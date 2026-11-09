@@ -89,6 +89,16 @@ final class OverlayActionsTests: XCTestCase {
         XCTAssertEqual(keyLegend("f4"), "F4")
         XCTAssertEqual(keyLegend("left"), "←")
     }
+
+    /// A modifier alone is a key combination the editors save and the ring sends: Win.
+    func testAModifierAloneIsAKeyCombination() {
+        let cfg = OverlayConfig(ring: [.shortcut("s1"), nil, nil, nil, nil, nil],
+                                shortcuts: [OverlayShortcut(id: "s1", label: "", keys: ["win"])])
+        let back = OverlayConfig.parse(cfg.toJSON())
+        XCTAssertEqual(back, cfg)
+        XCTAssertEqual(back.shortcut("s1").map { chordChip($0.keys) }, "Win")
+        XCTAssertEqual(keyVk("win"), 0x5B)
+    }
 }
 
 extension OverlayActionsTests {

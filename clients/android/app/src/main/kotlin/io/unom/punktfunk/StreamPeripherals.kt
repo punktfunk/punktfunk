@@ -18,6 +18,7 @@ import io.unom.punktfunk.kit.PadSensors
 import io.unom.punktfunk.kit.Sc2Capture
 import io.unom.punktfunk.kit.SessionAccess
 import io.unom.punktfunk.kit.SessionEndReason
+import io.unom.punktfunk.kit.Shortcuts
 import io.unom.punktfunk.models.ActiveSession
 import io.unom.punktfunk.kit.deviceBodyVibrator
 
@@ -60,51 +61,49 @@ internal class StreamPeripherals(
     private var dsUsbReceiver: BroadcastReceiver? = null
     private var decor: android.view.View? = null
 
+    /** A pad or the keyboard fired a shortcut the router does not act on itself ([fireShortcut]). */
+    var onShortcut: ((Shortcuts.Action, Shortcuts.Phase) -> Unit)? = null
+
     fun start() {
         activity?.streamHandle = handle // route hardware keys to this session
         // Multi-controller router: a stable wire pad index per connected controller, per-device axis
         // state, Arrival/Remove on hot-plug, and feedback routed back by pad index. Forwards every
         // controller (Automatic). Built here, released on dispose.
+        // The session's shortcuts, less what Android cannot do: one engine per pad, one for keys.
+        val ringCfg = OverlayConfig.parse(settings.overlayActions)
+        val shortcuts = settings.shortcutBindings().bindings.filter { it.actsHere(ringCfg) }
         router = GamepadRouter(
             context, handle, settings.gamepad, settings.gamepadForwarding,
-            settings.systemButtonsForward(), settings.guideGestureEnabled(),
+            settings.systemButtonsForward(), shortcuts,
         )
         activity?.gamepadRouter = router
         // A pad gets its slot on its first press, so the start banner asks what is connected.
         ui.padPresent = Gamepad.pads().isNotEmpty()
-        // Select+Start+L1+R1 chord leaves the stream — a deliberate quit (signal it so the host skips
-        // the keep-alive linger), unlike a host-ended / backgrounded drop. The router debounces it
-        // (must be held ~1.5 s) and fires onExitChord on its main-thread timer, so leave the stream
-        // the same way the Back gesture does.
+        // End stream from a pad (by default the exit chord held 1 s) is a deliberate quit: signal
+        // it so the host skips the keep-alive linger, unlike a host-ended / backgrounded drop.
         activity?.requestStreamExit = { NativeBridge.nativeDisconnectQuit(handle); onSessionEnded(SessionEndReason.LOCAL) }
         router.onExitChord = { activity?.requestStreamExit?.invoke() }
-        // Show a "hold to quit" hint the moment the chord completes (the router debounces the actual
-        // exit); it clears when the buttons release early or the hold elapses. Runs on the main thread.
+        // "Hold to quit…" while an End stream hold counts down. Runs on the main thread.
         router.onExitArmed = { armed -> ui.exitArming = armed }
-        // Select + Y toggles the mic — with no on-screen mute element, this chord is the whole of
-        // the control. Ignored when no capture is running (there is nothing to mute, and a hint
-        // saying "Microphone muted" over a mic nobody opened would be a lie).
         // A captured Sony pad whose motion this session cannot carry. Fires once per pad, at the
         // moment it is claimed, on the main thread.
         router.onMotionUnreachable = { ui.motionHint = true }
+        // A pad's own mute button. Ignored when no capture is running: a "Microphone muted" hint
+        // over a mic nobody opened would be a lie.
         router.onMicChord = {
             if (ui.micRunning) ui.mute(!ui.micMuted)
         }
-        // Select + X steps the stats overlay one tier — the same live cycle the three-finger tap
-        // performs, and the ONLY route to it on a TV or in a passthrough-touch session. Session-
-        // local on purpose: this mirrors the tap exactly (`onCycleStats` below), and the settings
-        // row calls it a live cycle — the stored default is what the next stream starts from.
-        router.onStatsChord = { ui.statsVerbosity = ui.statsVerbosity.next() }
-        // `Select+A` opens the ring at the screen centre; while it is up the pad belongs to it.
-        val openRing = { ring.openAt(Offset(containerSize().width / 2f, containerSize().height / 2f)) }
+        // Quick actions from a pad (Select + A by default) opens the ring at the screen centre;
+        // while it is up the pad belongs to it.
         router.onRingChord = { pad ->
             haptics.confirm()
-            openRing()
+            ring.openAt(Offset(containerSize().width / 2f, containerSize().height / 2f))
             ring.opener = pad
         }
-        // Ctrl+Alt+Shift+O, the cross-client chord, opens the same ring from a keyboard.
-        activity?.openRing = openRing
         router.onRingNav = { ring.nav(it) }
+        router.onShortcut = { a, p -> onShortcut?.invoke(a, p) }
+        activity?.keyShortcuts = Shortcuts.Engine(shortcuts, Shortcuts.Device.KEYBOARD)
+        activity?.fireShortcut = { a, p -> onShortcut?.invoke(a, p) }
         // Both of the ring's claims on its input, taken and dropped on the same edge: the pad
         // through the router, everything key-shaped through the activity. A TV remote is neither a
         // finger nor a pad, so without the second one the ring opens and cannot be driven.
@@ -116,7 +115,7 @@ internal class StreamPeripherals(
             mouse.setSuspended(open)
         }
         // Physical mouse: uncaptured hover/click/wheel forwards as absolute pointing; captured
-        // (setting or the Ctrl+Alt+Shift+Q chord) raw deltas forward as relative mouse-look.
+        // (setting or Release input, Ctrl+Alt+Shift+Q by default) raw deltas as relative mouse-look.
         decor = activity?.window?.decorView
         val viewConfig = android.view.ViewConfiguration.get(context)
         mouse = MouseForwarder(
@@ -409,14 +408,15 @@ internal class StreamPeripherals(
         sc2?.stop() // release the USB/BLE link + free the wire slot (host tears the pad down)
         dsUsbReceiver?.let { runCatching { context.unregisterReceiver(it) } }
         ds?.stop() // rumble-stop on the physical pad + release the USB link + free the wire slot
-        router.onExitArmed = null // don't poke Compose state from release()'s disarm while tearing down
+        router.onExitArmed = null // don't poke Compose state from release()'s flush while tearing down
         router.onMicChord = null // same: no mute toggle on buttons released during teardown
-        router.onStatsChord = null // same: no tier cycle on buttons released during teardown
+        router.onShortcut = null // same: no action fired by a held key combination coming up
         router.onRingChord = null
         router.onRingNav = null
         ring.onOpenChange = null
         activity?.ringKeys = null // a session torn down with the ring up must not keep the keys
-        activity?.openRing = null
+        activity?.keyShortcuts = null
+        activity?.fireShortcut = null
         router.onMotionUnreachable = null // same: no notice raised by a slot closing at teardown
         router.release() // flush every slot (nothing sticks host-side) + drop the hot-plug listener
         activity?.gamepadRouter = null

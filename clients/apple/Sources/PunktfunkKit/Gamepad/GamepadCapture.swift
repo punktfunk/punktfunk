@@ -71,25 +71,19 @@ public final class GamepadCapture {
         /// The last accel sent, re-used by the flush zero so "rotation stopped" doesn't
         /// also replace a plausible gravity vector with free-fall.
         var lastAccel: (Int16, Int16, Int16) = (0, 0, 0)
-        // Hold-Select→guide gesture state (pf-client-core's `SelectGesture`, adapted to
-        // this class's mask-diff model): a Select pressed ALONE at `selectDownAt` is held out
-        // of the mask until `gestureFiltered` or `gestureHoldFired` resolves it.
-        var selectPending = false
-        var selectDownAt: TimeInterval = 0
-        var selectAsGuide = false
-        /// A delivered tap of `tapBit` owes its release (`tapTimer` scheduled) — its down
-        /// went out outside `buttons`, so `flush` must know to lift it.
-        var tapReleaseOwed = false
-        var tapBit = GamepadWire.back
-        /// `Select+A` opened the ring: neither press reached the host, so neither release may.
-        var swallowA = false
-        var swallowSelect = false
-        var gestureTimer: Timer?
-        var tapTimer: Timer?
-        init(controller: GCController, pad: UInt32, pref: PunktfunkConnection.GamepadType) {
+        /// This pad's shortcuts (design/client-shortcuts.md §4). Every hardware transition goes
+        /// through it, and only what it forwards reaches `buttons`.
+        var engine: Shortcuts.Engine
+        /// The hardware buttons last fed to `engine`, the guide included.
+        var physical: UInt32 = 0
+        /// System buttons a held shortcut keeps down on the host, outside `buttons`.
+        var synthetic: UInt32 = 0
+        init(controller: GCController, pad: UInt32, pref: PunktfunkConnection.GamepadType,
+             engine: Shortcuts.Engine) {
             self.controller = controller
             self.pad = pad
             self.pref = pref
+            self.engine = engine
         }
     }
 
@@ -97,68 +91,51 @@ public final class GamepadCapture {
     /// against `manager.forwarded` (empty until a session's `start`, cleared by `stop`).
     private var slots: [Slot] = []
 
-    /// The cross-client controller escape chord (pf-client-core's `ESCAPE_CHORD`):
-    /// L1+R1+Start+Select held together — four simultaneous buttons no game uses, so normal
-    /// play can't trip it. Held for `disconnectHold` it ends the session via
-    /// `onDisconnectRequest`; the chord keeps forwarding to the host meanwhile (the user is
-    /// leaving anyway). The desktop clients' quick-press step (leave fullscreen / release
-    /// capture) has no Apple equivalent worth wiring — macOS has ⌃⌥⇧Q/D, touch has the HUD.
-    /// Internal rather than private only so `GamepadEscapeChordTests` can pin it against
-    /// `escapeChordElements` below — the two must not drift.
-    static let escapeChord: UInt32 =
-        GamepadWire.leftShoulder | GamepadWire.rightShoulder | GamepadWire.start | GamepadWire.back
-    /// `escapeChord`'s four elements by GameController alias — the ONLY system gestures claimed
-    /// while forwarding is off (see `openSlot`). Kept beside the mask it mirrors: change one and
-    /// change the other, or the chord silently stops reaching us on tvOS. A test asserts the two
-    /// agree, because the failure is invisible until someone is stuck in a stream on an Apple TV.
-    static let escapeChordElements = [
-        GCInputLeftShoulder, GCInputRightShoulder, GCInputButtonMenu, GCInputButtonOptions,
+    /// The GameController element of each wire bit a shortcut can read: what a NON-forwarding
+    /// slot claims from the OS, so its shortcuts still complete. Leave one out and that button's
+    /// press stays the system's; on tvOS the exit hold is the only controller way out.
+    static let elements: [UInt32: String] = [
+        GamepadWire.leftShoulder: GCInputLeftShoulder, GamepadWire.rightShoulder: GCInputRightShoulder,
+        GamepadWire.start: GCInputButtonMenu, GamepadWire.back: GCInputButtonOptions,
+        GamepadWire.a: GCInputButtonA, GamepadWire.b: GCInputButtonB,
+        GamepadWire.x: GCInputButtonX, GamepadWire.y: GCInputButtonY,
+        GamepadWire.leftStickClick: GCInputLeftThumbstickButton,
+        GamepadWire.rightStickClick: GCInputRightThumbstickButton,
+        GamepadWire.dpadUp: GCInputDirectionPad, GamepadWire.dpadDown: GCInputDirectionPad,
+        GamepadWire.dpadLeft: GCInputDirectionPad, GamepadWire.dpadRight: GCInputDirectionPad,
+        GamepadWire.guide: GCInputButtonHome, GamepadWire.misc1: GCInputButtonShare,
+        GamepadWire.touchpadClick: GCInputDualShockTouchpadButton,
     ]
-    /// The stats-overlay chord: Select + X, one tier per completion (off → compact → normal →
-    /// detailed → off). It exists because a controller in both hands has no other way to the
-    /// numbers — the ⌃⌥⇧S combo needs a keyboard and the three-finger tap needs a free screen —
-    /// and on tvOS there is no other way AT ALL, which is what this fixes.
-    ///
-    /// Built like Android's mic chord (`GamepadRouter.MIC_CHORD`, Select + Y) and deliberately
-    /// not overlapping `escapeChord`: X is none of its four buttons, so no way of reaching the
-    /// exit chord passes through this one on the way, and vice versa. Select is a menu button
-    /// rather than a twitch action, which keeps the pair out of real play. Y is left free so the
-    /// mic chord can be ported onto it later without moving this one.
-    static let statsChord: UInt32 = GamepadWire.back | GamepadWire.x
-    /// `statsChord`'s elements by GameController alias — same mirror-the-mask rule (and same
-    /// invisible failure) as `escapeChordElements`; the same test pins both.
-    static let statsChordElements = [GCInputButtonOptions, GCInputButtonX]
-    /// Every element some chord reads — what a NON-forwarding slot claims (see `openSlot`). The
-    /// escape chord's four plus the stats chord's X; Select is shared, so it appears once.
-    static let chordElements: [String] =
-        escapeChordElements + statsChordElements.filter { !escapeChordElements.contains($0) }
-    /// pf-client-core's `DISCONNECT_HOLD` — the same 1.5 s on every client.
-    private static let disconnectHold: TimeInterval = 1.5
-    /// pf-client-core's `GUIDE_HOLD`: hold Select alone this long and it is the HOST's guide.
-    /// The gesture exists because iOS reserves the physical Home press (the Game Overlay;
-    /// sanctioned opt-out only via the user's iOS 27+ Home-button setting) and tvOS never
-    /// delivers it at all.
-    static let guideHold: TimeInterval = 0.35
-    /// pf-client-core's `GUIDE_COMMIT`: a lone Select held this long sends the guide while
-    /// still held, so a long hold is the host's long-press — a Gaming-Mode host's QAM. Until
-    /// then an `escapeChord` partner may still join.
-    private static let guideCommit: TimeInterval = 1.0
-    /// What a pending Select becomes when `joined` buttons press after `held` seconds (`0` =
-    /// its own release): the guide past `guideHold`, else a real Select. An `escapeChord`
-    /// partner always keeps it a Select, so the escape chord never presses guide.
-    static func pendingSelectBecomes(held: TimeInterval, joined: UInt32) -> UInt32 {
-        held >= guideHold && joined & escapeChord & ~GamepadWire.back == 0
-            ? GamepadWire.guide : GamepadWire.back
+
+    /// The elements `bits` need, each once.
+    static func elements(for bits: Set<UInt32>) -> [String] {
+        Array(Set(bits.compactMap { elements[$0] })).sorted()
     }
-    /// pf-client-core's `TAP_PRESS`: a held-back Select tap is delivered as a press with
-    /// its release this far behind — back-to-back transitions can fold into nothing in
-    /// the host's per-pad input fold.
+
+    /// The wire buttons a profile holds, the guide aside: what the Shortcuts page records.
+    public static func heldButtons(_ g: GCExtendedGamepad) -> UInt32 { buttonMask(g) }
+
+    /// The SF Symbol `controller` prints on the button for wire bit `bit`, or nil.
+    public static func symbol(for bit: UInt32, on controller: GCController?) -> String? {
+        guard let profile = controller?.physicalInputProfile, let alias = elements[bit] else { return nil }
+        if let dpad = profile.dpads[alias] {
+            let arrows: [UInt32: GCControllerButtonInput] = [
+                GamepadWire.dpadUp: dpad.up, GamepadWire.dpadDown: dpad.down,
+                GamepadWire.dpadLeft: dpad.left, GamepadWire.dpadRight: dpad.right,
+            ]
+            return arrows[bit]?.sfSymbolsName
+        }
+        return profile.buttons[alias]?.sfSymbolsName
+    }
+
+    /// pf-client-core's `TAP_PRESS`: a synthetic tap's presses and release this far apart, or
+    /// back-to-back transitions fold into nothing in the host's per-pad input fold.
     nonisolated private static let tapPress: TimeInterval = 0.05
-    private var chordTimer: Timer?
-    /// Fired ON MAIN once the escape chord has been held `disconnectHold` — the session owner
-    /// disconnects. On tvOS this (plus the Siri Remote's hold-Back) is the ONLY way out of a
-    /// stream with a controller: B/Menu presses are deliberately swallowed during a session so
-    /// gameplay can't end it (see ContentView's tvOS session branch).
+    /// Wakes the engines when a hold or an owed tap release comes due.
+    private var shortcutTimer: Timer?
+    /// The pad's End stream shortcut fired (by default L1+R1+Start+Select held 1 s). On tvOS
+    /// this and the Siri Remote's hold-Back are the only ways out of a stream: B and Menu are
+    /// swallowed during a session (see ContentView's tvOS session branch).
     public var onDisconnectRequest: (() -> Void)?
 
     /// Fired ON MAIN, once per slot at open, when a controller that HAS a gyro was given a host
@@ -170,10 +147,9 @@ public final class GamepadCapture {
     /// burning battery streaming gyro nobody reads.
     public var onMotionUnreachable: ((PunktfunkConnection.GamepadType) -> Void)?
 
-    /// `Select+A`, Select first, while Select is still pending its guide hold: the quick-action
-    /// ring's opener (design/touch-client-overlay.md §2.6) — the first chord the host never
-    /// sees. A is "jump" or "confirm" in most games, so both presses are swallowed.
-    public var onRingChord: ((UInt32) -> Void)?
+    /// A shortcut this capture does not run itself fired on the pad with this wire index:
+    /// opening the dial, a key combination, a host action, anything the dial does. Main actor.
+    public var onShortcut: ((Shortcuts.Action, Shortcuts.Phase, UInt32) -> Void)?
     /// A pad press while the ring owns the pad (`ringOpen`).
     public var onRingNav: ((RingNav) -> Void)?
     /// The ring is up: everything held is released on the host NOW (a held sprint must not
@@ -211,9 +187,8 @@ public final class GamepadCapture {
     /// default true on Apple — where the OS shows its own overlay for them, that's the OS's
     /// business; local mode exists for preset parity with the Gaming-Mode clients).
     public let systemForward: Bool
-    /// The hold-Select guide gesture (`EffectiveSettings.guideGestureEnabled` — auto = on
-    /// everywhere but macOS). See `guideHold`.
-    public let guideGesture: Bool
+    /// The session's pad shortcuts (`EffectiveSettings.resolvedShortcuts`).
+    private let shortcuts: Shortcuts
 
     #if os(iOS)
     /// Opt-in phone-gyro mirror (`DefaultsKey.gyroFromDevice`): while player 1's forwarded
@@ -226,13 +201,13 @@ public final class GamepadCapture {
 
     public init(
         connection: PunktfunkConnection, manager: GamepadManager, forwarding: Bool = true,
-        systemForward: Bool = true, guideGesture: Bool = false
+        systemForward: Bool = true
     ) {
         self.connection = connection
         self.manager = manager
         self.forwarding = forwarding
         self.systemForward = systemForward
-        self.guideGesture = guideGesture
+        self.shortcuts = connection.settings.resolvedShortcuts
         #if os(iOS)
         if forwarding, DeviceGyro.isAvailable,
             UserDefaults.standard.bool(forKey: DefaultsKey.gyroFromDevice) {
@@ -339,20 +314,44 @@ public final class GamepadCapture {
     }
 
     /// A one-shot synthetic tap of a system button on the host's pad (pf-client-core's
-    /// `GamepadService.tapButton`), on the first forwarded slot's wire index — pad 0 when none
-    /// is open, which is best-effort (the host pad may not exist). The quick-action ring's
-    /// route to the host's guide on a device whose OS keeps the physical Home press for itself.
-    /// `misc1` is the Quick Access action, pressed as that pad's host device reads it
+    /// `GamepadService.tapButton`), on wire pad `pad` — by default the first forwarded slot's,
+    /// pad 0 when none is open, which is best-effort (the host pad may not exist). The dial's
+    /// and the shortcuts' route to the host's guide on a device whose OS keeps the physical Home
+    /// press. `misc1` is the Quick Access action, pressed as that pad's host device reads it
     /// (`GamepadWire.quickAccessPresses`). Deliberately outside `slot.buttons` and the
-    /// system-buttons policy: this is the ring's own press, not the player's.
-    public func tapButton(_ bit: UInt32) {
+    /// system-buttons policy: this is the client's own press, not the player's.
+    public func tapButton(_ bit: UInt32, pad: UInt32? = nil) {
+        let pad = pad ?? slots.first?.pad ?? 0
+        send(Self.tapEvents(systemPresses(bit, pad: pad)), pad: pad)
+    }
+
+    /// `tapButton`'s press held by a shortcut: down until the shortcut lifts. `flush` lifts it
+    /// with the slot.
+    public func holdButton(_ bit: UInt32, down: Bool, pad: UInt32? = nil) {
+        let pad = pad ?? slots.first?.pad ?? 0
+        let presses = systemPresses(bit, pad: pad)
+        let mask = presses.reduce(0, |)
+        let slot = slots.first { $0.pad == pad }
+        if down {
+            send(presses.enumerated().map { (bit: $0.element, down: true, after: Double($0.offset) * Self.tapPress) },
+                 pad: pad)
+            slot?.synthetic |= mask
+        } else {
+            send(presses.reversed().map { (bit: $0, down: false, after: 0) }, pad: pad)
+            slot?.synthetic &= ~mask
+        }
+    }
+
+    /// What one system button presses on `pad`'s host device.
+    private func systemPresses(_ bit: UInt32, pad: UInt32) -> [UInt32] {
+        guard bit == GamepadWire.misc1 else { return [bit] }
+        let pref = (slots.first { $0.pad == pad } ?? slots.first)?.pref
+        return GamepadWire.quickAccessPresses(hasButton: connection.hasQuickAccess(declared: pref))
+    }
+
+    /// Send timed wire events on `pad`: the ones due now at once, the rest from main-loop timers.
+    private func send(_ events: [(bit: UInt32, down: Bool, after: TimeInterval)], pad: UInt32) {
         guard let wire else { return }
-        let pad = slots.first?.pad ?? 0
-        let presses = bit == GamepadWire.misc1
-            ? GamepadWire.quickAccessPresses(
-                hasButton: connection.hasQuickAccess(declared: slots.first?.pref))
-            : [bit]
-        let events = Self.tapEvents(presses)
         // One timer per moment: two timers due together fire in no promised order.
         for delay in Set(events.map(\.after)).sorted() {
             let due = events.filter { $0.after == delay }
@@ -400,7 +399,6 @@ public final class GamepadCapture {
             closeSlot(slot)
             openSlot(dc)
         }
-        updateEscapeChord()
         updateDeviceGyro()
     }
 
@@ -425,8 +423,6 @@ public final class GamepadCapture {
         for dc in forwarded where !slots.contains(where: { $0.controller === dc.controller }) {
             openSlot(dc)
         }
-        // A chord-holding pad may have just unplugged — re-evaluate so a stale hold disarms.
-        updateEscapeChord()
         // Pad 0 may have changed hands — re-evaluate whether this device's IMU speaks for it.
         updateDeviceGyro()
     }
@@ -437,7 +433,8 @@ public final class GamepadCapture {
     /// (every slot taken) or exposes no extended profile.
     private func openSlot(_ dc: GamepadManager.DiscoveredController) {
         guard let pad = manager.padIndex(for: dc), let ext = dc.controller.extendedGamepad else { return }
-        let slot = Slot(controller: dc.controller, pad: UInt32(pad), pref: manager.declaredKind(for: dc))
+        let slot = Slot(controller: dc.controller, pad: UInt32(pad), pref: manager.declaredKind(for: dc),
+                        engine: Shortcuts.Engine(padBindings, device: .pad))
         slots.append(slot)
         // Declare the pad's KIND before any input: the host builds its virtual device from this,
         // not the handshake default. Then wake the host pad, which exists from its first event.
@@ -460,23 +457,12 @@ public final class GamepadCapture {
         ext.valueChangedHandler = { [weak self, weak slot] g, _ in
             MainActor.assumeIsolated { if let self, let slot { self.sync(slot, g) } }
         }
-        // Claim EVERY element's system gesture while this pad drives a stream. The OS attaches
-        // gestures to several controller buttons — share/create → local screenshot/recording,
-        // Home → Game Center overlay (iOS) / Launchpad's Games folder (macOS) — and with a
-        // gesture attached the press is the system's, not the game's. During capture the remote
-        // session IS the game: the share button must reach the host (e.g. Steam screenshots),
-        // the PS button must open the host's Steam overlay. Restored to .enabled on close.
-        //
-        // With forwarding OFF none of that applies — no press reaches the host, so taking the
-        // user's screenshot gesture away buys nothing. NARROWED, not skipped: the CHORDS are
-        // still read off this slot — on tvOS the escape chord is the only controller way out of
-        // a stream, and the stats chord the only way to the overlay — so their own elements keep
-        // their claim. (Menu especially: leave its gesture attached on tvOS and the press is the
-        // system's — the chord would never complete and the session would have no controller
-        // exit at all.)
+        // A button with a system gesture attached is the system's press, not the host's. While
+        // forwarding, claim every element; restored to .enabled on close. Forwarding off, claim
+        // only what the shortcuts read: on tvOS the exit hold is the only way out.
         let claimed = forwarding
             ? Array(c.physicalInputProfile.elements.values)
-            : Self.chordElements.compactMap { c.physicalInputProfile.elements[$0] }
+            : Self.elements(for: slot.engine.buttons).compactMap { c.physicalInputProfile.elements[$0] }
         for element in claimed {
             element.preferredSystemGestureState = .disabled
         }
@@ -486,7 +472,7 @@ public final class GamepadCapture {
         // legacy `extendedGamepad.buttonHome` is often nil when the element exists. tvOS: nil.
         if let home = c.physicalInputProfile.buttons[GCInputButtonHome] {
             home.pressedChangedHandler = { [weak self, weak slot] _, _, pressed in
-                MainActor.assumeIsolated { if let self, let slot { self.sendGuide(slot, down: pressed) } }
+                MainActor.assumeIsolated { if let self, let slot { self.homeChanged(slot, pressed) } }
             }
         }
         if let tp = Self.touchpad(ext) {
@@ -518,7 +504,7 @@ public final class GamepadCapture {
            connection.motionReaches(declared: slot.pref) {
             if motion.sensorsRequireManualActivation { motion.sensorsActive = true }
             // On main like every handler here: `handlerQueue` belongs to the controller, so
-            // moving motion would move the tvOS escape chord too. Jitter? Read the host's
+            // moving motion would move the tvOS exit hold too. Jitter? Read the host's
             // `motion_cadence` histogram first.
             motion.valueChangedHandler = { [weak self, weak slot] m in
                 MainActor.assumeIsolated { if let self, let slot { self.forwardMotion(slot, m) } }
@@ -531,6 +517,7 @@ public final class GamepadCapture {
     /// GC cleanup, so it is safe even when the device already physically unplugged. Mirrors
     /// pf-client-core's `close_slot_at`.
     private func closeSlot(_ slot: Slot) {
+        resetShortcuts(slot)
         flush(slot)
         // Sent after the flush so the core stamps it with a seq past the zeroing snapshots; the host
         // seq-gates it, so a reordered snapshot can't resurrect the removed pad.
@@ -565,41 +552,19 @@ public final class GamepadCapture {
 
     private func closeAllSlots() {
         while let slot = slots.first { closeSlot(slot) }
-        chordTimer?.invalidate()
-        chordTimer = nil
+        scheduleShortcutTick()
     }
 
-    /// Snapshot the profile into a slot's wire state and send every transition since the last one,
-    /// tagged with the slot's wire pad index.
+    /// Snapshot the profile into a slot's wire state: buttons through the slot's shortcut
+    /// engine (`feed`), the axes as they changed, tagged with the slot's wire pad index.
     private func sync(_ slot: Slot, _ g: GCExtendedGamepad) {
         guard live else { return }
-        // guide is driven separately (`sendGuide`, off the Home handler) and deliberately kept out
-        // of `buttonMask`. Preserve its current held state here so the XOR diff below never sees it
-        // as "changed" — otherwise the first stick/button move after a guide press would emit a
-        // spurious guide-UP while the button is still physically held (and drop the bit from
-        // `slot.buttons`, swallowing the real release too). `flush`/`allButtons` still release it.
-        var raw = Self.buttonMask(g)
-        // Raw system buttons stay local when passthrough is off: misc1 (share/QAM) is
-        // masked here, guide is gated at its own handler.
-        if !systemForward { raw &= ~GamepadWire.misc1 }
-        raw = ringChordFiltered(slot, raw)
-        // The hold-Select gesture rewrites the mask: a Select pressed alone is held out
-        // until it resolves (tap on release / synthetic guide past the threshold).
-        if guideGesture { raw = gestureFiltered(slot, raw) }
-        let newButtons = raw | (slot.buttons & GamepadWire.guide)
+        // The guide (Home/PS) comes from its own handler (`homeChanged`); it stays held here.
+        feed(slot, Self.buttonMask(g) | (slot.physical & GamepadWire.guide))
         let newAxes = Self.axesOf(g)
         if ringOpen {
-            // Adopt, don't send: the flush at open released everything; a press inside the ring
-            // must not fire in the game the instant it closes.
-            let pressed = newButtons & ~slot.buttons
-            slot.buttons = newButtons
+            // Adopt, don't send: the flush at open released everything.
             slot.axes = newAxes
-            let map: [(UInt32, RingNav)] = [
-                (GamepadWire.dpadUp, .up), (GamepadWire.dpadDown, .down),
-                (GamepadWire.dpadLeft, .left), (GamepadWire.dpadRight, .right),
-                (GamepadWire.a, .confirm), (GamepadWire.b, .back), (GamepadWire.y, .centre),
-            ]
-            for (bit, nav) in map where pressed & bit != 0 { onRingNav?(nav) }
             // The left stick AIMS: its sector is the slot, so the ring follows the thumb the way
             // a weapon wheel does. Sent on every sector change, neutral included — the D-pad is
             // what steps disc by disc.
@@ -611,29 +576,128 @@ public final class GamepadCapture {
             }
             return
         }
-        let changed = newButtons ^ slot.buttons
-        if changed != 0 {
-            let was = slot.buttons
-            for bit in GamepadWire.allButtons where changed & bit != 0 {
-                wire?.send(.gamepadButton(bit, down: newButtons & bit != 0, pad: slot.pad))
-            }
-            slot.buttons = newButtons
-            // The stats chord, edge-triggered on the press that COMPLETES it: one cycle per
-            // chord rather than one per press, since a third button pressed on top finds the
-            // mask already complete and can't re-fire it. Read off the wire mask like the escape
-            // chord, which means a Select the hold-Select gesture has turned into a guide is not
-            // in it — a guide hold can't cycle the overlay on its way past. The buttons still
-            // forward (the chord is a local overlay change, not an input the host must not see).
-            if was & Self.statsChord != Self.statsChord,
-               newButtons & Self.statsChord == Self.statsChord {
-                StatsVerbosity.requestCycle(for: connection)
-            }
-        }
         for (i, v) in newAxes.enumerated() where v != slot.axes[i] {
             wire?.send(.gamepadAxis(UInt32(i), value: v, pad: slot.pad))
             slot.axes[i] = v
         }
-        updateEscapeChord()
+    }
+
+    /// The Home/PS button, which `buttonMask` cannot read, joins the slot's hardware mask.
+    private func homeChanged(_ slot: Slot, _ pressed: Bool) {
+        guard live else { return }
+        let bit = GamepadWire.guide
+        feed(slot, pressed ? slot.physical | bit : slot.physical & ~bit)
+    }
+
+    /// Every hardware button change of a slot through its shortcut engine, releases first, and
+    /// then whatever the engine sends on, lifts or fires.
+    private func feed(_ slot: Slot, _ held: UInt32) {
+        let changed = held ^ slot.physical
+        let now = ContinuousClock.now
+        var outs = slot.engine.tick(now)
+        for bit in GamepadWire.allButtons where changed & bit != 0 && held & bit == 0 {
+            outs += slot.engine.step(.release(bit), at: now)
+        }
+        for bit in GamepadWire.allButtons where changed & bit != 0 && held & bit != 0 {
+            outs += slot.engine.step(.press(bit), at: now)
+        }
+        slot.physical = held
+        apply(slot, outs)
+        scheduleShortcutTick()
+    }
+
+    private func apply(_ slot: Slot, _ outs: [Shortcuts.Out]) {
+        for out in outs {
+            switch out {
+            case .forward(let bit, let down):
+                forward(slot, bit, down: down)
+            case .lift(let bits):
+                for bit in bits where slot.buttons & bit != 0 {
+                    wire?.send(.gamepadButton(bit, down: false, pad: slot.pad))
+                    slot.buttons &= ~bit
+                }
+            case .fire(let action, let phase):
+                fire(slot, action, phase)
+            }
+        }
+    }
+
+    /// The ring's buttons while it owns the pad.
+    private static let ringNav: [UInt32: RingNav] = [
+        GamepadWire.dpadUp: .up, GamepadWire.dpadDown: .down,
+        GamepadWire.dpadLeft: .left, GamepadWire.dpadRight: .right,
+        GamepadWire.a: .confirm, GamepadWire.b: .back, GamepadWire.y: .centre,
+    ]
+
+    /// One transition the engine let through: to the host, or to the ring while it owns the pad.
+    /// Raw system buttons stay local when passthrough is off.
+    private func forward(_ slot: Slot, _ bit: UInt32, down: Bool) {
+        if !ringOpen, !systemForward, bit & (GamepadWire.guide | GamepadWire.misc1) != 0 { return }
+        let next = down ? slot.buttons | bit : slot.buttons & ~bit
+        guard next != slot.buttons else { return }
+        slot.buttons = next
+        if ringOpen {
+            // Adopted, not sent: a press inside the ring must not fire in the game the instant
+            // it closes, and on close nothing is replayed.
+            if down, let nav = Self.ringNav[bit] { onRingNav?(nav) }
+            return
+        }
+        wire?.send(.gamepadButton(bit, down: down, pad: slot.pad))
+    }
+
+    /// A shortcut fired on this pad. End stream and the statistics act here, so they work with
+    /// nothing else listening; Guide and Quick access go out on this pad; the rest is the
+    /// session's (`onShortcut`).
+    private func fire(_ slot: Slot, _ action: Shortcuts.Action, _ phase: Shortcuts.Phase) {
+        let system: UInt32? = switch action {
+        case .slot(.guide): GamepadWire.guide
+        case .slot(.qam): GamepadWire.misc1
+        default: nil
+        }
+        if let bit = system {
+            if phase == .tap || phase == .once {
+                tapButton(bit, pad: slot.pad)
+            } else {
+                holdButton(bit, down: phase == .down, pad: slot.pad)
+            }
+            return
+        }
+        switch action {
+        case .slot(.endStream): onDisconnectRequest?()
+        case .slot(.stats): StatsVerbosity.requestCycle(for: connection)
+        default: onShortcut?(action, phase, slot.pad)
+        }
+    }
+
+    /// The bindings a pad engine runs; the dial only while the session opens it.
+    private var padBindings: [Shortcuts.Binding] { shortcuts.runnable(dial: onShortcut != nil) }
+
+    /// Wake the engines when a hold or a tap's release comes due: GameController reports changes
+    /// only, and a held chord changes nothing.
+    private func scheduleShortcutTick() {
+        shortcutTimer?.invalidate()
+        shortcutTimer = nil
+        guard let due = slots.compactMap(\.engine.nextDue).min() else { return }
+        let wait = due - ContinuousClock.now
+        let seconds = max(0, Double(wait.components.seconds) + Double(wait.components.attoseconds) / 1e18)
+        let timer = Timer(timeInterval: seconds, repeats: false) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                self.shortcutTimer = nil
+                let now = ContinuousClock.now
+                for slot in self.slots { self.apply(slot, slot.engine.tick(now)) }
+                self.scheduleShortcutTick()
+            }
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        shortcutTimer = timer
+    }
+
+    /// Forget a slot's held buttons: what its shortcuts hold on the host comes up (a held Guide,
+    /// a held key combination), so nothing outlives a suspend or a close.
+    private func resetShortcuts(_ slot: Slot) {
+        apply(slot, slot.engine.flush())
+        slot.physical = 0
     }
 
     /// A sector, once engaged, keeps the stick until the angle is this far past its 30° edge — a
@@ -669,150 +733,6 @@ public final class GamepadCapture {
             Int32(g.leftTrigger.value * 255),
             Int32(g.rightTrigger.value * 255),
         ]
-    }
-
-    /// `Select+A`, Select first, with Select already on the wire (sent, or the guide gesture is
-    /// off): the ring chord. A is withheld until it physically releases; the ring's flush lifts
-    /// the Select. A Select still pending its guide hold is `gestureFiltered`'s case.
-    private func ringChordFiltered(_ slot: Slot, _ rawIn: UInt32) -> UInt32 {
-        var raw = rawIn
-        if slot.swallowA {
-            if raw & GamepadWire.a != 0 { raw &= ~GamepadWire.a } else { slot.swallowA = false }
-        }
-        let aPressed = raw & GamepadWire.a != 0 && slot.buttons & GamepadWire.a == 0
-        if aPressed, !ringOpen, slot.buttons & GamepadWire.back != 0 {
-            slot.swallowA = true
-            onRingChord?(slot.pad)
-            raw &= ~GamepadWire.a
-        }
-        return raw
-    }
-
-    /// The hold-Select→guide state machine over one sync's raw mask (pf-client-core's
-    /// `SelectGesture` rules): Select pressed ALONE is suppressed while pending. Pending ends
-    /// on the first of: a press joining, which makes it what `pendingSelectBecomes` says (a
-    /// real Select, unsuppressed so the diff sends its down, or the guide); its release, a
-    /// tap of the same choice delivered out-of-band with the release `tapPress` behind; or
-    /// `guideCommit` (`gestureHoldFired`). A guide is lifted here when Select physically
-    /// releases. `Select+A` inside `guideHold` is the ring chord.
-    ///
-    /// One deliberate divergence from the Rust worker: while transformed into a guide the
-    /// Select stays OUT of `slot.buttons`, so the escape chord doesn't complete on top of
-    /// an in-flight guide-hold — release Select and press the chord plainly instead.
-    private func gestureFiltered(_ slot: Slot, _ rawIn: UInt32) -> UInt32 {
-        let back = GamepadWire.back
-        var raw = rawIn
-        // A swallowed Select stays out of the mask until it physically releases: its press never
-        // went out, so its release must not either.
-        if slot.swallowSelect {
-            if raw & back != 0 { raw &= ~back } else { slot.swallowSelect = false }
-        }
-        let backDown = raw & back != 0
-        let others = raw & ~back
-        if slot.selectAsGuide {
-            if backDown { return raw & ~back }
-            slot.selectAsGuide = false
-            sendGuide(slot, down: false, raw: false)
-            return raw
-        }
-        if slot.selectPending {
-            let held = ProcessInfo.processInfo.systemUptime - slot.selectDownAt
-            if !backDown {
-                endPending(slot)
-                deliverTap(slot, Self.pendingSelectBecomes(held: held, joined: 0))
-                return raw
-            }
-            if raw & GamepadWire.a != 0, held < Self.guideHold {
-                // `Select+A`, Select first: the ring chord — swallowed on both buttons.
-                endPending(slot)
-                slot.swallowSelect = true
-                slot.swallowA = true
-                onRingChord?(slot.pad)
-                return raw & ~back & ~GamepadWire.a
-            }
-            if others != 0 {
-                endPending(slot)
-                if Self.pendingSelectBecomes(held: held, joined: others) == back { return raw }
-                slot.selectAsGuide = true
-                sendGuide(slot, down: true, raw: false)
-                return raw & ~back
-            }
-            return raw & ~back
-        }
-        if backDown, others == 0, slot.buttons & back == 0 {
-            // Newly pressed, alone: hold it back. An owed tap release goes out first so
-            // the host never sees two downs in a row.
-            if slot.tapReleaseOwed { finishTap(slot) }
-            slot.selectPending = true
-            slot.selectDownAt = ProcessInfo.processInfo.systemUptime
-            let timer = Timer(timeInterval: Self.guideCommit, repeats: false) { [weak self, weak slot] _ in
-                MainActor.assumeIsolated {
-                    if let self, let slot { self.gestureHoldFired(slot) }
-                }
-            }
-            RunLoop.main.add(timer, forMode: .common)
-            slot.gestureTimer?.invalidate()
-            slot.gestureTimer = timer
-            return raw & ~back
-        }
-        return raw
-    }
-
-    /// `guideCommit` passed with Select still pending → it IS the guide now, down until the
-    /// physical release (`gestureFiltered`'s `selectAsGuide` branch lifts it).
-    private func gestureHoldFired(_ slot: Slot) {
-        guard slot.selectPending else { return }
-        slot.selectPending = false
-        slot.gestureTimer = nil
-        slot.selectAsGuide = true
-        sendGuide(slot, down: true, raw: false)
-    }
-
-    private func endPending(_ slot: Slot) {
-        slot.selectPending = false
-        slot.gestureTimer?.invalidate()
-        slot.gestureTimer = nil
-    }
-
-    /// Deliver a held-back Select as a tap of `bit` (Select or the guide): the press now, its
-    /// release `tapPress` behind. Both sends bypass `slot.buttons` (the raw mask no longer
-    /// carries Select, so the diff stays consistent); `tapReleaseOwed` is what `flush` checks
-    /// so the press can't outlive the slot.
-    private func deliverTap(_ slot: Slot, _ bit: UInt32) {
-        wire?.send(.gamepadButton(bit, down: true, pad: slot.pad))
-        slot.tapBit = bit
-        slot.tapReleaseOwed = true
-        let timer = Timer(timeInterval: Self.tapPress, repeats: false) { [weak self, weak slot] _ in
-            MainActor.assumeIsolated {
-                if let self, let slot { self.finishTap(slot) }
-            }
-        }
-        RunLoop.main.add(timer, forMode: .common)
-        slot.tapTimer?.invalidate()
-        slot.tapTimer = timer
-    }
-
-    private func finishTap(_ slot: Slot) {
-        guard slot.tapReleaseOwed else { return }
-        slot.tapReleaseOwed = false
-        slot.tapTimer?.invalidate()
-        slot.tapTimer = nil
-        wire?.send(.gamepadButton(slot.tapBit, down: false, pad: slot.pad))
-    }
-
-    /// Forward the guide (Home/PS) transition directly — it's kept out of `buttonMask` (the legacy
-    /// `buttonHome` element is unreliable). Folds into the slot's `buttons` so a held PS button is
-    /// released by `flush` on focus loss / close just like the others. `raw: true` marks the
-    /// physical Home handler's calls, which the system-buttons policy can keep local; the
-    /// gesture's synthetic transitions pass `raw: false` and always go out.
-    private func sendGuide(_ slot: Slot, down: Bool, raw: Bool = true) {
-        if raw, !systemForward { return }
-        guard live else { return }
-        let bit = GamepadWire.guide
-        let now = down ? (slot.buttons | bit) : (slot.buttons & ~bit)
-        guard now != slot.buttons else { return }
-        wire?.send(.gamepadButton(bit, down: down, pad: slot.pad))
-        slot.buttons = now
     }
 
     private static func buttonMask(_ g: GCExtendedGamepad) -> UInt32 {
@@ -977,39 +897,16 @@ public final class GamepadCapture {
         #endif
     }
 
-    /// Arm the disconnect timer when ANY forwarded pad holds the full escape chord, disarm the
-    /// moment none do — a release, or the holding pad unplugged (pf-client-core's `chord_held` is
-    /// likewise any-slot). GC events only arrive on state CHANGES, so a held chord needs the timer:
-    /// the handler won't fire again until something moves.
-    private func updateEscapeChord() {
-        let held = slots.contains { $0.buttons & Self.escapeChord == Self.escapeChord }
-        if held, chordTimer == nil {
-            let timer = Timer(timeInterval: Self.disconnectHold, repeats: false) { [weak self] _ in
-                MainActor.assumeIsolated { self?.onDisconnectRequest?() }
-            }
-            RunLoop.main.add(timer, forMode: .common)
-            chordTimer = timer
-        } else if !held, chordTimer != nil {
-            chordTimer?.invalidate()
-            chordTimer = nil
-        }
-    }
-
     /// Unwind everything a slot holds on the wire: button-ups, neutral axes, lifted fingers. The
     /// host's virtual pad returns to rest instead of running with the last state. Wire events only
     /// (no GC calls) — safe against an already-removed device. Does NOT close the slot or send
     /// GamepadRemove (that's `closeSlot`).
     private func flush(_ slot: Slot) {
-        // Gesture first: a pending (never-sent) Select just drops, an owed tap release
-        // goes out, and a transformed guide's bit — folded into `buttons` by `sendGuide`
-        // — is lifted by the loop below like any held button.
-        endPending(slot)
-        slot.selectAsGuide = false
-        if slot.tapReleaseOwed { finishTap(slot) }
-        for bit in GamepadWire.allButtons where slot.buttons & bit != 0 {
+        for bit in GamepadWire.allButtons where (slot.buttons | slot.synthetic) & bit != 0 {
             wire?.send(.gamepadButton(bit, down: false, pad: slot.pad))
         }
         slot.buttons = 0
+        slot.synthetic = 0
         for (i, v) in slot.axes.enumerated() where v != 0 {
             wire?.send(.gamepadAxis(UInt32(i), value: 0, pad: slot.pad))
             slot.axes[i] = 0
@@ -1029,11 +926,13 @@ public final class GamepadCapture {
     }
 
     /// Flush every open slot's held state (app deactivation) — keeps the slots open (GC just stops
-    /// delivering; resume re-syncs), disarms the escape chord. Distinct from `closeAllSlots`, which
-    /// also sends GamepadRemove and detaches handlers.
+    /// delivering; resume re-syncs) and forgets every shortcut press, so no hold fires unseen.
+    /// Distinct from `closeAllSlots`, which also sends GamepadRemove and detaches handlers.
     private func releaseAll() {
-        chordTimer?.invalidate()
-        chordTimer = nil
-        for slot in slots { flush(slot) }
+        for slot in slots {
+            resetShortcuts(slot)
+            flush(slot)
+        }
+        scheduleShortcutTick()
     }
 }

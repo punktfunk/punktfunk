@@ -31,6 +31,7 @@ pub(super) struct OverlayFacts<'s> {
     pads: Vec<PadInfo>,
     ring: Option<RingFacts>,
     native: Mode,
+    shortcuts: std::rc::Rc<pf_client_core::shortcuts::Shortcuts>,
 }
 
 impl OverlayFacts<'_> {
@@ -56,6 +57,7 @@ impl OverlayFacts<'_> {
             pads: &self.pads,
             ring: self.ring.as_ref(),
             native: self.native,
+            shortcuts: &self.shortcuts,
         }
     }
 }
@@ -106,7 +108,7 @@ impl Shell {
             hint: live
                 .and_then(|st| st.capture.as_ref())
                 .filter(|cap| !cap.captured() && cap.can_capture() && !self.focus_lost)
-                .map(|_| capture_hint(pad.is_some())),
+                .map(|_| capture_hint(pad.is_some(), &self.shortcuts)),
             // A pill that never goes away is chrome, so it rides the stats tier. `None` for a
             // full-control permanent session.
             access: live
@@ -131,6 +133,7 @@ impl Shell {
                 )
             }),
             native: self.native,
+            shortcuts: self.shortcuts.clone(),
         }
     }
 }

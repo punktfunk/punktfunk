@@ -318,7 +318,7 @@ Apple is one app across macOS, iOS/iPadOS and tvOS. Android TV is the Android ap
     up to it.
 15. Pressure and contact area are dropped.
 
-Keyboard chords, and what each host can type, are in [Input](/docs/input).
+Keyboard chords are in [Shortcuts and quick actions](/docs/shortcuts).
 
 ### Picture and sound while you stream
 

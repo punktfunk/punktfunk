@@ -14,8 +14,8 @@ use adw::prelude::*;
 use gtk::gdk;
 use gtk::glib;
 use pf_client_core::overlay_actions::{
-    catalogue, chord_chip, key_legend, slot_icon, Chord, OverlayConfig, RingPlatform, Shortcut,
-    SlotId, CHORD_MODIFIERS, KEY_GRID, RING_SLOTS,
+    catalogue, chord_chip, key_legend, slot_icon, CatalogueGroup, Chord, OverlayConfig,
+    RingPlatform, Shortcut, SlotId, CHORD_MODIFIERS, KEY_GRID, RING_SLOTS,
 };
 use pf_client_core::ring::{slot_offset, CENTRE_DIAMETER, RING_RADIUS, SLOT_DIAMETER};
 use pf_l10n::{client, common, desktop};
@@ -107,6 +107,11 @@ fn short_label(cfg: &OverlayConfig, slot: &SlotId) -> String {
         SlotId::PadType => client::ring_pad_type_short().into(),
         SlotId::StreamMute => client::ring_stream_mute_short().into(),
         SlotId::SwapScreens => client::ring_swap_screens_short().into(),
+        SlotId::ReleaseInput => client::ring_release_input_short().into(),
+        SlotId::MouseMode => client::ring_mouse_mode_short().into(),
+        SlotId::Fullscreen => client::ring_fullscreen_short().into(),
+        SlotId::Minimize => client::ring_minimize_short().into(),
+        SlotId::Clipboard => client::ring_clipboard_short().into(),
         SlotId::Host(_) => client::ring_host_short().into(),
         SlotId::Shortcut(id) => cfg
             .shortcut(id)
@@ -116,7 +121,7 @@ fn short_label(cfg: &OverlayConfig, slot: &SlotId) -> String {
 }
 
 /// A slot's full name and its availability note on this shell, from the shared catalogue.
-fn describe(cfg: &OverlayConfig, slot: &SlotId) -> (String, String) {
+pub(super) fn describe(cfg: &OverlayConfig, slot: &SlotId) -> (String, String) {
     let id = slot.id();
     catalogue(cfg, RingPlatform::Desktop)
         .into_iter()
@@ -127,7 +132,7 @@ fn describe(cfg: &OverlayConfig, slot: &SlotId) -> (String, String) {
 }
 
 /// Our name for a GDK key, or `None` for one the wire does not carry.
-fn key_name(key: gdk::Key) -> Option<&'static str> {
+pub(super) fn key_name(key: gdk::Key) -> Option<&'static str> {
     use gdk::Key as K;
     Some(match key.to_lower() {
         K::Escape => "escape",
@@ -174,7 +179,7 @@ fn key_name(key: gdk::Key) -> Option<&'static str> {
 /// The name of the key at this physical position with NOTHING held, for a chord whose
 /// shifted symbol the grid cannot name — `Shift+1` arrives as `!` on a US layout, and the
 /// whole chord used to be dropped instead of read as Shift plus `1`.
-fn unshifted_key_name(keycode: u32) -> Option<&'static str> {
+pub(super) fn unshifted_key_name(keycode: u32) -> Option<&'static str> {
     let entries = gdk::Display::default()?.map_keycode(keycode)?;
     entries
         .iter()
@@ -182,8 +187,20 @@ fn unshifted_key_name(keycode: u32) -> Option<&'static str> {
         .and_then(|(_, keyval)| key_name(*keyval))
 }
 
+/// The chord's name for a modifier key itself.
+fn modifier_of(key: gdk::Key) -> Option<&'static str> {
+    use gdk::Key as K;
+    match key {
+        K::Control_L | K::Control_R => Some("ctrl"),
+        K::Alt_L | K::Alt_R | K::Meta_L | K::Meta_R => Some("alt"),
+        K::Shift_L | K::Shift_R => Some("shift"),
+        K::Super_L | K::Super_R => Some("win"),
+        _ => None,
+    }
+}
+
 /// The modifiers held with a key, as the chord names them.
-fn held_modifiers(state: gdk::ModifierType) -> Vec<String> {
+pub(super) fn held_modifiers(state: gdk::ModifierType) -> Vec<String> {
     let mut v = Vec::new();
     if state.contains(gdk::ModifierType::CONTROL_MASK) {
         v.push("ctrl".into());
@@ -261,12 +278,13 @@ fn editor_page(shared: &Shared) -> adw::NavigationPage {
         .orientation(gtk::Orientation::Vertical)
         .spacing(18)
         .build();
+    let opens = super::shortcuts::ring_chords()
+        .map(|(keys, pad)| desktop::desktop_ring_editor_open_hint(&keys, &pad));
     let caption = gtk::Label::builder()
-        .label(format!(
-            "{} {}",
-            desktop::desktop_ring_editor_hint(),
-            desktop::desktop_ring_editor_open_hint("Ctrl+Alt+Shift+O", "Select+A")
-        ))
+        .label(match opens {
+            Some(opens) => format!("{} {opens}", desktop::desktop_ring_editor_hint()),
+            None => desktop::desktop_ring_editor_hint().into(),
+        })
         .wrap(true)
         .xalign(0.0)
         .css_classes(["dim-label"])
@@ -556,11 +574,31 @@ fn build_ring(
     }
 }
 
-/// The picker over a slot: the catalogue by group with each entry's note and the current
-/// pick marked, then the swap targets for a keyboard.
+/// The picker over a slot: the catalogue by group, the slot's pick marked.
 fn picker(button: &gtk::Button, k: usize, shared: &Shared, rebuild: Option<Rc<dyn Fn()>>) {
     let cfg = shared.cfg();
     let current = cfg.ring[k].as_ref().map(SlotId::id).unwrap_or_default();
+    let shared = shared.clone();
+    let groups = catalogue(&cfg, RingPlatform::Desktop);
+    action_picker(button, groups, &current, move |id| {
+        let mut cfg = shared.cfg();
+        cfg.ring[k] = SlotId::parse(&id);
+        shared.write(&cfg);
+        if let Some(f) = &rebuild {
+            f();
+        }
+    });
+}
+
+/// `groups` in a popover on `anchor`, each entry's note under it and `current` marked. A pick
+/// closes the popover and hands `on_pick` the entry's id.
+pub(super) fn action_picker(
+    anchor: &impl IsA<gtk::Widget>,
+    groups: Vec<CatalogueGroup>,
+    current: &str,
+    on_pick: impl Fn(String) + 'static,
+) {
+    let on_pick = Rc::new(on_pick);
     let list = gtk::ListBox::builder()
         .selection_mode(gtk::SelectionMode::None)
         .css_classes(["boxed-list"])
@@ -581,7 +619,7 @@ fn picker(button: &gtk::Button, k: usize, shared: &Shared, rebuild: Option<Rc<dy
             )
             .build()
     };
-    for group in catalogue(&cfg, RingPlatform::Desktop) {
+    for group in groups {
         list.append(&header(group.title));
         for entry in group.entries {
             let row = adw::ActionRow::builder()
@@ -595,16 +633,10 @@ fn picker(button: &gtk::Button, k: usize, shared: &Shared, rebuild: Option<Rc<dy
             if entry.id == current {
                 row.add_suffix(&crate::widgets::lucide::row_icon("check"));
             }
-            let (shared, rebuild, popover, id) =
-                (shared.clone(), rebuild.clone(), popover.clone(), entry.id);
+            let (on_pick, popover, id) = (on_pick.clone(), popover.clone(), entry.id);
             row.connect_activated(move |_| {
-                let mut cfg = shared.cfg();
-                cfg.ring[k] = SlotId::parse(&id);
-                shared.write(&cfg);
                 popover.popdown();
-                if let Some(f) = &rebuild {
-                    f();
-                }
+                on_pick(id.clone());
             });
             list.append(&row);
         }
@@ -623,7 +655,7 @@ fn picker(button: &gtk::Button, k: usize, shared: &Shared, rebuild: Option<Rc<dy
         .build();
     scroll.set_size_request(380, -1);
     popover.set_child(Some(&scroll));
-    popover.set_parent(button);
+    popover.set_parent(anchor);
     // A popover must leave its parent once closed, or GTK complains when the disc goes; the
     // rebuild that follows a pick drops the disc, so unparent a beat later.
     popover.connect_closed(|p| {
@@ -868,47 +900,61 @@ fn shortcut_page(
     grid_group.add(&grid);
     content.append(&grid_group);
 
-    // Pressing the chord on the real keyboard fills the modifiers and the key in one go.
+    // Pressing the chord on the real keyboard fills the modifiers and the key in one go. A
+    // modifier pressed alone is taken when it lifts: Win by itself opens the Start menu.
     {
         let key = gtk::EventControllerKey::new();
         key.set_propagation_phase(gtk::PropagationPhase::Capture);
-        let (capture, draft, refresh, mod_buttons, key_buttons) = (
-            capture.clone(),
-            draft.clone(),
-            refresh_preview.clone(),
-            mod_buttons.clone(),
-            key_buttons.clone(),
-        );
+        let take: Rc<dyn Fn(Vec<String>, Option<&'static str>)> = {
+            let (capture, draft, refresh, mod_buttons, key_buttons) = (
+                capture.clone(),
+                draft.clone(),
+                refresh_preview.clone(),
+                mod_buttons.clone(),
+                key_buttons.clone(),
+            );
+            Rc::new(move |mods, name| {
+                {
+                    let mut d = draft.borrow_mut();
+                    for (i, m) in CHORD_MODIFIERS.iter().enumerate() {
+                        d.chord.mods[i] = mods.iter().any(|x| x == m);
+                    }
+                    d.chord.key = name.map(str::to_string);
+                }
+                // Copy out first: `set_active` emits `toggled` synchronously, and that handler
+                // takes the draft mutably — a borrow still live inside the call panics.
+                let mods = draft.borrow().chord.mods;
+                for (i, b) in mod_buttons.iter().enumerate() {
+                    b.set_active(mods[i]);
+                }
+                for (n, b) in key_buttons.borrow().iter() {
+                    b.set_active(Some(*n) == name);
+                }
+                capture.set_active(false);
+                refresh();
+            })
+        };
+        let lone = Rc::new(std::cell::Cell::new(false));
+        let capture_up = capture.clone();
+        let (capture, on_press, pressed_alone) = (capture.clone(), take.clone(), lone.clone());
         key.connect_key_pressed(move |_, keyval, keycode, state| {
             if !capture.is_active() {
                 return glib::Propagation::Proceed;
             }
-            let Some(name) = key_name(keyval).or_else(|| unshifted_key_name(keycode)) else {
-                // A lone modifier: keep waiting for the key.
-                return glib::Propagation::Stop;
-            };
-            let mods = held_modifiers(state);
-            {
-                let mut d = draft.borrow_mut();
-                for (i, m) in CHORD_MODIFIERS.iter().enumerate() {
-                    d.chord.mods[i] = mods.iter().any(|x| x == m);
-                }
-                d.chord.key = Some(name.to_string());
+            let name = key_name(keyval).or_else(|| unshifted_key_name(keycode));
+            pressed_alone.set(name.is_none() && modifier_of(keyval).is_some());
+            if let Some(name) = name {
+                on_press(held_modifiers(state), Some(name));
             }
-            // Copy out first: `set_active` emits `toggled` synchronously, and that handler
-            // takes the draft mutably — a borrow still live inside the call panics.
-            let mods = draft.borrow().chord.mods;
-            for (i, b) in mod_buttons.iter().enumerate() {
-                b.set_active(mods[i]);
-            }
-            for (n, b) in key_buttons.borrow().iter() {
-                if *n == name {
-                    b.set_active(true);
-                }
-            }
-            capture.set_active(false);
-            refresh();
             glib::Propagation::Stop
+        });
+        key.connect_key_released(move |_, keyval, _, state| {
+            if !capture_up.is_active() || !lone.replace(false) {
+                return;
+            }
+            let mut mods = held_modifiers(state);
+            mods.extend(modifier_of(keyval).map(String::from));
+            take(mods, None);
         });
         content.add_controller(key);
     }
@@ -935,7 +981,7 @@ fn shortcut_page(
         );
         save.connect_clicked(move |_| {
             let d = draft.borrow().clone();
-            if d.chord.key.is_none() {
+            if d.chord.keys().is_empty() {
                 let toast =
                     adw::AlertDialog::new(Some(client::ring_shortcut_pick_key_first()), None);
                 toast.add_responses(&[("ok", common::common_ok())]);

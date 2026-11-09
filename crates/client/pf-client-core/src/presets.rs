@@ -78,6 +78,9 @@ pub struct SettingsOverlay {
     /// Whole ring blob: inherit the default, or own the ring and shortcuts.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub overlay_actions: Option<String>,
+    /// Whole shortcuts blob, like the ring's.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub shortcuts: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub inhibit_shortcuts: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -178,6 +181,9 @@ impl SettingsOverlay {
         if let Some(v) = &self.overlay_actions {
             s.overlay_actions = v.clone();
         }
+        if let Some(v) = &self.shortcuts {
+            s.shortcuts = v.clone();
+        }
         if let Some(v) = self.inhibit_shortcuts {
             s.inhibit_shortcuts = v;
         }
@@ -247,6 +253,7 @@ impl SettingsOverlay {
             "mouse_mode" => self.mouse_mode = None,
             "invert_scroll" => self.invert_scroll = None,
             "overlay_actions" => self.overlay_actions = None,
+            "shortcuts" => self.shortcuts = None,
             "inhibit_shortcuts" => self.inhibit_shortcuts = None,
             "gamepad" => self.gamepad = None,
             "gamepad_forwarding" => self.gamepad_forwarding = None,
@@ -296,6 +303,7 @@ impl SettingsOverlay {
             "mouse_mode" => self.mouse_mode = Some(s.mouse_mode.clone()),
             "invert_scroll" => self.invert_scroll = Some(s.invert_scroll),
             "overlay_actions" => self.overlay_actions = Some(s.overlay_actions.clone()),
+            "shortcuts" => self.shortcuts = Some(s.shortcuts.clone()),
             "inhibit_shortcuts" => self.inhibit_shortcuts = Some(s.inhibit_shortcuts),
             "gamepad" => self.gamepad = Some(s.gamepad.clone()),
             "gamepad_forwarding" => self.gamepad_forwarding = Some(s.gamepad_forwarding),
@@ -341,6 +349,7 @@ impl SettingsOverlay {
             "mouse_mode" => self.mouse_mode.is_some(),
             "invert_scroll" => self.invert_scroll.is_some(),
             "overlay_actions" => self.overlay_actions.is_some(),
+            "shortcuts" => self.shortcuts.is_some(),
             "inhibit_shortcuts" => self.inhibit_shortcuts.is_some(),
             "gamepad" => self.gamepad.is_some(),
             "gamepad_forwarding" => self.gamepad_forwarding.is_some(),
@@ -599,6 +608,7 @@ pub(crate) mod tests {
             "mouse_mode",
             "invert_scroll",
             "overlay_actions",
+            "shortcuts",
             "inhibit_shortcuts",
             "gamepad",
             "gamepad_forwarding",

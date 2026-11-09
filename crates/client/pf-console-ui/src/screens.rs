@@ -8,7 +8,6 @@ pub(crate) mod add_host;
 pub(crate) mod bind_preset;
 pub(crate) mod card_menu;
 pub(crate) mod collections;
-pub(crate) mod controls;
 pub(crate) mod grants;
 pub(crate) mod home;
 pub(crate) mod input_test;
@@ -27,6 +26,7 @@ pub(crate) mod ring_editor;
 pub(crate) mod search;
 pub(crate) mod settings;
 pub(crate) mod shortcut_editor;
+pub(crate) mod shortcuts;
 pub(crate) mod unlock;
 
 use crate::glyphs::Hint;
@@ -501,8 +501,10 @@ pub(crate) enum Screen {
     PadMenu(pad_menu::PadMenuScreen),
     /// A question the app asks through the console ([`prompt::Prompt`]).
     Prompt(prompt::PromptScreen),
-    /// The stream controls. Raised by the About section.
-    Controls(controls::ControlsScreen),
+    /// The in-stream shortcuts. Raised by the Shortcuts settings row.
+    Shortcuts(shortcuts::ShortcutsScreen),
+    /// One shortcut: its action, buttons or keys, press or hold. Raised by a Shortcuts row.
+    ShortcutRow(Box<shortcuts::ShortcutRowScreen>),
     /// Open-source licences. Raised by the About section.
     Licenses(licenses::LicensesScreen),
     /// A title search over one host's shelf. Raised by the shelf's Search pill.
@@ -605,7 +607,8 @@ impl Screen {
             Screen::Grants(s) => s,
             Screen::PadMenu(s) => s,
             Screen::Prompt(s) => s,
-            Screen::Controls(s) => s,
+            Screen::Shortcuts(s) => s,
+            Screen::ShortcutRow(s) => &**s,
             Screen::Licenses(s) => s,
             Screen::Search(s) => s,
             Screen::PresetMenu(s) => s,
@@ -635,7 +638,8 @@ impl Screen {
             Screen::Grants(s) => s,
             Screen::PadMenu(s) => s,
             Screen::Prompt(s) => s,
-            Screen::Controls(s) => s,
+            Screen::Shortcuts(s) => s,
+            Screen::ShortcutRow(s) => &mut **s,
             Screen::Licenses(s) => s,
             Screen::Search(s) => s,
             Screen::PresetMenu(s) => s,

@@ -270,7 +270,7 @@ private struct KeycapDisc: View {
 }
 
 /// The catalogue by group; the current pick is ticked.
-private struct SlotPicker: View {
+struct SlotPicker: View {
     let groups: [SlotGroup]
     let current: String
     let choose: (String) -> Void
@@ -328,10 +328,10 @@ private struct ShortcutEditor: View {
                         KeycapDisc(keys: draft.keys)
                         VStack(alignment: .leading, spacing: 3) {
                             Text(draft.label.isEmpty
-                                 ? (key == nil ? String(localized: L10n.ringShortcutNoKey) : chordChip(draft.keys))
+                                 ? (draft.keys.isEmpty ? String(localized: L10n.ringShortcutNoKey) : chordChip(draft.keys))
                                  : draft.label)
                                 .font(.geist(15, .medium))
-                            Text(key == nil ? String(localized: L10n.ringShortcutPreview) : chordChip(draft.keys))
+                            Text(draft.keys.isEmpty ? String(localized: L10n.ringShortcutPreview) : chordChip(draft.keys))
                                 .font(.footnote)
                                 .foregroundStyle(.secondary)
                         }
@@ -397,7 +397,8 @@ private struct ShortcutEditor: View {
                         save(draft)
                         dismiss()
                     }
-                    .disabled(key == nil)
+                    // A modifier alone is a combination: Win opens the host's Start menu.
+                    .disabled(draft.keys.isEmpty)
                 }
             }
         }

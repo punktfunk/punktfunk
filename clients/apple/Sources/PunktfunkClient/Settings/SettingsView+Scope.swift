@@ -142,6 +142,10 @@ enum SettingsFields {
         .init(name: "overlay_actions", key: DefaultsKey.overlayActions,
               overlay: \.overlayActions, effective: \.overlayActions)
     }
+    static var shortcuts: SettingsField<String> {
+        .init(name: "shortcuts", key: DefaultsKey.shortcuts,
+              overlay: \.shortcuts, effective: \.shortcuts)
+    }
     static var inhibitShortcuts: SettingsField<Bool> {
         .init(name: "inhibit_shortcuts", key: DefaultsKey.inhibitShortcuts,
               overlay: \.inhibitShortcuts, effective: \.inhibitShortcuts)
@@ -161,10 +165,6 @@ enum SettingsFields {
     static var systemButtons: SettingsField<String> {
         .init(name: "system_buttons", key: DefaultsKey.systemButtons,
               overlay: \.systemButtons, effective: \.systemButtons)
-    }
-    static var guideGesture: SettingsField<String> {
-        .init(name: "guide_gesture", key: DefaultsKey.guideGesture,
-              overlay: \.guideGesture, effective: \.guideGesture)
     }
     static var statsVerbosity: SettingsField<String> {
         .init(name: "stats_verbosity", key: DefaultsKey.statsVerbosity,
@@ -235,6 +235,7 @@ extension SettingsView {
         base.presentPriority = presentPriority
         base.smoothBuffer = smoothBuffer
         base.overlayActions = overlayActions
+        base.shortcuts = shortcuts
         #if !os(tvOS)
         base.invertScroll = invertScroll
         base.modifierLayout = modifierLayout

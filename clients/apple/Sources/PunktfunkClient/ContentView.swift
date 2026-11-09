@@ -465,19 +465,12 @@ struct ContentView: View {
                 ring.native = nil // this session's Welcome mode, captured at its first open
                 // Host-action slots are pre-fetched here, never when the ring opens (§3.1).
                 if let host = model.activeHost { HostPowerStore.shared.refresh(host) }
-                // `Select+A` on a pad opens the ring in the middle of the stage; while it is up
-                // the pad belongs to it. On tvOS the remote's short Back arrives here too, and on
-                // macOS the chord and the menu item do — on both, a second press closes it again,
-                // because on neither is there a finger to tap the scrim with. iOS opens only: the
-                // twist that opened it also winds it back.
-                model.onRingChord = { [ring] pad in
-                    #if os(tvOS) || os(macOS)
-                    ring.toggleCentred()
-                    #else
-                    ring.pressTick &+= 1
-                    ring.openCentred()
-                    #endif
-                    if ring.committed { ring.opener = pad }
+                // The remote's short Back opens the ring in the middle of the stage; a pad's
+                // Quick actions shortcut does the same through `onShortcut`. While it is up the
+                // pad belongs to it.
+                model.onRingChord = { [ring] pad in ring.chordToggle(pad: pad) }
+                model.onShortcut = { [weak model, ring] action, phase, pad in
+                    model?.runShortcut(action, phase, pad: pad, ring: ring)
                 }
                 model.onRingNav = { [ring] nav in ring.nav(nav) }
                 // A session actually started — remember it on the card ("Connected … ago"
@@ -518,18 +511,6 @@ struct ContentView: View {
             cycleStats: { model.cycleStats() },
             toggleQuickActions: { if model.phase == .streaming { ring.toggleCentred() } },
             disconnect: { model.disconnect() }))
-        // ⌃⌥⇧A fired while input was CAPTURED (InputCapture's chord path posts it — the menu's
-        // identical equivalent can't reach a captured stream). Same toggle either way. It names
-        // its session, so a second window's stream keeps its own mic state.
-        .onReceive(NotificationCenter.default.publisher(for: .punktfunkToggleMicMute)) { note in
-            guard note.object as AnyObject === model.connection else { return }
-            model.toggleMicMute()
-        }
-        // ⌃⌥⇧C, captured: the same rule.
-        .onReceive(NotificationCenter.default.publisher(for: .punktfunkToggleClipboard)) { note in
-            guard note.object as AnyObject === model.connection else { return }
-            model.toggleClipboardSync()
-        }
         #endif
         #if os(macOS)
         // Fullscreen from launch under Always, else only while a session is up (incl. the trust

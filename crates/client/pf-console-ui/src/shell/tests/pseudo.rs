@@ -143,7 +143,9 @@ fn is_key(t: &str) -> bool {
         k.strip_prefix('F')
             .is_some_and(|n| !n.is_empty() && n.chars().all(|c| c.is_ascii_digit()))
     };
-    t.split(" + ").all(|k| KEYS.contains(&k) || function(k))
+    // A pad chord joins with " + ", a key chord with "+": "Ctrl+Alt+Shift+Q".
+    (t.split(" + ").flat_map(|k| k.split('+')))
+        .all(|k| KEYS.contains(&k) || function(k) || is_cap(k))
 }
 
 fn is_cap(t: &str) -> bool {
@@ -767,8 +769,22 @@ fn pushed(g: &mut Gate) {
             Screen::InputTest(crate::screens::input_test::InputTestScreen::new()),
         ),
         (
-            "controls",
-            Screen::Controls(crate::screens::controls::ControlsScreen::new(&ctx)),
+            "shortcuts",
+            Screen::Shortcuts(crate::screens::shortcuts::ShortcutsScreen::new(
+                &ctx,
+                Default::default(),
+            )),
+        ),
+        (
+            "shortcut",
+            Screen::ShortcutRow(Box::new(
+                crate::screens::shortcuts::ShortcutRowScreen::edit(
+                    &ctx,
+                    Default::default(),
+                    crate::screens::shortcuts::client(ctx.device.platform),
+                    0,
+                ),
+            )),
         ),
         (
             "licenses",
@@ -811,13 +827,15 @@ fn pushed(g: &mut Gate) {
         (
             "ring editor",
             Screen::RingEditor(Box::new(
-                crate::screens::ring_editor::RingEditorScreen::new(&ctx),
+                crate::screens::ring_editor::RingEditorScreen::new(&ctx, Default::default()),
             )),
         ),
         (
             "shortcut editor",
             Screen::ShortcutEditor(crate::screens::shortcut_editor::ShortcutEditorScreen::new(
-                &ctx, None,
+                &ctx,
+                None,
+                Default::default(),
             )),
         ),
         (

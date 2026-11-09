@@ -1,0 +1,937 @@
+{
+  "$comment": "In-stream shortcuts, the contract for every port: Rust pf_client_core::shortcuts (tests.rs), Swift Shortcuts.swift, Kotlin Shortcuts.kt, TypeScript shortcuts.ts. A port that disagrees reports it; nobody edits a row to make a port pass. Blob schema v1: {\"v\":1,\"bindings\":[{\"on\":\"pad\"|\"key\",\"keys\":[...],\"hold\":bool,\"do\":\"<action id>\"}]}. Pad keys are button names (a b x y lb rb ls rs start select guide up down left right touchpad misc1 misc2 paddle1-4; any case, back = select). Key keys are key_vk names, the last one the key, the others modifiers (ctrl alt shift). An action id is a quick-action slot id, host:<id>, shortcut:<id> or ring. Design: design/client-shortcuts.md §3, §4, §6.",
+
+  "parse": {
+    "$comment": "parse(blob).to_json() read back as JSON equals expect (field order free; a pad binding always writes hold, a key binding never does; modifiers come out ctrl, alt, shift). defaults: true means resolve() takes the client's defaults instead, because the blob is empty or not a shortcuts blob at all.",
+    "cases": [
+      {
+        "name": "a blob reads back as written",
+        "blob": "{\"v\":1,\"bindings\":[{\"on\":\"pad\",\"keys\":[\"select\",\"a\"],\"hold\":false,\"do\":\"ring\"},{\"on\":\"pad\",\"keys\":[\"select\"],\"hold\":true,\"do\":\"guide\"},{\"on\":\"key\",\"keys\":[\"ctrl\",\"alt\",\"shift\",\"o\"],\"do\":\"ring\"},{\"on\":\"key\",\"keys\":[\"f11\"],\"do\":\"fullscreen\"}]}",
+        "defaults": false,
+        "expect": {"v": 1, "bindings": [
+          {"on": "pad", "keys": ["select", "a"], "hold": false, "do": "ring"},
+          {"on": "pad", "keys": ["select"], "hold": true, "do": "guide"},
+          {"on": "key", "keys": ["ctrl", "alt", "shift", "o"], "do": "ring"},
+          {"on": "key", "keys": ["f11"], "do": "fullscreen"}
+        ]}
+      },
+      {
+        "name": "hold absent is a press",
+        "blob": "{\"v\":1,\"bindings\":[{\"on\":\"pad\",\"keys\":[\"select\",\"x\"],\"do\":\"stats\"}]}",
+        "defaults": false,
+        "expect": {"v": 1, "bindings": [{"on": "pad", "keys": ["select", "x"], "hold": false, "do": "stats"}]}
+      },
+      {
+        "name": "button names take any case, back is select, a repeat folds",
+        "blob": "{\"v\":1,\"bindings\":[{\"on\":\"pad\",\"keys\":[\"Back\",\"A\",\"select\"],\"hold\":false,\"do\":\"ring\"}]}",
+        "defaults": false,
+        "expect": {"v": 1, "bindings": [{"on": "pad", "keys": ["select", "a"], "hold": false, "do": "ring"}]}
+      },
+      {
+        "name": "the pad art's grip names are the paddles",
+        "blob": "{\"v\":1,\"bindings\":[{\"on\":\"pad\",\"keys\":[\"R4\",\"l4\"],\"hold\":true,\"do\":\"ring\"},{\"on\":\"pad\",\"keys\":[\"r5\",\"L5\"],\"hold\":true,\"do\":\"stats\"}]}",
+        "defaults": false,
+        "expect": {"v": 1, "bindings": [{"on": "pad", "keys": ["paddle1", "paddle2"], "hold": true, "do": "ring"}, {"on": "pad", "keys": ["paddle3", "paddle4"], "hold": true, "do": "stats"}]}
+      },
+      {
+        "name": "modifier aliases fold and sort, the key is lowercased",
+        "blob": "{\"v\":1,\"bindings\":[{\"on\":\"key\",\"keys\":[\"shift\",\"control\",\"option\",\"Q\"],\"do\":\"release_input\"}]}",
+        "defaults": false,
+        "expect": {"v": 1, "bindings": [{"on": "key", "keys": ["ctrl", "alt", "shift", "q"], "do": "release_input"}]}
+      },
+      {
+        "name": "an unknown action keeps its row",
+        "blob": "{\"v\":1,\"bindings\":[{\"on\":\"pad\",\"keys\":[\"start\"],\"hold\":true,\"do\":\"teleport\"}]}",
+        "defaults": false,
+        "expect": {"v": 1, "bindings": [{"on": "pad", "keys": ["start"], "hold": true, "do": "teleport"}]}
+      },
+      {
+        "name": "a key combination and a host action are kept by id",
+        "blob": "{\"v\":1,\"bindings\":[{\"on\":\"pad\",\"keys\":[\"select\"],\"hold\":true,\"do\":\"shortcut:s1\"},{\"on\":\"key\",\"keys\":[\"ctrl\",\"alt\",\"shift\",\"p\"],\"do\":\"host:power.sleep\"}]}",
+        "defaults": false,
+        "expect": {"v": 1, "bindings": [
+          {"on": "pad", "keys": ["select"], "hold": true, "do": "shortcut:s1"},
+          {"on": "key", "keys": ["ctrl", "alt", "shift", "p"], "do": "host:power.sleep"}
+        ]}
+      },
+      {
+        "name": "an unknown button drops that binding only",
+        "blob": "{\"v\":1,\"bindings\":[{\"on\":\"pad\",\"keys\":[\"select\",\"zr\"],\"hold\":false,\"do\":\"ring\"},{\"on\":\"pad\",\"keys\":[\"select\",\"x\"],\"hold\":false,\"do\":\"stats\"}]}",
+        "defaults": false,
+        "expect": {"v": 1, "bindings": [{"on": "pad", "keys": ["select", "x"], "hold": false, "do": "stats"}]}
+      },
+      {
+        "name": "an unknown key drops that binding",
+        "blob": "{\"v\":1,\"bindings\":[{\"on\":\"key\",\"keys\":[\"ctrl\",\"volumeup\"],\"do\":\"mic\"}]}",
+        "defaults": false,
+        "expect": {"v": 1, "bindings": []}
+      },
+      {
+        "name": "a modifier shortcuts do not offer drops that binding",
+        "blob": "{\"v\":1,\"bindings\":[{\"on\":\"key\",\"keys\":[\"win\",\"e\"],\"do\":\"mic\"}]}",
+        "defaults": false,
+        "expect": {"v": 1, "bindings": []}
+      },
+      {
+        "name": "a binding without a device, keys or action is dropped",
+        "blob": "{\"v\":1,\"bindings\":[{\"keys\":[\"select\",\"a\"],\"do\":\"ring\"},{\"on\":\"pad\",\"keys\":[],\"do\":\"ring\"},{\"on\":\"pad\",\"keys\":[\"select\",\"a\"]},{\"on\":\"mouse\",\"keys\":[\"x1\"],\"do\":\"ring\"}]}",
+        "defaults": false,
+        "expect": {"v": 1, "bindings": []}
+      },
+      {
+        "name": "an empty list is no shortcuts, not the defaults",
+        "blob": "{\"v\":1,\"bindings\":[]}",
+        "defaults": false,
+        "expect": {"v": 1, "bindings": []}
+      },
+      {
+        "name": "an empty blob is the defaults",
+        "blob": "",
+        "defaults": true,
+        "expect": {"v": 1, "bindings": []}
+      },
+      {
+        "name": "a blob that is not JSON is the defaults",
+        "blob": "not json",
+        "defaults": true,
+        "expect": {"v": 1, "bindings": []}
+      },
+      {
+        "name": "a blob without a bindings list is the defaults",
+        "blob": "{\"v\":1}",
+        "defaults": true,
+        "expect": {"v": 1, "bindings": []}
+      }
+    ]
+  },
+
+  "defaults": {
+    "$comment": "defaults(client, game_mode, guide_gesture) as a blob. guide_gesture is the retired Hold Select for guide setting: on and off decide the Hold Select row where a client has one (desktop, android, apple, mac); anything else is automatic (desktop: game_mode; apple: on; android, mac: off). Clients: desktop android apple mac webos web tizen ps5 switch. The switch names wire bits, so its Minus + A is [select, b]. Order is the reference screen's: pad rows, then keys.",
+    "cases": [
+      {
+        "client": "desktop", "game_mode": false, "guide_gesture": "auto",
+        "expect": [
+          {"on": "pad", "keys": ["select", "a"], "hold": false, "do": "ring"},
+          {"on": "pad", "keys": ["select", "x"], "hold": false, "do": "stats"},
+          {"on": "pad", "keys": ["lb", "rb", "start", "select"], "hold": false, "do": "release_input"},
+          {"on": "pad", "keys": ["lb", "rb", "start", "select"], "hold": true, "do": "end_stream"},
+          {"on": "key", "keys": ["ctrl", "alt", "shift", "q"], "do": "release_input"},
+          {"on": "key", "keys": ["ctrl", "alt", "shift", "d"], "do": "end_stream"},
+          {"on": "key", "keys": ["ctrl", "alt", "shift", "s"], "do": "stats"},
+          {"on": "key", "keys": ["ctrl", "alt", "shift", "o"], "do": "ring"},
+          {"on": "key", "keys": ["ctrl", "alt", "shift", "v"], "do": "mic"},
+          {"on": "key", "keys": ["ctrl", "alt", "shift", "m"], "do": "mouse_mode"},
+          {"on": "key", "keys": ["f11"], "do": "fullscreen"},
+          {"on": "key", "keys": ["alt", "enter"], "do": "fullscreen"}
+        ]
+      },
+      {
+        "client": "desktop", "game_mode": true, "guide_gesture": "auto",
+        "expect": [
+          {"on": "pad", "keys": ["select", "a"], "hold": false, "do": "ring"},
+          {"on": "pad", "keys": ["select", "x"], "hold": false, "do": "stats"},
+          {"on": "pad", "keys": ["select"], "hold": true, "do": "guide"},
+          {"on": "pad", "keys": ["lb", "rb", "start", "select"], "hold": false, "do": "release_input"},
+          {"on": "pad", "keys": ["lb", "rb", "start", "select"], "hold": true, "do": "end_stream"},
+          {"on": "key", "keys": ["ctrl", "alt", "shift", "q"], "do": "release_input"},
+          {"on": "key", "keys": ["ctrl", "alt", "shift", "d"], "do": "end_stream"},
+          {"on": "key", "keys": ["ctrl", "alt", "shift", "s"], "do": "stats"},
+          {"on": "key", "keys": ["ctrl", "alt", "shift", "o"], "do": "ring"},
+          {"on": "key", "keys": ["ctrl", "alt", "shift", "v"], "do": "mic"},
+          {"on": "key", "keys": ["ctrl", "alt", "shift", "m"], "do": "mouse_mode"},
+          {"on": "key", "keys": ["f11"], "do": "fullscreen"},
+          {"on": "key", "keys": ["alt", "enter"], "do": "fullscreen"}
+        ]
+      },
+      {
+        "client": "desktop", "game_mode": true, "guide_gesture": "off",
+        "expect": [
+          {"on": "pad", "keys": ["select", "a"], "hold": false, "do": "ring"},
+          {"on": "pad", "keys": ["select", "x"], "hold": false, "do": "stats"},
+          {"on": "pad", "keys": ["lb", "rb", "start", "select"], "hold": false, "do": "release_input"},
+          {"on": "pad", "keys": ["lb", "rb", "start", "select"], "hold": true, "do": "end_stream"},
+          {"on": "key", "keys": ["ctrl", "alt", "shift", "q"], "do": "release_input"},
+          {"on": "key", "keys": ["ctrl", "alt", "shift", "d"], "do": "end_stream"},
+          {"on": "key", "keys": ["ctrl", "alt", "shift", "s"], "do": "stats"},
+          {"on": "key", "keys": ["ctrl", "alt", "shift", "o"], "do": "ring"},
+          {"on": "key", "keys": ["ctrl", "alt", "shift", "v"], "do": "mic"},
+          {"on": "key", "keys": ["ctrl", "alt", "shift", "m"], "do": "mouse_mode"},
+          {"on": "key", "keys": ["f11"], "do": "fullscreen"},
+          {"on": "key", "keys": ["alt", "enter"], "do": "fullscreen"}
+        ]
+      },
+      {
+        "client": "android", "game_mode": false, "guide_gesture": "auto",
+        "expect": [
+          {"on": "pad", "keys": ["select", "a"], "hold": false, "do": "ring"},
+          {"on": "pad", "keys": ["select", "x"], "hold": false, "do": "stats"},
+          {"on": "pad", "keys": ["select", "y"], "hold": false, "do": "mic"},
+          {"on": "pad", "keys": ["lb", "rb", "start", "select"], "hold": true, "do": "end_stream"},
+          {"on": "key", "keys": ["ctrl", "alt", "shift", "q"], "do": "release_input"},
+          {"on": "key", "keys": ["ctrl", "alt", "shift", "o"], "do": "ring"}
+        ]
+      },
+      {
+        "client": "android", "game_mode": false, "guide_gesture": "on",
+        "expect": [
+          {"on": "pad", "keys": ["select", "a"], "hold": false, "do": "ring"},
+          {"on": "pad", "keys": ["select", "x"], "hold": false, "do": "stats"},
+          {"on": "pad", "keys": ["select", "y"], "hold": false, "do": "mic"},
+          {"on": "pad", "keys": ["select"], "hold": true, "do": "guide"},
+          {"on": "pad", "keys": ["lb", "rb", "start", "select"], "hold": true, "do": "end_stream"},
+          {"on": "key", "keys": ["ctrl", "alt", "shift", "q"], "do": "release_input"},
+          {"on": "key", "keys": ["ctrl", "alt", "shift", "o"], "do": "ring"}
+        ]
+      },
+      {
+        "client": "apple", "game_mode": false, "guide_gesture": "auto",
+        "expect": [
+          {"on": "pad", "keys": ["select", "a"], "hold": false, "do": "ring"},
+          {"on": "pad", "keys": ["select", "x"], "hold": false, "do": "stats"},
+          {"on": "pad", "keys": ["select"], "hold": true, "do": "guide"},
+          {"on": "pad", "keys": ["lb", "rb", "start", "select"], "hold": true, "do": "end_stream"},
+          {"on": "key", "keys": ["ctrl", "alt", "shift", "q"], "do": "release_input"},
+          {"on": "key", "keys": ["ctrl", "alt", "shift", "d"], "do": "end_stream"},
+          {"on": "key", "keys": ["ctrl", "alt", "shift", "s"], "do": "stats"},
+          {"on": "key", "keys": ["ctrl", "alt", "shift", "o"], "do": "ring"},
+          {"on": "key", "keys": ["ctrl", "alt", "shift", "c"], "do": "clipboard"},
+          {"on": "key", "keys": ["ctrl", "alt", "shift", "a"], "do": "mic"}
+        ]
+      },
+      {
+        "client": "apple", "game_mode": false, "guide_gesture": "off",
+        "expect": [
+          {"on": "pad", "keys": ["select", "a"], "hold": false, "do": "ring"},
+          {"on": "pad", "keys": ["select", "x"], "hold": false, "do": "stats"},
+          {"on": "pad", "keys": ["lb", "rb", "start", "select"], "hold": true, "do": "end_stream"},
+          {"on": "key", "keys": ["ctrl", "alt", "shift", "q"], "do": "release_input"},
+          {"on": "key", "keys": ["ctrl", "alt", "shift", "d"], "do": "end_stream"},
+          {"on": "key", "keys": ["ctrl", "alt", "shift", "s"], "do": "stats"},
+          {"on": "key", "keys": ["ctrl", "alt", "shift", "o"], "do": "ring"},
+          {"on": "key", "keys": ["ctrl", "alt", "shift", "c"], "do": "clipboard"},
+          {"on": "key", "keys": ["ctrl", "alt", "shift", "a"], "do": "mic"}
+        ]
+      },
+      {
+        "client": "mac", "game_mode": false, "guide_gesture": "auto",
+        "expect": [
+          {"on": "pad", "keys": ["select", "a"], "hold": false, "do": "ring"},
+          {"on": "pad", "keys": ["select", "x"], "hold": false, "do": "stats"},
+          {"on": "pad", "keys": ["lb", "rb", "start", "select"], "hold": true, "do": "end_stream"},
+          {"on": "key", "keys": ["ctrl", "alt", "shift", "q"], "do": "release_input"},
+          {"on": "key", "keys": ["ctrl", "alt", "shift", "d"], "do": "end_stream"},
+          {"on": "key", "keys": ["ctrl", "alt", "shift", "s"], "do": "stats"},
+          {"on": "key", "keys": ["ctrl", "alt", "shift", "o"], "do": "ring"},
+          {"on": "key", "keys": ["ctrl", "alt", "shift", "m"], "do": "mouse_mode"},
+          {"on": "key", "keys": ["ctrl", "alt", "shift", "c"], "do": "clipboard"},
+          {"on": "key", "keys": ["ctrl", "alt", "shift", "a"], "do": "mic"}
+        ]
+      },
+      {
+        "client": "mac", "game_mode": false, "guide_gesture": "on",
+        "expect": [
+          {"on": "pad", "keys": ["select", "a"], "hold": false, "do": "ring"},
+          {"on": "pad", "keys": ["select", "x"], "hold": false, "do": "stats"},
+          {"on": "pad", "keys": ["select"], "hold": true, "do": "guide"},
+          {"on": "pad", "keys": ["lb", "rb", "start", "select"], "hold": true, "do": "end_stream"},
+          {"on": "key", "keys": ["ctrl", "alt", "shift", "q"], "do": "release_input"},
+          {"on": "key", "keys": ["ctrl", "alt", "shift", "d"], "do": "end_stream"},
+          {"on": "key", "keys": ["ctrl", "alt", "shift", "s"], "do": "stats"},
+          {"on": "key", "keys": ["ctrl", "alt", "shift", "o"], "do": "ring"},
+          {"on": "key", "keys": ["ctrl", "alt", "shift", "m"], "do": "mouse_mode"},
+          {"on": "key", "keys": ["ctrl", "alt", "shift", "c"], "do": "clipboard"},
+          {"on": "key", "keys": ["ctrl", "alt", "shift", "a"], "do": "mic"}
+        ]
+      },
+      {
+        "client": "webos", "game_mode": false, "guide_gesture": "auto",
+        "expect": [
+          {"on": "pad", "keys": ["select", "a"], "hold": false, "do": "ring"},
+          {"on": "pad", "keys": ["lb", "rb", "start", "select"], "hold": true, "do": "end_stream"}
+        ]
+      },
+      {
+        "client": "web", "game_mode": false, "guide_gesture": "auto",
+        "expect": [
+          {"on": "pad", "keys": ["select", "a"], "hold": false, "do": "ring"},
+          {"on": "pad", "keys": ["lb", "rb", "start", "select"], "hold": false, "do": "release_input"},
+          {"on": "pad", "keys": ["lb", "rb", "start", "select"], "hold": true, "do": "end_stream"},
+          {"on": "key", "keys": ["ctrl", "alt", "shift", "q"], "do": "release_input"},
+          {"on": "key", "keys": ["ctrl", "alt", "shift", "d"], "do": "end_stream"},
+          {"on": "key", "keys": ["ctrl", "alt", "shift", "s"], "do": "stats"},
+          {"on": "key", "keys": ["ctrl", "alt", "shift", "o"], "do": "ring"},
+          {"on": "key", "keys": ["ctrl", "alt", "shift", "v"], "do": "mic"},
+          {"on": "key", "keys": ["ctrl", "alt", "shift", "m"], "do": "mouse_mode"},
+          {"on": "key", "keys": ["f11"], "do": "fullscreen"},
+          {"on": "key", "keys": ["alt", "enter"], "do": "fullscreen"}
+        ]
+      },
+      {
+        "client": "tizen", "game_mode": false, "guide_gesture": "auto",
+        "expect": [
+          {"on": "pad", "keys": ["select", "a"], "hold": false, "do": "ring"},
+          {"on": "pad", "keys": ["lb", "rb", "start", "select"], "hold": false, "do": "release_input"},
+          {"on": "pad", "keys": ["lb", "rb", "start", "select"], "hold": true, "do": "end_stream"},
+          {"on": "key", "keys": ["ctrl", "alt", "shift", "q"], "do": "release_input"},
+          {"on": "key", "keys": ["ctrl", "alt", "shift", "d"], "do": "end_stream"},
+          {"on": "key", "keys": ["ctrl", "alt", "shift", "s"], "do": "stats"},
+          {"on": "key", "keys": ["ctrl", "alt", "shift", "o"], "do": "ring"},
+          {"on": "key", "keys": ["ctrl", "alt", "shift", "v"], "do": "mic"},
+          {"on": "key", "keys": ["ctrl", "alt", "shift", "m"], "do": "mouse_mode"},
+          {"on": "key", "keys": ["f11"], "do": "fullscreen"},
+          {"on": "key", "keys": ["alt", "enter"], "do": "fullscreen"}
+        ]
+      },
+      {
+        "client": "ps5", "game_mode": false, "guide_gesture": "auto",
+        "expect": [
+          {"on": "pad", "keys": ["touchpad", "a"], "hold": false, "do": "ring"},
+          {"on": "pad", "keys": ["lb", "rb", "start", "touchpad"], "hold": true, "do": "end_stream"}
+        ]
+      },
+      {
+        "client": "switch", "game_mode": false, "guide_gesture": "auto",
+        "expect": [
+          {"on": "pad", "keys": ["select", "b"], "hold": false, "do": "ring"},
+          {"on": "pad", "keys": ["lb", "rb", "start", "select"], "hold": true, "do": "end_stream"}
+        ]
+      }
+    ]
+  },
+
+  "validate": {
+    "$comment": "Whether candidate may join bindings. expect is ok, identical, press_subset (index = the existing binding it meets), single_press, no_modifier or no_key. A key needs ctrl, alt or shift unless it is f1-f24. Bindings and candidate use the blob's binding shape.",
+    "cases": [
+      {
+        "name": "a press that a hold starts is allowed",
+        "bindings": [{"on": "pad", "keys": ["select"], "hold": true, "do": "guide"}],
+        "candidate": {"on": "pad", "keys": ["select", "a"], "hold": false, "do": "ring"},
+        "expect": "ok"
+      },
+      {
+        "name": "the same buttons as a press and a hold are two-stage",
+        "bindings": [{"on": "pad", "keys": ["lb", "rb", "start", "select"], "hold": true, "do": "end_stream"}],
+        "candidate": {"on": "pad", "keys": ["lb", "rb", "start", "select"], "hold": false, "do": "release_input"},
+        "expect": "ok"
+      },
+      {
+        "name": "a press inside the new chord would fire first",
+        "bindings": [{"on": "pad", "keys": ["select", "a"], "hold": false, "do": "ring"}],
+        "candidate": {"on": "pad", "keys": ["select", "a", "b"], "hold": false, "do": "stats"},
+        "expect": "press_subset", "index": 0
+      },
+      {
+        "name": "a new press inside a hold's chord would fire first",
+        "bindings": [
+          {"on": "pad", "keys": ["start"], "hold": true, "do": "ring"},
+          {"on": "pad", "keys": ["select", "a", "b"], "hold": true, "do": "stats"}
+        ],
+        "candidate": {"on": "pad", "keys": ["select", "a"], "hold": false, "do": "mic"},
+        "expect": "press_subset", "index": 1
+      },
+      {
+        "name": "a hold inside a press's chord is allowed",
+        "bindings": [{"on": "pad", "keys": ["select", "a"], "hold": false, "do": "ring"}],
+        "candidate": {"on": "pad", "keys": ["select"], "hold": true, "do": "guide"},
+        "expect": "ok"
+      },
+      {
+        "name": "the same trigger twice offers a replace",
+        "bindings": [
+          {"on": "pad", "keys": ["select", "x"], "hold": false, "do": "stats"},
+          {"on": "pad", "keys": ["start"], "hold": true, "do": "ring"}
+        ],
+        "candidate": {"on": "pad", "keys": ["start"], "hold": true, "do": "pad_mouse"},
+        "expect": "identical", "index": 1
+      },
+      {
+        "name": "the same buttons in another order are the same trigger",
+        "bindings": [{"on": "pad", "keys": ["select", "a"], "hold": false, "do": "ring"}],
+        "candidate": {"on": "pad", "keys": ["a", "select"], "hold": false, "do": "stats"},
+        "expect": "identical", "index": 0
+      },
+      {
+        "name": "one button is only a hold",
+        "bindings": [],
+        "candidate": {"on": "pad", "keys": ["start"], "hold": false, "do": "ring"},
+        "expect": "single_press"
+      },
+      {
+        "name": "a key needs a modifier",
+        "bindings": [],
+        "candidate": {"on": "key", "keys": ["o"], "do": "ring"},
+        "expect": "no_modifier"
+      },
+      {
+        "name": "a function key needs no modifier",
+        "bindings": [{"on": "key", "keys": ["alt", "enter"], "do": "fullscreen"}],
+        "candidate": {"on": "key", "keys": ["f11"], "do": "fullscreen"},
+        "expect": "ok"
+      },
+      {
+        "name": "F24 is a function key too",
+        "bindings": [],
+        "candidate": {"on": "key", "keys": ["f24"], "do": "stats"},
+        "expect": "ok"
+      },
+      {
+        "name": "modifiers alone are not a key",
+        "bindings": [],
+        "candidate": {"on": "key", "keys": ["ctrl", "alt"], "do": "ring"},
+        "expect": "no_key"
+      },
+      {
+        "name": "the same key combination twice offers a replace",
+        "bindings": [{"on": "key", "keys": ["ctrl", "alt", "shift", "o"], "do": "ring"}],
+        "candidate": {"on": "key", "keys": ["shift", "alt", "ctrl", "o"], "do": "stats"},
+        "expect": "identical", "index": 0
+      },
+      {
+        "name": "fewer modifiers on the same key are another shortcut",
+        "bindings": [{"on": "key", "keys": ["ctrl", "alt", "shift", "o"], "do": "ring"}],
+        "candidate": {"on": "key", "keys": ["ctrl", "alt", "o"], "do": "stats"},
+        "expect": "ok"
+      },
+      {
+        "name": "a pad and a key never meet",
+        "bindings": [{"on": "key", "keys": ["ctrl", "a"], "do": "ring"}],
+        "candidate": {"on": "pad", "keys": ["select", "a"], "hold": false, "do": "ring"},
+        "expect": "ok"
+      }
+    ]
+  },
+
+  "engine": {
+    "$comment": "Timelines through Engine(bindings, device). events and ticks merge by t (ms); at one t the events go first, in order, then the tick; flush, when given, runs last at its t. A step runs a due tick before its event. A press is held back only while the buttons down are exactly an armed hold's: a press that completes no shortcut sends any held-back press first, then itself; a release that disarms a hold sends the held-back press at once, unless another hold is then exactly down, which arms from that t. While a key-like hold is down, a further press matches no shortcut and is forwarded; the hold's own buttons still end it on their first lift. expect lists every output in order with the t it came out at: forward [button, down] (to the host, obeys the input mask), fire [action id, once|down|up|tap], lift [buttons] (release on the host, mask or not). Key devices name keys by key_vk name; left and right modifiers are one key. HOLD 1000 ms, TAP_PRESS 50 ms, KEY_TAP 350 ms.",
+    "cases": [
+      {
+        "name": "hold Start opens quick actions; the game never sees Start",
+        "device": "pad",
+        "bindings": [{"on": "pad", "keys": ["start"], "hold": true, "do": "ring"}],
+        "events": [{"t": 0, "bit": "start", "down": true}, {"t": 1500, "bit": "start", "down": false}],
+        "ticks": [500, 999, 1000, 1600],
+        "expect": [{"t": 1000, "out": {"fire": ["ring", "once"]}}]
+      },
+      {
+        "name": "a Start tap goes out at release, its release 50 ms later",
+        "device": "pad",
+        "bindings": [{"on": "pad", "keys": ["start"], "hold": true, "do": "ring"}],
+        "events": [{"t": 0, "bit": "start", "down": true}, {"t": 120, "bit": "start", "down": false}],
+        "ticks": [169, 170, 1200],
+        "expect": [
+          {"t": 120, "out": {"forward": ["start", true]}},
+          {"t": 170, "out": {"forward": ["start", false]}}
+        ]
+      },
+      {
+        "name": "Select + A opens quick actions; neither reaches the game",
+        "device": "pad",
+        "bindings": [
+          {"on": "pad", "keys": ["select", "a"], "hold": false, "do": "ring"},
+          {"on": "pad", "keys": ["select"], "hold": true, "do": "guide"}
+        ],
+        "events": [
+          {"t": 0, "bit": "select", "down": true},
+          {"t": 80, "bit": "a", "down": true},
+          {"t": 200, "bit": "a", "down": false},
+          {"t": 250, "bit": "select", "down": false}
+        ],
+        "ticks": [1000, 1500],
+        "expect": [{"t": 80, "out": {"fire": ["ring", "once"]}}]
+      },
+      {
+        "name": "hold Select for guide, released at 0.2 s: a Select tap",
+        "device": "pad",
+        "bindings": [{"on": "pad", "keys": ["select"], "hold": true, "do": "guide"}],
+        "events": [{"t": 0, "bit": "select", "down": true}, {"t": 200, "bit": "select", "down": false}],
+        "ticks": [249, 250, 1000],
+        "expect": [
+          {"t": 200, "out": {"forward": ["select", true]}},
+          {"t": 250, "out": {"forward": ["select", false]}}
+        ]
+      },
+      {
+        "name": "hold Select for guide, released at 0.6 s: a Guide tap",
+        "device": "pad",
+        "bindings": [{"on": "pad", "keys": ["select"], "hold": true, "do": "guide"}],
+        "events": [{"t": 0, "bit": "select", "down": true}, {"t": 600, "bit": "select", "down": false}],
+        "ticks": [349, 350, 1000, 1100],
+        "expect": [{"t": 600, "out": {"fire": ["guide", "tap"]}}]
+      },
+      {
+        "name": "hold Select for guide past 1 s: Guide down until Select lifts",
+        "device": "pad",
+        "bindings": [{"on": "pad", "keys": ["select"], "hold": true, "do": "guide"}],
+        "events": [{"t": 0, "bit": "select", "down": true}, {"t": 1500, "bit": "select", "down": false}],
+        "ticks": [999, 1000, 1200, 1600],
+        "expect": [
+          {"t": 1000, "out": {"fire": ["guide", "down"]}},
+          {"t": 1500, "out": {"fire": ["guide", "up"]}}
+        ]
+      },
+      {
+        "name": "Select then LB, which no shortcut has: the held-back Select goes out first",
+        "device": "pad",
+        "bindings": [
+          {"on": "pad", "keys": ["select", "a"], "hold": false, "do": "ring"},
+          {"on": "pad", "keys": ["select"], "hold": true, "do": "guide"}
+        ],
+        "events": [
+          {"t": 0, "bit": "select", "down": true},
+          {"t": 400, "bit": "lb", "down": true},
+          {"t": 600, "bit": "lb", "down": false},
+          {"t": 700, "bit": "select", "down": false}
+        ],
+        "ticks": [1000, 1100],
+        "expect": [
+          {"t": 400, "out": {"forward": ["select", true]}},
+          {"t": 400, "out": {"forward": ["lb", true]}},
+          {"t": 600, "out": {"forward": ["lb", false]}},
+          {"t": 700, "out": {"forward": ["select", false]}}
+        ]
+      },
+      {
+        "name": "exit chord pressed: Release input when it lifts at 0.3 s",
+        "device": "pad",
+        "bindings": [
+          {"on": "pad", "keys": ["lb", "rb", "start", "select"], "hold": false, "do": "release_input"},
+          {"on": "pad", "keys": ["lb", "rb", "start", "select"], "hold": true, "do": "end_stream"}
+        ],
+        "events": [
+          {"t": 0, "bit": "lb", "down": true},
+          {"t": 20, "bit": "rb", "down": true},
+          {"t": 40, "bit": "start", "down": true},
+          {"t": 60, "bit": "select", "down": true},
+          {"t": 360, "bit": "select", "down": false},
+          {"t": 400, "bit": "start", "down": false},
+          {"t": 410, "bit": "rb", "down": false},
+          {"t": 420, "bit": "lb", "down": false}
+        ],
+        "ticks": [1100, 1500],
+        "expect": [
+          {"t": 0, "out": {"forward": ["lb", true]}},
+          {"t": 20, "out": {"forward": ["rb", true]}},
+          {"t": 40, "out": {"forward": ["start", true]}},
+          {"t": 360, "out": {"lift": ["lb", "rb", "start"]}},
+          {"t": 360, "out": {"fire": ["release_input", "once"]}}
+        ]
+      },
+      {
+        "name": "exit chord pressed, a shoulder lifting first still fires Release input",
+        "device": "pad",
+        "bindings": [
+          {"on": "pad", "keys": ["lb", "rb", "start", "select"], "hold": false, "do": "release_input"},
+          {"on": "pad", "keys": ["lb", "rb", "start", "select"], "hold": true, "do": "end_stream"}
+        ],
+        "events": [
+          {"t": 0, "bit": "lb", "down": true},
+          {"t": 20, "bit": "rb", "down": true},
+          {"t": 40, "bit": "start", "down": true},
+          {"t": 60, "bit": "select", "down": true},
+          {"t": 300, "bit": "lb", "down": false},
+          {"t": 320, "bit": "select", "down": false},
+          {"t": 330, "bit": "rb", "down": false},
+          {"t": 340, "bit": "start", "down": false}
+        ],
+        "ticks": [1100],
+        "expect": [
+          {"t": 0, "out": {"forward": ["lb", true]}},
+          {"t": 20, "out": {"forward": ["rb", true]}},
+          {"t": 40, "out": {"forward": ["start", true]}},
+          {"t": 300, "out": {"lift": ["lb", "rb", "start"]}},
+          {"t": 300, "out": {"fire": ["release_input", "once"]}}
+        ]
+      },
+      {
+        "name": "exit chord held: End stream at 1 s, the shoulders and Start lifted",
+        "device": "pad",
+        "bindings": [
+          {"on": "pad", "keys": ["lb", "rb", "start", "select"], "hold": false, "do": "release_input"},
+          {"on": "pad", "keys": ["lb", "rb", "start", "select"], "hold": true, "do": "end_stream"}
+        ],
+        "events": [
+          {"t": 0, "bit": "lb", "down": true},
+          {"t": 20, "bit": "rb", "down": true},
+          {"t": 40, "bit": "start", "down": true},
+          {"t": 60, "bit": "select", "down": true},
+          {"t": 1500, "bit": "select", "down": false},
+          {"t": 1510, "bit": "start", "down": false},
+          {"t": 1520, "bit": "rb", "down": false},
+          {"t": 1530, "bit": "lb", "down": false}
+        ],
+        "ticks": [1059, 1060, 1600],
+        "expect": [
+          {"t": 0, "out": {"forward": ["lb", true]}},
+          {"t": 20, "out": {"forward": ["rb", true]}},
+          {"t": 40, "out": {"forward": ["start", true]}},
+          {"t": 1060, "out": {"lift": ["lb", "rb", "start"]}},
+          {"t": 1060, "out": {"fire": ["end_stream", "once"]}}
+        ]
+      },
+      {
+        "name": "exit chord begun with a held-back Select: it never becomes Guide",
+        "device": "pad",
+        "bindings": [
+          {"on": "pad", "keys": ["select"], "hold": true, "do": "guide"},
+          {"on": "pad", "keys": ["lb", "rb", "start", "select"], "hold": false, "do": "release_input"},
+          {"on": "pad", "keys": ["lb", "rb", "start", "select"], "hold": true, "do": "end_stream"}
+        ],
+        "events": [
+          {"t": 0, "bit": "select", "down": true},
+          {"t": 100, "bit": "lb", "down": true},
+          {"t": 150, "bit": "rb", "down": true},
+          {"t": 200, "bit": "start", "down": true}
+        ],
+        "ticks": [1000, 1199, 1200],
+        "expect": [
+          {"t": 100, "out": {"forward": ["select", true]}},
+          {"t": 100, "out": {"forward": ["lb", true]}},
+          {"t": 150, "out": {"forward": ["rb", true]}},
+          {"t": 1200, "out": {"lift": ["select", "lb", "rb"]}},
+          {"t": 1200, "out": {"fire": ["end_stream", "once"]}}
+        ]
+      },
+      {
+        "name": "hold Select for controller mouse: it fires once at 1 s",
+        "device": "pad",
+        "bindings": [{"on": "pad", "keys": ["select"], "hold": true, "do": "pad_mouse"}],
+        "events": [{"t": 0, "bit": "select", "down": true}, {"t": 1300, "bit": "select", "down": false}],
+        "ticks": [1000, 1400],
+        "expect": [{"t": 1000, "out": {"fire": ["pad_mouse", "once"]}}]
+      },
+      {
+        "name": "hold Select for controller mouse, released at 0.6 s: a Select tap",
+        "device": "pad",
+        "bindings": [{"on": "pad", "keys": ["select"], "hold": true, "do": "pad_mouse"}],
+        "events": [{"t": 0, "bit": "select", "down": true}, {"t": 600, "bit": "select", "down": false}],
+        "ticks": [650, 1000],
+        "expect": [
+          {"t": 600, "out": {"forward": ["select", true]}},
+          {"t": 650, "out": {"forward": ["select", false]}}
+        ]
+      },
+      {
+        "name": "hold Select for a key combination, released at 0.5 s: a tap of the combination",
+        "device": "pad",
+        "bindings": [{"on": "pad", "keys": ["select"], "hold": true, "do": "shortcut:s1"}],
+        "events": [{"t": 0, "bit": "select", "down": true}, {"t": 500, "bit": "select", "down": false}],
+        "ticks": [1000],
+        "expect": [{"t": 500, "out": {"fire": ["shortcut:s1", "tap"]}}]
+      },
+      {
+        "name": "hold Select for a key combination for 2 s: down, then up when Select lifts",
+        "device": "pad",
+        "bindings": [{"on": "pad", "keys": ["select"], "hold": true, "do": "shortcut:s1"}],
+        "events": [{"t": 0, "bit": "select", "down": true}, {"t": 2000, "bit": "select", "down": false}],
+        "ticks": [1000, 1500, 2100],
+        "expect": [
+          {"t": 1000, "out": {"fire": ["shortcut:s1", "down"]}},
+          {"t": 2000, "out": {"fire": ["shortcut:s1", "up"]}}
+        ]
+      },
+      {
+        "name": "a release that breaks a hold sends its held-back press at once",
+        "device": "pad",
+        "bindings": [{"on": "pad", "keys": ["lb", "select"], "hold": true, "do": "pad_mouse"}],
+        "events": [
+          {"t": 0, "bit": "lb", "down": true},
+          {"t": 100, "bit": "select", "down": true},
+          {"t": 300, "bit": "lb", "down": false},
+          {"t": 1300, "bit": "select", "down": false}
+        ],
+        "ticks": [1100, 1200, 1350],
+        "expect": [
+          {"t": 0, "out": {"forward": ["lb", true]}},
+          {"t": 300, "out": {"forward": ["lb", false]}},
+          {"t": 300, "out": {"forward": ["select", true]}},
+          {"t": 1300, "out": {"forward": ["select", false]}}
+        ]
+      },
+      {
+        "name": "a two-button hold released by its held-back press is a tap of it",
+        "device": "pad",
+        "bindings": [{"on": "pad", "keys": ["select", "a"], "hold": true, "do": "pad_mouse"}],
+        "events": [
+          {"t": 0, "bit": "select", "down": true},
+          {"t": 100, "bit": "a", "down": true},
+          {"t": 400, "bit": "a", "down": false},
+          {"t": 600, "bit": "select", "down": false}
+        ],
+        "ticks": [449, 450, 1200],
+        "expect": [
+          {"t": 0, "out": {"forward": ["select", true]}},
+          {"t": 400, "out": {"forward": ["a", true]}},
+          {"t": 450, "out": {"forward": ["a", false]}},
+          {"t": 600, "out": {"forward": ["select", false]}}
+        ]
+      },
+      {
+        "name": "a nested hold arms again when its partner taps out",
+        "device": "pad",
+        "bindings": [
+          {"on": "pad", "keys": ["select"], "hold": true, "do": "guide"},
+          {"on": "pad", "keys": ["select", "a"], "hold": true, "do": "pad_mouse"}
+        ],
+        "events": [
+          {"t": 0, "bit": "select", "down": true},
+          {"t": 100, "bit": "a", "down": true},
+          {"t": 300, "bit": "a", "down": false},
+          {"t": 1500, "bit": "select", "down": false}
+        ],
+        "ticks": [350, 1000, 1100, 1299, 1300],
+        "expect": [
+          {"t": 300, "out": {"forward": ["a", true]}},
+          {"t": 350, "out": {"forward": ["a", false]}},
+          {"t": 1300, "out": {"fire": ["guide", "down"]}},
+          {"t": 1500, "out": {"fire": ["guide", "up"]}}
+        ]
+      },
+      {
+        "name": "Select then Start, part of the exit chord: Select goes out first, for Select + Start hotkeys",
+        "device": "pad",
+        "bindings": [
+          {"on": "pad", "keys": ["select", "a"], "hold": false, "do": "ring"},
+          {"on": "pad", "keys": ["select", "x"], "hold": false, "do": "stats"},
+          {"on": "pad", "keys": ["select"], "hold": true, "do": "guide"},
+          {"on": "pad", "keys": ["lb", "rb", "start", "select"], "hold": false, "do": "release_input"},
+          {"on": "pad", "keys": ["lb", "rb", "start", "select"], "hold": true, "do": "end_stream"}
+        ],
+        "events": [
+          {"t": 0, "bit": "select", "down": true},
+          {"t": 200, "bit": "start", "down": true},
+          {"t": 300, "bit": "start", "down": false},
+          {"t": 350, "bit": "select", "down": false}
+        ],
+        "ticks": [1000, 1400],
+        "expect": [
+          {"t": 200, "out": {"forward": ["select", true]}},
+          {"t": 200, "out": {"forward": ["start", true]}},
+          {"t": 300, "out": {"forward": ["start", false]}},
+          {"t": 350, "out": {"forward": ["select", false]}}
+        ]
+      },
+      {
+        "name": "a partner makes a held-back press real: no Guide after it lifts",
+        "device": "pad",
+        "bindings": [
+          {"on": "pad", "keys": ["select", "a"], "hold": false, "do": "ring"},
+          {"on": "pad", "keys": ["select", "x"], "hold": false, "do": "stats"},
+          {"on": "pad", "keys": ["select"], "hold": true, "do": "guide"},
+          {"on": "pad", "keys": ["lb", "rb", "start", "select"], "hold": false, "do": "release_input"},
+          {"on": "pad", "keys": ["lb", "rb", "start", "select"], "hold": true, "do": "end_stream"}
+        ],
+        "events": [
+          {"t": 0, "bit": "select", "down": true},
+          {"t": 100, "bit": "lb", "down": true},
+          {"t": 300, "bit": "lb", "down": false},
+          {"t": 1500, "bit": "select", "down": false}
+        ],
+        "ticks": [1000, 1299, 1300, 1400],
+        "expect": [
+          {"t": 100, "out": {"forward": ["select", true]}},
+          {"t": 100, "out": {"forward": ["lb", true]}},
+          {"t": 300, "out": {"forward": ["lb", false]}},
+          {"t": 1500, "out": {"forward": ["select", false]}}
+        ]
+      },
+      {
+        "name": "a press chord's completing press is never sent, the rest is lifted",
+        "device": "pad",
+        "bindings": [{"on": "pad", "keys": ["select", "x"], "hold": false, "do": "stats"}],
+        "events": [
+          {"t": 0, "bit": "select", "down": true},
+          {"t": 100, "bit": "x", "down": true},
+          {"t": 200, "bit": "x", "down": false},
+          {"t": 300, "bit": "select", "down": false}
+        ],
+        "ticks": [],
+        "expect": [
+          {"t": 0, "out": {"forward": ["select", true]}},
+          {"t": 100, "out": {"lift": ["select"]}},
+          {"t": 100, "out": {"fire": ["stats", "once"]}}
+        ]
+      },
+      {
+        "name": "a key-like press fires as a tap",
+        "device": "pad",
+        "bindings": [{"on": "pad", "keys": ["select", "y"], "hold": false, "do": "qam"}],
+        "events": [{"t": 0, "bit": "select", "down": true}, {"t": 50, "bit": "y", "down": true}],
+        "ticks": [],
+        "expect": [
+          {"t": 0, "out": {"forward": ["select", true]}},
+          {"t": 50, "out": {"lift": ["select"]}},
+          {"t": 50, "out": {"fire": ["qam", "tap"]}}
+        ]
+      },
+      {
+        "name": "a one-button press binding is ignored: the button reaches the game",
+        "device": "pad",
+        "bindings": [{"on": "pad", "keys": ["start"], "hold": false, "do": "ring"}],
+        "events": [{"t": 0, "bit": "start", "down": true}, {"t": 100, "bit": "start", "down": false}],
+        "ticks": [],
+        "expect": [
+          {"t": 0, "out": {"forward": ["start", true]}},
+          {"t": 100, "out": {"forward": ["start", false]}}
+        ]
+      },
+      {
+        "name": "an unknown action is inert: its trigger reaches the game",
+        "device": "pad",
+        "bindings": [{"on": "pad", "keys": ["start"], "hold": true, "do": "teleport"}],
+        "events": [{"t": 0, "bit": "start", "down": true}, {"t": 1500, "bit": "start", "down": false}],
+        "ticks": [1000],
+        "expect": [
+          {"t": 0, "out": {"forward": ["start", true]}},
+          {"t": 1500, "out": {"forward": ["start", false]}}
+        ]
+      },
+      {
+        "name": "a quick second press lifts the owed release first",
+        "device": "pad",
+        "bindings": [{"on": "pad", "keys": ["select"], "hold": true, "do": "guide"}],
+        "events": [
+          {"t": 0, "bit": "select", "down": true},
+          {"t": 80, "bit": "select", "down": false},
+          {"t": 100, "bit": "select", "down": true},
+          {"t": 200, "bit": "select", "down": false}
+        ],
+        "ticks": [250],
+        "expect": [
+          {"t": 80, "out": {"forward": ["select", true]}},
+          {"t": 100, "out": {"forward": ["select", false]}},
+          {"t": 200, "out": {"forward": ["select", true]}},
+          {"t": 250, "out": {"forward": ["select", false]}}
+        ]
+      },
+      {
+        "name": "Guide held, then A: A reaches the host, no dial",
+        "device": "pad",
+        "bindings": [
+          {"on": "pad", "keys": ["select", "a"], "hold": false, "do": "ring"},
+          {"on": "pad", "keys": ["select"], "hold": true, "do": "guide"}
+        ],
+        "events": [
+          {"t": 0, "bit": "select", "down": true},
+          {"t": 1200, "bit": "a", "down": true},
+          {"t": 1300, "bit": "a", "down": false},
+          {"t": 1500, "bit": "select", "down": false}
+        ],
+        "ticks": [1000],
+        "expect": [
+          {"t": 1000, "out": {"fire": ["guide", "down"]}},
+          {"t": 1200, "out": {"forward": ["a", true]}},
+          {"t": 1300, "out": {"forward": ["a", false]}},
+          {"t": 1500, "out": {"fire": ["guide", "up"]}}
+        ]
+      },
+      {
+        "name": "flush brings a held Guide up and lifts what the host holds",
+        "device": "pad",
+        "bindings": [{"on": "pad", "keys": ["select"], "hold": true, "do": "guide"}],
+        "events": [{"t": 0, "bit": "select", "down": true}, {"t": 1100, "bit": "lb", "down": true}],
+        "ticks": [1000],
+        "flush": 1200,
+        "expect": [
+          {"t": 1000, "out": {"fire": ["guide", "down"]}},
+          {"t": 1100, "out": {"forward": ["lb", true]}},
+          {"t": 1200, "out": {"fire": ["guide", "up"]}},
+          {"t": 1200, "out": {"lift": ["lb"]}}
+        ]
+      },
+      {
+        "name": "a key chord fires on its key and lifts the modifiers the host holds",
+        "device": "key",
+        "bindings": [{"on": "key", "keys": ["ctrl", "alt", "shift", "o"], "do": "ring"}],
+        "events": [
+          {"t": 0, "bit": "ctrl", "down": true},
+          {"t": 10, "bit": "alt", "down": true},
+          {"t": 20, "bit": "shift", "down": true},
+          {"t": 30, "bit": "o", "down": true},
+          {"t": 100, "bit": "o", "down": false},
+          {"t": 110, "bit": "shift", "down": false},
+          {"t": 120, "bit": "alt", "down": false},
+          {"t": 130, "bit": "ctrl", "down": false}
+        ],
+        "ticks": [],
+        "expect": [
+          {"t": 0, "out": {"forward": ["ctrl", true]}},
+          {"t": 10, "out": {"forward": ["alt", true]}},
+          {"t": 20, "out": {"forward": ["shift", true]}},
+          {"t": 30, "out": {"lift": ["ctrl", "alt", "shift"]}},
+          {"t": 30, "out": {"fire": ["ring", "once"]}}
+        ]
+      },
+      {
+        "name": "a second key under held modifiers fires its own chord",
+        "device": "key",
+        "bindings": [
+          {"on": "key", "keys": ["ctrl", "alt", "shift", "s"], "do": "stats"},
+          {"on": "key", "keys": ["ctrl", "alt", "shift", "o"], "do": "ring"}
+        ],
+        "events": [
+          {"t": 0, "bit": "ctrl", "down": true},
+          {"t": 0, "bit": "alt", "down": true},
+          {"t": 0, "bit": "shift", "down": true},
+          {"t": 10, "bit": "s", "down": true},
+          {"t": 20, "bit": "s", "down": false},
+          {"t": 30, "bit": "o", "down": true},
+          {"t": 40, "bit": "o", "down": false}
+        ],
+        "ticks": [],
+        "expect": [
+          {"t": 0, "out": {"forward": ["ctrl", true]}},
+          {"t": 0, "out": {"forward": ["alt", true]}},
+          {"t": 0, "out": {"forward": ["shift", true]}},
+          {"t": 10, "out": {"lift": ["ctrl", "alt", "shift"]}},
+          {"t": 10, "out": {"fire": ["stats", "once"]}},
+          {"t": 30, "out": {"fire": ["ring", "once"]}}
+        ]
+      },
+      {
+        "name": "keys that complete nothing reach the host, repeats once",
+        "device": "key",
+        "bindings": [{"on": "key", "keys": ["ctrl", "alt", "shift", "o"], "do": "ring"}],
+        "events": [
+          {"t": 0, "bit": "ctrl", "down": true},
+          {"t": 10, "bit": "c", "down": true},
+          {"t": 40, "bit": "c", "down": true},
+          {"t": 50, "bit": "c", "down": false},
+          {"t": 60, "bit": "ctrl", "down": false}
+        ],
+        "ticks": [],
+        "expect": [
+          {"t": 0, "out": {"forward": ["ctrl", true]}},
+          {"t": 10, "out": {"forward": ["c", true]}},
+          {"t": 50, "out": {"forward": ["c", false]}},
+          {"t": 60, "out": {"forward": ["ctrl", false]}}
+        ]
+      },
+      {
+        "name": "a modifier is never the press that completes a chord",
+        "device": "key",
+        "bindings": [{"on": "key", "keys": ["alt", "enter"], "do": "fullscreen"}],
+        "events": [
+          {"t": 0, "bit": "enter", "down": true},
+          {"t": 10, "bit": "alt", "down": true},
+          {"t": 20, "bit": "alt", "down": false},
+          {"t": 30, "bit": "enter", "down": false}
+        ],
+        "ticks": [],
+        "expect": [
+          {"t": 0, "out": {"forward": ["enter", true]}},
+          {"t": 10, "out": {"forward": ["alt", true]}},
+          {"t": 20, "out": {"forward": ["alt", false]}},
+          {"t": 30, "out": {"forward": ["enter", false]}}
+        ]
+      },
+      {
+        "name": "F11 alone toggles fullscreen",
+        "device": "key",
+        "bindings": [{"on": "key", "keys": ["f11"], "do": "fullscreen"}],
+        "events": [{"t": 0, "bit": "f11", "down": true}, {"t": 80, "bit": "f11", "down": false}],
+        "ticks": [],
+        "expect": [{"t": 0, "out": {"fire": ["fullscreen", "once"]}}]
+      }
+    ]
+  }
+}

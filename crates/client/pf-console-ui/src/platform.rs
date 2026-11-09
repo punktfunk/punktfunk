@@ -28,13 +28,16 @@ pub enum Platform {
     /// The PS5 homebrew title (`punktfunk/client-ps5`): DualSense only, no touch, no window,
     /// the console's one 4K output. PlayStation glyphs, PyroWave decodes, and the title quits.
     Ps5,
+    /// The Switch homebrew title (`punktfunk/client-switch`): one pad, no touch, no window.
+    /// Its shortcuts name the buttons in the Nintendo legend; otherwise it offers the PS5's rows.
+    Switch,
 }
 
 impl Platform {
     /// Every variant. A platform absent from a universal row list offers no settings
     /// row at all, which is a blank screen rather than a missing control — walk this
     /// instead of retyping the set.
-    pub const ALL: [Platform; 7] = [
+    pub const ALL: [Platform; 8] = [
         Platform::Desktop,
         Platform::Android,
         Platform::WebOS,
@@ -42,6 +45,7 @@ impl Platform {
         Platform::Apple,
         Platform::Tizen,
         Platform::Ps5,
+        Platform::Switch,
     ];
 
     /// Whether the app may close itself. An Apple app and a browser page cannot; a packaged TV

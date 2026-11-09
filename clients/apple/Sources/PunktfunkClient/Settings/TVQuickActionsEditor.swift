@@ -15,6 +15,10 @@ struct TVQuickActionsEditor: View {
     @Binding var blob: String
     /// The edited preset owns its own dial.
     let overridden: Bool
+    /// The Shortcuts page of the same layer, a push away.
+    let shortcuts: ShortcutsEditor
+    /// The pad chord that opens the dial, from the live shortcuts; nil when none does.
+    let padOpener: String?
     /// Back to the TV dial: drops the override in preset scope, clears the global otherwise.
     let reset: () -> Void
     @State private var picking: Int?
@@ -47,11 +51,18 @@ struct TVQuickActionsEditor: View {
                 }
                 shortcutsSection
                 Section {
+                    NavigationLink(String(localized: L10n.playerShortcuts)) { shortcuts }
+                } footer: {
+                    Text(L10n.playerShortcutsHint)
+                }
+                Section {
                     Button(L10n.ringReset, role: .destructive, action: reset)
                 } footer: {
-                    Text(overridden
-                        ? String(localized: L10n.ringEditorPresetOwns)
-                        : L10n.appleTvRingFooter(remote: "Back", pad: "Select + A"))
+                    if overridden {
+                        Text(L10n.ringEditorPresetOwns)
+                    } else if let padOpener {
+                        Text(L10n.appleTvRingFooter(remote: "Back", pad: padOpener))
+                    }
                 }
             }
         }
@@ -227,7 +238,7 @@ private struct DiscButtonStyle: ButtonStyle {
 
 /// The catalogue as the TV's pushed list: grouped, each entry's note under it, the current one
 /// ticked. Picking one sets the slot and comes back.
-private struct TVSlotPicker: View {
+struct TVSlotPicker: View {
     let groups: [SlotGroup]
     let current: String
     let choose: (String) -> Void
@@ -280,7 +291,7 @@ private struct TVShortcutEditor: View {
                 TVScreenTitle(String(localized: draft.isNew ? L10n.ringShortcutNewTitle : L10n.ringShortcutTitle))
                 TVFieldRow(
                     label: String(localized: L10n.ringShortcutName), value: draft.label,
-                    placeholder: key == nil ? String(localized: L10n.ringShortcutNamePlaceholder)
+                    placeholder: draft.keys.isEmpty ? String(localized: L10n.ringShortcutNamePlaceholder)
                         : chordChip(draft.keys)
                 ) { editingName = true }
                 heading(String(localized: L10n.ringShortcutModifiers))
@@ -308,7 +319,8 @@ private struct TVShortcutEditor: View {
                         save(draft)
                         dismiss()
                     }
-                    .disabled(key == nil)
+                    // A modifier alone is a combination: Win opens the host's Start menu.
+                    .disabled(draft.keys.isEmpty)
                     if !draft.isNew {
                         Button(L10n.ringShortcutRemove, role: .destructive) {
                             delete()

@@ -1,6 +1,6 @@
 //! In-stream quick-action ring: the `overlay_actions` JSON blob (schema `v: 2`).
-//! Six slots clockwise from 12 o'clock, custom shortcuts, and the virtual pad
-//! preset. Design: `design/touch-client-overlay.md`.
+//! Six slots clockwise from 12 o'clock, key combinations (`shortcut:`), and the
+//! virtual pad preset. Design: `design/touch-client-overlay.md`.
 //!
 //! [`OverlayConfig::parse`] never fails. Short rings pad empty, long ones
 //! truncate; unknown ids and dangling `shortcut:` refs become empty slots;
@@ -44,6 +44,16 @@ pub enum SlotId {
     StreamMute,
     /// A dual-screen handheld's two screens trade the picture and the companion panel.
     SwapScreens,
+    /// Release the captured mouse and keyboard, or capture them again.
+    ReleaseInput,
+    /// Switch the mouse between capture (relative) and desktop (absolute) mode.
+    MouseMode,
+    /// Toggle the window between fullscreen and windowed.
+    Fullscreen,
+    /// Minimize the window; the stream keeps running.
+    Minimize,
+    /// Start or stop sharing the clipboard with the host, mid-stream.
+    Clipboard,
     Host(String),
     Shortcut(String),
 }
@@ -67,6 +77,11 @@ impl SlotId {
             SlotId::PadType => "pad_type".into(),
             SlotId::StreamMute => "stream_mute".into(),
             SlotId::SwapScreens => "swap_screens".into(),
+            SlotId::ReleaseInput => "release_input".into(),
+            SlotId::MouseMode => "mouse_mode".into(),
+            SlotId::Fullscreen => "fullscreen".into(),
+            SlotId::Minimize => "minimize".into(),
+            SlotId::Clipboard => "clipboard".into(),
             SlotId::Host(id) => format!("host:{id}"),
             SlotId::Shortcut(id) => format!("shortcut:{id}"),
         }
@@ -90,6 +105,11 @@ impl SlotId {
             "pad_type" => SlotId::PadType,
             "stream_mute" => SlotId::StreamMute,
             "swap_screens" => SlotId::SwapScreens,
+            "release_input" => SlotId::ReleaseInput,
+            "mouse_mode" => SlotId::MouseMode,
+            "fullscreen" => SlotId::Fullscreen,
+            "minimize" => SlotId::Minimize,
+            "clipboard" => SlotId::Clipboard,
             _ => {
                 if let Some(id) = s.strip_prefix("host:").filter(|id| !id.is_empty()) {
                     SlotId::Host(id.into())
@@ -196,8 +216,8 @@ pub const KEY_GRID: [&[&str]; 6] = [
     ],
 ];
 
-/// A shortcut's chord as an editor holds it: one toggle per [`CHORD_MODIFIERS`] entry and
-/// one [`KEY_GRID`] key.
+/// A key combination as an editor holds it: one toggle per [`CHORD_MODIFIERS`] entry and at
+/// most one [`KEY_GRID`] key. Modifiers alone are a combination: `win` opens the Start menu.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Chord {
     pub mods: [bool; 4],
@@ -206,7 +226,7 @@ pub struct Chord {
 
 impl Chord {
     /// Read stored keys: modifier aliases (`control`, `option`, `cmd`, `super`, `meta`) fold
-    /// onto their toggle, and the last grid key wins.
+    /// onto their toggle, and the last grid key wins. No grid key leaves `key` empty.
     pub fn parse(keys: &[String]) -> Chord {
         let has = |names: &[&str]| keys.iter().any(|k| names.contains(&k.as_str()));
         Chord {
@@ -455,7 +475,8 @@ pub struct CatalogueGroup {
 }
 
 /// One table every editor renders, worded when it is built. Notes are the platform's:
-/// desktop has no virtual pad and no typed-text path; a phone has both. Empty last.
+/// desktop has no virtual pad, typed-text path or live clipboard switch; a phone has those
+/// and no window to fullscreen or minimize. Empty last.
 pub fn catalogue(cfg: &OverlayConfig, platform: RingPlatform) -> Vec<CatalogueGroup> {
     use pf_l10n::client as c;
     let e = |id: &str, label: &str, note: &str| CatalogueEntry {
@@ -466,6 +487,7 @@ pub fn catalogue(cfg: &OverlayConfig, platform: RingPlatform) -> Vec<CatalogueGr
     let group = |id, title, entries| CatalogueGroup { id, title, entries };
     let desktop = platform == RingPlatform::Desktop;
     let host = c::ring_host_note();
+    let windowed = if desktop { "" } else { c::ring_no_window() };
     let mut g = vec![
         group(
             GroupId::Session,
@@ -504,6 +526,17 @@ pub fn catalogue(cfg: &OverlayConfig, platform: RingPlatform) -> Vec<CatalogueGr
                 e("qam", c::ring_qam(), c::ring_qam_note()),
                 e("pad_mouse", c::ring_pad_mouse(), ""),
                 e("pad_type", c::ring_pad_type(), c::ring_pad_type_note()),
+                e("release_input", c::ring_release_input(), ""),
+                e("mouse_mode", c::ring_mouse_mode(), ""),
+                e(
+                    "clipboard",
+                    c::ring_clipboard(),
+                    if desktop {
+                        c::ring_clipboard_unavailable()
+                    } else {
+                        ""
+                    },
+                ),
             ],
         ),
         group(
@@ -516,6 +549,8 @@ pub fn catalogue(cfg: &OverlayConfig, platform: RingPlatform) -> Vec<CatalogueGr
                     c::ring_swap_screens(),
                     c::ring_swap_screens_note(),
                 ),
+                e("fullscreen", c::ring_fullscreen(), windowed),
+                e("minimize", c::ring_minimize(), windowed),
             ],
         ),
         group(
@@ -596,6 +631,11 @@ pub fn slot_icon(id: &str, muted: bool) -> Option<&'static str> {
         "pad_type" => "gamepad-2",
         "stream_mute" => "volume-2",
         "swap_screens" => "arrow-up-down",
+        "release_input" => "lock",
+        "mouse_mode" => "mouse",
+        "fullscreen" => "maximize",
+        "minimize" => "chevron-down",
+        "clipboard" => "copy",
         "more" => "ellipsis",
         "host:power.sleep" => "moon",
         "host:power.reboot" => "rotate-cw",
@@ -846,6 +886,44 @@ mod tests {
         assert_eq!(c.key.as_deref(), Some("a"), "the last grid key wins");
         assert_eq!(c.keys(), keys(&["ctrl", "win", "a"]));
         assert_eq!(Chord::parse(&keys(&["option", "hyper"])).key, None);
+        let win = Chord::parse(&keys(&["super"]));
+        assert_eq!(
+            (win.mods, win.key.as_deref()),
+            ([false, false, false, true], None)
+        );
+        assert_eq!(
+            win.keys(),
+            keys(&["win"]),
+            "a modifier alone is a combination"
+        );
+        assert_eq!(chord_chip(&win.keys()), "Win");
+        let two = Chord::parse(&keys(&["shift", "ctrl"]));
+        assert_eq!(two.keys(), keys(&["ctrl", "shift"]));
+        assert_eq!(chord_chip(&two.keys()), "Ctrl+Shift");
+    }
+
+    #[test]
+    fn the_window_and_capture_actions_are_noted_per_platform() {
+        let cfg = OverlayConfig::platform_default(RingPlatform::Desktop);
+        let note = |platform, id: &str| {
+            catalogue(&cfg, platform)
+                .into_iter()
+                .flat_map(|g| g.entries.into_iter().map(move |e| (g.id, e)))
+                .find(|(_, e)| e.id == id)
+                .map(|(g, e)| (g, e.note))
+                .unwrap_or_else(|| panic!("{id} is not in the catalogue"))
+        };
+        let (desk, touch) = (RingPlatform::Desktop, RingPlatform::Touch);
+        for id in ["release_input", "mouse_mode"] {
+            assert_eq!(note(desk, id), (GroupId::Input, String::new()));
+            assert_eq!(note(touch, id), (GroupId::Input, String::new()));
+        }
+        for id in ["fullscreen", "minimize"] {
+            assert_eq!(note(desk, id), (GroupId::View, String::new()));
+            assert_eq!(note(touch, id).1, "This device has no window");
+        }
+        assert_eq!(note(desk, "clipboard").1, "Not on this device yet");
+        assert_eq!(note(touch, "clipboard"), (GroupId::Input, String::new()));
     }
 
     #[test]

@@ -72,6 +72,7 @@
 	"android_keycapture_service_label": "Punktfunk keyboard shortcuts",
 	"android_keycapture_service_description": "Lets a stream take every keyboard shortcut, Alt+Tab and the Windows key included. Keys go only to the computer you stream from, and only while a stream is on screen; outside a stream every key passes through untouched. Nothing is stored.",
 	"android_remote_pointer_hint": "Remote pointer — {select} click · {play_pause} right-click · hold {select} to exit",
+	"android_controls_remote_pointer": "Steer the host's pointer with the remote, or stop",
 	"android_grant_expired": "Your access to this host has expired.",
 	"android_keepalive_streaming": "Streaming",
 	"android_keepalive_background": "Streaming in the background",

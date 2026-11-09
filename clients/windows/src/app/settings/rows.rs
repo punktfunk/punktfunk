@@ -75,9 +75,10 @@ rows! {
 
     TOUCH: "touch_mode", pf_l10n::client::player_touch_mode(), "input", false;
     MOUSE: "mouse_mode", pf_l10n::client::player_mouse_mode(), "input", false;
-    SHORTCUTS: "inhibit_shortcuts", pf_l10n::client::player_inhibit_shortcuts(), "input", false;
+    INHIBIT_SHORTCUTS: "inhibit_shortcuts", pf_l10n::client::player_inhibit_shortcuts(), "input", false;
     INVERT_SCROLL: "invert_scroll", pf_l10n::client::player_invert_scroll(), "input", false;
     QUICK_ACTIONS: "overlay_actions", pf_l10n::client::player_overlay_actions(), "quick_actions", false;
+    SHORTCUTS: "shortcuts", pf_l10n::client::player_shortcuts(), "shortcuts", false;
 
     AUDIO_CHANNELS: "audio_channels", pf_l10n::client::player_audio_channels(), "audio", false;
     SPEAKER: "speaker_device", pf_l10n::client::player_speaker_device(), "audio", false;
@@ -92,7 +93,6 @@ rows! {
     FORWARDING: "gamepad_forwarding", pf_l10n::client::player_gamepad_forwarding(), "controllers", true;
     FORWARD_PAD: "forward_pad", pf_l10n::client::player_forward_pad(), "controllers", true;
     SYSTEM_BUTTONS: "system_buttons", pf_l10n::client::player_system_buttons(), "controllers", true;
-    GUIDE_GESTURE: "guide_gesture", pf_l10n::client::player_guide_gesture(), "controllers", true;
     PAD_HAPTICS: "pad_haptics", pf_l10n::client::player_pad_haptics(), "controllers", true;
     PAD_SPEAKER: "pad_speaker", pf_l10n::client::player_pad_speaker(), "controllers", true;
 }
@@ -116,9 +116,12 @@ mod tests {
     /// Rows with no catalog entry: this device's own pickers.
     const LOCAL: &[&str] = &["adapter", "speaker_device", "mic_device"];
 
-    /// Rows on a sidebar page the catalog does not name, with that page: Quick actions has
-    /// its own.
-    const OWN_PAGE: &[(&str, &str)] = &[("overlay_actions", "quick_actions")];
+    /// Rows on a sidebar page the catalog does not name, with that page: Quick actions and
+    /// Shortcuts have their own.
+    const OWN_PAGE: &[(&str, &str)] = &[
+        ("overlay_actions", "quick_actions"),
+        ("shortcuts", "shortcuts"),
+    ];
 
     /// Each row that edits a shared setting is the catalog's: the `player_<key>` message for
     /// its label (V-Sync, a brand, has none), its category and tier, save a page [`OWN_PAGE`]
@@ -198,11 +201,6 @@ mod tests {
             "system_buttons",
             include_str!("controllers.rs"),
             "SYSTEM_BUTTONS",
-        ),
-        (
-            "guide_gesture",
-            include_str!("controllers.rs"),
-            "GUIDE_GESTURES",
         ),
         ("audio_channels", include_str!("audio.rs"), "AUDIO_CHANNELS"),
     ];

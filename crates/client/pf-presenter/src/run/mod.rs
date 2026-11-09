@@ -15,8 +15,8 @@
 //! video present and its 1 Hz window (`pace.rs`). [`Shell`] holds what setup built,
 //! [`StreamState`] one stream's life.
 //!
-//! In-stream chords share Ctrl+Alt+Shift: Q release/engage, M mouse model, D
-//! disconnect, S stats tier, O quick-action ring, V microphone mute.
+//! In-stream shortcuts are the launch's bindings (`shortcuts.rs`): the keyboard's engine runs
+//! here, each forwarded pad's in the gamepad worker.
 
 use crate::backend::Presenter;
 use crate::input::{Capture, FingerPhase};
@@ -30,7 +30,7 @@ use crate::present_pace::{
 use crate::touch::{Abs, Act};
 use crate::vk::{FrameInput, Presented};
 use anyhow::{Context as _, Result};
-use pf_client_core::gamepad::{GamepadPump, GamepadService, MenuEvent, SelectChord};
+use pf_client_core::gamepad::{GamepadPump, GamepadService, MenuEvent, ShortcutFired};
 use pf_client_core::orchestrate::{emit, SessionLine};
 use pf_client_core::session::{self, DecodeFacts, SessionEvent, SessionHandle, SessionParams};
 use pf_client_core::trust::{MouseMode, PresentPriority, StatsVerbosity, TouchMode};
@@ -42,7 +42,6 @@ use punktfunk_core::hud::{self, HudLine, StatsSnapshot};
 use punktfunk_core::quic::HdrMeta;
 use punktfunk_core::video_fit::{self, VideoFit};
 use sdl3::event::{DisplayEvent, Event, WindowEvent};
-use sdl3::keyboard::Mod;
 use std::ops::ControlFlow;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -55,6 +54,7 @@ mod pace_step;
 mod restart;
 mod screens;
 mod shell;
+mod shortcuts;
 mod stream;
 
 use pace::{OverlayDamage, PresentHealth, PresentWindow};
@@ -73,14 +73,17 @@ pub struct SessionOpts {
     /// Desktop top-left; `None` = primary-display center. Shells pass their own window so
     /// the stream opens on the same monitor (fullscreen follows that display).
     pub window_pos: Option<(i32, i32)>,
-    /// OSD tier at start; also gates stdout `stats:` lines. Ctrl+Alt+Shift+S cycles live.
+    /// OSD tier at start; also gates stdout `stats:` lines. A shortcut cycles it live.
     pub stats_verbosity: StatsVerbosity,
     /// Per stream. A mouse-only client leaves the default and never sees a finger.
     pub touch_mode: TouchMode,
-    /// `Capture` (pointer lock + relative) or `Desktop` (uncaptured absolute). Ctrl+Alt+Shift+M
-    /// flips it live; hosts without absolute injection (gamescope) stay captured.
+    /// `Capture` (pointer lock + relative) or `Desktop` (uncaptured absolute). A shortcut flips
+    /// it live; hosts without absolute injection (gamescope) stay captured.
     pub mouse_mode: MouseMode,
     pub invert_scroll: bool,
+    /// The `shortcuts` blob, resolved; empty is the desktop's defaults. Browse mode takes each
+    /// launch's ([`SessionParams::shortcuts`]).
+    pub shortcuts: String,
     /// Send system chords (Alt+Tab, Super) to the host while captured. Off keeps them local.
     /// Applies in both mouse models; desktop mode's unlocked pointer clicking another window
     /// is the way back. See [`apply_capture`](shell::apply_capture).
@@ -290,7 +293,7 @@ struct Shell {
     overlay_frame: Option<OverlayFrame>,
     stats_verbosity: StatsVerbosity,
     fullscreen: bool,
-    /// The pad's escape chord left fullscreen; its press back in restores it.
+    /// A pad's Release input left fullscreen; its press back in restores it.
     pad_left_fullscreen: bool,
     mouse: sdl3::mouse::MouseUtil,
     event_pump: sdl3::EventPump,
@@ -306,7 +309,13 @@ struct Shell {
     #[cfg(target_os = "linux")]
     overlay_focus: Option<pf_client_core::overlay_focus::OverlayFocus>,
     menu_rx: async_channel::Receiver<MenuEvent>,
-    disconnect_rx: async_channel::Receiver<()>,
+    /// What the forwarded pads' shortcuts fire.
+    shortcut_rx: async_channel::Receiver<ShortcutFired>,
+    /// This launch's shortcuts, for the hints; the keyboard's engine over them.
+    shortcuts: std::rc::Rc<pf_client_core::shortcuts::Shortcuts>,
+    keys: shortcuts::Keys,
+    /// End game or a host action fired once, and when: the next fire within two seconds runs it.
+    armed: Option<(pf_client_core::overlay_actions::SlotId, Instant)>,
     /// Last audio-mute mask drawn and when it changed: a local mute's badge is timed off it.
     audio_mute_at: Instant,
     audio_mute_seen: u8,
@@ -314,15 +323,13 @@ struct Shell {
     /// `None` until they do: a stream starts unmuted and says nothing.
     mic_muted_seen: bool,
     mic_muted_at: Option<Instant>,
-    /// The pad whose Select+A opened the ring; `None` for a keyboard, touch or closed ring.
+    /// The pad whose shortcut opened the ring; `None` for a keyboard, touch or closed ring.
     ring_opener: Option<u8>,
     /// Ring pad ownership, edge-tracked: open masks the pads (a held trigger is released
     /// on the host) and polls them into menu events; close re-adopts them.
     ring_was_open: bool,
     /// SDL's screen saver hold as last set. SDL holds it from start, so this begins `true`.
     screen_held: bool,
-    chord_rx: async_channel::Receiver<(u8, SelectChord)>,
-    escape_rx: async_channel::Receiver<()>,
     pump: GamepadPump,
     gamepad: GamepadService,
     overlay: Option<Box<dyn Overlay>>,
@@ -470,6 +477,8 @@ struct StreamState {
         String,
         std::sync::mpsc::Receiver<pf_client_core::library::GameEnd>,
     )>,
+    /// A shortcut's host action in flight: the host's answer, once it lands, is the notice.
+    host_notice: Option<std::sync::mpsc::Receiver<String>>,
     /// Gaming Mode touch-as-mouse: drops leaked Steam Input positions sent as deltas, once.
     touch_mouse: crate::touch::SteamTouchMouse,
     /// Host's pinned fingerprint once connected — the key the pre-fetched host-actions cache uses.

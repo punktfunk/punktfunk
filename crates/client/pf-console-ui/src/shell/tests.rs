@@ -967,29 +967,69 @@ fn the_licences_page_through_a_hosts_notices() {
     assert!(matches!(s.stack.last(), Some(Screen::Home(_))));
 }
 
-/// The stream controls draw without a host, and a pad leaves them with B.
+/// The shortcuts page draws without a host, and a pad leaves it with B.
 #[test]
-fn the_stream_controls_draw_and_a_pad_leaves_them() {
+fn the_shortcuts_page_draws_and_a_pad_leaves_it() {
     let fonts = crate::theme::build_fonts().unwrap();
     let mut surface = skia_safe::surfaces::raster_n32_premul((1280, 800)).unwrap();
     let mut settings = pf_client_core::trust::Settings::default();
     let lib = crate::library::LibraryShared::default();
-    let controls = crate::screens::controls::ControlsScreen::new(&crate::screens::Ctx::test(
-        &mut settings,
-        &lib,
-    ));
+    let ctx = crate::screens::Ctx::test(&mut settings, &lib);
+    let page = crate::screens::shortcuts::ShortcutsScreen::new(&ctx, Default::default());
     let (mut s, _console, _library) = shell(vec![
         Screen::Home(HomeScreen::new()),
-        Screen::Controls(controls),
+        Screen::Shortcuts(page),
     ]);
     s.render(surface.canvas(), 1280, 800, &fonts, None, None, &[]);
-    let Some(Screen::Controls(c)) = s.stack.last() else {
-        panic!("the controls are on top");
+    let Some(Screen::Shortcuts(p)) = s.stack.last() else {
+        panic!("the page is on top");
     };
-    assert_eq!(c.title(), "Stream controls");
+    assert_eq!(p.title(), "Shortcuts");
     s.handle_menu(MenuEvent::Back);
     finish_motion(&mut s);
     assert!(matches!(s.stack.last(), Some(Screen::Home(_))));
+}
+
+/// A recording shortcut takes the host's test mode as the input test does; the chord held
+/// when the first button lifts is saved, and the test mode ends with the recording.
+#[test]
+fn a_recording_shortcut_takes_the_pad_and_saves_its_chord() {
+    use crate::model::{ConsoleCmd, PadTestState};
+    use pf_client_core::shortcuts::{button_bit, Shortcuts, Trigger};
+    let fonts = crate::theme::build_fonts().unwrap();
+    let mut surface = skia_safe::surfaces::raster_n32_premul((1280, 800)).unwrap();
+    let mut settings = pf_client_core::trust::Settings::default();
+    let lib = crate::library::LibraryShared::default();
+    let ctx = crate::screens::Ctx::test(&mut settings, &lib);
+    let client = crate::screens::shortcuts::client(ctx.device.platform);
+    let mut row =
+        crate::screens::shortcuts::ShortcutRowScreen::edit(&ctx, Default::default(), client, 0);
+    row.start_recording();
+    let (mut s, console, _library) = shell(vec![
+        Screen::Home(HomeScreen::new()),
+        Screen::ShortcutRow(Box::new(row)),
+    ]);
+    let mut frame = |s: &mut Shell| s.render(surface.canvas(), 1280, 800, &fonts, None, None, &[]);
+    frame(&mut s);
+    assert!(s.bus.drain().contains(&ConsoleCmd::PadTest { on: true }));
+    for held in [&[][..], &["Y"], &["Y", "B"], &["B"]] {
+        console.set_pad_test(PadTestState {
+            held: held.iter().map(|h| h.to_string()).collect(),
+            axes: Vec::new(),
+        });
+        frame(&mut s);
+    }
+    let saved = Shortcuts::parse(&s.settings.shortcuts);
+    let yb = ["y", "b"].map(|n| button_bit(n).unwrap()).to_vec();
+    assert_eq!(
+        saved.bindings[0].trigger,
+        Trigger::Pad {
+            buttons: yb,
+            hold: false
+        }
+    );
+    frame(&mut s);
+    assert!(s.bus.drain().contains(&ConsoleCmd::PadTest { on: false }));
 }
 
 /// The host's test mode follows the test screen: on while it is on top, drawn from the

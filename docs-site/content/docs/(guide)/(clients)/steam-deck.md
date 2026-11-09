@@ -70,10 +70,12 @@ installed on the Deck. Pick **This device** to hand the button back to Steam. Th
 
 ### Controls while streaming
 
-- **Leave:** hold [L1 + R1 + Start + Select](/docs/input#leaving-with-a-controller) for about 1.5
-  seconds, or quit the game from the Steam overlay.
-- **The Steam and `…` buttons open the Deck's own menus.** To press them on the host, hold
-  **Select**, or use **Host menus** in the panel while a stream runs. To send them raw instead, set
+- **Leave:** hold [L1 + R1 + Start + Select](/docs/shortcuts#leaving-with-a-controller) for a
+  second, or quit the game from the Steam overlay. Change it under **Open Punktfunk → Settings →
+  Input → Shortcuts**.
+- **The Steam and `…` buttons open the Deck's own menus.** To press them on the host,
+  [hold **Select**](/docs/shortcuts#the-guide-button-xbox--ps--steam-and-quick-access), or use
+  **Host menus** in the panel while a stream runs. To send them raw instead, set
   **Open Punktfunk → Settings → Controllers → Guide button** to **Send to host** (turn on
   **Show advanced** first).
 - **End game:** a stream started from a game's page adds **End game** to **Host menus**. It closes

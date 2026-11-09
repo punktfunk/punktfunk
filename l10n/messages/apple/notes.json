@@ -64,6 +64,7 @@
 	"apple_ring_note_no_touch_tv": "Note under a touch action in the action picker on Apple TV.",
 	"apple_ring_note_keyboard_tv": "Note under Keyboard in the action picker on Apple TV.",
 	"apple_ring_note_mic_tv": "Note under Microphone in the action picker on Apple TV.",
+	"apple_ring_mac_only": "Why Mouse mode, Fullscreen or Minimize is dimmed, and their note in the action picker, on an iPhone, iPad, Vision Pro or Apple TV.",
 	"apple_tv_ring_footer": "Under the quick actions editor on Apple TV. {remote} is the Siri Remote's button name, {pad} a controller chord; both untranslated.",
 	"apple_tv_ring_move": "Context menu item on a ring slot: pick it up to move it.",
 	"apple_tv_ring_clear": "Context menu item on a ring slot: empty it.",

@@ -186,9 +186,8 @@ pub struct Settings {
     /// [`Settings::system_buttons_forward`].
     #[serde(default = "default_auto")]
     pub system_buttons: String,
-    /// Hold-Select ≥ ~350 ms sends the host the guide button (down for the hold).
-    /// `"auto"` / `"on"` / `"off"`; auto = on only where raw guide cannot reach the
-    /// host cleanly (Gaming Mode). A Select tap is delayed up to the threshold.
+    /// Legacy `"auto"` / `"on"` / `"off"`: only decides whether the default shortcuts
+    /// ([`crate::shortcuts::defaults`]) carry Hold Select → Guide. Nothing else reads it.
     #[serde(default = "default_auto")]
     pub guide_gesture: String,
     /// Host compositor backend to request (advisory; the host falls back if unavailable).
@@ -358,6 +357,10 @@ pub struct Settings {
     /// Empty = platform default. One opaque field: each cross-client setting is ~six edits.
     #[serde(default)]
     pub overlay_actions: String,
+    /// In-stream shortcuts JSON ([`crate::shortcuts::Shortcuts::parse`]). Empty = this
+    /// client's defaults ([`crate::shortcuts::resolve`]), which read `guide_gesture`.
+    #[serde(default)]
+    pub shortcuts: String,
     /// Playback endpoint (PipeWire `node.name` / WASAPI `IMMDevice` id); empty = OS default.
     /// Maps to `PUNKTFUNK_AUDIO_SINK`. A gone pick falls back to default.
     #[serde(default)]
@@ -712,16 +715,6 @@ impl Settings {
         }
     }
 
-    /// Whether the hold-Select guide gesture is armed.
-    /// Auto = on only under Gaming Mode, the sole controller route once raw presses stay local.
-    pub fn guide_gesture_enabled(&self, game_mode: bool) -> bool {
-        match self.guide_gesture.as_str() {
-            "on" => true,
-            "off" => false,
-            _ => game_mode,
-        }
-    }
-
     /// The `codec` setting as a `quic::CODEC_*` preference bit (`0` = auto).
     #[cfg(not(target_family = "wasm"))]
     pub fn preferred_codec(&self) -> u8 {
@@ -792,6 +785,7 @@ impl Default for Settings {
             auto_wake: true,
             invert_scroll: false,
             overlay_actions: String::new(),
+            shortcuts: String::new(),
             speaker_device: String::new(),
             mic_device: String::new(),
             pad_rumble: true,

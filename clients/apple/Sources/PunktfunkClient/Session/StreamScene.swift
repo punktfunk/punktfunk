@@ -29,19 +29,6 @@ struct StreamScene: View {
     @State private var picture = CurveTarget()
     #endif
 
-    /// The ring this platform draws. macOS takes the DESKTOP default (no soft keyboard, no
-    /// on-screen pad), tvOS the TV one (no touch, keyboard or microphone slot), iOS the touch
-    /// one; a configured blob overrides each.
-    private var ringConfig: OverlayConfig {
-        #if os(macOS)
-        OverlayConfig.parse(model.settings.overlayActions, platform: .desktop)
-        #elseif os(tvOS)
-        OverlayConfig.parse(model.settings.overlayActions, platform: .tv)
-        #else
-        OverlayConfig.parse(model.settings.overlayActions)
-        #endif
-    }
-
     var body: some View {
         Group {
             if let conn = model.connection {
@@ -93,8 +80,9 @@ struct StreamScene: View {
                 if captured { model?.claimControllers() }
                 #endif
             },
-            onDisconnectRequest: { [weak model] in
-                model?.disconnect() // the captured-state ⌃⌥⇧D combo
+            onDisconnectRequest: { [weak model] in model?.disconnect() },
+            onShortcut: { [weak model, ring] action, phase in
+                model?.runShortcut(action, phase, pad: nil, ring: ring)
             },
             onDial: dialSink,
             onFrame: { [meter = model.meter, queue = model.clientQueue] au in
@@ -237,7 +225,7 @@ struct StreamScene: View {
         // Pro's ornament. Mounted only while open — a closed overlay costs nothing.
         .overlay {
             if captureEnabled, ring.visible, overlaysHere(conn) {
-                RingOverlay(state: ring, cfg: ringConfig, actions: model.ringActions(conn, ring: ring))
+                RingOverlay(state: ring, cfg: model.ringConfig, actions: model.ringActions(conn, ring: ring))
                     .overFlatPicture()
             }
         }
@@ -251,17 +239,6 @@ struct StreamScene: View {
                 name: .punktfunkRingOpen, object: NSNumber(value: open))
             #endif
         }
-        #if !os(tvOS)
-        // ⌃⌥⇧O from InputCapture: the Mac's while captured, the iPad's in both states. It
-        // names its session; the Stream menu's item goes through `sessionFocus` instead.
-        .onReceive(NotificationCenter.default.publisher(
-            for: .punktfunkToggleQuickActions
-        )) { note in
-            guard captureEnabled, model.phase == .streaming,
-                  note.object as AnyObject === conn else { return }
-            ring.toggleCentred()
-        }
-        #endif
         #if os(visionOS)
         .handlesGameControllerEvents(matching: .gamepad)
         #endif
@@ -347,6 +324,46 @@ struct StreamScene: View {
 }
 
 extension SessionModel {
+    /// The ring this platform draws. macOS takes the DESKTOP default (no soft keyboard, no
+    /// on-screen pad), tvOS the TV one (no touch, keyboard or microphone slot), iOS the touch
+    /// one; a configured blob overrides each.
+    var ringConfig: OverlayConfig {
+        #if os(macOS)
+        OverlayConfig.parse(settings.overlayActions, platform: .desktop)
+        #elseif os(tvOS)
+        OverlayConfig.parse(settings.overlayActions, platform: .tv)
+        #else
+        OverlayConfig.parse(settings.overlayActions)
+        #endif
+    }
+
+    /// A shortcut fired (design/client-shortcuts.md §4) on wire pad `pad`, `nil` for the keyboard
+    /// or a captured Steam Controller. It runs as the dial's slot would, at once: only the host's
+    /// danger actions and End game ask for a second press. A held key-like action stays down on
+    /// the host until its `.up`.
+    func runShortcut(_ action: Shortcuts.Action, _ phase: Shortcuts.Phase, pad: UInt32?, ring: RingState) {
+        guard let conn = connection, self.phase == .streaming else { return }
+        guard case .slot(let slot) = action else {
+            if action == .ring { pad == nil ? ring.toggleCentred() : ring.chordToggle(pad: pad) }
+            return
+        }
+        let a = ringActions(conn, ring: ring)
+        let cfg = ringConfig
+        if phase == .down || phase == .up {
+            switch slot {
+            case .guide: a.holdPadButton(GamepadWire.guide, phase == .down, pad)
+            case .qam: a.holdPadButton(GamepadWire.misc1, phase == .down, pad)
+            case .shortcut(let id): a.holdKeys(cfg.shortcut(id)?.keys ?? [], phase == .down)
+            default: break
+            }
+            return
+        }
+        let s = spec(slot, cfg, a)
+        guard s.enabled else { return }
+        if s.armed, slot != .endStream, !confirmShortcut(s.id, prompt: confirmHint(s)) { return }
+        perform(slot, cfg, a, ring, pad: pad)
+    }
+
     /// The session's live state and commands behind each ring slot.
     func ringActions(_ conn: PunktfunkConnection, ring: RingState) -> RingActions {
         RingActions(
@@ -379,7 +396,7 @@ extension SessionModel {
             padAvailable: { self.virtualPadAvailable },
             padShown: { self.virtualPadShown },
             togglePad: { self.toggleVirtualPad() },
-            tapPadButton: { bit in self.tapPadButton(bit) },
+            tapPadButton: { bit, pad in self.tapPadButton(bit, pad: pad) },
             pointerGranted: { conn.canSendPointer },
             padMouseTarget: { [ring] in padMouseTarget(ring, conn) },
             padMouseMode: { [ring] in conn.padMouseMode(padMouseTarget(ring, conn)) },
@@ -395,7 +412,21 @@ extension SessionModel {
             endGame: { [weak self] in self?.endStreamedGame() },
             padType: { self.padType },
             padTypeAvailable: { self.padTypeAvailable },
-            cyclePadType: { [weak self] in self?.cyclePadType() })
+            cyclePadType: { [weak self] in self?.cyclePadType() },
+            toggleCapture: { streamSlot(.releaseInput, conn) },
+            toggleMouseMode: { streamSlot(.mouseMode, conn) },
+            toggleFullscreen: {
+                NotificationCenter.default.post(name: .punktfunkToggleFullscreen, object: nil)
+            },
+            minimize: { streamSlot(.minimize, conn) },
+            clipboardAvailable: { conn.hostSupportsClipboard && conn.canUseClipboard },
+            toggleClipboard: { [weak self] in self?.toggleClipboardSync() },
+            holdKeys: { keys, down in
+                let vks = keys.compactMap(keyVk)
+                guard vks.count == keys.count else { return }
+                for vk in down ? vks : vks.reversed() { conn.send(.key(vk, down: down)) }
+            },
+            holdPadButton: { [weak self] bit, down, pad in self?.holdPadButton(bit, down: down, pad: pad) })
     }
 }
 
@@ -409,6 +440,11 @@ extension View {
         self
         #endif
     }
+}
+
+/// Hand a slot only the stream view runs to this session's view.
+@MainActor private func streamSlot(_ slot: SlotId, _ conn: PunktfunkConnection) {
+    NotificationCenter.default.post(name: .punktfunkStreamSlot, object: conn, userInfo: ["slot": slot.id])
 }
 
 /// The wire pads the controller-mouse toggle acts on: the ring's opener, else every live pad.

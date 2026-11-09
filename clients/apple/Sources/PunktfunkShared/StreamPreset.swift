@@ -127,6 +127,8 @@ public struct SettingsOverlay: Codable, Equatable, Sendable {
     /// The whole ring blob (design/touch-client-overlay.md D10): a preset inherits the default
     /// ring entirely or owns its own ring and shortcuts.
     public var overlayActions: String?
+    /// The whole shortcuts blob, like the ring's.
+    public var shortcuts: String?
     public var inhibitShortcuts: Bool?
     public var gamepadType: Int?
     public var gamepadForwarding: Bool?
@@ -180,6 +182,7 @@ public struct SettingsOverlay: Codable, Equatable, Sendable {
         case mouseMode = "mouse_mode"
         case invertScroll = "invert_scroll"
         case overlayActions = "overlay_actions"
+        case shortcuts
         case inhibitShortcuts = "inhibit_shortcuts"
         case gamepadType = "gamepad"
         case gamepadForwarding = "gamepad_forwarding"
@@ -223,6 +226,7 @@ public struct SettingsOverlay: Codable, Equatable, Sendable {
         mouseMode = str(.mouseMode)
         invertScroll = bool(.invertScroll)
         overlayActions = str(.overlayActions)
+        shortcuts = str(.shortcuts)
         inhibitShortcuts = bool(.inhibitShortcuts)
         gamepadType = int(.gamepadType)
         gamepadForwarding = bool(.gamepadForwarding)
@@ -268,6 +272,7 @@ public struct SettingsOverlay: Codable, Equatable, Sendable {
         try c.encodeIfPresent(mouseMode, forKey: AnyKey(Key.mouseMode.rawValue))
         try c.encodeIfPresent(invertScroll, forKey: AnyKey(Key.invertScroll.rawValue))
         try c.encodeIfPresent(overlayActions, forKey: AnyKey(Key.overlayActions.rawValue))
+        try c.encodeIfPresent(shortcuts, forKey: AnyKey(Key.shortcuts.rawValue))
         try c.encodeIfPresent(inhibitShortcuts, forKey: AnyKey(Key.inhibitShortcuts.rawValue))
         try c.encodeIfPresent(gamepadType, forKey: AnyKey(Key.gamepadType.rawValue))
         try c.encodeIfPresent(
@@ -330,6 +335,7 @@ public enum OverlayField {
         case "mouse_mode": overlay.mouseMode = nil
         case "invert_scroll": overlay.invertScroll = nil
         case "overlay_actions": overlay.overlayActions = nil
+        case "shortcuts": overlay.shortcuts = nil
         case "inhibit_shortcuts": overlay.inhibitShortcuts = nil
         case "gamepad": overlay.gamepadType = nil
         case "gamepad_forwarding": overlay.gamepadForwarding = nil
@@ -375,6 +381,7 @@ public enum OverlayField {
         case "mouse_mode": return o.mouseMode != nil
         case "invert_scroll": return o.invertScroll != nil
         case "overlay_actions": return o.overlayActions != nil
+        case "shortcuts": return o.shortcuts != nil
         case "inhibit_shortcuts": return o.inhibitShortcuts != nil
         case "gamepad": return o.gamepadType != nil
         case "gamepad_forwarding": return o.gamepadForwarding != nil

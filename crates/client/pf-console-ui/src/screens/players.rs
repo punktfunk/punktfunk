@@ -105,9 +105,10 @@ enum Target {
     Grants,
 }
 
-/// The hosts that send a pad's readings for the input test.
-fn can_test(platform: Platform) -> bool {
-    matches!(platform, Platform::Android | Platform::Apple)
+/// The hosts that send a pad's readings for the input test. The browser page has its own
+/// recorder, so its console never gets them.
+pub(super) fn can_test(platform: Platform) -> bool {
+    !matches!(platform, Platform::Web | Platform::Tizen)
 }
 
 fn targets(ctx: &Ctx, others: &[OtherDevice]) -> Vec<Target> {
@@ -689,7 +690,7 @@ mod tests {
     }
 
     /// OK, or a hold, on a pad the host can test or pulse opens its menu; Right reaches the
-    /// next pad. A desktop has neither, so OK thuds there.
+    /// next pad. A TV has neither, so OK thuds there.
     #[test]
     fn ok_or_a_hold_on_a_pad_opens_its_menu() {
         let pads = [pad("DualSense", true), pad("Edge", true)];
@@ -720,7 +721,7 @@ mod tests {
         let mut s = PlayersScreen::new();
         let out = drive(
             &mut s,
-            Platform::Desktop,
+            Platform::Web,
             &[pad("DualSense", true)],
             &[MenuEvent::Confirm],
         );

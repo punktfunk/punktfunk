@@ -175,7 +175,7 @@ started yourself on the host.
 
 | Where | How |
 |---|---|
-| While streaming | **End game** on the [quick-action dial](/docs/input#the-quick-action-dial)'s sheet. The stream ends with it. |
+| While streaming | **End game** on the [quick-action dial](/docs/shortcuts#the-quick-action-dial)'s sheet. The stream ends with it. |
 | A library | Hold or right-click the running title → **End game** |
 | Controller home | The title's options → **End game** |
 | Steam Deck | **End game** under **Host menus** in the Decky panel |

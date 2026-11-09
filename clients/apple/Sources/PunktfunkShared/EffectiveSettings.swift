@@ -43,6 +43,8 @@ public struct EffectiveSettings: Equatable, Sendable {
     public var invertScroll = SettingDefault.invertScroll
     /// Cross-client `overlay_actions`: the ring blob, empty = the platform default.
     public var overlayActions = SettingDefault.overlayActions
+    /// Cross-client `shortcuts`: the shortcuts blob, empty = this platform's defaults.
+    public var shortcuts = SettingDefault.shortcuts
     /// Cross-client `inhibit_shortcuts` (default on): system chords reach the host while input is
     /// captured. See `DefaultsKey.inhibitShortcuts` — on macOS this is the ⌘-chord passthrough.
     public var inhibitShortcuts = SettingDefault.inhibitShortcuts
@@ -54,7 +56,8 @@ public struct EffectiveSettings: Equatable, Sendable {
     public var sc2Capture = SettingDefault.sc2Capture
     /// Cross-client `system_buttons`: "auto" | "forward" | "local".
     public var systemButtons = SettingDefault.systemButtons
-    /// Cross-client `guide_gesture`: "auto" | "on" | "off".
+    /// The retired `guide_gesture` ("auto" | "on" | "off"): it decides the Hold Select row of
+    /// the default shortcuts.
     public var guideGesture = SettingDefault.guideGesture
     /// A `StatsVerbosity` raw value; the enum lives in PunktfunkKit, which this module can't see.
     public var statsVerbosity = SettingDefault.statsVerbosity
@@ -122,6 +125,7 @@ public struct EffectiveSettings: Equatable, Sendable {
         mouseMode = str(DefaultsKey.mouseMode, mouseMode)
         invertScroll = bool(DefaultsKey.invertScroll, invertScroll)
         overlayActions = str(DefaultsKey.overlayActions, overlayActions)
+        shortcuts = str(DefaultsKey.shortcuts, shortcuts)
         inhibitShortcuts = bool(DefaultsKey.inhibitShortcuts, inhibitShortcuts)
         gamepadType = int(DefaultsKey.gamepadType, gamepadType)
         gamepadForwarding = bool(DefaultsKey.gamepadForwarding, gamepadForwarding)
@@ -168,22 +172,14 @@ public struct EffectiveSettings: Equatable, Sendable {
         }
     }
 
-    /// The hold-Select guide gesture resolved for this platform ([`guideGesture`]). Auto =
-    /// on everywhere but macOS: iOS reserves the physical Home press (the Game Overlay,
-    /// uncapturable pre-27) and tvOS never delivers it, so holding Select is the controller
-    /// route to the host's guide — and, held on, to a Gaming-Mode host's QAM. On macOS the
-    /// raw press reaches the host, so auto stays off and Select keeps its exact timing.
-    public var guideGestureEnabled: Bool {
-        switch guideGesture {
-        case "on": return true
-        case "off": return false
-        default:
-            #if os(macOS)
-            return false
-            #else
-            return true
-            #endif
-        }
+    /// This device's shortcuts: the stored blob, or the platform's defaults. Hold Select for
+    /// Guide is a default off macOS: iOS keeps the physical Home press and tvOS never delivers it.
+    public var resolvedShortcuts: Shortcuts {
+        #if os(macOS)
+        Shortcuts.resolve(shortcuts, client: .mac, legacyGuideGesture: guideGesture)
+        #else
+        Shortcuts.resolve(shortcuts, client: .apple, legacyGuideGesture: guideGesture)
+        #endif
     }
 
     /// The one resolution seam: this overlay on top of these settings. Pure — no store reads, no
@@ -212,6 +208,7 @@ public struct EffectiveSettings: Equatable, Sendable {
         if let v = overlay.mouseMode { s.mouseMode = v }
         if let v = overlay.invertScroll { s.invertScroll = v }
         if let v = overlay.overlayActions { s.overlayActions = v }
+        if let v = overlay.shortcuts { s.shortcuts = v }
         if let v = overlay.inhibitShortcuts { s.inhibitShortcuts = v }
         if let v = overlay.gamepadType { s.gamepadType = v }
         if let v = overlay.gamepadForwarding { s.gamepadForwarding = v }

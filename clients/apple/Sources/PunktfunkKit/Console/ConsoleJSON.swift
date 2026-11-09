@@ -283,6 +283,7 @@ public enum ConsoleJSON {
         j["mouse_mode"] = o.mouseMode
         j["invert_scroll"] = o.invertScroll
         j["overlay_actions"] = o.overlayActions
+        j["shortcuts"] = o.shortcuts
         j["inhibit_shortcuts"] = o.inhibitShortcuts
         j["gamepad_forwarding"] = o.gamepadForwarding
         j["system_buttons"] = o.systemButtons
@@ -302,8 +303,8 @@ public enum ConsoleJSON {
         "pyrowave_bpp", "render_scale", "video_fit", "screens", "codec", "hdr_enabled", "enable_444",
         "ten_bit_sdr",
         "audio_channels", "audio_format", "mic_enabled", "echo_cancel", "keep_host_audio",
-        "touch_mode", "mouse_mode", "invert_scroll", "overlay_actions", "inhibit_shortcuts",
-        "gamepad_forwarding", "system_buttons", "guide_gesture", "stats_verbosity",
+        "touch_mode", "mouse_mode", "invert_scroll", "overlay_actions", "shortcuts",
+        "inhibit_shortcuts", "gamepad_forwarding", "system_buttons", "guide_gesture", "stats_verbosity",
         "fullscreen_on_stream", "present_priority", "smooth_buffer", "vsync", "allow_vrr",
     ]
 

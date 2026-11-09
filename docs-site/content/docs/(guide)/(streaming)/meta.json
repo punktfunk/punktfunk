@@ -1,6 +1,7 @@
 {
   "title": "Streaming",
   "pages": [
+    "shortcuts",
     "input",
     "controller-audio",
     "clipboard",

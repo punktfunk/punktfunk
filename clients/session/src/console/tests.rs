@@ -619,3 +619,16 @@ fn the_shell_model_keeps_a_titles_overrides() {
     );
     assert!(model[1].overrides.is_none());
 }
+
+/// The input test hears Xbox names, a paddle by its drawn name, and a trigger past half as held.
+#[test]
+fn a_pad_reading_names_what_the_input_test_draws() {
+    let r = PadReading {
+        buttons: wire::BTN_B | wire::BTN_BACK | wire::BTN_PADDLE2,
+        axes: [0.0, -1.0, 0.0, 0.0, 0.8, 0.3],
+    };
+    let s = pad_test_state(r);
+    assert_eq!(s.held, ["B", "Back", "L4", "LT"]);
+    assert_eq!(s.axes[1], ("LY".to_string(), -1.0));
+    assert_eq!(s.axes[5], ("RT".to_string(), 0.3));
+}

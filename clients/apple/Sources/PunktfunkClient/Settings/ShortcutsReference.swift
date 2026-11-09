@@ -1,20 +1,6 @@
-// The in-session controls, written down once and read by every surface that shows them.
-//
-// This replaced the start-of-stream banner (ContentView's `showShortcutHint`): a 6-second pill
-// that told you the controls exactly once, while you were busy looking at the thing you had just
-// connected to, and then never again. A reference you can OPEN answers the question at the moment
-// it is actually asked — which is the second session, not the first.
-//
-// The catalog is data rather than a view so both About pages render the same words: the touch
-// `AboutView` (a Form) and the controller-first `GamepadAboutView` (a console list). The banner
-// was macOS/tvOS-only, so deleting it would have cost Mac TOUCH users the one place those keys
-// were written down — hence the touch surface gets this too, not just the gamepad UI.
-//
-// Per-platform by `#if`, because the honest answer really is different: tvOS has no keyboard and
-// no menu bar, iOS has a touch gesture nothing else has, and macOS is the only one that has to
-// explain mouse capture. A controller's chords are the one section common to all three — they are
-// the same buttons on every client (`GamepadCapture.escapeChord` / `.statsChord`), which is the
-// whole point of a cross-client chord.
+// The in-session controls as a read-only reference on the About pages: the rows of
+// `Shortcuts.rows` for this device's live shortcuts, which the Shortcuts page edits
+// (SettingsView+Sections, `shortcutsRow`).
 
 import AVFoundation
 import PunktfunkKit
@@ -68,80 +54,24 @@ enum ShortcutsCatalog {
         #endif
     }
 
-    /// `micAvailable` gates the mute row — a device with no microphone would otherwise be told
-    /// about a key that does nothing, which is the failure the old banner already avoided.
+    /// This device's shortcuts as the Shortcuts page lists them, read-only. `micAvailable` gates
+    /// the mute row: a device with no microphone is not told about a key that does nothing.
     static func groups(micAvailable: Bool) -> [ShortcutGroup] {
-        var groups: [ShortcutGroup] = []
-        #if os(macOS)
-        var keyboard: [ShortcutItem] = [
-            .init("capture", keys: String(localized: L10n.controlsGestureClick),
-                  L10n.controlsCaptureMouseKeyboard),
-            .init("release", keys: L10n.controlsEither(first: "⌃⌥⇧Q", second: "⌘⎋"),
-                  L10n.controlsReleaseMouseKeyboard),
-            .init("disconnect", keys: "⌃⌥⇧D", L10n.controlsDisconnect),
-            .init("stats", keys: "⌃⌥⇧S", L10n.controlsCycleStats),
-            .init("dial", keys: "⌃⌥⇧O", L10n.controlsOpenDial),
-            .init("mouse_mode", keys: "⌃⌥⇧M", L10n.controlsSwitchMouseMode),
-            .init("clipboard", keys: "⌃⌥⇧C", L10n.controlsToggleClipboard),
-            .init("fullscreen", keys: "⌃⌘F", text: L10n.controlsToggleFullscreenAfter(keys: "⌘⎋")),
-        ]
-        if micAvailable {
-            keyboard.append(.init("mic", keys: "⌃⌥⇧A", L10n.controlsToggleMic))
-        }
-        groups.append(.init(id: "keyboard", title: String(localized: L10n.controlsGroupKeyboard),
-                            items: keyboard))
-        #elseif os(iOS) || os(visionOS)
-        // iPad with a hardware keyboard gets the same cross-client set as the Mac (StreamCommands
-        // publishes it either way); a phone simply never sees a keyboard to press it on.
-        var keyboard: [ShortcutItem] = [
-            .init("release", keys: L10n.controlsEither(first: "⌃⌥⇧Q", second: "⌘⎋"),
-                  L10n.controlsReleasePointerDevice),
-            .init("disconnect", keys: "⌃⌥⇧D", L10n.controlsDisconnect),
-            .init("stats", keys: "⌃⌥⇧S", L10n.controlsCycleStats),
-            .init("dial", keys: "⌃⌥⇧O", L10n.controlsOpenDial),
-            .init("clipboard", keys: "⌃⌥⇧C", L10n.controlsToggleClipboard),
-        ]
-        if micAvailable {
-            keyboard.append(.init("mic", keys: "⌃⌥⇧A", L10n.controlsToggleMic))
-        }
-        groups.append(.init(id: "keyboard", title: String(localized: L10n.controlsGroupKeyboard),
-                            items: keyboard))
-        groups.append(.init(id: "touch", title: String(localized: L10n.controlsGroupTouch), items: [
-            .init("twist", keys: String(localized: L10n.controlsGestureTwoFingerTwist),
-                  L10n.controlsOpenDial),
-            .init("tap", keys: String(localized: L10n.controlsGestureThreeFingerTap),
-                  L10n.controlsCycleStats),
-            .init("swipe_up", keys: String(localized: L10n.controlsGestureThreeFingerSwipeUp),
-                  L10n.controlsShowKeyboard),
-            .init("swipe_down", keys: String(localized: L10n.controlsGestureThreeFingerSwipeDown),
-                  L10n.controlsHideKeyboard),
-            .init("side_edge", keys: String(localized: L10n.appleControlsGestureSideEdge),
-                  L10n.appleControlsOpenDialPassthrough),
-        ]))
-        #elseif os(tvOS)
-        // The remote section leads on tvOS: it carries the ONLY exits. Menu/B is swallowed during
-        // a session (ContentView's `.onExitCommand {}`), so a user who does not know the hold
-        // gesture is genuinely stuck — which is why this was the one banner that could not simply
-        // be deleted without putting the words somewhere findable first.
-        groups.append(.init(id: "remote", title: "Siri Remote", items: [
-            .init("back", keys: "Back", L10n.controlsOpenDial),
-            .init("back_hold", keys: L10n.controlsHold(keys: "Back"), L10n.controlsDisconnect),
-            .init("surface", keys: String(localized: L10n.appleControlsTouchSurface),
-                  L10n.appleControlsMovePointer),
-            .init("press", keys: String(localized: L10n.appleControlsPress), L10n.appleControlsClick),
-            .init("play_pause", keys: "Play/Pause", L10n.appleControlsRightClick),
-            .init("play_pause_hold", keys: L10n.controlsHold(keys: "Play/Pause"), L10n.controlsCycleStats),
-        ]))
+        let shortcuts = EffectiveSettings(defaults: .standard).resolvedShortcuts
+        #if os(iOS) || os(visionOS)
+        let touchscreen = true
+        #else
+        let touchscreen = false
         #endif
-        // Every client's controller speaks these two chords — see GamepadCapture.escapeChord and
-        // .statsChord, which a test pins against their GameController element lists.
-        groups.append(.init(id: "controller", title: String(localized: L10n.controlsGroupPad), items: [
-            .init("escape", keys: "L1 + R1 + Start + Select", L10n.controlsHoldDisconnect),
-            .init("stats", keys: "Select + X", L10n.controlsCycleStats),
-            .init("dial", keys: "Select + A", L10n.controlsOpenDial),
-            .init("guide", keys: L10n.controlsHold(keys: "Select"), L10n.controlsGuideHold),
-        ]))
-        return groups
+        let overlay = OverlayConfig.parse(UserDefaults.standard.string(forKey: DefaultsKey.overlayActions))
+        return shortcuts.rows(client: shortcutClient, touchscreen: touchscreen, overlay: overlay).map { g in
+            let items = g.rows.filter { row in
+                micAvailable || row.binding.map { shortcuts.bindings[$0].action != .slot(.mic) } ?? true
+            }
+            return ShortcutGroup(
+                id: g.id, title: g.note.map { "\(g.title) · \($0)" } ?? g.title,
+                items: items.map { ShortcutItem($0.id, keys: $0.keys, text: $0.text) })
+        }
     }
 }
 

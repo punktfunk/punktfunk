@@ -52,6 +52,8 @@
 	"desktop_shortcut_capture_tooltip": "Tooltip on the Press the chord button.",
 	"desktop_shortcuts_this_window": "Section in the keyboard shortcuts window: the main window's keys.",
 	"desktop_shortcuts_stream_window": "Section in the keyboard shortcuts window: the stream window's keys.",
+	"desktop_shortcuts_reset_title": "Alert title before Settings → Input → Shortcuts goes back to the defaults.",
+	"desktop_shortcuts_reset_body": "Alert body before the shortcuts are reset.",
 	"desktop_accel_show_hosts": "Keyboard shortcut description in the shortcuts window.",
 	"desktop_accel_show_library": "Keyboard shortcut description in the shortcuts window.",
 	"desktop_accel_search_library": "Keyboard shortcut description in the shortcuts window.",

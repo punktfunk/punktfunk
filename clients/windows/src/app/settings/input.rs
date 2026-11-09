@@ -1,7 +1,11 @@
-//! Input: touch, keyboard and mouse, and the quick-action ring.
+//! Input: touch, keyboard and mouse, the quick-action ring, and the in-stream shortcuts.
 
 use super::{described_overridable, group, presets, rows, setting_combo, setting_toggle, Cx};
+use crate::app::quick_actions::{Props, QuickActions};
+use crate::app::shortcuts::{resolved, ring_keys, ShortcutsPage};
+use pf_client_core::overlay_actions::SlotId;
 use pf_client_core::settings::{MouseMode, TouchMode};
+use pf_client_core::shortcuts::{Action, Device};
 use pf_l10n::{client, desktop};
 use windows_reactor::*;
 
@@ -18,7 +22,7 @@ pub(super) fn input_section(cx: &Cx) -> Vec<View> {
         s.touch_mode = TouchMode::ALL[i].as_name().to_string();
     });
     // Capture (pointer lock, relative, for games) vs desktop (uncaptured absolute pointer, for
-    // remote desktop work); Ctrl+Alt+Shift+M flips the model live in-stream.
+    // remote desktop work); the Mouse mode shortcut flips the model live in-stream.
     let mouse_modes: Vec<(&str, &str)> = MouseMode::ALL
         .iter()
         .map(|m| (m.as_name(), m.label()))
@@ -27,6 +31,9 @@ pub(super) fn input_section(cx: &Cx) -> Vec<View> {
     let mouse_combo = setting_combo(cx, scope, "mouse_mode", mouse_names, mouse_i, |s, i| {
         s.mouse_mode = MouseMode::ALL[i].as_name().to_string();
     });
+    let mouse_keys = resolved(s)
+        .hint(&Action::Slot(SlotId::MouseMode), Device::Keyboard)
+        .map(|keys| client::player_mouse_mode_keys_hint(&keys));
     let invert_scroll_toggle =
         setting_toggle(cx, scope, "invert_scroll", s.invert_scroll, |s, on| {
             s.invert_scroll = on
@@ -58,15 +65,15 @@ pub(super) fn input_section(cx: &Cx) -> Vec<View> {
                 cx,
                 &rows::MOUSE,
                 mouse_combo,
-                &format!(
-                    "{} {}",
-                    client::player_mouse_mode_hint(),
-                    client::player_mouse_mode_keys_hint("Ctrl+Alt+Shift+M"),
-                ),
+                &[client::player_mouse_mode_hint().to_string()]
+                    .into_iter()
+                    .chain(mouse_keys)
+                    .collect::<Vec<_>>()
+                    .join(" "),
             ),
             described_overridable(
                 cx,
-                &rows::SHORTCUTS,
+                &rows::INHIBIT_SHORTCUTS,
                 shortcuts_toggle,
                 &client::player_inhibit_shortcuts_hint("Alt+Tab, Win, \u{2026}"),
             ),
@@ -82,35 +89,43 @@ pub(super) fn input_section(cx: &Cx) -> Vec<View> {
     out
 }
 
+/// What the ring and shortcut editors take from the page: the scope and its commit plumbing.
+fn editor_props(cx: &Cx) -> Props {
+    Props {
+        ctx: cx.ctx.clone(),
+        pal: *cx.pal,
+        scope: cx.scope.to_string(),
+        rev: cx.rev,
+        set_rev: cx.set_rev.clone(),
+        set_status: cx.set_status.clone(),
+    }
+}
+
 /// The quick-action ring, edited on the ring itself (design touch-client-overlay.md
-/// §3.3). The editor commits every edit itself; the override marker is the page's.
+/// §3.3). The editor commits every edit itself; the override marker is the page's. The
+/// caption names the scope's Quick actions shortcuts while it has both.
 pub(super) fn quick_actions_section(cx: &Cx) -> Vec<View> {
-    let Cx {
-        ctx,
-        scope,
-        rev,
-        set_rev,
-        set_status,
-        ..
-    } = *cx;
+    let opens = ring_keys(&resolved(&cx.s))
+        .map(|(keys, pad)| desktop::desktop_player_overlay_actions_hint(&keys, &pad));
     vec![described_overridable(
         cx,
         &rows::QUICK_ACTIONS,
-        component::<crate::app::quick_actions::QuickActions>(
-            "quick-actions",
-            crate::app::quick_actions::Props {
-                ctx: ctx.clone(),
-                pal: *cx.pal,
-                scope: scope.to_string(),
-                rev,
-                set_rev: set_rev.clone(),
-                set_status: set_status.clone(),
-            },
-        ),
-        &format!(
-            "{} {}",
-            desktop::desktop_player_overlay_actions_hint("Ctrl+Alt+Shift+O", "Select+A"),
-            desktop::desktop_player_overlay_actions_preset_hint(),
-        ),
+        component::<QuickActions>("quick-actions", editor_props(cx)),
+        &opens
+            .into_iter()
+            .chain([desktop::desktop_player_overlay_actions_preset_hint().to_string()])
+            .collect::<Vec<_>>()
+            .join(" "),
+    )]
+}
+
+/// The in-stream shortcuts (design client-shortcuts.md §5). The editor commits every edit
+/// itself; the override marker is the page's.
+pub(super) fn shortcuts_section(cx: &Cx) -> Vec<View> {
+    vec![described_overridable(
+        cx,
+        &rows::SHORTCUTS,
+        component::<ShortcutsPage>("shortcuts", editor_props(cx)),
+        client::player_shortcuts_hint(),
     )]
 }

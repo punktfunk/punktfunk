@@ -624,7 +624,9 @@ impl SimpleComponent for AppModel {
                 crate::settings::Scope::Defaults,
             )),
             AppMsg::ShowPreferencesScoped(scope) => self.show_preferences(scope, &sender),
-            AppMsg::ShowShortcuts => shortcuts_dialog().present(Some(&self.window)),
+            AppMsg::ShowShortcuts => {
+                shortcuts_dialog(&self.store.settings()).present(Some(&self.window))
+            }
             AppMsg::ShowAbout => crate::settings::show_about(&self.window),
             AppMsg::ShowAddHost => self.hosts.emit(HostsMsg::ShowAddHost),
             AppMsg::Disconnect(key) => {
@@ -1022,44 +1024,32 @@ fn store_health_banner(pages: &[adw::ToolbarView], store: &Store) {
     store.subscribe(move |_| check());
 }
 
-/// The Keyboard Shortcuts dialog: this window's keys, then the session window's, then the
-/// controller chords and touch gestures, which have no accelerator to draw.
-pub fn shortcuts_dialog() -> adw::ShortcutsDialog {
+/// The Keyboard Shortcuts dialog: this window's keys, then the stream's shortcuts as `s`
+/// binds them, each chord as text since the player may have moved it anywhere.
+pub fn shortcuts_dialog(s: &crate::trust::Settings) -> adw::ShortcutsDialog {
     let dialog = adw::ShortcutsDialog::new();
-    for section in shortcut_sections() {
+    for section in shortcut_sections(s) {
         dialog.add(section);
     }
     dialog
 }
 
-fn shortcut_sections() -> Vec<adw::ShortcutsSection> {
-    use pf_client_core::shortcuts;
+fn shortcut_sections(s: &crate::trust::Settings) -> Vec<adw::ShortcutsSection> {
+    use pf_client_core::overlay_actions::{OverlayConfig, RingPlatform};
+    use pf_client_core::shortcuts::{Client, Kind};
     let shell = adw::ShortcutsSection::new(Some(desktop::desktop_shortcuts_this_window()));
     for (title, action, _) in ACCELS {
         shell.add(adw::ShortcutsItem::from_action(title(), action));
     }
-    let stream = adw::ShortcutsSection::new(Some(desktop::desktop_shortcuts_stream_window()));
-    for (title, accel) in [
-        (client::controls_toggle_fullscreen(), "F11 <Alt>Return"),
-        (client::controls_release_input(), "<Control><Alt><Shift>q"),
-        (client::controls_disconnect(), "<Control><Alt><Shift>d"),
-        (client::controls_cycle_stats(), "<Control><Alt><Shift>s"),
-        (client::controls_toggle_mic(), "<Control><Alt><Shift>v"),
-        (client::controls_open_dial(), "<Control><Alt><Shift>o"),
-        (
-            client::controls_switch_mouse_mode(),
-            "<Control><Alt><Shift>m",
-        ),
-    ] {
-        stream.add(adw::ShortcutsItem::new(title, accel));
-    }
-    let mut sections = vec![shell, stream];
-    // The keyboard group is the sections above; the rest read from the shared list.
-    for g in shortcuts::groups(shortcuts::Client::Desktop, true)
-        .into_iter()
-        .filter(|g| g.kind != shortcuts::Kind::Keyboard)
-    {
-        let section = adw::ShortcutsSection::new(Some(&g.heading()));
+    let mut sections = vec![shell];
+    let stream = crate::settings::shortcuts::live(&s.shortcuts, &s.guide_gesture);
+    let ring = OverlayConfig::parse(&s.overlay_actions, RingPlatform::Desktop);
+    for g in stream.rows_in(&ring, Client::Desktop, true) {
+        let title = match g.kind {
+            Kind::Keyboard => desktop::desktop_shortcuts_stream_window().into(),
+            _ => g.heading(),
+        };
+        let section = adw::ShortcutsSection::new(Some(&title));
         for i in g.items {
             let item = adw::ShortcutsItem::new(&i.text(), "");
             item.set_subtitle(&i.keys.to_string());
@@ -1080,9 +1070,10 @@ mod shortcuts_tests {
     fn shortcuts_dialog_lists_the_controller_chords() {
         use adw::prelude::*;
         assert!(gtk::init().is_ok() && adw::init().is_ok(), "no display");
-        let _ = super::shortcuts_dialog();
+        let s = crate::trust::Settings::default();
+        let _ = super::shortcuts_dialog(&s);
         let mut found = false;
-        for section in super::shortcut_sections() {
+        for section in super::shortcut_sections(&s) {
             assert!(section.n_items() > 0, "{:?} is empty", section.title());
             for i in 0..section.n_items() {
                 let item = section

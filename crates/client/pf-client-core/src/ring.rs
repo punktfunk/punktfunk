@@ -56,6 +56,46 @@ pub enum RingCommand {
     /// Flip this client's own speakers ([`punktfunk_core::client::AUDIO_MUTE_LOCAL`]). Never
     /// reaches the host, so a session joined to the same display keeps hearing the game.
     ToggleStreamMute,
+    /// Release the captured mouse and keyboard, or capture them again.
+    ToggleCapture,
+    /// Switch the mouse between capture (relative) and desktop (absolute) mode.
+    ToggleMouseMode,
+    ToggleFullscreen,
+    /// Minimize the window and release capture; the stream keeps running.
+    Minimize,
+}
+
+impl RingCommand {
+    /// The command a slot sends with no facts and no arming. `None` for a slot that needs
+    /// either (End game, a host action, a key combination) or does nothing here.
+    pub fn for_slot(slot: &crate::overlay_actions::SlotId) -> Option<RingCommand> {
+        use crate::overlay_actions::SlotId as S;
+        use punktfunk_core::input::gamepad as wire;
+        Some(match slot {
+            S::EndStream => RingCommand::EndStream,
+            S::DisconnectLinger => RingCommand::DisconnectLinger,
+            S::TouchMode => RingCommand::CycleTouchMode,
+            S::Keyboard => RingCommand::Keyboard,
+            S::Stats => RingCommand::CycleStats,
+            S::Mic => RingCommand::ToggleMic,
+            S::Guide => RingCommand::TapButton(wire::BTN_GUIDE),
+            S::Qam => RingCommand::TapButton(wire::BTN_MISC1),
+            S::PadMouse => RingCommand::CyclePadMouse,
+            S::PadType => RingCommand::CyclePadType,
+            S::StreamMute => RingCommand::ToggleStreamMute,
+            S::ReleaseInput => RingCommand::ToggleCapture,
+            S::MouseMode => RingCommand::ToggleMouseMode,
+            S::Fullscreen => RingCommand::ToggleFullscreen,
+            S::Minimize => RingCommand::Minimize,
+            S::EndGame
+            | S::Host(_)
+            | S::Shortcut(_)
+            | S::Pad
+            | S::SendText
+            | S::SwapScreens
+            | S::Clipboard => return None,
+        })
+    }
 }
 
 /// 100 % scale, client design units (px on Skia, dp/pt on phones). Shared so editors cannot drift.
@@ -96,6 +136,26 @@ mod geometry_tests {
             assert!((slot_angle_deg(k) - (-90.0 + 60.0 * k as f32)).abs() < 1e-6);
         }
     }
+
+    #[test]
+    fn a_slot_that_needs_facts_or_arming_has_no_plain_command() {
+        use crate::overlay_actions::SlotId as S;
+        assert_eq!(
+            RingCommand::for_slot(&S::Minimize),
+            Some(RingCommand::Minimize)
+        );
+        assert_eq!(
+            RingCommand::for_slot(&S::ReleaseInput),
+            Some(RingCommand::ToggleCapture)
+        );
+        for slot in [
+            S::EndGame,
+            S::Host("power.sleep".into()),
+            S::Shortcut("s1".into()),
+        ] {
+            assert_eq!(RingCommand::for_slot(&slot), None, "{slot:?}");
+        }
+    }
 }
 
 /// Per-frame session facts the slots show and gate on.
@@ -121,6 +181,10 @@ pub struct RingFacts {
     pub pad_mouse: punktfunk_core::input::PadMouseMode,
     /// The host grants pointer input; controller mouse needs it.
     pub pointer_granted: bool,
+    /// The stream sits in a desktop window: Fullscreen and Minimize act on it.
+    pub windowed: bool,
+    /// This client captures the mouse and keyboard: Release input and Mouse mode act on it.
+    pub pointer_capture: bool,
     /// The controller type the host emulates; `Auto` = each pad as itself.
     pub pad_type: punktfunk_core::config::GamepadPref,
     /// Live `(w, h, hz)`. `native_mode` is the Welcome native.

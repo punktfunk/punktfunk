@@ -58,6 +58,7 @@
     { "key": "invert_scroll", "category": "input", "advanced": false, "default": false, "preset": true, "on": ["desktop", "android", "apple", "webos", "web", "tizen"] },
     { "key": "inhibit_shortcuts", "category": "input", "advanced": false, "default": true, "preset": true, "on": ["desktop", "apple"] },
     { "key": "overlay_actions", "category": "input", "advanced": false, "preset": true, "on": ["desktop", "android", "apple", "webos", "web", "tizen", "ps5"] },
+    { "key": "shortcuts", "category": "input", "advanced": false, "preset": true, "on": ["desktop", "android", "apple", "webos", "web", "tizen", "ps5"] },
     { "key": "cursor_gestures", "category": "input", "advanced": false, "default": false, "preset": false, "on": ["webos"] },
 
     { "key": "gamepad", "category": "controllers", "advanced": false, "options": ["auto", "xbox360", "xboxone", "dualsense", "dualshock4", "steamdeck", "steamcontroller2"], "default": "auto", "preset": true, "on": ["desktop", "android", "apple", "webos", "web", "tizen", "ps5"] },
@@ -67,7 +68,6 @@
     { "key": "gamepad_forwarding", "category": "controllers", "advanced": true, "default": true, "preset": true, "on": ["desktop", "android", "apple", "web", "tizen"] },
     { "key": "forward_pad", "category": "controllers", "advanced": true, "preset": false, "on": ["desktop", "apple"] },
     { "key": "system_buttons", "category": "controllers", "advanced": true, "options": ["auto", "forward", "local"], "default": "auto", "preset": true, "on": ["desktop", "android", "apple", "web", "tizen"] },
-    { "key": "guide_gesture", "category": "controllers", "advanced": true, "options": ["auto", "on", "off"], "default": "auto", "preset": true, "on": ["desktop", "android", "apple", "web", "tizen"] },
     { "key": "pad_haptics", "category": "controllers", "advanced": true, "default": true, "preset": false, "on": ["desktop", "android", "webos"] },
     { "key": "pad_speaker", "category": "controllers", "advanced": true, "preset": false, "on": ["desktop", "android", "webos"] },
     { "key": "sc2_capture", "category": "controllers", "advanced": true, "default": false, "preset": false, "on": ["apple"] },

@@ -11,6 +11,7 @@ final class SettingsResetTests: XCTestCase {
         defaults.removePersistentDomain(forName: suite)
         defer { defaults.removePersistentDomain(forName: suite) }
         let fresh = ConsoleSettings.document(defaults)
+        XCTAssertNotNil(fresh["shortcuts"], "the shortcuts blob rides the document, so it is moved and reset below")
 
         // Every key the document carries, moved off its default and stored. The null default
         // host is no property-list value; it is set by hand below.

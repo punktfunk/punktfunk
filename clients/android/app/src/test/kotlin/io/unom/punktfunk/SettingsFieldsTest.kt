@@ -44,7 +44,8 @@ class SettingsFieldsTest {
         keepAwake = false,
         rumbleOnPhone = true, gyroOnPhone = true, dsCapture = false,
         padHaptics = false, padSpeaker = true, mouseMode = MouseMode.CAPTURE, invertScroll = true,
-        overlayActions = "{\"ring\":[]}", backOpensRing = false, startIn = "library", defaultHost = "desk",
+        overlayActions = "{\"ring\":[]}", shortcuts = "{\"bindings\":[]}", backOpensRing = false,
+        startIn = "library", defaultHost = "desk",
     )
 
     @Test
