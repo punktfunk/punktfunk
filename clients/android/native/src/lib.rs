@@ -103,6 +103,9 @@ mod run_end;
 mod session;
 mod stats;
 mod sys;
+// `decode`'s vsync clock arithmetic, `test`-gated like `au_intake` so its table runs off-device.
+#[cfg(any(target_os = "android", test))]
+mod vsync_grid;
 // Ungated: pure `jni` + `punktfunk_core::wol` (no Android framework), so it links
 // into the host workspace build too. Kotlin only ever calls it on device.
 mod wol;
