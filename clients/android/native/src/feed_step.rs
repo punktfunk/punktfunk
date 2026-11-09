@@ -1,13 +1,15 @@
 //! What the MediaCodec loop's feed does with the deliveries it parks and the input slots the
 //! codec offers: the park and its cap, the pairing of a slot with the park's head, and what each
-//! codec answer leaves behind. No codec and no clock: [`Feed::next`] names the call, the loop
-//! makes it and reports the answer back. The loop is `State::feed` in `decode/async_loop.rs`;
-//! the per-piece rules are [`crate::feed_rules`]. `the_feed_table` pins it.
+//! codec answer leaves behind; and how much the feeder thread hands on ahead of the loop
+//! ([`Handoff`]). No codec and no clock: [`Feed::next`] names the call, the loop makes it and
+//! reports the answer back. The loop is `State::feed` in `decode/async_loop.rs`; the per-piece
+//! rules are [`crate::feed_rules`]. `the_feed_table` pins it.
 
 use std::collections::VecDeque;
 
 use punktfunk_core::session::Frame;
 
+use crate::au_intake::hand_on;
 use crate::feed_rules::{gate, spoiled, Cause, Gate, PartFeed, Piece, Spoiled};
 
 /// Cap on whole AUs parked awaiting a free codec input slot. Matches the connector's own
@@ -19,6 +21,39 @@ pub(crate) const FRAME_PARK_CAP: usize = 16;
 /// Oversize AUs in a row that end the run as a hung codec's does. Each one asks for a keyframe;
 /// past the first, those keyframes outgrew the buffer too, and only a rebuild changes it.
 pub(crate) const OVERSIZE_RUN: u32 = 3;
+
+/// The feeder's side of the hand-off to the loop: the head it last skipped, whose later parts
+/// follow it out ([`hand_on`]), and the heads it discarded since it last sent one.
+#[derive(Default)]
+pub(crate) struct Handoff {
+    skip: Option<u32>,
+    discarded: u32,
+}
+
+impl Handoff {
+    /// One delivery from core. `admit`: core's verdict on a whole AU or a first part, `None` on
+    /// a later part. `held`: heads sent that the loop has not taken. Past [`FRAME_PARK_CAP`] of
+    /// those an admitted head is discarded, a loss core never sees. `Some(n)`: send it, carrying
+    /// the `n` heads discarded ahead of it to the loop. A new format always goes: it ends the
+    /// run, and the next decoder is built for it.
+    pub(crate) fn hand(
+        &mut self,
+        index: u32,
+        admit: Option<bool>,
+        held: usize,
+        reformat: bool,
+    ) -> Option<u32> {
+        let full = admit == Some(true) && held >= FRAME_PARK_CAP && !reformat;
+        if !hand_on(&mut self.skip, index, admit.map(|a| a && !full)) {
+            self.discarded += u32::from(full);
+            return None;
+        }
+        Some(match admit {
+            Some(_) => std::mem::take(&mut self.discarded),
+            None => 0,
+        })
+    }
+}
 
 /// The codec's input side: the slots it offered, the deliveries parked for them, and the AU open
 /// in the codec. The codec offers a slot once, so one whose call did not take goes back first in
@@ -156,7 +191,7 @@ impl Feed {
 
 #[cfg(test)]
 mod tests {
-    use super::{Feed, Step, FRAME_PARK_CAP};
+    use super::{Feed, Handoff, Step, FRAME_PARK_CAP};
     use crate::feed_rules::{Cause, Spoiled};
     use punktfunk_core::session::{Frame, FramePart};
 
@@ -479,6 +514,57 @@ mod tests {
     fn the_feed_table() {
         for &(name, ops, want) in CASES {
             assert_eq!(run(ops), want, "{name}");
+        }
+    }
+
+    const FULL: usize = FRAME_PARK_CAP;
+
+    /// One feeder step: index, core's verdict or `None` for a later part, heads the loop has
+    /// not taken, a new format, and `Some(discards it carries)` when it is sent.
+    type Hand = (u32, Option<bool>, usize, bool, Option<u32>);
+
+    /// (name, steps through one feeder)
+    const HANDOFFS: &[(&str, &[Hand])] = &[
+        (
+            "a head goes while the loop keeps up, its parts however full",
+            &[
+                (1, Some(true), 0, false, Some(0)),
+                (1, None, FULL, false, Some(0)),
+            ],
+        ),
+        (
+            "R1-1: past the bound heads are discarded, and the next head sent carries them",
+            &[
+                (2, Some(true), FULL, false, None),
+                (2, None, 0, false, None),
+                (3, Some(true), FULL, false, None),
+                (4, Some(true), FULL - 1, false, Some(2)),
+                (4, None, FULL, false, Some(0)),
+                (5, Some(true), 0, false, Some(0)),
+            ],
+        ),
+        (
+            "core's refusal drops a head and its parts, no loss",
+            &[
+                (3, Some(false), 0, false, None),
+                (3, None, 0, false, None),
+                (4, Some(true), 0, false, Some(0)),
+            ],
+        ),
+        (
+            "a new format goes past the bound",
+            &[(4, Some(true), FULL, true, Some(0))],
+        ),
+    ];
+
+    #[test]
+    fn the_feeder_hands_on_a_bounded_backlog() {
+        for &(name, steps) in HANDOFFS {
+            let mut handoff = Handoff::default();
+            for (i, &(index, admit, held, reformat, want)) in steps.iter().enumerate() {
+                let got = handoff.hand(index, admit, held, reformat);
+                assert_eq!(got, want, "{name}: step {i}");
+            }
         }
     }
 }

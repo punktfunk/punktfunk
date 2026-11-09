@@ -8,7 +8,7 @@ use punktfunk_core::reanchor::{AnchorEvidence, DecoderClass, LocalRecovery};
 use punktfunk_core::session::Frame;
 use std::collections::VecDeque;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use std::{fs, io};
@@ -27,9 +27,9 @@ use super::sink::{self, asc_backend_selected, AscSink, PresentMeter, Sink};
 use super::surface_control::{Layer, PresentComplete};
 use super::vsync::{VsyncClock, VsyncShared};
 use super::{Backstops, DecodeOptions, IN_FLIGHT_CAP};
-use crate::au_intake::{hand_on, Delivery, Intake};
+use crate::au_intake::{Delivery, Intake};
 use crate::feed_rules::{colour_after, render_after, Cause, Piece, Spoiled};
-use crate::feed_step::{Feed, Step, OVERSIZE_RUN};
+use crate::feed_step::{Feed, Handoff, Step, OVERSIZE_RUN};
 use crate::input_stall::{
     rung_after_failure, InputStall, OutputSilence, RungFloor, INPUT_STALL_PATIENCE, SETTLED_FRAMES,
 };
@@ -55,10 +55,15 @@ pub(super) struct OutputReady {
 /// internal looper thread) push the codec ones; the feeder thread pushes `Au`. Each carries only
 /// owned/`Copy` data so the callback closures satisfy the `Send` bound and never touch the codec.
 pub(crate) enum DecodeEvent {
-    /// A received access unit core admitted, ready to queue into the decoder. The `u32` is
-    /// the gap ahead of it from [`NativeClient::recovery_on_au`] (0 = none): the receiver rule
-    /// and the ladder's loss mark key on it. Core armed the freeze and asked at the report.
-    Au(Frame, u32),
+    /// A received access unit core admitted, ready to queue into the decoder. `gap`: the gap
+    /// ahead of it from [`NativeClient::recovery_on_au`] (0 = none); core armed the freeze and
+    /// asked at the report. `discarded`: AUs the feeder dropped ahead of it past its backlog
+    /// bound, which core never saw lost. The receiver rule and the ladder's loss mark key on both.
+    Au {
+        frame: Frame,
+        gap: u32,
+        discarded: u32,
+    },
     /// An input buffer slot freed (index) — we can queue an AU into it.
     InputAvailable(usize),
     /// A decoded frame is ready (buffer index + echoed pts + the callback-time `decoded` stamps).
@@ -512,7 +517,12 @@ fn run_codec(
     }
     if let Some(mut frame) = carry {
         frame.new_format = None; // this codec is the one built for it
-        state.dispatch(client, DecodeEvent::Au(*frame, 0), &mut Pass::default());
+        let carried = DecodeEvent::Au {
+            frame: *frame,
+            gap: 0,
+            discarded: 0,
+        };
+        state.dispatch(client, carried, &mut Pass::default());
     }
 
     // `ev_tx` moves into the feeder: from here only it and the codec callbacks keep the channel up.
@@ -548,6 +558,7 @@ fn run_codec(
             .into_iter()
             .chain(std::iter::from_fn(|| ev_rx.try_recv().ok()))
         {
+            feeder.took(&ev);
             state.dispatch(client, ev, &mut pass);
         }
         let had_output = !state.ready.is_empty();
@@ -1152,11 +1163,21 @@ impl State {
     /// Route one [`DecodeEvent`] into the working sets.
     fn dispatch(&mut self, client: &NativeClient, ev: DecodeEvent, pass: &mut Pass) {
         match ev {
-            DecodeEvent::Au(f, gap) => {
+            DecodeEvent::Au {
+                frame: f,
+                gap,
+                discarded,
+            } => {
                 if f.new_format.is_some() {
                     self.reformat = Some(f);
                     return;
                 }
+                // A discard is a gap core never saw: it reaches core's recovery as an overflow.
+                if discarded > 0 {
+                    log::warn!("decode: {discarded} AU(s) discarded while the loop was busy");
+                    pass.aus_dropped += u64::from(discarded);
+                }
+                let gap = gap + discarded;
                 if gap > 0 {
                     self.loss_open = true;
                     pass.lost = true;
@@ -1564,9 +1585,11 @@ impl State {
 
 /// The `pf-decode-feed` thread ([`feeder_loop`]): it blocks on the network so the loop doesn't,
 /// and an AU's arrival becomes an event that wakes the loop at once. `stop` ends it with this
-/// run; the session's `shutdown` would end every later run too.
+/// run; the session's `shutdown` would end every later run too. `held`: AU heads it sent that
+/// the loop has not taken ([`Handoff`] bounds them).
 struct Feeder {
     stop: Arc<AtomicBool>,
+    held: Arc<AtomicUsize>,
     join: Option<std::thread::JoinHandle<()>>,
 }
 
@@ -1580,10 +1603,12 @@ impl Feeder {
         last_gap_ns: Arc<AtomicI64>,
     ) -> Feeder {
         let stop = Arc::new(AtomicBool::new(false));
+        let held = Arc::new(AtomicUsize::new(0));
         let join = {
             let client = client.clone();
             let stats = stats.clone();
             let stop = stop.clone();
+            let held = held.clone();
             std::thread::Builder::new()
                 .name("pf-decode-feed".into())
                 .spawn(move || {
@@ -1595,11 +1620,22 @@ impl Feeder {
                         stop,
                         ev_tx,
                         last_gap_ns,
+                        held,
                     );
                 })
                 .ok()
         };
-        Feeder { stop, join }
+        Feeder { stop, held, join }
+    }
+
+    /// The loop took `ev` off the channel: an AU head leaves the backlog. The feeder counts a
+    /// head before it sends it, so this never runs ahead of that count.
+    fn took(&self, ev: &DecodeEvent) {
+        if let DecodeEvent::Au { frame, .. } = ev {
+            if delivery(frame).first {
+                self.held.fetch_sub(1, Ordering::Relaxed);
+            }
+        }
     }
 
     fn stop_and_join(self) {
@@ -1611,10 +1647,12 @@ impl Feeder {
 }
 
 /// The `pf-decode-feed` thread: block on the connector for the next access unit so the async loop
-/// never has to. Drops what core refuses, stamps `last_gap_ns` on a loss gap, stamps receipt for
-/// the decode stage (the connector already noted it for the overlay), then hands the AU to the
-/// loop via the event channel. Registers with ADPF: a stall here is a late frame. Exits when
+/// never has to. Drops what core refuses, and what passes the loop's backlog ([`Handoff`]), a
+/// loss the next AU sent carries; stamps `last_gap_ns` on a loss gap, stamps receipt for the
+/// decode stage (the connector already noted it for the overlay), then hands the AU to the loop
+/// via the event channel. Registers with ADPF: a stall here is a late frame. Exits when
 /// `shutdown` is set, the session closes, or the loop's receiver is gone.
+#[allow(clippy::too_many_arguments)]
 fn feeder_loop(
     client: Arc<NativeClient>,
     stats: Arc<crate::stats::VideoStats>,
@@ -1623,22 +1661,27 @@ fn feeder_loop(
     shutdown: Arc<AtomicBool>,
     ev_tx: mpsc::Sender<DecodeEvent>,
     last_gap_ns: Arc<AtomicI64>,
+    held: Arc<AtomicUsize>,
 ) {
     client.register_hot_thread();
-    let mut refused = None;
+    let mut handoff = Handoff::default();
     while !shutdown.load(Ordering::Relaxed) {
         match client.next_frame(Duration::from_millis(5)) {
             Ok(frame) => {
                 // Reported here so core asks for a lost range the moment it shows. Parts repeat
                 // their AU's index: once, on the first. A refused straggler would rewind the
                 // decoder's references; it never reaches the loop and is no loss.
-                let arrival = frame
-                    .part
-                    .is_none_or(|p| p.first)
-                    .then(|| client.recovery_on_au(frame.frame_index, frame.complete, 0));
-                if !hand_on(&mut refused, frame.frame_index, arrival.map(|a| a.admit)) {
+                let head = delivery(&frame).first;
+                let arrival =
+                    head.then(|| client.recovery_on_au(frame.frame_index, frame.complete, 0));
+                let Some(discarded) = handoff.hand(
+                    frame.frame_index,
+                    arrival.map(|a| a.admit),
+                    held.load(Ordering::Relaxed),
+                    frame.new_format.is_some(),
+                ) else {
                     continue;
-                }
+                };
                 let gap = arrival.map_or(0, |a| a.gap);
                 if gap > 0 {
                     last_gap_ns.store(now_monotonic_ns(), Ordering::Relaxed);
@@ -1658,7 +1701,15 @@ fn feeder_loop(
                 // A new format ends this codec: what follows waits in core for the next one's
                 // feeder.
                 let reformat = frame.new_format.is_some();
-                if ev_tx.send(DecodeEvent::Au(frame, gap)).is_err() || reformat {
+                if head {
+                    held.fetch_add(1, Ordering::Relaxed);
+                }
+                let au = DecodeEvent::Au {
+                    frame,
+                    gap,
+                    discarded,
+                };
+                if ev_tx.send(au).is_err() || reformat {
                     break; // the decode loop is gone, or is ending for the new format
                 }
             }
