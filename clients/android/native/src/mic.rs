@@ -118,32 +118,30 @@ fn capture_rungs(echo_cancel: bool) -> &'static [Rung] {
     }
 }
 
-/// Walks `rungs` best first and starts the first stream that opens. A refused open is the next
-/// rung; a start that fails ends the walk with `None`.
+/// Walks `rungs` best first to the first stream that opens and starts. A refused open is the
+/// next rung, and so is a stream that does not start: it is dropped, which closes it, first.
 fn walk<S, E: std::fmt::Display>(
     rungs: &[Rung],
     mut open: impl FnMut(Rung) -> Result<S, E>,
-    start: impl FnOnce(&S) -> Result<(), E>,
+    mut start: impl FnMut(&S) -> Result<(), E>,
 ) -> Option<S> {
-    let mut opened = None;
     for &(sharing, voice) in rungs {
-        match open((sharing, voice)) {
-            Ok(o) => {
-                opened = Some(o);
-                break;
+        let stream = match open((sharing, voice)) {
+            Ok(stream) => stream,
+            Err(e) => {
+                log::info!(
+                    "mic: open {sharing:?}{} failed ({e}) — trying the next fallback",
+                    if voice { "+VoiceCommunication" } else { "" },
+                );
+                continue;
             }
-            Err(e) => log::info!(
-                "mic: open {sharing:?}{} failed ({e}) — trying the next fallback",
-                if voice { "+VoiceCommunication" } else { "" },
-            ),
+        };
+        match start(&stream) {
+            Ok(()) => return Some(stream),
+            Err(e) => log::error!("mic: request_start: {e}"),
         }
     }
-    let stream = opened?;
-    if let Err(e) = start(&stream) {
-        log::error!("mic: request_start: {e}");
-        return None;
-    }
-    Some(stream)
+    None
 }
 
 /// One open attempt at a given sharing mode (same pattern as [`crate::audio`]: `open_stream`
@@ -530,7 +528,7 @@ mod tests {
     #[test]
     fn the_ladder_starts_the_first_stream_that_opens() {
         use At::{Opens, Refuses};
-        let rows: [Row; 4] = [
+        let rows: [Row; 5] = [
             (
                 "the first rung is used",
                 &[Opens(true), Opens(true)],
@@ -550,10 +548,16 @@ mod tests {
                 &[],
             ),
             (
-                "R5-2: a rung that opens and fails to start ends the walk",
+                "R5-2: a rung that opens and fails to start is closed, then the next is tried",
                 &[Opens(false), Opens(true)],
+                Some(1),
+                &["start 0", "close 0", "start 1"],
+            ),
+            (
+                "a ladder that never starts is no mic, and every stream it opened is closed",
+                &[Opens(false), Refuses, Opens(false)],
                 None,
-                &["start 0", "close 0"],
+                &["start 0", "close 0", "start 2", "close 2"],
             ),
         ];
         for (name, script, used, events) in rows {
