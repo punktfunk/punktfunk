@@ -686,19 +686,33 @@ fn sync_file_read(fence: BorrowedFd<'_>) -> Option<(i32, u64)> {
     }
 }
 
-/// The instant `fence` signalled, or `None` while it is still pending, in error, invalid, or
-/// unreadable.
-pub(super) fn fence_signal_ns(fence: BorrowedFd<'_>) -> Option<i64> {
-    match sync_file_read(fence)? {
-        (1, latest) if latest > 0 => Some(latest as i64),
-        _ => None,
+/// A fence as one read sees it.
+pub(super) enum FenceState {
+    /// Signalled at this `CLOCK_MONOTONIC` instant.
+    Signalled(i64),
+    /// Resolved in error: its producer gave the buffer up (a decoder's dropped or flushed
+    /// frame), and a consumer that waited on it read unfinished pixels.
+    Errored,
+    /// Still pending, invalid, or unreadable.
+    Pending,
+}
+
+/// `fence`'s state from one sync_file read.
+pub(super) fn fence_state(fence: BorrowedFd<'_>) -> FenceState {
+    match sync_file_read(fence) {
+        Some((1, latest)) if latest > 0 => FenceState::Signalled(latest as i64),
+        Some((status, _)) if status < 0 => FenceState::Errored,
+        _ => FenceState::Pending,
     }
 }
 
-/// Whether `fence` resolved in error: its producer gave the buffer up (a decoder's dropped or
-/// flushed frame), and a consumer that waited on it read unfinished pixels.
-pub(super) fn fence_errored(fence: BorrowedFd<'_>) -> bool {
-    sync_file_read(fence).is_some_and(|(status, _)| status < 0)
+/// The instant `fence` signalled, or `None` while it is still pending, in error, invalid, or
+/// unreadable.
+pub(super) fn fence_signal_ns(fence: BorrowedFd<'_>) -> Option<i64> {
+    match fence_state(fence) {
+        FenceState::Signalled(ns) => Some(ns),
+        _ => None,
+    }
 }
 
 /// The buffer rect for a crop in frame fractions, at least one pixel on each axis.

@@ -27,7 +27,7 @@ use super::super::async_loop::{Ctx, DecodeEvent, OutputReady};
 use super::super::display::stream_dataspace;
 use super::super::latency::{now_realtime_ns, p50_max_ms, take_by_pts};
 use super::super::surface_control::{
-    fence_errored, fence_signal_ns, present, Layer, PresentComplete,
+    fence_signal_ns, fence_state, present, FenceState, Layer, PresentComplete,
 };
 use super::super::vsync::VsyncShared;
 use super::{Downrate, Routed, Sink};
@@ -649,12 +649,12 @@ impl AscSink {
         // unfinished buffer.
         if let Some(acq) = a.acquire.as_ref() {
             let decoded_mono = a.release_mono - (a.release_real - a.decoded_real) as i64;
-            match fence_signal_ns(acq.as_fd()) {
-                Some(done) => self
+            match fence_state(acq.as_fd()) {
+                FenceState::Signalled(done) => self
                     .fence_tail_us
                     .push(((done - decoded_mono).max(0) / 1000) as u64),
-                None if fence_errored(acq.as_fd()) => self.fence_err += 1,
-                None => {}
+                FenceState::Errored => self.fence_err += 1,
+                FenceState::Pending => {}
             }
         }
         let pts_ns = a.pts_us.saturating_mul(1000);
