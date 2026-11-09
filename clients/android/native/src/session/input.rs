@@ -19,6 +19,19 @@ use punktfunk_core::quic::{
 
 use super::{jni_guard, SESSIONS};
 
+/// `(width << 16) | height` for the `flags` of an absolute pointer or touch event. Each side is
+/// floored at zero and kept to 16 bits; the host drops the event when a side is zero.
+fn surface_flags(width: jint, height: jint) -> u32 {
+    let w = (width.max(0) as u32) & 0xffff;
+    let h = (height.max(0) as u32) & 0xffff;
+    (w << 16) | h
+}
+
+/// The wire pad index of Kotlin's pad number: its low four bits, 0..=15.
+fn wire_pad(pad: jint) -> u8 {
+    (pad as u32 & 0xF) as u8
+}
+
 /// Retain the keyed session for one non-blocking [`InputEvent`] send.
 fn send_event(handle: jlong, kind: InputKind, code: u32, x: i32, y: i32, flags: u32) {
     let Some(h) = SESSIONS.get(handle) else {
@@ -64,9 +77,8 @@ pub extern "system" fn Java_io_unom_punktfunk_kit_NativeBridge_nativeSendPointer
     surface_height: jint,
 ) {
     jni_guard((), || {
-        let w = (surface_width.max(0) as u32) & 0xffff;
-        let ht = (surface_height.max(0) as u32) & 0xffff;
-        send_event(handle, InputKind::MouseMoveAbs, 0, x, y, (w << 16) | ht);
+        let flags = surface_flags(surface_width, surface_height);
+        send_event(handle, InputKind::MouseMoveAbs, 0, x, y, flags);
     })
 }
 
@@ -90,11 +102,28 @@ pub extern "system" fn Java_io_unom_punktfunk_kit_NativeBridge_nativeSendPointer
     })
 }
 
+/// The scroll event for Kotlin's constants, or `None` when the wire refuses the pair. `axis`,
+/// `source` and `phase` must be in range before [`ScrollEvent::from_event`] judges the rest: a
+/// stop carrying distance, a phased wheel. Kotlin's constants are checked, not trusted.
+fn scroll_event(axis: jint, delta: jint, source: jint, phase: jint) -> Option<InputEvent> {
+    if !(0..=1).contains(&axis) || !(0..=5).contains(&source) || !(0..=7).contains(&phase) {
+        return None;
+    }
+    let ev = InputEvent {
+        kind: InputKind::Scroll,
+        _pad: [0; 3],
+        code: axis as u32,
+        x: delta,
+        y: 0,
+        flags: (source as u32) | ((phase as u32) << 8),
+    };
+    ScrollEvent::from_event(&ev).map(|_| ev)
+}
+
 /// `NativeBridge.nativeSendNormalizedScroll(handle, axis, delta, source, phase)` — one normalized
 /// scroll event (`InputKind::Scroll`). `delta` is signed Q24.8 in the source's unit (v120 for
 /// Wheel/Unknown, DIP for the rest); `source`/`phase` are the wire bytes packed into `flags`.
-/// [`ScrollEvent::from_event`] drops a malformed pair — bad axis, a stop carrying distance, a
-/// phased wheel — before anything is sent, so Kotlin constants are checked, not trusted.
+/// A pair [`scroll_event`] refuses is dropped before the session is looked up.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_io_unom_punktfunk_kit_NativeBridge_nativeSendNormalizedScroll(
     _env: EnvUnowned,
@@ -106,20 +135,9 @@ pub extern "system" fn Java_io_unom_punktfunk_kit_NativeBridge_nativeSendNormali
     phase: jint,
 ) {
     jni_guard((), || {
-        if !(0..=1).contains(&axis) || !(0..=5).contains(&source) || !(0..=7).contains(&phase) {
+        let Some(ev) = scroll_event(axis, delta, source, phase) else {
             return;
-        }
-        let ev = InputEvent {
-            kind: InputKind::Scroll,
-            _pad: [0; 3],
-            code: axis as u32,
-            x: delta,
-            y: 0,
-            flags: (source as u32) | ((phase as u32) << 8),
         };
-        if ScrollEvent::from_event(&ev).is_none() {
-            return;
-        }
         let Some(h) = SESSIONS.get(handle) else {
             return;
         };
@@ -162,6 +180,15 @@ pub extern "system" fn Java_io_unom_punktfunk_kit_NativeBridge_nativePathChanged
     })
 }
 
+/// The wire kind of Kotlin's touch `kind`: `0` down, `1` move, anything else up.
+fn touch_kind(kind: jint) -> InputKind {
+    match kind {
+        0 => InputKind::TouchDown,
+        1 => InputKind::TouchMove,
+        _ => InputKind::TouchUp,
+    }
+}
+
 /// `NativeBridge.nativeSendTouch(handle, id, kind, x, y, surfaceWidth, surfaceHeight)` — one REAL
 /// touchscreen transition (`kind`: 0=down 1=move 2=up), for the touch-passthrough input mode. `id`
 /// distinguishes fingers (reusable after up); coordinates are pixels on the client's touch
@@ -181,14 +208,8 @@ pub extern "system" fn Java_io_unom_punktfunk_kit_NativeBridge_nativeSendTouch(
     surface_height: jint,
 ) {
     jni_guard((), || {
-        let kind = match kind {
-            0 => InputKind::TouchDown,
-            1 => InputKind::TouchMove,
-            _ => InputKind::TouchUp,
-        };
-        let w = (surface_width.max(0) as u32) & 0xffff;
-        let h = (surface_height.max(0) as u32) & 0xffff;
-        send_event(handle, kind, id as u32, x, y, (w << 16) | h);
+        let flags = surface_flags(surface_width, surface_height);
+        send_event(handle, touch_kind(kind), id as u32, x, y, flags);
     })
 }
 
@@ -273,6 +294,74 @@ const PEN_JNI_STRIDE: usize = 10;
 /// buffer. 64 samples ≈ >250 ms of 240 Hz history = a pathological UI-thread stall.
 const PEN_JNI_MAX_SAMPLES: usize = PEN_BATCH_MAX * 8;
 
+/// How many samples to read for Kotlin's `count`: none unless positive, at most
+/// [`PEN_JNI_MAX_SAMPLES`].
+fn pen_count(count: jint) -> usize {
+    usize::try_from(count).unwrap_or(0).min(PEN_JNI_MAX_SAMPLES)
+}
+
+/// One sample from [`PEN_JNI_STRIDE`] floats. `None` for a non-finite `x`/`y`, which is never
+/// forwarded, or a slice of another length. A negative `distance`, `tilt_deg`, `azimuth_deg` or
+/// `roll_deg` is the wire's "unknown".
+fn pen_sample(s: &[f32]) -> Option<PenSample> {
+    let Ok(&[state, tool, x, y, pressure, distance, tilt, azimuth, roll, dt_us]) =
+        <&[f32; PEN_JNI_STRIDE]>::try_from(s)
+    else {
+        return None;
+    };
+    if !x.is_finite() || !y.is_finite() {
+        return None;
+    }
+    Some(PenSample {
+        state: state as u8,
+        tool: if tool as u8 == 1 {
+            PenTool::Eraser
+        } else {
+            PenTool::Pen
+        },
+        x: x.clamp(0.0, 1.0),
+        y: y.clamp(0.0, 1.0),
+        pressure: (pressure.clamp(0.0, 1.0) * 65535.0) as u16,
+        distance: if distance < 0.0 {
+            PEN_DISTANCE_UNKNOWN
+        } else {
+            (distance.clamp(0.0, 1.0) * 65534.0) as u16
+        },
+        tilt_deg: if tilt < 0.0 {
+            PEN_TILT_UNKNOWN
+        } else {
+            (tilt.clamp(0.0, 90.0)) as u8
+        },
+        azimuth_deg: if azimuth < 0.0 {
+            PEN_ANGLE_UNKNOWN
+        } else {
+            (azimuth as u16) % 360
+        },
+        roll_deg: if roll < 0.0 {
+            PEN_ANGLE_UNKNOWN
+        } else {
+            (roll as u16) % 360
+        },
+        dt_us: dt_us.clamp(0.0, 65535.0) as u16,
+    })
+}
+
+/// The `send_pen` batches of `flat`, oldest first: [`PEN_BATCH_MAX`] samples each, the last
+/// possibly fewer, as `(samples, len)`. The run ends before the batch holding a sample
+/// [`pen_sample`] refuses; the batches ahead of it still go.
+fn pen_batches(flat: &[f32]) -> impl Iterator<Item = ([PenSample; PEN_BATCH_MAX], usize)> + '_ {
+    flat.chunks(PEN_BATCH_MAX * PEN_JNI_STRIDE)
+        .map_while(|run| {
+            let mut batch = [PenSample::default(); PEN_BATCH_MAX];
+            let mut len = 0;
+            for (slot, s) in batch.iter_mut().zip(run.chunks_exact(PEN_JNI_STRIDE)) {
+                *slot = pen_sample(s)?;
+                len += 1;
+            }
+            Some((batch, len))
+        })
+}
+
 /// `NativeBridge.nativeSendPen(handle, samples, count)` — one stylus emit of STATE-FULL
 /// samples, `count` × [`PEN_JNI_STRIDE`] floats, oldest first:
 /// `[state, tool, x, y, pressure, distance, tilt_deg, azimuth_deg, roll_deg, dt_us]`.
@@ -289,10 +378,10 @@ pub extern "system" fn Java_io_unom_punktfunk_kit_NativeBridge_nativeSendPen(
     count: jint,
 ) {
     env.with_env(|env| -> jni::errors::Result<()> {
-        if handle == 0 || count <= 0 {
+        let count = pen_count(count);
+        if handle == 0 || count == 0 {
             return Ok(());
         }
-        let count = (count as usize).min(PEN_JNI_MAX_SAMPLES);
         let mut buf = [0f32; PEN_JNI_MAX_SAMPLES * PEN_JNI_STRIDE];
         let flat = &mut buf[..count * PEN_JNI_STRIDE];
         if samples.get_region(env, 0, flat).is_err() {
@@ -301,56 +390,23 @@ pub extern "system" fn Java_io_unom_punktfunk_kit_NativeBridge_nativeSendPen(
         let Some(h) = SESSIONS.get(handle) else {
             return Ok(());
         };
-        let mut batch = [PenSample::default(); PEN_BATCH_MAX];
-        for run in flat.chunks(PEN_BATCH_MAX * PEN_JNI_STRIDE) {
-            let n = run.len() / PEN_JNI_STRIDE;
-            for (slot, s) in batch.iter_mut().zip(run.chunks_exact(PEN_JNI_STRIDE)) {
-                if !s[2].is_finite() || !s[3].is_finite() {
-                    return Ok(()); // never forward a NaN coordinate
-                }
-                *slot = PenSample {
-                    state: s[0] as u8,
-                    tool: if s[1] as u8 == 1 {
-                        PenTool::Eraser
-                    } else {
-                        PenTool::Pen
-                    },
-                    x: s[2].clamp(0.0, 1.0),
-                    y: s[3].clamp(0.0, 1.0),
-                    pressure: (s[4].clamp(0.0, 1.0) * 65535.0) as u16,
-                    distance: if s[5] < 0.0 {
-                        PEN_DISTANCE_UNKNOWN
-                    } else {
-                        (s[5].clamp(0.0, 1.0) * 65534.0) as u16
-                    },
-                    tilt_deg: if s[6] < 0.0 {
-                        PEN_TILT_UNKNOWN
-                    } else {
-                        (s[6].clamp(0.0, 90.0)) as u8
-                    },
-                    azimuth_deg: if s[7] < 0.0 {
-                        PEN_ANGLE_UNKNOWN
-                    } else {
-                        (s[7] as u16) % 360
-                    },
-                    roll_deg: if s[8] < 0.0 {
-                        PEN_ANGLE_UNKNOWN
-                    } else {
-                        (s[8] as u16) % 360
-                    },
-                    dt_us: s[9].clamp(0.0, 65535.0) as u16,
-                };
-            }
-            let _ = h.client.send_pen(&batch[..n]);
+        for (batch, len) in pen_batches(flat) {
+            let _ = h.client.send_pen(&batch[..len]);
         }
         Ok(())
     })
     .resolve::<LogErrorAndDefault>()
 }
 
+/// The Unicode scalars of `text` worth typing. Control characters are skipped: Enter, Backspace
+/// and Tab ride the VK key path.
+fn text_scalars(text: &str) -> impl Iterator<Item = u32> + '_ {
+    text.chars().filter(|c| !c.is_control()).map(|c| c as u32)
+}
+
 /// `NativeBridge.nativeSendText(handle, text)` — committed IME text, one `TextInput` event per
-/// Unicode scalar (`code` = the scalar; multi-char commits are consecutive events in order).
-/// Control characters are skipped — Enter/Backspace/Tab ride the VK key path. Call only when
+/// Unicode scalar (`code` = the scalar; multi-char commits are consecutive events in order),
+/// control characters left out ([`text_scalars`]). Call only when
 /// [`Java_io_unom_punktfunk_kit_NativeBridge_nativeTextInputSupported`] returned true.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_io_unom_punktfunk_kit_NativeBridge_nativeSendText(
@@ -366,8 +422,8 @@ pub extern "system" fn Java_io_unom_punktfunk_kit_NativeBridge_nativeSendText(
         let Ok(s) = text.try_to_string(env) else {
             return Ok(());
         };
-        for ch in s.chars().filter(|c| !c.is_control()) {
-            send_event(handle, InputKind::TextInput, ch as u32, 0, 0, 0);
+        for code in text_scalars(&s) {
+            send_event(handle, InputKind::TextInput, code, 0, 0, 0);
         }
         Ok(())
     })
@@ -574,11 +630,20 @@ pub extern "system" fn Java_io_unom_punktfunk_kit_NativeBridge_nativeSendGamepad
     })
 }
 
+/// How many bytes of a HID report to forward: Kotlin's `len` bounded by the buffer's capacity
+/// and the wire body, none unless positive.
+fn hid_report_len(len: jint, capacity: usize) -> usize {
+    usize::try_from(len)
+        .unwrap_or(0)
+        .min(capacity)
+        .min(HID_REPORT_MAX)
+}
+
 /// `NativeBridge.nativeSendPadHidReport(handle, pad, buf, len)` — one raw HID input report from a
 /// client-captured controller (the as-is Steam Controller 2 passthrough), forwarded verbatim on
 /// the rich-input plane (`RichInput::HidReport`, 0xCC). `buf` is a DIRECT ByteBuffer whose first
 /// `len` bytes are the report, id byte first (`0x42`/`0x45`/`0x47` state, `0x43` battery, …);
-/// `len` is clamped to the 64-byte wire body. Called from the capture thread at the controller's
+/// `len` is bounded by [`hid_report_len`]. Called from the capture thread at the controller's
 /// own report rate (~250–500 Hz) — the direct-buffer read avoids a JNI array copy per report.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_io_unom_punktfunk_kit_NativeBridge_nativeSendPadHidReport(
@@ -601,7 +666,7 @@ pub extern "system" fn Java_io_unom_punktfunk_kit_NativeBridge_nativeSendPadHidR
             Ok(p) if !p.is_null() => p,
             _ => return Ok(()),
         };
-        let n = (len as usize).min(cap).min(HID_REPORT_MAX);
+        let n = hid_report_len(len, cap);
         let mut data = [0u8; HID_REPORT_MAX];
         // SAFETY: `ptr`/`cap` describe the direct ByteBuffer's backing store, valid for this call;
         // `n` is bounded by both the buffer capacity and the fixed wire body.
@@ -610,7 +675,7 @@ pub extern "system" fn Java_io_unom_punktfunk_kit_NativeBridge_nativeSendPadHidR
             return Ok(());
         };
         let _ = h.client.send_rich_input(RichInput::HidReport {
-            pad: (pad as u32 & 0xF) as u8,
+            pad: wire_pad(pad),
             len: n as u8,
             data,
         });
@@ -632,7 +697,7 @@ pub extern "system" fn Java_io_unom_punktfunk_kit_NativeBridge_nativeSetSc2Gate(
     jni_guard((), || {
         if let Some(h) = SESSIONS.get(handle) {
             let gate = punktfunk_core::client::Sc2Gate::from_bits(gate as u32);
-            h.client.set_sc2_gate((pad as u32 & 0xF) as u8, gate);
+            h.client.set_sc2_gate(wire_pad(pad), gate);
         }
     })
 }
@@ -770,7 +835,7 @@ pub extern "system" fn Java_io_unom_punktfunk_kit_NativeBridge_nativeSendPadIden
         };
         let serial = serial.try_to_string(env).unwrap_or_default();
         let replies = env.convert_byte_array(&replies)?;
-        let pad = (pad as u32 & 0xF) as u8;
+        let pad = wire_pad(pad);
         let slot = u8::try_from(slot).unwrap_or(0);
         let id = punktfunk_core::quic::PadIdentity {
             pad,
@@ -784,6 +849,28 @@ pub extern "system" fn Java_io_unom_punktfunk_kit_NativeBridge_nativeSendPadIden
         Ok(())
     })
     .resolve::<LogErrorAndDefault>()
+}
+
+/// The touchpad contact for Kotlin's ints: `finger` is the low bit (slot 0 or 1), `x`/`y` clamp
+/// to the wire's 0..=65535.
+fn pad_touch(pad: jint, finger: jint, active: bool, x: jint, y: jint) -> RichInput {
+    RichInput::Touchpad {
+        pad: wire_pad(pad),
+        finger: (finger as u32 & 0x1) as u8,
+        active,
+        x: (x as i64).clamp(0, 65535) as u16,
+        y: (y as i64).clamp(0, 65535) as u16,
+    }
+}
+
+/// The motion sample for Kotlin's ints: each gyro and accel value clamps to signed 16 bits.
+fn pad_motion(pad: jint, gyro: [jint; 3], accel: [jint; 3]) -> RichInput {
+    let c = |v: jint| (v as i64).clamp(i64::from(i16::MIN), i64::from(i16::MAX)) as i16;
+    RichInput::Motion {
+        pad: wire_pad(pad),
+        gyro: gyro.map(c),
+        accel: accel.map(c),
+    }
 }
 
 /// `NativeBridge.nativeSendPadTouch(handle, pad, finger, active, x, y)` — one touchpad contact
@@ -807,13 +894,9 @@ pub extern "system" fn Java_io_unom_punktfunk_kit_NativeBridge_nativeSendPadTouc
         let Some(h) = SESSIONS.get(handle) else {
             return;
         };
-        let _ = h.client.send_rich_input(RichInput::Touchpad {
-            pad: (pad as u32 & 0xF) as u8,
-            finger: (finger as u32 & 0x1) as u8,
-            active,
-            x: (x as i64).clamp(0, 65535) as u16,
-            y: (y as i64).clamp(0, 65535) as u16,
-        });
+        let _ = h
+            .client
+            .send_rich_input(pad_touch(pad, finger, active, x, y));
     })
 }
 
@@ -840,12 +923,9 @@ pub extern "system" fn Java_io_unom_punktfunk_kit_NativeBridge_nativeSendPadMoti
         let Some(h) = SESSIONS.get(handle) else {
             return;
         };
-        let c = |v: jint| (v as i64).clamp(i64::from(i16::MIN), i64::from(i16::MAX)) as i16;
-        let _ = h.client.send_rich_input(RichInput::Motion {
-            pad: (pad as u32 & 0xF) as u8,
-            gyro: [c(gyro_pitch), c(gyro_yaw), c(gyro_roll)],
-            accel: [c(accel_x), c(accel_y), c(accel_z)],
-        });
+        let gyro = [gyro_pitch, gyro_yaw, gyro_roll];
+        let accel = [accel_x, accel_y, accel_z];
+        let _ = h.client.send_rich_input(pad_motion(pad, gyro, accel));
     })
 }
 
