@@ -43,6 +43,10 @@ use crate::sys::{now_monotonic_ns, sysprop};
 /// Reader pool depth: the presents SurfaceFlinger may hold ([`PRESENTED_CAP`]), the store's
 /// deepest buffer, and the acquire in hand. Images allocate lazily, so a display that holds two
 /// costs what it did at eight.
+///
+/// The pool never runs dry: the budget applies nothing while [`PRESENTED_CAP`] presents are
+/// held, and [`Retire::complete`] lets at most one completed present wait behind a missing
+/// completion, so a full list holds transactions in flight whose completions drain it.
 const READER_MAX_IMAGES: i32 = PRESENTED_CAP as i32 + 4;
 
 /// Completed presents whose fence is still pending; older entries are occluded frames and drop.
@@ -153,7 +157,7 @@ pub(crate) struct AscSink {
 
     // -- images on SurfaceFlinger --
     /// Images on SurfaceFlinger, oldest first, awaiting release.
-    presented: Retire<Presented>,
+    presented: Retire<Presented, OwnedFd>,
     /// Completed presents awaiting their present fence, oldest first.
     awaiting: VecDeque<Awaiting>,
     #[cfg(debug_assertions)]

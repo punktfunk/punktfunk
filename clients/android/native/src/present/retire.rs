@@ -2,22 +2,32 @@
 //! behind which release fence. Generic over the sink's present record and its fence; the sink
 //! owns the reader images and does each release.
 //!
-//! A completion's release fence frees the buffer its transaction replaced. The sink deletes that
-//! image behind the fence, so the reader reuses it only once SurfaceFlinger is done with it; an
-//! image freed without one returns at once. SurfaceFlinger holds its own reference from
-//! `setBuffer`, so an early free tears at worst and never faults.
+//! A completion's release fence frees the buffer its transaction replaced: the present before it
+//! in seq order. The sink deletes that image behind the fence, so the reader reuses it only once
+//! SurfaceFlinger is done with it; an image freed without one returns at once. Completions take
+//! effect in seq order, so one that arrives early waits for the older one. SurfaceFlinger holds
+//! its own reference from `setBuffer`, so an early free tears at worst and never faults.
 //!
 //! `CASES` replays completion traces and pins each outcome. Design:
 //! `design/android-native-overhaul.md` F3 (planning repo).
 
 use std::collections::VecDeque;
 
-/// The presents SurfaceFlinger holds, oldest first, each under its transaction's seq.
-pub(crate) struct Retire<I> {
-    held: VecDeque<(u64, I)>,
+/// One present SurfaceFlinger holds.
+struct Entry<I, F> {
+    seq: u64,
+    present: I,
+    /// `Some` once its completion arrived, with the release fence it carried until that fence
+    /// frees the present before it.
+    done: Option<Option<F>>,
 }
 
-impl<I> Default for Retire<I> {
+/// The presents SurfaceFlinger holds, oldest first. A done front is the one on glass.
+pub(crate) struct Retire<I, F> {
+    held: VecDeque<Entry<I, F>>,
+}
+
+impl<I, F> Default for Retire<I, F> {
     fn default() -> Self {
         Retire {
             held: VecDeque::new(),
@@ -25,35 +35,61 @@ impl<I> Default for Retire<I> {
     }
 }
 
-impl<I> Retire<I> {
+impl<I, F> Retire<I, F> {
     /// One transaction applied; seqs only grow.
     pub(crate) fn push(&mut self, seq: u64, present: I) {
-        self.held.push_back((seq, present));
+        self.held.push_back(Entry {
+            seq,
+            present,
+            done: None,
+        });
     }
 
     /// The held presents, oldest first.
     pub(crate) fn iter(&self) -> impl ExactSizeIterator<Item = &I> + DoubleEndedIterator {
-        self.held.iter().map(|(_, p)| p)
+        self.held.iter().map(|e| &e.present)
     }
 
     /// The present a completion for `seq` reports on, while it is held.
     pub(crate) fn get_mut(&mut self, seq: u64) -> Option<&mut I> {
         self.held
             .iter_mut()
-            .find(|(s, _)| *s == seq)
-            .map(|(_, p)| p)
+            .find(|e| e.seq == seq)
+            .map(|e| &mut e.present)
     }
 
-    /// One completion for `seq` and its release fence. Every older present is replaced: the
-    /// newest of them is freed behind `fence`, any older straggler at once. Returns each freed
-    /// present with the fence to delete it behind (`None`: at once).
-    pub(crate) fn complete<F>(&mut self, seq: u64, fence: Option<F>) -> Vec<(I, Option<F>)> {
-        let older = self.held.iter().take_while(|(s, _)| *s < seq).count();
-        let mut freed: Vec<_> = self.held.drain(..older).map(|(_, p)| (p, None)).collect();
-        if let Some(newest) = freed.last_mut() {
-            newest.1 = fence;
+    /// One completion for `seq` and the release fence it carried. Completions take effect in seq
+    /// order: each frees the present before it behind its fence, at once without one. One that
+    /// arrives before an older one waits for it; an older one still missing once two newer ones
+    /// arrived never comes and takes effect without a fence, so at most one completed present
+    /// waits behind a hole. Returns each freed present with the fence to delete it behind.
+    pub(crate) fn complete(&mut self, seq: u64, fence: Option<F>) -> Vec<(I, Option<F>)> {
+        if let Some(e) = self
+            .held
+            .iter_mut()
+            .find(|e| e.seq == seq && e.done.is_none())
+        {
+            e.done = Some(fence);
         }
-        freed
+        let mut freed = Vec::new();
+        loop {
+            let done = |i: usize| self.held.get(i).is_some_and(|e| e.done.is_some());
+            if done(0) && done(1) {
+                let fence = self.held[1].done.as_mut().and_then(Option::take);
+                freed.extend(self.held.pop_front().map(|e| (e.present, fence)));
+            } else if let Some(hole) = self.lost() {
+                self.held[hole].done = Some(None);
+            } else {
+                return freed;
+            }
+        }
+    }
+
+    /// The oldest present whose completion never comes: two newer ones already arrived.
+    fn lost(&self) -> Option<usize> {
+        let hole = self.held.iter().position(|e| e.done.is_none())?;
+        let newer = self.held.iter().skip(hole + 1);
+        (newer.filter(|e| e.done.is_some()).count() >= 2).then_some(hole)
     }
 }
 
@@ -135,21 +171,33 @@ mod tests {
             &[2, 3],
         ),
         (
-            "R2-2 today: a reordered coalesced pair frees the on-glass image at once, loses 1",
+            "R2-2: a reordered coalesced pair frees as it does in order",
             &[Fenced(0), Bare(2), Fenced(1)],
-            &[Now(0), Now(1), Lost(1)],
+            &[Behind(0, 1), Now(1)],
             &[2, 3],
         ),
         (
-            "R2-2 today: a reordered pair across frames frees 0 at once, loses 1",
+            "R2-2: a reordered pair across frames frees as it does in order",
             &[Fenced(0), Fenced(2), Fenced(1)],
-            &[Now(0), Behind(1, 2), Lost(1)],
+            &[Behind(0, 1), Behind(1, 2)],
             &[2, 3],
         ),
         (
-            "a missing completion: the next one frees its predecessor at once",
+            "R2-2: a completion ahead of an older one waits for it",
+            &[Fenced(0), Fenced(2)],
+            &[],
+            &[0, 1, 2, 3],
+        ),
+        (
+            "a missing completion ages out once two newer ones arrived, without a fence",
             &[Fenced(0), Fenced(2), Fenced(3)],
             &[Now(0), Behind(1, 2), Behind(2, 3)],
+            &[3],
+        ),
+        (
+            "a completion after its age-out frees nothing",
+            &[Fenced(0), Fenced(2), Fenced(3), Fenced(1)],
+            &[Now(0), Behind(1, 2), Behind(2, 3), Lost(1)],
             &[3],
         ),
     ];
