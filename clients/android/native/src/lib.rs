@@ -52,6 +52,10 @@ mod logs;
 // AAudio callback arithmetic, `test`-gated on top of Android so its proof runs off-device.
 #[cfg(any(target_os = "android", test))]
 mod audio_format;
+// `audio`'s open and recovery rules, `test`-gated like `audio_format` so their tables run
+// off-device.
+#[cfg(any(target_os = "android", test))]
+mod audio_policy;
 // `decode`'s bring-up ladder and decoder pick, `test`-gated like `run_end` so their tests run
 // off-device.
 #[cfg(any(target_os = "android", test))]

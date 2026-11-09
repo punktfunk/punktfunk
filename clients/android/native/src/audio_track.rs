@@ -6,6 +6,7 @@
 //! writer thread fills each chunk from the same jitter ring [`crate::audio`] drains, and blocks in
 //! `write` until the track takes it.
 
+use crate::audio_policy::heard_at;
 use jni::errors::Result as JniResult;
 use jni::objects::{JObject, JValue};
 use jni::refs::Global;
@@ -106,7 +107,7 @@ impl Track {
             fill,
             buf: vec![0.0; chunk_frames * usize::from(cfg.channels)],
             channels: i64::from(cfg.channels),
-            rate_hz: i64::from(cfg.rate_hz.max(1)),
+            rate_hz: cfg.rate_hz,
             chunk_frames: chunk_frames as i32,
             stop: stop.clone(),
             heard_at_ns: heard_at_ns.clone(),
@@ -167,7 +168,7 @@ struct Writer {
     fill: Fill,
     buf: Vec<f32>,
     channels: i64,
-    rate_hz: i64,
+    rate_hz: u32,
     chunk_frames: i32,
     stop: Arc<AtomicBool>,
     heard_at_ns: Arc<AtomicI64>,
@@ -209,8 +210,8 @@ impl Writer {
                 anchor = timestamp(env, track, &ts)?.or(anchor);
             }
             if let Some((pos, at)) = anchor {
-                let ahead = (written - pos) * 1_000_000_000 / self.rate_hz;
-                self.heard_at_ns.store(at + ahead, Ordering::Relaxed);
+                let heard = heard_at(at, pos, written, self.rate_hz);
+                self.heard_at_ns.store(heard, Ordering::Relaxed);
             }
             if n % UNDERRUN_CHECK_EVERY == 0 {
                 self.grow_on_underrun(env, track, &mut underruns)?;

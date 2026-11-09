@@ -12,6 +12,7 @@
 //! the video reference for A/V sync. See `design/hi-res-audio.md` and
 //! `design/audio-latency-overhaul.md` for the full policy.
 
+use crate::audio_policy::heard_at;
 use crate::sys::sysprop;
 use ndk::audio::{
     AudioCallbackResult, AudioContentType, AudioDirection, AudioFormat, AudioPerformanceMode,
@@ -75,8 +76,12 @@ impl Output {
                 let Ok(ts) = s.timestamp(ndk::audio::Clockid::Monotonic) else {
                     return 0;
                 };
-                let ahead = s.frames_written() - ts.frame_position;
-                ts.time_nanoseconds + ahead * 1_000_000_000 / i64::from(rate_hz.max(1))
+                heard_at(
+                    ts.time_nanoseconds,
+                    ts.frame_position,
+                    s.frames_written(),
+                    rate_hz,
+                )
             }
             Output::Track(t) => match t.heard_at_ns() {
                 0 => return 0,
