@@ -25,12 +25,13 @@ use std::time::{Duration, Instant};
 
 use super::super::async_loop::{Ctx, DecodeEvent, OutputReady};
 use super::super::display::stream_dataspace;
-use super::super::latency::{now_realtime_ns, p50_max_ms, take_by_pts};
+use super::super::latency::now_realtime_ns;
 use super::super::surface_control::{
     fence_signal_ns, fence_state, present, FenceState, Layer, PresentComplete,
 };
 use super::super::vsync::VsyncShared;
 use super::{Downrate, Routed, Sink};
+use crate::codec_format::{p50_max_ms, take_by_pts};
 use crate::present::budget::{AscBudget, PRESENTED_CAP};
 use crate::present::retire::Retire;
 use crate::present::slots::Slots;

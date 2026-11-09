@@ -1,5 +1,6 @@
-//! Decode-latency bookkeeping: realtime clock + decoded-pts / user-flags stat recording.
+//! Decode-latency bookkeeping: realtime clock + decoded-pts stat recording.
 
+use crate::codec_format::take_by_pts;
 use punktfunk_core::client::NativeClient;
 use punktfunk_core::session::Frame;
 use std::collections::VecDeque;
@@ -42,44 +43,6 @@ pub(super) fn note_decoded_pts(
     received_ns
 }
 
-/// The value parked for `pts_us` in a pts-ordered queue, popping it and every older entry.
-/// Decode order == input order (low-latency, no B-frames), so an older entry was dropped inside
-/// the codec or parked before a flush; a newer one stays for its own output. `None` on a miss.
-pub(super) fn take_by_pts<V: Copy>(q: &mut VecDeque<(u64, V)>, pts_us: u64) -> Option<V> {
-    while let Some(&(p, v)) = q.front() {
-        if p > pts_us {
-            return None;
-        }
-        q.pop_front();
-        if p == pts_us {
-            return Some(v);
-        }
-    }
-    None
-}
-
-/// The AU `user_flags` for a decoded output, keyed by the echoed `presentationTimeUs`. Recovery
-/// signalling (FLAG_SOF IDR marker / RECOVERY_ANCHOR / RECOVERY_POINT) rides the AU's flags, which are
-/// only in scope at feed time — so the feed side parks `(pts_us, flags)` here and the present side
-/// looks them up to report the picture to core's freeze ([`NativeClient::recovery_on_decoded`]). A
-/// miss (probe filler, or an entry aged past the cap) reads `0` — no recovery flags, decoded normally.
-pub(super) fn take_flags(map: &mut VecDeque<(u64, u32)>, pts_us: u64) -> u32 {
-    take_by_pts(map, pts_us).unwrap_or(0)
-}
-
-/// p50/max of an unsorted µs sample vec, in ms — the HUD's per-stage summary, shared by both
-/// presenters. `(0, 0)` when empty.
-pub(super) fn p50_max_ms(mut v: Vec<u64>) -> (f64, f64) {
-    if v.is_empty() {
-        return (0.0, 0.0);
-    }
-    v.sort_unstable();
-    (
-        v[v.len() / 2] as f64 / 1000.0,
-        v[v.len() - 1] as f64 / 1000.0,
-    )
-}
-
 /// The `received` point for one arriving AU: the core's reassembly stamp, which keys the
 /// in-flight map the decode stage pairs against. The connector already noted receipt for the
 /// overlay; draining the timings here matches each 0xCF to its frame.
@@ -93,25 +56,4 @@ pub(crate) fn note_received_frame(client: &NativeClient, frame: &Frame) -> i128 
     };
     while client.next_host_timing(Duration::ZERO).is_ok() {}
     received_ns
-}
-
-#[cfg(test)]
-mod tests {
-    use super::take_by_pts;
-    use std::collections::VecDeque;
-
-    #[test]
-    fn take_by_pts_evicts_older_pops_the_match_and_holds_newer() {
-        let mut q: VecDeque<(u64, i128)> = [(10, 1), (20, 2), (30, 3), (40, 4)].into();
-        assert_eq!(take_by_pts(&mut q, 30), Some(3));
-        assert_eq!(q, VecDeque::from([(40, 4)]));
-        assert_eq!(
-            take_by_pts(&mut q, 35),
-            None,
-            "a miss keeps the newer entry"
-        );
-        assert_eq!(q, VecDeque::from([(40, 4)]));
-        assert_eq!(take_by_pts(&mut q, 50), None);
-        assert!(q.is_empty());
-    }
 }

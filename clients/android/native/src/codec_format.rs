@@ -1,6 +1,9 @@
 //! The codec-facing rules `decode` computes before it touches the NDK: the MIME, the picture size
-//! a decoder reports and the low-latency keys per decoder name. Plain values in and out;
-//! `MediaFormat` and `MediaCodec` are read and written in `decode/`.
+//! a decoder reports, the low-latency keys per decoder name and the pts-keyed stamp queues behind
+//! the HUD. Plain values in and out; `MediaFormat` and `MediaCodec` are read and written in
+//! `decode/`.
+
+use std::collections::VecDeque;
 
 /// The MediaCodec MIME for the codec the host resolved (`Welcome.codec`). Shared by the decode
 /// thread and `nativeVideoMime` (which tells Kotlin what to rank decoders for). AV1 uses the
@@ -152,6 +155,44 @@ fn decoder_supports_max_operating_rate(name_lower: &str) -> bool {
     name_lower.starts_with("omx.qcom") || name_lower.starts_with("c2.qti")
 }
 
+/// The value parked for `pts_us` in a pts-ordered queue, popping it and every older entry.
+/// Decode order == input order (low-latency, no B-frames), so an older entry was dropped inside
+/// the codec or parked before a flush; a newer one stays for its own output. `None` on a miss.
+pub(crate) fn take_by_pts<V: Copy>(q: &mut VecDeque<(u64, V)>, pts_us: u64) -> Option<V> {
+    while let Some(&(p, v)) = q.front() {
+        if p > pts_us {
+            return None;
+        }
+        q.pop_front();
+        if p == pts_us {
+            return Some(v);
+        }
+    }
+    None
+}
+
+/// The AU `user_flags` for a decoded output, keyed by the echoed `presentationTimeUs`. Recovery
+/// signalling (the IDR marker, RECOVERY_ANCHOR, RECOVERY_POINT) rides the AU's flags, which are
+/// only in scope at feed time: the feed side parks `(pts_us, flags)` and the present side reads
+/// them back for core's freeze (`NativeClient::recovery_on_decoded`). A miss (probe filler, or an
+/// entry aged past the cap) reads `0`: no recovery flags, decoded normally.
+pub(crate) fn take_flags(map: &mut VecDeque<(u64, u32)>, pts_us: u64) -> u32 {
+    take_by_pts(map, pts_us).unwrap_or(0)
+}
+
+/// p50/max of an unsorted µs sample vec, in ms — the HUD's per-stage summary, shared by both
+/// presenters. `(0, 0)` when empty.
+pub(crate) fn p50_max_ms(mut v: Vec<u64>) -> (f64, f64) {
+    if v.is_empty() {
+        return (0.0, 0.0);
+    }
+    v.sort_unstable();
+    (
+        v[v.len() / 2] as f64 / 1000.0,
+        v[v.len() - 1] as f64 / 1000.0,
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -163,6 +204,21 @@ mod tests {
         assert!(!qti_fence_eligible("c2.qti.hevc.decoder", 32));
         assert!(!qti_fence_eligible("omx.qcom.video.decoder.hevc", 34));
         assert!(!qti_fence_eligible("c2.mtk.hevc.decoder", 34));
+    }
+
+    #[test]
+    fn take_by_pts_evicts_older_pops_the_match_and_holds_newer() {
+        let mut q: VecDeque<(u64, i128)> = [(10, 1), (20, 2), (30, 3), (40, 4)].into();
+        assert_eq!(take_by_pts(&mut q, 30), Some(3));
+        assert_eq!(q, VecDeque::from([(40, 4)]));
+        assert_eq!(
+            take_by_pts(&mut q, 35),
+            None,
+            "a miss keeps the newer entry"
+        );
+        assert_eq!(q, VecDeque::from([(40, 4)]));
+        assert_eq!(take_by_pts(&mut q, 50), None);
+        assert!(q.is_empty());
     }
 
     #[test]

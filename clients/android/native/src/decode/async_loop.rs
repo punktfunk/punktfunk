@@ -16,9 +16,7 @@ use std::{fs, io};
 use super::display::{
     install_render_callback, layer_dataspace, release_render_callback, DisplayTracker,
 };
-use super::latency::{
-    note_decoded_pts, note_received_frame, now_realtime_ns, take_by_pts, take_flags,
-};
+use super::latency::{note_decoded_pts, note_received_frame, now_realtime_ns};
 use super::setup::{
     boost_hot_threads, boost_thread_priority, create_codec, hdr_static, low_latency_format,
     try_set_frame_rate,
@@ -29,7 +27,7 @@ use super::vsync::{VsyncClock, VsyncShared};
 use super::{Backstops, DecodeOptions, IN_FLIGHT_CAP};
 use crate::au_intake::{Delivery, Intake};
 use crate::bring_up::bring_up_rungs;
-use crate::codec_format::codec_mime;
+use crate::codec_format::{codec_mime, take_by_pts, take_flags};
 use crate::feed_rules::{colour_after, render_after, Cause, Piece, Spoiled};
 use crate::feed_step::{Feed, Handoff, Step, OVERSIZE_RUN};
 use crate::input_stall::{

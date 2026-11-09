@@ -8,9 +8,9 @@ use std::ffi::c_void;
 use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
-use super::latency::{now_realtime_ns, take_by_pts};
+use super::latency::now_realtime_ns;
 use super::RENDERED_CAP;
-use crate::codec_format::picture_dims;
+use crate::codec_format::{picture_dims, take_by_pts};
 use crate::colour::{layer_space, negotiated_space, reported_space, Space};
 use crate::sys::now_monotonic_ns;
 
