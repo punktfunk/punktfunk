@@ -232,7 +232,8 @@ struct Glass {
     // then the two contexts.
     skia: Option<(skia_safe::Surface, u32, u32)>,
     surface: Option<EglSurface>,
-    /// Held only so the ANativeWindow outlives the EGL surface over it.
+    /// Kotlin's window: outlives the EGL surface over it, and stays for the next attach when
+    /// that surface fails.
     window: Option<NativeWindow>,
     gpu: Option<Gpu>,
     egl: EglContext,
@@ -264,6 +265,10 @@ impl Glass {
             match self.life.step(ev) {
                 Action::Nothing => return Ok(()),
                 Action::Attach => ev = self.attach()?,
+                Action::DropSurface => {
+                    self.drop_surface();
+                    return Ok(());
+                }
                 Action::Detach => {
                     self.detach();
                     return Ok(());
@@ -279,8 +284,8 @@ impl Glass {
         }
     }
 
-    /// Take Kotlin's new window, dropping any surface still up (Kotlin re-created the view
-    /// without a destroy in between).
+    /// Take Kotlin's new window in place of what is held: a surface still up (Kotlin re-created
+    /// the view without a destroy in between), or a window kept for a retry.
     fn created(&mut self, w: NativeWindow) -> Result<()> {
         self.detach();
         self.window = Some(w);
@@ -290,12 +295,17 @@ impl Glass {
     /// Release in order: the Skia surface, then the current binding, then the EGL surface and
     /// the window under it. The context itself goes with `self`.
     fn detach(&mut self) {
+        self.drop_surface();
+        self.window = None;
+    }
+
+    /// `detach` short of the window.
+    fn drop_surface(&mut self) {
         self.skia = None;
         if self.surface.is_some() {
             self.egl.release_current();
         }
         self.surface = None;
-        self.window = None;
     }
 
     /// Put an EGL surface over the window held: `Attached` or `AttachFailed`. `Err` = no Skia
@@ -399,11 +409,13 @@ impl Glass {
                 r.peak_ms,
             );
         }
-        if let Err(e) = s.swap() {
-            log::warn!("console: {e:#} — dropping the surface");
-            return self.report(SurfaceEvent::SwapFailed);
+        match s.swap() {
+            Ok(()) => self.report(SurfaceEvent::Shown),
+            Err(e) => {
+                log::warn!("console: {e:#} — dropping the surface");
+                self.report(SurfaceEvent::SwapFailed)
+            }
         }
-        Ok(())
     }
 }
 
@@ -489,12 +501,10 @@ impl Ui {
             }
             Cmd::Navigate(entry) => console.navigate(entry),
             Cmd::SurfaceCreated(w) => {
+                // A fresh surface is a fresh entry: the next poll snapshots the pad, so a button
+                // still held from before does not fire into the first frame, a retried one too.
+                self.nav.reset();
                 glass.created(w)?;
-                // A fresh surface is a fresh entry: snapshot the pad so a button
-                // still held from before does not fire into the first frame.
-                if glass.surface.is_some() {
-                    self.nav.reset();
-                }
             }
             // Only a wake-up: `Glass::draw` re-reads the size every frame, so the resize does not
             // wait on this and cannot be missed if it arrives late.

@@ -12,8 +12,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Condvar, Mutex};
 use std::time::Duration;
 
-/// GL failures in a row the loop tolerates. One is a transient (a window torn down mid-create);
-/// a run is a context that is not coming back, and a gray SurfaceView is worse than the touch UI.
+/// GL failures with no frame between them that the loop tolerates. One is a transient (a window
+/// torn down mid-create); a run is a context that is not coming back, and a gray SurfaceView is
+/// worse than the touch UI.
 pub(crate) const FAILURE_LIMIT: u32 = 3;
 
 /// What the render thread saw.
@@ -29,6 +30,8 @@ pub(crate) enum Event {
     /// Skia wrapped the EGL surface at its size.
     Wrapped,
     WrapFailed,
+    /// A frame reached the panel.
+    Shown,
     SwapFailed,
     /// The end of a pass: Kotlin's commands applied, the frame drawn.
     Tick,
@@ -40,6 +43,8 @@ pub(crate) enum Action {
     Nothing,
     /// Put an EGL surface over the window.
     Attach,
+    /// Drop the Skia surface and the EGL surface; keep the window for the next attach.
+    DropSurface,
     /// Drop the Skia surface, the EGL surface and the window.
     Detach,
     /// Detach and end the thread.
@@ -49,10 +54,12 @@ pub(crate) enum Action {
 #[derive(Default)]
 pub(crate) struct Lifecycle {
     failures: u32,
+    /// The window is kept with no EGL surface over it: the next pass attaches again.
+    retry: bool,
 }
 
 impl Lifecycle {
-    /// GL failures since the last good attach or wrap.
+    /// GL failures since a frame last reached the panel.
     pub(crate) fn failures(&self) -> u32 {
         self.failures
     }
@@ -60,21 +67,37 @@ impl Lifecycle {
     pub(crate) fn step(&mut self, ev: Event) -> Action {
         match ev {
             Event::Created => Action::Attach,
-            Event::Destroyed | Event::SwapFailed => Action::Detach,
-            Event::Attached | Event::Wrapped => {
-                self.failures = 0;
-                Action::Nothing
-            }
-            Event::AttachFailed => {
-                self.failures += 1;
+            Event::Destroyed => {
+                self.retry = false;
                 Action::Detach
             }
+            Event::Attached => {
+                self.retry = false;
+                Action::Nothing
+            }
+            // Kotlin sends nothing more for a window it still holds: the retry is ours.
+            Event::AttachFailed => {
+                self.failures += 1;
+                self.retry = true;
+                Action::Nothing
+            }
+            Event::Wrapped => Action::Nothing,
             // The surface stays up and the next pass wraps again.
             Event::WrapFailed => {
                 self.failures += 1;
                 Action::Nothing
             }
+            Event::Shown => {
+                self.failures = 0;
+                Action::Nothing
+            }
+            Event::SwapFailed => {
+                self.failures += 1;
+                self.retry = true;
+                Action::DropSurface
+            }
             Event::Tick if self.failures >= FAILURE_LIMIT => Action::Die,
+            Event::Tick if self.retry => Action::Attach,
             Event::Tick => Action::Nothing,
         }
     }
@@ -215,9 +238,10 @@ impl<C, E> Shared<C, E> {
 
 #[cfg(test)]
 mod tests {
-    use super::Action::{self, Attach, Detach, Die, Nothing};
+    use super::Action::{self, Attach, Detach, Die, DropSurface, Nothing};
     use super::Event::{
-        self, AttachFailed, Attached, Created, Destroyed, SwapFailed, Tick, WrapFailed, Wrapped,
+        self, AttachFailed, Attached, Created, Destroyed, Shown, SwapFailed, Tick, WrapFailed,
+        Wrapped,
     };
     use super::{Lifecycle, Shared};
     use std::sync::Arc;
@@ -228,11 +252,12 @@ mod tests {
 
     const CASES: &[Case] = &[
         (
-            "a window attaches and wraps",
+            "a window attaches, wraps and shows",
             &[
                 (Created, Attach, 0),
                 (Attached, Nothing, 0),
                 (Wrapped, Nothing, 0),
+                (Shown, Nothing, 0),
                 (Tick, Nothing, 0),
             ],
         ),
@@ -242,42 +267,42 @@ mod tests {
                 (Created, Attach, 0),
                 (Attached, Nothing, 0),
                 (Wrapped, Nothing, 0),
+                (Shown, Nothing, 0),
                 (Destroyed, Detach, 0),
                 (Tick, Nothing, 0),
             ],
         ),
         (
-            "a failed attach drops the window and counts one",
+            "R7-2: a failed attach keeps the window and attaches again",
             &[
                 (Created, Attach, 0),
-                (AttachFailed, Detach, 1),
-                (Tick, Nothing, 1),
+                (AttachFailed, Nothing, 1),
+                (Tick, Attach, 1),
+                (Attached, Nothing, 1),
+                (Wrapped, Nothing, 1),
+                (Shown, Nothing, 0),
+                (Tick, Nothing, 0),
             ],
         ),
         (
-            "three failed attaches in a row end the thread",
+            "R7-2: a window that never attaches ends the thread within three tries",
             &[
                 (Created, Attach, 0),
-                (AttachFailed, Detach, 1),
-                (Tick, Nothing, 1),
-                (Created, Attach, 1),
-                (AttachFailed, Detach, 2),
-                (Tick, Nothing, 2),
-                (Created, Attach, 2),
-                (AttachFailed, Detach, 3),
+                (AttachFailed, Nothing, 1),
+                (Tick, Attach, 1),
+                (AttachFailed, Nothing, 2),
+                (Tick, Attach, 2),
+                (AttachFailed, Nothing, 3),
                 (Tick, Die, 3),
             ],
         ),
         (
-            "an attach restarts the run",
+            "a destroy ends the retry",
             &[
                 (Created, Attach, 0),
-                (AttachFailed, Detach, 1),
-                (Created, Attach, 1),
-                (AttachFailed, Detach, 2),
-                (Created, Attach, 2),
-                (Attached, Nothing, 0),
-                (Tick, Nothing, 0),
+                (AttachFailed, Nothing, 1),
+                (Destroyed, Detach, 1),
+                (Tick, Nothing, 1),
             ],
         ),
         (
@@ -294,42 +319,75 @@ mod tests {
             ],
         ),
         (
-            "a wrap restarts the run",
+            "R7-2: only a frame on the panel restarts the run",
             &[
                 (Created, Attach, 0),
-                (Attached, Nothing, 0),
-                (WrapFailed, Nothing, 1),
+                (AttachFailed, Nothing, 1),
+                (Tick, Attach, 1),
+                (Attached, Nothing, 1),
                 (WrapFailed, Nothing, 2),
-                (Wrapped, Nothing, 0),
+                (Tick, Nothing, 2),
+                (Wrapped, Nothing, 2),
+                (Shown, Nothing, 0),
                 (Tick, Nothing, 0),
             ],
         ),
         (
-            "a failed swap detaches uncounted and waits for the next window",
+            "R7-2: a failed swap keeps the window and attaches again",
             &[
                 (Created, Attach, 0),
                 (Attached, Nothing, 0),
                 (Wrapped, Nothing, 0),
-                (SwapFailed, Detach, 0),
-                (Tick, Nothing, 0),
-                (Tick, Nothing, 0),
+                (Shown, Nothing, 0),
+                (SwapFailed, DropSurface, 1),
+                (Tick, Attach, 1),
+                (Attached, Nothing, 1),
+                (Wrapped, Nothing, 1),
+                (Shown, Nothing, 0),
+            ],
+        ),
+        (
+            "R7-2: a swap that keeps failing on a live window ends the thread within three tries",
+            &[
+                (Created, Attach, 0),
+                (Attached, Nothing, 0),
+                (Wrapped, Nothing, 0),
+                (SwapFailed, DropSurface, 1),
+                (Tick, Attach, 1),
+                (Attached, Nothing, 1),
+                (Wrapped, Nothing, 1),
+                (SwapFailed, DropSurface, 2),
+                (Tick, Attach, 2),
+                (Attached, Nothing, 2),
+                (Wrapped, Nothing, 2),
+                (SwapFailed, DropSurface, 3),
+                (Tick, Die, 3),
             ],
         ),
     ];
 
+    /// The name and first wrong step of every case that breaks.
     #[test]
     fn the_lifecycle_table() {
-        for &(name, steps) in CASES {
-            let mut life = Lifecycle::default();
-            for (i, &(ev, want, failures)) in steps.iter().enumerate() {
-                let got = life.step(ev);
-                assert_eq!(
-                    (got, life.failures()),
-                    (want, failures),
-                    "{name}: step {i} ({ev:?})"
-                );
-            }
-        }
+        let broken: Vec<String> = CASES
+            .iter()
+            .filter_map(|&(name, steps)| {
+                let mut life = Lifecycle::default();
+                steps
+                    .iter()
+                    .enumerate()
+                    .find_map(|(i, &(ev, want, failures))| {
+                        let got = (life.step(ev), life.failures());
+                        (got != (want, failures)).then(|| {
+                            format!(
+                                "{name}: step {i} {ev:?} gave {got:?}, want {:?}",
+                                (want, failures)
+                            )
+                        })
+                    })
+            })
+            .collect();
+        assert!(broken.is_empty(), "{broken:#?}");
     }
 
     const DESTROY: u8 = 1;
