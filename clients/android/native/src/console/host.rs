@@ -72,7 +72,7 @@ pub(super) enum HostEvent {
     Console(Event),
     /// The GLES generation the context came up with — Kotlin logs it, nothing more.
     Gles(GlesVersion),
-    /// The render thread died (EGL/Skia init failed). Kotlin falls back to its own console.
+    /// The render thread ended on an error or a panic. Kotlin falls back to its own console.
     Dead(String),
 }
 
@@ -213,13 +213,21 @@ impl ConsoleHost {
             .name("pf-console".into())
             .spawn(move || {
                 boost_thread_priority();
-                let run = || -> Result<()> {
+                let loop_shared = thread_shared.clone();
+                let run = move || -> Result<()> {
                     let console = Console::new(opts, entry, &thread_handles)?;
-                    render_loop(console, thread_shared.clone(), thread_store)
+                    render_loop(console, loop_shared, thread_store)
                 };
-                if let Err(e) = run() {
-                    log::error!("console: render thread ended: {e:#}");
-                    thread_shared.emit(HostEvent::Dead(format!("{e:#}")));
+                // A panic ends the thread as an error does: Kotlin must hear of both, or it
+                // keeps a frozen console up. The hook has logged the panic itself.
+                let dead = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(run)) {
+                    Ok(Ok(())) => None,
+                    Ok(Err(e)) => Some(format!("{e:#}")),
+                    Err(_) => Some("the render thread panicked".to_owned()),
+                };
+                if let Some(msg) = dead {
+                    log::error!("console: render thread ended: {msg}");
+                    thread_shared.emit(HostEvent::Dead(msg));
                 }
             })?;
         Ok(ConsoleHost {
