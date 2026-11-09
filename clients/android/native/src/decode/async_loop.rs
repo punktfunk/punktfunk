@@ -1173,12 +1173,7 @@ impl State {
                         self.recovery_flags.pop_front();
                     }
                 }
-                if self.inputs.park(f) {
-                    pass.aus_dropped += 1;
-                    pass.lost = true;
-                    self.loss_open = true;
-                    self.local_loss(pass);
-                }
+                self.inputs.park(f);
             }
             DecodeEvent::InputAvailable(i) => {
                 self.inputs.offer(i);
@@ -1237,7 +1232,8 @@ impl State {
     }
 
     /// The pass proper, after the drain: completions, the vsync tick, the format change, feeding,
-    /// the re-anchor cadence reset, then presenting.
+    /// the park's cap, the re-anchor cadence reset, then presenting. The cap judges what feeding
+    /// left, so a slot offered this pass takes an AU before the cap drops one.
     fn apply(&mut self, ctx: &Ctx, pass: &mut Pass) {
         let off = ctx.offset();
         for pc in pass.present_completes.drain(..) {
@@ -1246,7 +1242,6 @@ impl State {
         if pass.vsync_tick {
             self.sink.on_vsync(ctx);
         }
-        ctx.stats.note_skipped_overflow(pass.aus_dropped); // parked-AU overflow: skips, flagged as such
         if pass.fmt_dirty {
             // Only the ASurfaceControl sink crops; the SurfaceView shows what the codec hands it.
             let picture =
@@ -1262,6 +1257,15 @@ impl State {
                 .on_format_changed(ctx, picture, self.stream_colour);
         }
         self.feed(ctx, pass);
+        let dropped = self.inputs.trim();
+        if dropped > 0 {
+            pass.aus_dropped += dropped;
+            pass.lost = true;
+            self.loss_open = true;
+            self.local_loss(pass);
+        }
+        // Parked-AU overflow: skips, flagged as such.
+        ctx.stats.note_skipped_overflow(pass.aus_dropped);
         // The cadence loop's re-anchor seam. An arm is a loss: the frames past it come through
         // a decoder that just recovered, so the source→presentable delay the loop measured no
         // longer holds. Core's arm count catches every site, its own tick included.

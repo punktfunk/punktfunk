@@ -10,9 +10,10 @@ use punktfunk_core::session::Frame;
 
 use crate::feed_rules::{gate, spoiled, Cause, Gate, PartFeed, Piece, Spoiled};
 
-/// Cap on deliveries parked awaiting a free codec input slot. Matches the connector's own
-/// frame-channel depth; past it the oldest is dropped and a keyframe requested, the recovery of
-/// a reassembler drop. In steady state the park stays near-empty.
+/// Cap on whole AUs parked awaiting a free codec input slot. Matches the connector's own
+/// frame-channel depth, which also counts AUs, not pieces; past it the oldest AU is dropped and a
+/// keyframe requested, the recovery of a reassembler drop. In steady state the park stays
+/// near-empty.
 pub(crate) const FRAME_PARK_CAP: usize = 16;
 
 /// The codec's input side: the slots it offered, the deliveries parked for them, and the AU open
@@ -47,15 +48,28 @@ impl Feed {
         self.slots.push_back(slot);
     }
 
-    /// Park a delivery the intake admitted. `true`: the park passed [`FRAME_PARK_CAP`] and its
-    /// oldest entry is dropped, a loss.
-    pub(crate) fn park(&mut self, f: Frame) -> bool {
+    /// Park a delivery the intake admitted. [`Feed::trim`] holds the cap.
+    pub(crate) fn park(&mut self, f: Frame) {
         self.park.push_back(f);
-        let over = self.park.len() > FRAME_PARK_CAP;
-        if over {
-            self.park.pop_front();
+    }
+
+    /// Drop the oldest parked AUs, each with its pieces, until at most [`FRAME_PARK_CAP`] whole
+    /// AUs wait. A piece of an AU still arriving counts for nothing. Run after feeding, so a slot
+    /// offered in the same pass is used first. Returns the AUs dropped, each a loss.
+    pub(crate) fn trim(&mut self) -> u64 {
+        let closes = |f: &Frame| Piece::of(f).last;
+        let mut aus = self.park.iter().filter(|f| closes(f)).count();
+        let mut dropped = 0;
+        while aus > FRAME_PARK_CAP {
+            let Some(f) = self.park.pop_front() else {
+                break;
+            };
+            if closes(&f) {
+                aus -= 1;
+                dropped += 1;
+            }
         }
-        over
+        dropped
     }
 
     /// Keep the parked deliveries `keep` passes, in order.
@@ -175,7 +189,7 @@ mod tests {
         NoBuffer(u32),
         Oversize(u32, Left),
         Refused(u32, Left),
-        /// The park dropped its oldest entry.
+        /// The park dropped its oldest AU.
         Overflow,
     }
     use Out::{Closed, Fed, Orphan, Overflow};
@@ -207,14 +221,15 @@ mod tests {
         }
     }
 
-    fn park(feed: &mut Feed, f: Frame, out: &mut Vec<Out>) {
-        if feed.park(f) {
+    /// One pass of `State::feed`, the codec answering from `answers`, then the park's cap.
+    fn pass(feed: &mut Feed, answers: &[Answer], out: &mut Vec<Out>) {
+        feed_pass(feed, answers, out);
+        for _ in 0..feed.trim() {
             out.push(Overflow);
         }
     }
 
-    /// One pass of `State::feed`, the codec answering from `answers`.
-    fn pass(feed: &mut Feed, answers: &[Answer], out: &mut Vec<Out>) {
+    fn feed_pass(feed: &mut Feed, answers: &[Answer], out: &mut Vec<Out>) {
         let mut answers = answers.iter().copied();
         while let Some(step) = feed.next() {
             match step {
@@ -256,18 +271,18 @@ mod tests {
         let mut out = Vec::new();
         for &op in ops {
             match op {
-                Whole(i) => park(&mut feed, frame(i, None), &mut out),
+                Whole(i) => feed.park(frame(i, None)),
                 Part(i, offset, first, last) => {
                     let part = FramePart {
                         offset,
                         first,
                         last,
                     };
-                    park(&mut feed, frame(i, Some(part)), &mut out);
+                    feed.park(frame(i, Some(part)));
                 }
                 Burst(from, n) => {
                     for i in from..from + n {
-                        park(&mut feed, frame(i, None), &mut out);
+                        feed.park(frame(i, None));
                     }
                 }
                 Slot(s) => feed.offer(s),
@@ -364,9 +379,40 @@ mod tests {
             &[Fed(1, 0), Out::Refused(1, Left::Poison), Closed(1), Orphan],
         ),
         (
-            "park: past the cap the oldest delivery is dropped",
-            &[Burst(0, CAP + 1), Slot(0), Pass(&[])],
+            "park: past the cap the oldest AU is dropped",
+            &[Burst(0, CAP + 1), Pass(&[]), Slot(0), Pass(&[])],
             &[Overflow, Fed(1, 0)],
+        ),
+        (
+            "park: the oldest AU goes with its pieces",
+            &[
+                Part(0, 0, true, false),
+                Part(0, 100, false, true),
+                Burst(1, CAP),
+                Pass(&[]),
+                Slot(0),
+                Pass(&[]),
+            ],
+            &[Overflow, Fed(1, 0)],
+        ),
+        (
+            "R1-2: a piece never trips the cap while its AU is open",
+            &[
+                Burst(0, CAP),
+                Part(CAP, 0, true, false),
+                Part(CAP, 100, false, false),
+                Pass(&[]),
+                Part(CAP, 200, false, true),
+                Pass(&[]),
+                Slot(0),
+                Pass(&[]),
+            ],
+            &[Overflow, Fed(1, 0)],
+        ),
+        (
+            "R1-2: a slot offered in the same pass feeds before the cap judges",
+            &[Burst(0, CAP + 1), Slot(0), Pass(&[])],
+            &[Fed(0, 0)],
         ),
     ];
 
