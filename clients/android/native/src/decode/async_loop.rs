@@ -7,7 +7,6 @@ use punktfunk_core::error::PunktfunkError;
 use punktfunk_core::reanchor::{AnchorEvidence, DecoderClass, LocalRecovery};
 use punktfunk_core::session::Frame;
 use std::collections::VecDeque;
-use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -35,7 +34,7 @@ use crate::input_stall::{
 };
 use crate::present::verdict::Verdict;
 use crate::run_end::{after_failure, ending, Ending, Retry};
-use crate::rung_memory::{self, Entry, Key, Outcome, Start};
+use crate::rung_memory::{Key, Memory};
 use crate::sys::{now_monotonic_ns, sysprop};
 use punktfunk_core::quic::ColorInfo;
 
@@ -180,97 +179,55 @@ enum RunEnd {
 /// The rung memory's file in the app's files dir ([`crate::rung_memory`]).
 const MEMORY_FILE: &str = "decode-rungs.txt";
 
-/// This surface's copy of the rung memory: the file's entries, the stream codec's key, and
-/// where that codec's decoders started. `path` is `None` with no files dir or once a write fails.
-struct Memory {
-    path: Option<PathBuf>,
-    entries: Vec<Entry>,
-    key: Key,
-    start: Start,
+/// Read the rung memory's file. One that is missing or unreadable is no memory.
+fn load_memory() -> Memory {
+    let path = crate::logs::dir().map(|dir| dir.join(MEMORY_FILE));
+    let text = match path.as_deref().map(fs::read_to_string) {
+        Some(Ok(text)) => text,
+        Some(Err(e)) if e.kind() != io::ErrorKind::NotFound => {
+            log::debug!("decode: rung memory unreadable: {e}");
+            String::new()
+        }
+        _ => String::new(),
+    };
+    Memory::load(path, &text)
 }
 
-impl Memory {
-    /// Read the file. One that is missing or unreadable is no memory.
-    fn load() -> Memory {
-        let path = crate::logs::dir().map(|dir| dir.join(MEMORY_FILE));
-        let entries = match path.as_deref().map(fs::read_to_string) {
-            Some(Ok(text)) => rung_memory::parse(&text),
-            Some(Err(e)) if e.kind() != io::ErrorKind::NotFound => {
-                log::debug!("decode: rung memory unreadable: {e}");
-                Vec::new()
-            }
-            _ => Vec::new(),
-        };
-        Memory {
-            path,
-            entries,
-            key: Key::default(),
-            start: Start::Fresh,
-        }
+/// Key the rung memory on the stream's codec: the floor its first decoder starts on.
+fn begin_memory(memory: &mut Memory, client: &NativeClient, opts: &DecodeOptions) -> RungFloor {
+    let mime = codec_mime(client.video_format().codec);
+    let key = Key {
+        fingerprint: sysprop(c"ro.build.fingerprint")
+            .or_else(|| sysprop(c"ro.build.version.incremental"))
+            .unwrap_or_default(),
+        // Kotlin's pick, known before bring-up and stable per device; a probe codec costs
+        // 100 ms+ on a TV.
+        decoder: super::ranked_for(opts.decoder_name.as_deref(), opts.decoder_mime, mime)
+            .unwrap_or("default")
+            .to_owned(),
+        codec: mime.to_owned(),
+    };
+    let (floor, note) = memory.begin(key, unix_secs());
+    if let Some(note) = note {
+        log::info!("{note}");
     }
-
-    /// Key the memory on the stream's codec: the floor its first decoder starts on.
-    fn begin(&mut self, client: &NativeClient, opts: &DecodeOptions) -> RungFloor {
-        let mime = codec_mime(client.video_format().codec);
-        self.key = Key {
-            fingerprint: sysprop(c"ro.build.fingerprint")
-                .or_else(|| sysprop(c"ro.build.version.incremental"))
-                .unwrap_or_default(),
-            // Kotlin's pick, known before bring-up and stable per device; a probe codec costs
-            // 100 ms+ on a TV.
-            decoder: super::ranked_for(opts.decoder_name.as_deref(), opts.decoder_mime, mime)
-                .unwrap_or("default")
-                .to_owned(),
-            codec: mime.to_owned(),
-        };
-        let now = unix_secs();
-        self.start = rung_memory::lookup(&self.entries, &self.key, now, APP_VERSION);
-        let Key { decoder, codec, .. } = &self.key;
-        if let Some(e) = rung_memory::find(&self.entries, &self.key) {
-            let days = now.saturating_sub(e.proven_at_secs) / 86_400;
-            match self.start {
-                Start::Remembered(r) => log::info!(
-                    "decode: starting at rung {r} from memory ({decoder} / {codec}, proven {days} \
-                     days ago)"
-                ),
-                Start::Retry(_) => log::info!(
-                    "decode: retrying rung 0 for {decoder} / {codec} (memory from {}, {days} \
-                     days old)",
-                    e.version
-                ),
-                Start::Fresh => {}
-            }
-        }
-        RungFloor::starting_at(self.start.rung())
-    }
-
-    /// A decoder has shown `rendered` frames with the floor at `floor`: write what it proved.
-    fn shown(&mut self, floor: usize, rendered: u64) {
-        let Key { decoder, codec, .. } = &self.key;
-        let changed = match rung_memory::outcome(self.start, floor, rendered) {
-            Outcome::Keep => return,
-            Outcome::Record(r) => {
-                log::info!("decode: rung {r} remembered for {decoder} / {codec}");
-                self.start = Start::Remembered(r);
-                rung_memory::record(&mut self.entries, &self.key, r, unix_secs(), APP_VERSION)
-            }
-            Outcome::Forget => {
-                log::info!("decode: rung 0 works again for {decoder} / {codec} — memory cleared");
-                self.start = Start::Fresh;
-                rung_memory::forget(&mut self.entries, &self.key)
-            }
-        };
-        if let Some(path) = self.path.as_deref().filter(|_| changed) {
-            if let Err(e) = fs::write(path, rung_memory::render(&self.entries)) {
-                log::debug!("decode: rung memory unwritable: {e}");
-                self.path = None;
-            }
-        }
-    }
+    floor
 }
 
-/// The version a remembered rung was proven under.
-const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
+/// Log, then write, what a decoder that showed `rendered` frames with the floor at `floor` proved.
+fn remember(memory: &mut Memory, floor: usize, rendered: u64) {
+    let Some((note, write)) = memory.shown(floor, rendered, unix_secs) else {
+        return;
+    };
+    log::info!("{note}");
+    let Some((path, text)) = write else {
+        return;
+    };
+    if let Err(e) = fs::write(path, text) {
+        log::debug!("decode: rung memory unwritable: {e}");
+        memory.unwritable();
+    }
+}
 
 fn unix_secs() -> u64 {
     SystemTime::now()
@@ -296,8 +253,8 @@ pub(super) fn run_async(
     boost_thread_priority();
     let mut rebuilt = false;
     let mut barren = 0u32;
-    let mut memory = Memory::load();
-    let mut floor = memory.begin(&client, &opts);
+    let mut memory = load_memory();
+    let mut floor = begin_memory(&mut memory, &client, &opts);
     // The failed codec's layer, still showing the last good frame until a rebuilt one presents.
     let mut stale: Option<Layer> = None;
     // Monotonic ns of the feeder's last loss gap (each one fires an RFI ask); 0 = none yet.
@@ -325,7 +282,7 @@ pub(super) fn run_async(
                     codec_mime(client.video_format().codec)
                 );
                 // Another codec's failures say nothing about this one's rungs.
-                (barren, floor) = (0, memory.begin(&client, &opts));
+                (barren, floor) = (0, begin_memory(&mut memory, &client, &opts));
                 carry = Some(frame);
             }
             RunEnd::Failed {
@@ -547,7 +504,7 @@ fn run_codec(
         aux.after_pass(client, work_t0, had_output, presented_now);
         if presented_now {
             state.log_progress();
-            memory.shown(floor, state.rendered);
+            remember(memory, floor, state.rendered);
             if let Some(mut layer) = stale.take() {
                 layer.hide();
             }
