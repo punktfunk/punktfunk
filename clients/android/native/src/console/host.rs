@@ -25,6 +25,7 @@ use pf_console_ui::{
 };
 use punktfunk_core::config::GamepadPref;
 use std::collections::VecDeque;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 
@@ -104,6 +105,9 @@ pub(super) struct Shared {
     /// waits for the bump.
     surface_gen: Mutex<u64>,
     surface_cv: Condvar,
+    /// The shell's launch hold, as of the last frame. Written before the frame's events leave,
+    /// so a `Launch` the shell raised is never read as unheld.
+    holds_launch: AtomicBool,
 }
 
 impl Shared {
@@ -115,7 +119,13 @@ impl Shared {
             events_cv: Condvar::new(),
             surface_gen: Mutex::new(0),
             surface_cv: Condvar::new(),
+            holds_launch: AtomicBool::new(false),
         }
+    }
+
+    /// Whether the shell's launch hold is up: its session waits for `ShowStream`.
+    pub(super) fn holds_launch(&self) -> bool {
+        self.holds_launch.load(Ordering::Acquire)
     }
 
     pub(super) fn send(&self, cmd: Cmd) {
@@ -311,6 +321,9 @@ fn render_loop(mut console: Console, shared: Arc<Shared>, store: Arc<SnapshotSto
                 glass.gl_failures
             );
         }
+        shared
+            .holds_launch
+            .store(console.holds_launch(), Ordering::Release);
         published.publish(&mut console, &store, |e| shared.emit(HostEvent::Console(e)));
     }
 }

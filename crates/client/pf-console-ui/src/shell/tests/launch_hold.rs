@@ -345,3 +345,35 @@ fn launcher_tiles_skip_the_hold_and_a_press_ends_it() {
     s.handle_menu(MenuEvent::Confirm);
     assert!(s.in_stream && !s.holds_stream());
 }
+
+/// A host that asks the shell whether it holds (Android's `ShowStream` wait) must read false for
+/// every session the shell did not launch off its shelf, or that session is never released.
+#[test]
+fn only_a_game_launched_off_the_shelf_holds() {
+    let (mut s, _library, _bus) = on_shelf();
+    // A link dials with no `Launch` from the shell: the handshake finds no hold to wait on.
+    s.session_streaming();
+    assert!(!s.holds_stream() && s.in_stream);
+
+    s.session_ended(None);
+    let mut desktop = intent("steam:570");
+    desktop.launch = None;
+    s.start_connect(desktop);
+    s.session_streaming();
+    assert!(
+        !s.holds_stream(),
+        "a desktop connect has no title to wait for"
+    );
+
+    s.session_ended(None);
+    s.start_connect(intent("steam:unlisted"));
+    s.session_streaming();
+    assert!(
+        !s.holds_stream(),
+        "a title the shelf does not list is not held"
+    );
+
+    s.session_ended(None);
+    s.start_connect(intent("steam:570"));
+    assert!(s.holds_stream(), "a listed game off the shelf is");
+}
