@@ -63,10 +63,11 @@ pub(crate) fn capture_virtual_output(
         screen,
         // gamescope is Linux-only.
         gamescope_cursor: _gamescope_cursor,
+        mirrored,
     } = request;
     // A monitor this host did not create is captured by a worker; the driver has no part in it.
     if vout.ownership == crate::vdisplay::DisplayOwnership::External {
-        return capture_external_output(vout, want, stream_hz, screen);
+        return capture_external_output(vout, want, stream_hz, screen, mirrored);
     }
     let target = vout.win_capture.clone().ok_or_else(|| {
         anyhow::anyhow!(
@@ -153,13 +154,15 @@ pub(crate) fn capture_virtual_output(
 /// and open the monitor in it. The absolute-input aim moves to that monitor, as the IDD-push
 /// open does for its own.
 ///
-/// A mirror's worker gets the GPU scheduling class a session's encoder gets. A viewer of
-/// another session's display keeps the default, below the driver that encodes for its owner.
+/// A `mirrored` session's worker gets the GPU scheduling class a session's encoder gets. A
+/// viewer of another session's display keeps the default, below the driver that encodes for
+/// its owner.
 fn capture_external_output(
     vout: crate::vdisplay::VirtualOutput,
     want: OutputFormat,
     stream_hz: u32,
     screen: u8,
+    mirrored: bool,
 ) -> Result<Box<dyn Capturer>> {
     let target = vout
         .win_capture
@@ -177,13 +180,12 @@ fn capture_external_output(
         target_id: target.target_id,
         hdr,
     };
-    let own_priority = crate::session_plan::mirrored();
     pf_capture::open_wgc(
         worker,
         source,
         want.hdr,
         stream_hz,
-        own_priority,
+        mirrored,
         vout.keepalive,
     )
     .context("WGC capture open (no fallback)")
@@ -289,6 +291,7 @@ mod live_tests {
                 stream_hz: 60,
                 screen: 0,
                 gamescope_cursor: false,
+                mirrored: false,
             },
         )
         .expect("open the IDD-push capturer");
@@ -416,6 +419,7 @@ mod live_tests {
                 stream_hz: 60,
                 screen: 0,
                 gamescope_cursor: false,
+                mirrored: false,
             },
         )
         .expect("open the IDD-push capturer");

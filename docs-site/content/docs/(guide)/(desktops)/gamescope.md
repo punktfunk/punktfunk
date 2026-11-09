@@ -20,6 +20,14 @@ runs one. Install the host first: [Bazzite](/docs/bazzite) or [SteamOS (Host)](/
 - With [`punktfunk-gamescope`](#hdr-on-gamescope): HDR, the real resolution and refresh rate in
   Steam, the performance overlay, and your keyboard layout.
 
+## The Game Mode tile
+
+On a host that runs a gamescope session, such as SteamOS, Bazzite, Nobara or CachyOS with
+gamescope-session, the library shows a **Game Mode** tile beside **Desktop**. It streams Steam's
+gamepad interface on a screen of its own, at your device's resolution and refresh rate, the way a
+[managed or bare-spawn session](#how-the-host-gets-a-gamescope) does. A desktop that only has
+gamescope installed shows no tile.
+
 ## host.env
 
 Nothing is required: the host finds gamescope from your live session. The gamescope settings in

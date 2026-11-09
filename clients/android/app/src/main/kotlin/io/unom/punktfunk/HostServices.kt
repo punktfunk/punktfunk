@@ -399,9 +399,13 @@ class HostServices(val store: KnownHostStore, private val native: HostNative) {
     /** The title each paired host has up, by fingerprint; `""` for none. */
     val nowPlaying = ConcurrentHashMap<String, String>()
 
-    /** When [hostActions] and [nowPlaying] were last asked, by fingerprint: their TTLs run from here. */
+    /** The screens each paired host offers this device and its pick, by fingerprint. Absent = no Screen section. */
+    val screens = ConcurrentHashMap<String, DisplayTargets.Targets>()
+
+    /** When [hostActions], [nowPlaying] and [screens] were last asked, by fingerprint: their TTLs run from here. */
     val hostActionsAt = ConcurrentHashMap<String, Long>()
     val nowPlayingAt = ConcurrentHashMap<String, Long>()
+    val screensAt = ConcurrentHashMap<String, Long>()
 
     private companion object {
         const val TAG = "punktfunk"

@@ -860,6 +860,7 @@ fn session_plan(ctx: &SessionContext) -> crate::session_plan::SessionPlan {
         c.session.shard_payload(),
         ctx.reframe_to,
         ctx.join_live,
+        ctx.mirrored,
     );
     tracing::info!(?plan, "resolved session plan");
     plan
@@ -1056,7 +1057,7 @@ fn open_display(
         Some(p) => (p.vd, Some(p.pipeline)),
         None => {
             // Open first: Windows `open` inits the manager; `vdm()` before that panics.
-            let mut vd = crate::vdisplay::open(compositor)?;
+            let mut vd = crate::vdisplay::open_for(compositor, vd_params.client_fp)?;
             vd_params.apply(&mut *vd);
             (vd, None)
         }

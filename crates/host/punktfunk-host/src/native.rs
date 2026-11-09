@@ -1417,9 +1417,9 @@ async fn negotiate_session(
     // Live reconfigure is off for gamescope (resize must not relaunch the title),
     // `identity: per-client-mode` (resize would resolve a different slot), a monitor
     // mirror (physical head ignores the requested mode) and a `join` session (the mode
-    // is the owner's). Synthetic stays on. Captured once here, the mirror pin too: a console
-    // change mid-session must not change this session's answer.
-    let mirrored = crate::session_plan::mirrored();
+    // is the owner's). Synthetic stays on. The mirror is the handshake's pick: a console change
+    // mid-session must not change this session's answer.
+    let mirrored = n.mirrored;
     let live_reconfig_ok = {
         let per_client_mode_identity = crate::vdisplay::policy::prefs()
             .configured_effective()
@@ -2016,6 +2016,7 @@ fn display_half(
         slices,
         joined,
         features,
+        mirrored,
         ..
     } = n;
     // Read back from what the ServerHello agreed, like `cursor_forward` below.
@@ -2061,6 +2062,7 @@ fn display_half(
         // `None` = older client or no HDR: the EDID and 0xCE take built-in defaults.
         client_hdr: hello.display_hdr.map(crate::encode::hdr_meta_from_wire),
         join_live: joined.is_some(),
+        mirrored,
         reframe_to,
         frame_map: lanes.frame_map,
         #[cfg(target_os = "linux")]

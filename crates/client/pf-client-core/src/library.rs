@@ -1100,6 +1100,12 @@ impl<T: Clone + Send + 'static> FpCache<T> {
     pub(crate) fn invalidate(&self, fp_hex: &str) {
         self.map().remove(fp_hex);
     }
+
+    /// Store rows a caller fetched itself, as fresh as a [`FpCache::refresh`] landing now.
+    pub(crate) fn put(&self, fp_hex: &str, rows: Vec<T>) {
+        self.map()
+            .insert(fp_hex.to_string(), (Instant::now(), rows));
+    }
 }
 
 /// 20 s. What a host has up changes minute to minute, unlike the grants

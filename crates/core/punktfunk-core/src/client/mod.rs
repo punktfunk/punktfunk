@@ -284,6 +284,8 @@ pub struct NativeClient {
     pub mgmt_port: u16,
     /// The profile the host resolved this session to; `None` from a host without profiles.
     profile: Option<String>,
+    /// The screen the host says this session streams; `None` from a host that does not say.
+    screen: Option<crate::quic::v2::hello::ScreenEcho>,
     /// `displayed + clock_offset − pts` (ns). `0` = nothing presented yet. Presenter writes;
     /// audio reads to land with the picture ([`crate::audio::AvSync`]). Lives next to
     /// `clock_offset` because neither plane owns the other.
@@ -846,6 +848,7 @@ impl NativeClient {
             host_caps2: welcome.host_caps2,
             mgmt_port: welcome.mgmt_port,
             profile: negotiated.profile,
+            screen: negotiated.screen,
             worker: Some(worker),
             video_e2e_ns: Arc::new(AtomicU64::new(0)),
             audio_av_offset_ms: Arc::new(AtomicI64::new(0)),
@@ -1299,7 +1302,8 @@ impl NativeClient {
     }
 
     /// Close the overlay window with everything the connector knows filled in: mode, codec,
-    /// colour, chroma asked and granted, audio format, counters and, with `l10n`, the link line
+    /// colour, chroma asked and granted, the monitor a mirror streams, audio format, counters and,
+    /// with `l10n`, the link line
     /// and the weak-network warning. The caller adds the decoder, display HDR and its own extras.
     pub fn hud_snapshot(&self) -> crate::hud::StatsSnapshot {
         // Whole AUs the all-intra drain dropped before the decoder: it fell behind.
@@ -1319,6 +1323,9 @@ impl NativeClient {
         }
         s.chroma_444 = f.chroma_format == crate::quic::CHROMA_IDC_444;
         s.asked_444 = self.asked_444;
+        if let Some(crate::quic::v2::hello::ScreenEcho::Monitor(c)) = &self.screen {
+            s.screen = Some(c.clone());
+        }
         s.auto_rate = self.wants_decode;
         let a = self.audio_format();
         s.audio_lossless = a.is_pcm();
@@ -1884,6 +1891,12 @@ impl NativeClient {
     /// when none was. `None` from a host without profiles.
     pub fn profile(&self) -> Option<&str> {
         self.profile.as_deref()
+    }
+
+    /// The screen this session streams: its own, or the host monitor it mirrors. `None` from a
+    /// host that does not say. Fixed for the session: a pick applies at the next connect.
+    pub fn screen(&self) -> Option<&crate::quic::v2::hello::ScreenEcho> {
+        self.screen.as_ref()
     }
 
     /// Live grants ([`crate::quic::GRANT_GAMEPAD`] family). Welcome seed, latest

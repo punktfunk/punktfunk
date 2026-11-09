@@ -8,7 +8,9 @@ import type { FC, ReactNode } from "react";
 import type {
 	ApiDisplayInfo,
 	ApiMonitorInfo,
+	ClientOverlay,
 	DisplayPolicy,
+	DisplayTarget,
 	EffectivePolicy,
 } from "@/api/gen/model";
 import { ROW, ROW_GAP, staggerProps } from "@/components/stagger";
@@ -18,6 +20,22 @@ import { Card, CardContent, CardTitle } from "@/components/ui/card";
 import { Segmented } from "@/components/ui/segmented";
 import { m } from "@/paraglide/messages";
 import { stateLabel } from "./DesktopMap";
+
+/** What the host policy or a device row streams: `screen`, else the alias an older writer left. */
+export const screenOf = (
+	p: Pick<ClientOverlay, "screen" | "capture_monitor"> | null | undefined,
+): DisplayTarget | undefined =>
+	p?.screen ??
+	(p?.capture_monitor ? { monitor: p.capture_monitor } : undefined);
+
+/** The monitor a screen names; null for a screen of the device's own. */
+export const monitorOf = (
+	t: DisplayTarget | null | undefined,
+): string | null => (t && t !== "own" ? t.monitor : null);
+
+/** `PUNKTFUNK_CAPTURE_MONITOR` outranks the stored policy and every device row. */
+export const pinLocked = (pinned: string | null, policy?: DisplayPolicy) =>
+	!!pinned && !!policy && monitorOf(screenOf(policy)) !== pinned;
 
 export const ScreenRows: FC<{
 	monitors: readonly ApiMonitorInfo[];
@@ -64,7 +82,7 @@ export const ScreenRows: FC<{
 			: null;
 	// `PUNKTFUNK_CAPTURE_MONITOR` outranks the stored policy: a pin from the unit's environment is
 	// read-only here, not a control that silently loses.
-	const envLocked = !!pinned && !!policy && policy.capture_monitor !== pinned;
+	const envLocked = pinLocked(pinned, policy);
 	const locked = busy || envLocked;
 	const exclusive = effective?.topology === "exclusive";
 	const keptLit = new Set(

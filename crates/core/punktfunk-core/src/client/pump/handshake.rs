@@ -407,6 +407,7 @@ async fn dial(
                 clock_offset_ns,
                 clock_rtt_ns,
                 profile: server.profile.clone(),
+                screen: server.screen.clone(),
                 scroll_axis_units: server.features.has(registry::FEATURE_SCROLL_AXIS_UNITS),
             },
         ))))

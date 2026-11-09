@@ -714,6 +714,7 @@ mod session_tests {
                 encrypt_video: false,
                 studio_asked: crate::session_plan::StudioAsk::default(),
                 encoder: crate::encode::resolve(),
+                mirrored: false,
             });
         }
 

@@ -442,8 +442,9 @@ pub(crate) fn sorted_games() -> std::sync::Arc<Vec<GameEntry>> {
 }
 
 /// Merge every enabled source and the custom entries, sorted by [`sort_key`], each
-/// carrying its play stats, its game overrides and what Art & Metadata sources fill. Split
-/// out so the two public views differ only in how they apply the hidden set.
+/// carrying its play stats, its game overrides and what Art & Metadata sources fill, plus the
+/// host's own [`GAME_MODE_ID`] tile. Split out so the two public views differ only in how they
+/// apply the hidden set.
 fn collect_games() -> Vec<GameEntry> {
     let off = disabled_scanners();
     let stats = game_stats();
@@ -460,8 +461,46 @@ fn collect_games() -> Vec<GameEntry> {
         g.overrides = overrides.resolve(&g.id);
         fills.apply(g);
     }
+    games.extend(game_mode_entry(
+        crate::vdisplay::managed_session_available(),
+        pf_paths::seat::role().follows_contract(),
+    ));
     games.sort_by_cached_key(sort_key);
     games
+}
+
+/// The library id of the host's Game Mode tile: Steam's gamepad UI in the box's own gamescope
+/// session. The handshake routes its connect to gamescope ([`game_mode_entry`]).
+pub(crate) const GAME_MODE_ID: &str = "host:gamemode";
+
+/// The [`GAME_MODE_ID`] launcher, on a box that runs a gamescope session (SteamOS,
+/// `gamescope-session-plus`). Not on a contract seat (`contract_seat`): it has one virtual
+/// screen and no Game Mode of its own; the owner's host at the desk keeps the tile. Built here,
+/// never stored, so nothing edits it; a hide of it is ignored. Clients word the title themselves.
+pub(crate) fn game_mode_entry(gamescope_session: bool, contract_seat: bool) -> Option<GameEntry> {
+    (gamescope_session && !contract_seat).then(|| GameEntry {
+        id: GAME_MODE_ID.into(),
+        store: "host".into(),
+        title: "Game Mode".into(),
+        art: Artwork::default(),
+        role: GameRole::Launcher,
+        icon: Some("steam".into()),
+        launch: Some(LaunchSpec {
+            kind: "steam_ui".into(),
+            value: "bigpicture".into(),
+            args: None,
+        }),
+        provider: None,
+        detect: DetectSpec::default(),
+        on_window: OnWindow::default(),
+        stats: None,
+        // A launcher of the host's own: a game override would set a mode for Steam's UI.
+        overrides: None,
+        ids: BTreeMap::new(),
+        filled: BTreeMap::new(),
+        install: None,
+        meta: GameMeta::default(),
+    })
 }
 
 /// Absent or malformed → the default. A bad file must cost its own contents, not the library.
@@ -541,6 +580,21 @@ mod tests {
         let v = serde_json::to_value(&hidden).expect("serializes");
         assert_eq!(v["hidden"], true);
         assert_eq!(v["id"], "steam:70", "flatten still applies when hidden");
+    }
+
+    /// The Game Mode tile is a Steam Big Picture launcher, on a box with a gamescope session
+    /// and a host that is no contract seat.
+    #[test]
+    fn the_game_mode_tile_needs_a_gamescope_session_and_no_contract_seat() {
+        assert!(game_mode_entry(false, false).is_none());
+        assert!(game_mode_entry(true, true).is_none());
+        let g = game_mode_entry(true, false).expect("offered");
+        assert_eq!((g.id.as_str(), g.role), (GAME_MODE_ID, GameRole::Launcher));
+        let l = g.launch.expect("it launches");
+        assert_eq!(
+            (l.kind.as_str(), l.value.as_str()),
+            ("steam_ui", "bigpicture")
+        );
     }
 
     /// Both views share `collect_games`; they must agree on which ids exist and

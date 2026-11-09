@@ -560,6 +560,7 @@ mod tests {
                 suite: None,
                 features: Default::default(),
                 profile: None,
+                screen: None,
             };
             ServerHello::from_body(&sh.fields().into_body())
                 .unwrap()

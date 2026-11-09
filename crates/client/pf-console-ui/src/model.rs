@@ -107,6 +107,10 @@ pub struct HostRow {
     /// only while `remember` is set ([`Self::remembered`]); otherwise a connect asks.
     #[serde(default)]
     pub profile: Option<pf_client_core::profiles::ProfilePick>,
+    /// The screens this host offers this device and its pick (`GET /display/targets`). `None`
+    /// until the host answers, and from a host without the route: then there is no Screen section.
+    #[serde(default)]
+    pub screens: Option<pf_client_core::display_targets::Targets>,
 }
 
 #[cfg(test)]
@@ -708,6 +712,16 @@ pub enum ConsoleCmd {
         action_id: String,
         /// Resolved label for the toast — the service thread must not re-derive wording
         /// the screen already settled.
+        label: String,
+    },
+    /// Write this device's screen on the host (`PUT /display/clients/{fp}`). Same lane as
+    /// [`Self::HostAction`]; a refusal is a notice, and the new pick arrives on the host row.
+    SetScreen {
+        addr: String,
+        mgmt: u16,
+        fp_hex: String,
+        screen: pf_client_core::display_targets::DisplayTarget,
+        /// The row's word, for the notice.
         label: String,
     },
     /// End a title this device launched (`POST /api/v1/game/end`). The outcome is a

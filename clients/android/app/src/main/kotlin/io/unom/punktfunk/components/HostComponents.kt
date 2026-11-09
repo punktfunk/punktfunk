@@ -63,11 +63,15 @@ fun SectionLabel(text: String) {
  * One row of a host card's overflow menu. [startsSection] draws a divider above it, which is how
  * the preset actions ("Connect with: …", "Pin as card: …") stay legible next to the host actions
  * in one flat menu — Compose has no submenus, and the Windows client made the same call.
+ * [detail] is a second line under the label. A row with no [onClick] is a section's title, with
+ * its note as [detail]; a row not [enabled] says why in [detail].
  */
 data class HostMenuItem(
     val label: String,
     val startsSection: Boolean = false,
-    val onClick: () -> Unit,
+    val enabled: Boolean = true,
+    val detail: String? = null,
+    val onClick: (() -> Unit)?,
 )
 
 /**
@@ -109,6 +113,10 @@ fun HostCard(
     profileName: String? = null,
     profilePicture: String? = null,
     profileArt: io.unom.punktfunk.ProfileArt? = null,
+    /** "Streams LG TV" when a connect mirrors a host monitor; null on its own screen. */
+    screenLine: String? = null,
+    /** Keep [screenLine]'s space, for the same reason as [reservePresetSlot]. */
+    reserveScreenLine: Boolean = false,
 ) {
     // D-pad / controller focus highlight: a clickable card is focusable, but the default state
     // layer is too subtle on a TV across a room — draw a clear primary-colour border when focused.
@@ -161,6 +169,16 @@ fun HostCard(
                     overflow = TextOverflow.Ellipsis,
                     textAlign = TextAlign.Center,
                 )
+                if (screenLine != null || reserveScreenLine) {
+                    Text(
+                        screenLine.orEmpty(),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        textAlign = TextAlign.Center,
+                    )
+                }
                 if (presetLabel != null || reservePresetSlot) {
                     Spacer(Modifier.height(10.dp))
                     Box(
@@ -222,13 +240,37 @@ fun HostCard(
                         }
                         menuItems.forEach { item ->
                             if (item.startsSection) HorizontalDivider()
-                            DropdownMenuItem(
-                                text = { Text(item.label) },
-                                onClick = {
-                                    menu = false
-                                    item.onClick()
-                                },
-                            )
+                            val onClick = item.onClick
+                            if (onClick == null) {
+                                Column(Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
+                                    Text(
+                                        item.label,
+                                        style = MaterialTheme.typography.titleSmall,
+                                        color = MaterialTheme.colorScheme.primary,
+                                    )
+                                    item.detail?.let {
+                                        Text(
+                                            it,
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        )
+                                    }
+                                }
+                            } else {
+                                DropdownMenuItem(
+                                    text = {
+                                        Column {
+                                            Text(item.label)
+                                            item.detail?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
+                                        }
+                                    },
+                                    enabled = item.enabled,
+                                    onClick = {
+                                        menu = false
+                                        onClick()
+                                    },
+                                )
+                            }
                         }
                     }
                 }

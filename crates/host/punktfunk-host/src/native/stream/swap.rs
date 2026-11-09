@@ -571,6 +571,7 @@ pub(super) mod tests {
                 sdr10_native: false,
                 slices: 1,
                 reframe_to: None,
+                mirrored: false,
                 rgb_full_range: true,
                 studio_asked: crate::session_plan::StudioAsk::default(),
             },

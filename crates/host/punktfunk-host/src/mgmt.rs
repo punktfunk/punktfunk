@@ -443,6 +443,7 @@ fn api_router_parts() -> (Router<Arc<MgmtState>>, utoipa::openapi::OpenApi) {
         .routes(routes!(display::set_display_settings))
         .routes(routes!(display::get_display_state))
         .routes(routes!(display::get_display_monitors))
+        .routes(routes!(display::get_display_targets))
         .routes(routes!(display::release_display))
         .routes(routes!(display::set_display_layout))
         .routes(routes!(

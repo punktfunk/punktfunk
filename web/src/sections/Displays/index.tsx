@@ -110,7 +110,7 @@ export const SectionDisplays: FC = () => {
 	const write = (patch: Partial<DisplayPolicy>) => {
 		if (!policy) return;
 		save.mutate(
-			// `capture_monitor` is read back from the server on every write rather than carried
+			// `screen` is read back from the server on every write rather than carried
 			// through a component: the monitor rows own it, and a stale copy here is exactly how
 			// applying a preset used to un-pin a mirroring host.
 			{ data: { ...policy, ...patch } },
@@ -289,7 +289,9 @@ export const SectionDisplays: FC = () => {
 							overlaid={overlaid}
 							busy={busy}
 							releasing={release.isPending}
-							onPick={(connector) => write({ capture_monitor: connector })}
+							onPick={(connector) =>
+								write({ screen: connector ? { monitor: connector } : "own" })
+							}
 							onRelease={doRelease}
 							// The host says which backends honour a keep-list.
 							onKeepLit={

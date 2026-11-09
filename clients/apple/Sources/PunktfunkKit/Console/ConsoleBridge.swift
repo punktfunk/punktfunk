@@ -85,7 +85,7 @@ public final class ConsoleBridge {
         case setClipboard = "SetClipboard", unpairHost = "UnpairHost", savePreset = "SavePreset"
         case deletePreset = "DeletePreset", padTest = "PadTest", loadLicenses = "LoadLicenses"
         case promptAnswer = "PromptAnswer", padAction = "PadAction", hostAction = "HostAction"
-        case endGame = "EndGame", install = "Install"
+        case setScreen = "SetScreen", endGame = "EndGame", install = "Install"
     }
 
     /// Where the session the console asked for stands. `profileLocked` is a failure the host

@@ -28,6 +28,7 @@
     {"PromptAnswer": {"id": "q1", "choice": 1}},
     {"PadAction": {"action": "rumble", "pad_key": "1118:2834:Xbox"}},
     {"HostAction": {"addr": "10.0.0.2", "mgmt": 47990, "fp_hex": "ab12", "host_name": "Desk", "action_id": "power.sleep", "label": "Sleep"}},
+    {"SetScreen": {"addr": "10.0.0.2", "mgmt": 47990, "fp_hex": "ab12", "screen": {"monitor": "HDMI-A-1"}, "label": "LG TV"}},
     {"EndGame": {"addr": "10.0.0.2", "mgmt": 47990, "fp_hex": "ab12", "app_id": "steam:570", "title": "Dota 2"}},
     {"Install": {"addr": "10.0.0.2", "mgmt": 47990, "fp_hex": "ab12", "app_id": "steam:570", "title": "Dota 2", "action": "Install"}}
   ],

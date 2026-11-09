@@ -44,6 +44,16 @@ public enum ConsoleJSON {
         }
     }
 
+    /// `HostRow.screens`: the host's own `GET /display/targets` body, or null before it answers.
+    private static func screensJSON(
+        _ screens: [String: DisplayTargets], _ host: StoredHost
+    ) -> Any {
+        guard let rows = screens[fingerprint(host)], let data = try? JSONEncoder().encode(rows),
+              let json = try? JSONSerialization.jsonObject(with: data)
+        else { return NSNull() }
+        return json
+    }
+
     /// The home carousel: saved hosts in store order, which is the order they were added, each
     /// followed by its pinned preset cards, then the discovered-but-unsaved by name. The console
     /// applies the player's sort on top. `clients/shared/host-row-vectors.json` holds this, the
@@ -51,7 +61,7 @@ public enum ConsoleJSON {
     public static func hostRows(
         saved: [StoredHost], discovered: [DiscoveredHost], online: Set<StoredHost.ID>,
         presets: [StreamPreset], actions hostActions: [String: [HostAction]] = [:],
-        running: [String: String] = [:]
+        running: [String: String] = [:], screens: [String: DisplayTargets] = [:]
     ) -> String {
         var out: [[String: Any]] = []
         let same = { (d: DiscoveredHost, host: StoredHost) in
@@ -59,8 +69,9 @@ public enum ConsoleJSON {
         }
         for host in saved {
             let advert = discovered.first { same($0, host) }
-            let base = row(host, advert: advert, online: online.contains(host.id),
+            var base = row(host, advert: advert, online: online.contains(host.id),
                            presets: presets, hostActions: hostActions, running: running)
+            base["screens"] = screensJSON(screens, host)
             out.append(base)
             // A pinned card shares the primary tile's live state; its key rides the preset id
             // behind a NUL, which no fingerprint or `addr:port` can hold.

@@ -1,6 +1,7 @@
-//! One host card: a tile, two lines and a menu of at most five rows (design §2.2–2.3). Built
-//! from a [`CardModel`]; the page rebuilds cards only when the models change, so an open menu
-//! survives an unchanged probe sweep. Everything else about a host is on its page.
+//! One host card: a tile, two lines (a third when a connect mirrors a host monitor) and a menu
+//! of at most five rows (design §2.2–2.3). Built from a [`CardModel`]; the page rebuilds cards
+//! only when the models change, so an open menu survives an unchanged probe sweep. Everything
+//! else about a host is on its page.
 
 use super::model::{CardKind, CardModel, Preset, Status};
 use super::{Act, HostRef, HostsMsg};
@@ -11,7 +12,7 @@ use std::cell::RefCell;
 use std::collections::HashSet;
 
 /// The card for `m`, wrapped in the FlowBox child the page appends. `presets` feeds
-/// Connect with ▸.
+/// Connect with ▸; the screen line, when there is one, also ends the accessible label.
 pub fn build(
     m: &CardModel,
     presets: &[Preset],
@@ -35,6 +36,15 @@ pub fn build(
         .build();
     text.append(&name);
     text.append(&status_line(m));
+    if let Some(screen) = &m.screen {
+        let line = gtk::Label::builder()
+            .label(screen)
+            .xalign(0.0)
+            .ellipsize(gtk::pango::EllipsizeMode::End)
+            .css_classes(["caption", "dim-label"])
+            .build();
+        text.append(&line);
+    }
     row.append(&text);
     // The address is identity for a machine, not what a click does: it lives on the host page
     // and here, one hover away (design P4).
@@ -59,11 +69,11 @@ pub fn build(
 
     let child = gtk::FlowBoxChild::new();
     child.set_child(Some(&row));
-    child.update_property(&[gtk::accessible::Property::Label(&format!(
-        "{}, {}",
-        m.name,
-        line_text(m)
-    ))]);
+    let mut said = format!("{}, {}", m.name, line_text(m));
+    if let Some(screen) = &m.screen {
+        said = format!("{said}, {screen}");
+    }
+    child.update_property(&[gtk::accessible::Property::Label(&said)]);
     if m.status == Status::Connecting {
         child.set_sensitive(false);
     }

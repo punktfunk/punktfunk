@@ -538,7 +538,9 @@ fn run_screen(base: ScreenBase, mut run: ScreenRun) {
         tracing::warn!(screen = run.index, "{why} — the screen is left out");
         return;
     }
-    let mut vd = match crate::vdisplay::open(base.compositor) {
+    // A further screen is always one of its own: a session mirrors one monitor at most.
+    let own = crate::vdisplay::policy::DisplayTarget::Own;
+    let mut vd = match pf_vdisplay::open_for(base.compositor, own) {
         Ok(vd) => vd,
         Err(e) => {
             tracing::warn!(screen = run.index, error = %format!("{e:#}"), "screen display backend did not open");
@@ -953,6 +955,7 @@ mod tests {
                 sdr10_native: false,
                 slices: 1,
                 reframe_to: None,
+                mirrored: false,
                 rgb_full_range: true,
                 studio_asked: crate::session_plan::StudioAsk::default(),
             },

@@ -56,6 +56,11 @@ pub fn paired_may_access(method: &str, path: &str) -> bool {
     if method == "POST" && path_matches("/api/v1/library/install/{}/pause", path) {
         return true;
     }
+    // A device picks its own screen. The handler refuses another device's row and any field
+    // but `screen`; reading and clearing a row stay the console's.
+    if method == "PUT" && path_matches("/api/v1/display/clients/{}", path) {
+        return true;
+    }
     // A client's picker: the list, a picture, getting a seat ready, and the challenge of a key
     // unlock for this device, which the handler answers only for a key it enrolled. Editing
     // stays the console's.
@@ -78,6 +83,8 @@ pub fn paired_may_access(method: &str, path: &str) -> bool {
                 | "/api/v1/compositors"
                 | "/api/v1/status"
                 | "/api/v1/actions"
+                // The screen picker: this device's pick, and which device streams each head.
+                | "/api/v1/display/targets"
                 // Rosters are not on this lane: they name every other paired device. Library
                 // GET is; POST/PUT/DELETE stay token-only via this exact-path match.
                 | "/api/v1/library"

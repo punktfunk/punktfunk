@@ -20,6 +20,7 @@ pub(crate) use card::os_icon_name;
 use gtk::{gio, glib};
 pub use model::Phase;
 use model::{Band, CardModel, Live, Preset, Status};
+use pf_client_core::display_targets::{self, DisplayTarget};
 use pf_client_core::host_order;
 use pf_client_core::orchestrate::HostTarget;
 use pf_l10n::{client, desktop};
@@ -99,6 +100,13 @@ pub enum Act {
         action_id: String,
         label: String,
         danger: bool,
+    },
+    /// Write the screen this device streams from the host (`design/screen-pick.md` D3);
+    /// `label` is the row's name, for a refusal's toast.
+    Screen {
+        req: ConnectRequest,
+        screen: DisplayTarget,
+        label: String,
     },
     Wake {
         mac: Vec<String>,
@@ -565,8 +573,9 @@ impl HostsPage {
         self.store.reload(Changed::Hosts);
     }
 
-    /// Keep each paired, reachable host's own actions and what it has up warm, so a menu or a
-    /// status is built from a settled answer. Both caches are TTL-gated and fetch on a worker.
+    /// Keep each paired, reachable host's own actions, screens and what it has up warm, so a
+    /// menu, a page or a status is built from a settled answer. Every cache is TTL-gated and
+    /// fetches on a worker.
     fn refresh_reachable(&self) {
         for k in self.store.hosts().hosts.iter() {
             if !k.paired || !self.probed.get(&k.card_key()).copied().unwrap_or(false) {
@@ -574,6 +583,7 @@ impl HostsPage {
             }
             let mgmt = self.mgmt_port(&k.fp_hex, &k.addr, k.port);
             pf_client_core::host_actions::refresh(&k.addr, mgmt, k.port, &k.fp_hex);
+            display_targets::refresh(&k.addr, mgmt, k.port, &k.fp_hex);
             pf_client_core::library::refresh_running(&k.addr, mgmt, k.port, &k.fp_hex);
         }
     }
@@ -597,10 +607,12 @@ impl HostsPage {
         let settings = self.store.settings().clone();
         let presets = self.presets();
         let playing = |fp: &str| pf_client_core::library::now_playing(fp);
+        let screen = |fp: &str| model::screen_line(display_targets::cached(fp).as_ref());
         let live = Live {
             probed: &self.probed,
             sessions: &self.sessions,
             playing: &playing,
+            screen: &screen,
         };
         let bands = model::saved_bands(&hosts, &presets, &settings, &live);
         let discovered = model::discovered_cards(self.adverts.values(), &hosts, &self.sessions);
@@ -691,6 +703,11 @@ impl HostsPage {
             } else {
                 pf_client_core::host_actions::cached(&k.fp_hex)
             },
+            screens: if k.paired && !k.fp_hex.is_empty() {
+                display_targets::cached(&k.fp_hex)
+            } else {
+                None
+            },
             is_default: k.id.is_some() && settings.default_host == k.id,
             start_in: pf_client_core::start::StartIn::parse(&settings.start_in),
         }
@@ -727,6 +744,7 @@ impl HostsPage {
                     danger,
                 });
             }
+            Act::Screen { req, screen, label } => self.set_screen(req, screen, label),
             Act::Wake { mac, addr } => crate::wol::wake(&mac, addr.parse().ok()),
             Act::CopyLink { host, preset } => {
                 if let Some((url, _)) = self.link(&host, preset.as_deref()) {
@@ -756,6 +774,31 @@ impl HostsPage {
             }
             Act::Toast(msg) => out(HostsOutput::Toast(msg)),
         }
+    }
+
+    /// Write this device's screen on a worker, then redraw from the rows `set_target` read
+    /// back: the check moves when the host says so. Only a refusal says anything.
+    fn set_screen(&self, req: ConnectRequest, screen: DisplayTarget, label: String) {
+        let mgmt = self
+            .mgmt_port_for(&req)
+            .unwrap_or(pf_client_core::library::DEFAULT_MGMT_PORT);
+        let (identity, sender) = (self.identity.clone(), self.sender.clone());
+        std::thread::Builder::new()
+            .name("punktfunk-screen".into())
+            .spawn(move || {
+                let (addr, port) = (&req.host.addr, req.host.port);
+                let fp = req.host.fp_hex.as_deref().unwrap_or_default();
+                match display_targets::set_target(addr, mgmt, port, &identity, fp, &screen) {
+                    Ok(()) => {}
+                    Err(e) => {
+                        tracing::warn!(?screen, error = %e, "screen pick refused");
+                        let said = client::hostcard_action_failed(&label, e);
+                        sender.emit(HostsMsg::Act(Act::Toast(said)));
+                    }
+                }
+                sender.emit(HostsMsg::Refresh);
+            })
+            .ok();
     }
 
     /// The host's self-emitted `punktfunk://` link and a launcher label for it. It carries the

@@ -446,6 +446,7 @@ impl StreamState {
             usize::from(self.facts.shard_payload),
             self.plan.reframe_to,
             self.display.vd_params.join_live,
+            self.plan.mirrored,
         );
         self.bit_depth = bit_depth;
         let route = self.display.vd_params.route.clone();
@@ -485,7 +486,8 @@ impl StreamState {
                 Ok(Built::pipeline(pipe, None))
             }
             (build, Some(DisplayChange::Switch(to))) => {
-                let mut vd = crate::vdisplay::open(to)?;
+                let client = prep.params.as_ref().unwrap_or(&self.display.vd_params);
+                let mut vd = crate::vdisplay::open_for(to, client.client_fp)?;
                 let params = crate::vdisplay::SessionParams {
                     launch: prep.launch.take(),
                     ..prep
@@ -897,7 +899,7 @@ impl StreamState {
             ) {
                 crate::vdisplay::settle_desktop_portal(c);
             }
-            match crate::vdisplay::open(c) {
+            match crate::vdisplay::open_for(c, self.display.vd_params.client_fp) {
                 Ok(v) => {
                     tracing::info!(
                         from = self.display.compositor.id(),

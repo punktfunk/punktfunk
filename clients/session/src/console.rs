@@ -449,6 +449,7 @@ fn seed_row(k: Option<&trust::KnownHost>, addr: &str, port: u16) -> HostRow {
         running: String::new(),
         game_presets: Default::default(),
         profile: k.and_then(|h| h.profile.clone()),
+        screens: None,
     }
 }
 
@@ -695,6 +696,13 @@ impl ServiceState {
                 action_id,
                 label,
             } => self.host_action(addr, mgmt, fp_hex, host_name, action_id, label),
+            ConsoleCmd::SetScreen {
+                addr,
+                mgmt,
+                fp_hex,
+                screen,
+                label,
+            } => self.set_screen(addr, mgmt, fp_hex, screen, label),
             ConsoleCmd::EndGame {
                 addr,
                 mgmt,
@@ -1034,6 +1042,33 @@ impl ServiceState {
                     )
                     .unwrap_or_else(|e| e),
                 );
+            })
+            .ok();
+    }
+
+    /// Write this device's screen on a worker, as [`Self::host_action`] does. Only a refusal
+    /// says anything: the pick itself shows on the card once the rows come back.
+    fn set_screen(
+        &self,
+        addr: String,
+        mgmt: u16,
+        fp_hex: String,
+        screen: pf_client_core::display_targets::DisplayTarget,
+        label: String,
+    ) {
+        let identity = self.identity.clone();
+        let console = self.console.clone();
+        std::thread::Builder::new()
+            .name("punktfunk-screen".into())
+            .spawn(move || {
+                let port = stream_port(&fp_hex);
+                let set = pf_client_core::display_targets::set_target(
+                    &addr, mgmt, port, &identity, &fp_hex, &screen,
+                );
+                if let Err(e) = set {
+                    tracing::warn!(?screen, error = %e, "screen pick refused");
+                    console.set_notice(pf_l10n::client::hostcard_action_failed(&label, e));
+                }
             })
             .ok();
     }
@@ -1403,14 +1438,15 @@ impl ServiceState {
             .set_notice(pf_l10n::client::error_save_failed(format!("{e:#}")));
     }
 
-    /// Keep every paired, reachable host's advertised actions and running title fresh (the
-    /// shared TTL'd caches in `pf_client_core`). Idempotent and cheap — each only reaches the
-    /// network when its own entry has lapsed, and the running one lapses far sooner: what a
-    /// host has UP is what changes between two visits to the carousel.
+    /// Keep every paired, reachable host's advertised actions, screens and running title fresh
+    /// (the shared TTL'd caches in `pf_client_core`). Idempotent and cheap — each only reaches
+    /// the network when its own entry has lapsed, and the running and screen ones lapse far
+    /// sooner: what a host has UP is what changes between two visits to the carousel.
     fn refresh_host_state(&self, rows: &[HostRow]) {
         for r in rows {
             if r.paired && r.online && r.pin.is_none() {
                 pf_client_core::host_actions::refresh(&r.addr, r.mgmt_port, r.port, &r.fp_hex);
+                pf_client_core::display_targets::refresh(&r.addr, r.mgmt_port, r.port, &r.fp_hex);
                 library::refresh_running(&r.addr, r.mgmt_port, r.port, &r.fp_hex);
             }
         }
@@ -1527,6 +1563,8 @@ fn build_rows(
                 // compares, and a deleted preset falls back at resolve, not here.
                 game_presets: h.game_presets.clone(),
                 profile: h.profile.clone(),
+                // What this host last said this device may stream, from the same kind of cache.
+                screens: pf_client_core::display_targets::cached(&h.fp_hex),
             };
             // A pinned card shares the primary tile's live state; its own key lets
             // cursor-follow and the wake path address the card itself.
@@ -1579,6 +1617,7 @@ fn build_rows(
                 running: String::new(),
                 game_presets: Default::default(),
                 profile: None,
+                screens: None,
             }
         })
         .collect();

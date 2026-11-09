@@ -399,6 +399,7 @@ pub(crate) fn plugin_may_access(method: &Method, path: &str) -> bool {
         (&Method::PUT, "/api/v1/display/settings"),
         (&Method::GET, "/api/v1/display/state"),
         (&Method::GET, "/api/v1/display/monitors"),
+        (&Method::GET, "/api/v1/display/targets"),
         (&Method::PUT, "/api/v1/display/layout"),
         (&Method::POST, "/api/v1/display/release"),
         (&Method::GET, "/api/v1/display/presets"),

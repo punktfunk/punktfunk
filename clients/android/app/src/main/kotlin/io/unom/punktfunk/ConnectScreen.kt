@@ -193,6 +193,12 @@ fun ConnectScreen(
     // power rows then.
     var hostActions by remember { mutableStateOf<Map<String, List<HostActions.Action>>>(emptyMap()) }
     var hostActionsAt by remember { mutableStateOf<Map<String, Long>>(emptyMap()) }
+    // The screens each paired host offers this device and its pick (`design/screen-pick.md`),
+    // asked every lap: another device starting a stream moves `in_use_by`.
+    var screens by remember { mutableStateOf<Map<String, DisplayTargets.Targets>>(emptyMap()) }
+    fun recordScreens(fp: String, found: DisplayTargets.Targets?) {
+        screens = if (found == null) screens - fp else screens + (fp to found)
+    }
     LaunchedEffect(ctl.savedHosts, ctl.identity) {
         val id = ctl.identity ?: return@LaunchedEffect
         while (true) {
@@ -201,6 +207,12 @@ fun ConnectScreen(
             for (kh in ctl.savedHosts) {
                 if (!kh.paired || kh.fpHex.isEmpty()) continue
                 if (!kh.isOnline(ctl.reachable)) continue
+                recordScreens(
+                    kh.fpHex,
+                    withContext(Dispatchers.IO) {
+                        DisplayTargets.fetch(id, kh.address, kh.effectiveMgmtPort, kh.fpHex, kh.port)
+                    },
+                )
                 if (now - (hostActionsAt[kh.fpHex] ?: 0L) < HOST_ACTIONS_TTL_MS) continue
                 // Stamp BEFORE the request, so a slow host cannot make every lap ask again.
                 hostActionsAt = hostActionsAt + (kh.fpHex to now)
@@ -306,6 +318,22 @@ fun ConnectScreen(
         }
     }
 
+    // A Screen row: write this device's row on the host, then show what the host answers.
+    fun pickScreen(kh: KnownHost, t: DisplayTargets.Target) {
+        val id = ctl.requireIdentity() ?: return
+        val res = context.resources
+        ctl.status = null
+        scope.launch {
+            val (refused, found) = withContext(Dispatchers.IO) {
+                DisplayTargets.setScreen(
+                    id, kh.address, kh.effectiveMgmtPort, kh.fpHex, t.target(), t.name(res), kh.port,
+                ) to DisplayTargets.fetch(id, kh.address, kh.effectiveMgmtPort, kh.fpHex, kh.port)
+            }
+            recordScreens(kh.fpHex, found)
+            refused?.let { ctl.status = it.words(res) }
+        }
+    }
+
     // Switch profile: ask the host, show the picker. A pick saves; it does not connect.
     fun switchProfile(kh: KnownHost) {
         val id = ctl.requireIdentity() ?: return
@@ -373,6 +401,8 @@ fun ConnectScreen(
         onSwitchProfile = { kh -> switchProfile(kh) },
         hostActions = hostActions,
         onHostAction = { kh, a -> hostAction(kh, a) },
+        screens = screens,
+        onPickScreen = { kh, t -> pickScreen(kh, t) },
         onCopyLink = { kh, pin -> copyLink(kh, pin) },
         onTogglePin = { kh, p -> togglePin(kh, p) },
         onBrowseLibrary = { kh, pin -> onOpenLibrary(kh, pin?.id) },

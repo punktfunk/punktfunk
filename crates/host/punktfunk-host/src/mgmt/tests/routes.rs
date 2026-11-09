@@ -126,6 +126,8 @@ fn every_route_is_classified_for_the_plugin_and_cert_lanes() {
         ("PUT", "/api/v1/display/settings", true, false),
         ("GET", "/api/v1/display/state", true, false),
         ("GET", "/api/v1/display/monitors", true, false),
+        // The screen picker: a device reads its own pick and who streams each head.
+        ("GET", "/api/v1/display/targets", true, true),
         ("PUT", "/api/v1/display/layout", true, false),
         ("POST", "/api/v1/display/release", true, false),
         ("GET", "/api/v1/display/presets", true, false),
@@ -134,10 +136,10 @@ fn every_route_is_classified_for_the_plugin_and_cert_lanes() {
         ("DELETE", "/api/v1/display/presets/{id}", true, false),
         // Per-device display settings. Same lane as the host-wide policy above and
         // deliberately no stricter: this route changes ONE device's behaviour, while
-        // `PUT /display/settings` changes every device's. It carries no device identity
-        // either — the fingerprint is the key, and the body is display behaviour.
+        // `PUT /display/settings` changes every device's. A paired device may PUT its own
+        // row's `screen` alone; the handler refuses the rest (`a_device_sets_only_its_own_screen`).
         ("GET", "/api/v1/display/clients/{fingerprint}", true, false),
-        ("PUT", "/api/v1/display/clients/{fingerprint}", true, false),
+        ("PUT", "/api/v1/display/clients/{fingerprint}", true, true),
         (
             "DELETE",
             "/api/v1/display/clients/{fingerprint}",
@@ -591,6 +593,7 @@ fn every_route_has_a_side_on_the_door() {
         ("PUT", "/api/v1/display/settings", false),
         ("GET", "/api/v1/display/state", false),
         ("GET", "/api/v1/display/monitors", false),
+        ("GET", "/api/v1/display/targets", false),
         ("POST", "/api/v1/display/release", false),
         ("PUT", "/api/v1/display/layout", false),
         ("GET", "/api/v1/display/presets", false),

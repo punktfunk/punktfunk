@@ -44,6 +44,7 @@ final class ConsoleModel: ObservableObject, ConsoleViewDelegate {
     let discovery: HostDiscovery
     let presets: PresetStore
     let power: HostPowerStore
+    let screens = HostScreenStore.shared
     let nowPlaying: NowPlayingStore
     let waker: HostWaker
     let actions: Actions
@@ -130,7 +131,8 @@ final class ConsoleModel: ObservableObject, ConsoleViewDelegate {
         discovery.start()
         pads.start()
         for object in [store.objectWillChange, presets.objectWillChange, power.objectWillChange,
-                       nowPlaying.objectWillChange, discovery.objectWillChange] {
+                       screens.objectWillChange, nowPlaying.objectWillChange,
+                       discovery.objectWillChange] {
             watching.append(
                 object.receive(on: RunLoop.main).sink { [weak self] _ in
                     self?.pushHosts()
@@ -317,18 +319,20 @@ final class ConsoleModel: ObservableObject, ConsoleViewDelegate {
     func pushHosts() {
         var running: [String: String] = [:]
         var actions: [String: [HostAction]] = [:]
+        var offered: [String: DisplayTargets] = [:]
         for host in store.hosts {
             guard let fp = host.pinnedSHA256?.map({ String(format: "%02x", $0) }).joined()
             else { continue }
             if let title = nowPlaying.title(for: host) { running[fp] = title }
             let list = power.actions(for: host)
             if !list.isEmpty { actions[fp] = list }
+            offered[fp] = screens.targets(for: host)
         }
         bridge.push(
             .hosts,
             ConsoleJSON.hostRows(
                 saved: store.hosts, discovered: discovery.hosts, online: store.probedOnline,
-                presets: presets.presets, actions: actions, running: running))
+                presets: presets.presets, actions: actions, running: running, screens: offered))
     }
 
     private func pushPresets() { bridge.push(.presets, ConsoleJSON.presets(presets.presets)) }

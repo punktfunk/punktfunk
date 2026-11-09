@@ -421,6 +421,8 @@ pub struct StatsSnapshot {
     /// Decode path or decoder name. Empty until the first frame decodes.
     pub decoder: String,
     pub preset: Option<String>,
+    /// The monitor this session mirrors, by connector. `None` on a screen of its own.
+    pub screen: Option<String>,
     /// AUs received, and their payload bytes (goodput: no FEC, no headers).
     pub received: u32,
     pub bytes: u64,
@@ -644,6 +646,14 @@ pub fn player_label(slots: u16) -> Option<String> {
         0 => None,
         n => Some(m::overlay_players(n as u64, players.join(" · "))),
     }
+}
+
+/// `Screen HDMI-A-1` on a session that mirrors a monitor; nothing on a screen of its own.
+#[cfg(any(test, feature = "l10n"))]
+fn screen_field(s: &StatsSnapshot) -> Option<String> {
+    s.screen
+        .as_ref()
+        .map(|c| format!("{} {c}", m::overlay_screen()))
 }
 
 /// The codec as every overlay and client names it. Empty for a wire id this build does not
@@ -1393,6 +1403,7 @@ fn advanced_lines(s: &StatsSnapshot, tier: StatsVerbosity) -> Vec<HudLine> {
         media_fields(s, &mut l1);
     }
     l1.extend(s.preset.clone());
+    l1.extend(screen_field(s));
     out.push(line(Role::Primary, l1));
     if let Some((p50, p95, ep)) = head {
         let mut t = format!(
@@ -1498,6 +1509,7 @@ fn standard_lines(s: &StatsSnapshot, tier: StatsVerbosity) -> Vec<HudLine> {
     let mut l1 = vec![mode(s)];
     media_fields(s, &mut l1);
     l1.extend(s.preset.clone());
+    l1.extend(screen_field(s));
     out.push(line(Role::Primary, l1));
 
     let mut rates = vec![m::overlay_received(fps(s.received_fps()))];
@@ -2358,9 +2370,35 @@ mod tests {
         s.extras.push(Extra::detail("present: mailbox"));
         let json = serde_json::to_string(&s).unwrap();
         assert_eq!(serde_json::from_str::<StatsSnapshot>(&json).unwrap(), s);
+        s.screen = Some("HDMI-A-1".into());
+        let json = serde_json::to_string(&s).unwrap();
+        assert_eq!(serde_json::from_str::<StatsSnapshot>(&json).unwrap(), s);
         // A reader older than a field still parses a newer writer's line.
         let partial: StatsSnapshot = serde_json::from_str(r#"{"received":5,"future":1}"#).unwrap();
-        assert_eq!(partial.received, 5);
+        assert_eq!((partial.received, partial.screen), (5, None));
+    }
+
+    /// A mirrored session names its monitor on the first line of every full tier; a session on
+    /// its own screen, and a compact overlay, say nothing of it.
+    #[test]
+    fn a_mirrored_session_names_its_screen() {
+        let mut s = desktop();
+        for advanced in [false, true] {
+            for tier in [StatsVerbosity::Normal, StatsVerbosity::Detailed] {
+                assert!(!all(&s, tier, advanced).contains("Screen"), "{tier:?}");
+            }
+        }
+        s.screen = Some("HDMI-A-1".into());
+        for advanced in [false, true] {
+            for tier in [StatsVerbosity::Normal, StatsVerbosity::Detailed] {
+                let head = &format(&s, tier, advanced)[0];
+                assert!(
+                    head.fields.contains(&"Screen HDMI-A-1".to_string()),
+                    "{tier:?}"
+                );
+            }
+            assert!(!all(&s, StatsVerbosity::Compact, advanced).contains("Screen"));
+        }
     }
 
     /// Slot 0 is Player 1, and the line leads the overlay so a co-op guest reads it

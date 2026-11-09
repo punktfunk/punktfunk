@@ -1052,7 +1052,7 @@ fn no_games(slot: &Slot<'_>) -> Option<String> {
 }
 
 /// A card's one status line and its ink: what the host is doing, whether OK will reach
-/// it, and the preset a pinned or bound card connects with.
+/// it, the preset a pinned or bound card connects with, and the screen it streams.
 fn status(ui: &Frame, h: &HostRow) -> (String, Color4f) {
     if let Some(p) = &h.pin {
         return (p.name.clone(), accent_color(ui, p.accent.as_deref()));
@@ -1073,11 +1073,18 @@ fn status(ui: &Frame, h: &HostRow) -> (String, Color4f) {
     } else {
         (pf_l10n::client::hostcard_status_offline(), ui.fg(0.7))
     };
-    let base = base.to_string();
-    match &h.bound_preset {
-        Some(b) => (format!("{base} \u{b7} {}", b.name), ink),
-        None => (base, ink),
-    }
+    // Its own screen is the default and says nothing; a monitor is worth a word.
+    let monitor = h.screens.as_ref().filter(|s| {
+        matches!(
+            s.current(),
+            pf_client_core::display_targets::DisplayTarget::Monitor(_)
+        )
+    });
+    let parts: Vec<String> = std::iter::once(base.to_string())
+        .chain(h.bound_preset.as_ref().map(|b| b.name.clone()))
+        .chain(monitor.map(|s| s.summary()))
+        .collect();
+    (parts.join(" \u{b7} "), ink)
 }
 
 /// `#RRGGBB` accent, or the card's ink. A malformed value falls back.
@@ -1324,6 +1331,32 @@ mod tests {
 
     fn ctx_settings() -> pf_client_core::trust::Settings {
         pf_client_core::trust::Settings::default()
+    }
+
+    /// The card names a monitor this device streams; its own screen is the default and
+    /// adds nothing, as a host without the route adds nothing.
+    #[test]
+    fn a_card_says_which_screen_it_streams() {
+        use pf_client_core::display_targets::{DisplayTarget, Target, Targets};
+        let ui = Frame::default();
+        let plain = host("a", true, true, false);
+        assert_eq!(status(&ui, &plain).0, "Online");
+        let tv = Target {
+            id: "HDMI-A-1".into(),
+            label: "LG TV".into(),
+            ..Target::default()
+        };
+        let mut screened = HostRow {
+            screens: Some(Targets {
+                yours: Some(DisplayTarget::Monitor("HDMI-A-1".into())),
+                targets: vec![tv],
+                ..Targets::default()
+            }),
+            ..plain
+        };
+        assert_eq!(status(&ui, &screened).0, "Online \u{b7} Streams LG TV");
+        screened.screens.as_mut().unwrap().yours = None;
+        assert_eq!(status(&ui, &screened).0, "Online");
     }
 
     #[test]

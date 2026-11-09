@@ -784,6 +784,7 @@ fn stream_config(
         encrypt_video,
         studio_asked,
         encoder,
+        mirrored: false,
     })
 }
 

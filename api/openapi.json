@@ -777,7 +777,7 @@
           "display"
         ],
         "summary": "Save one device's overlay",
-        "description": "The WHOLE overlay: a field absent from the body stops being pinned and the\ndevice follows the host again. An overlay that pins nothing is dropped, which\nis the same as `DELETE`.",
+        "description": "The operator writes the WHOLE overlay: a field absent from the body stops being pinned and\nthe device follows the host again. An overlay that pins nothing is dropped, which is the\nsame as `DELETE`. A paired device writes only `screen`, and only on its own row; its other\nfields stay, and it is answered 204. `set_by` records which of the two wrote the screen.",
         "operationId": "setDisplayClient",
         "parameters": [
           {
@@ -811,6 +811,9 @@
               }
             }
           },
+          "204": {
+            "description": "A device's screen stored"
+          },
           "400": {
             "description": "Empty fingerprint",
             "content": {
@@ -823,6 +826,26 @@
           },
           "401": {
             "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "A device wrote another row, or more than its screen",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "The body is not an overlay",
             "content": {
               "application/json": {
                 "schema": {
@@ -1364,6 +1387,38 @@
           },
           "401": {
             "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/display/targets": {
+      "get": {
+        "tags": [
+          "display"
+        ],
+        "summary": "Screen picker",
+        "description": "The device's own screen, then each of the host's monitors with the device streaming it\nnow. A paired device also reads what it is set to. A host with no mirror backend lists its\nown screen alone.",
+        "operationId": "getDisplayTargets",
+        "responses": {
+          "200": {
+            "description": "What a device may stream",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DisplayTargets"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid credentials",
             "content": {
               "application/json": {
                 "schema": {
@@ -11004,7 +11059,8 @@
               "string",
               "null"
             ],
-            "description": "Mirror this connector for this device only. Absent follows the host,\nwhich is also the only way back to a virtual screen — a device cannot\nopt OUT of a host-wide pin. Nobody has asked to; the reverse direction\nis what the field exists for."
+            "description": "Deprecated: `screen`'s connector, kept one release for older consoles and SDKs.",
+            "deprecated": true
           },
           "game_session": {
             "oneOf": [
@@ -11060,6 +11116,28 @@
             ],
             "format": "double",
             "description": "Scale this device's screen is created at, when the desktop has not already\nremembered one for it (`display-management.md` §5.4). Mutter mints a fresh EDID\nserial per session, so its own `monitors.xml` never rematches — without this the\noperator re-sets the scale on every connect."
+          },
+          "screen": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/DisplayTarget",
+                "description": "What this device streams. `own` opts it out of a host-wide monitor; absent follows\nthe host. The device may write this field on its own row."
+              }
+            ]
+          },
+          "set_by": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/SetBy",
+                "description": "Who wrote `screen`. Absent with it."
+              }
+            ]
           },
           "topology": {
             "oneOf": [
@@ -11609,7 +11687,8 @@
               "string",
               "null"
             ],
-            "description": "Stream this physical connector (`DP-1`, `HDMI-A-2`) instead of a\nvirtual display; `None` is the virtual path. Host-wide, orthogonal\nto `preset`. `PUNKTFUNK_CAPTURE_MONITOR` overrides it so `host.env`\ncan pin without a console write undoing it."
+            "description": "Deprecated: `screen`'s connector, kept one release for older consoles and SDKs. Read\nwhen `screen` is absent; written from `screen`.",
+            "deprecated": true
           },
           "clients": {
             "type": "object",
@@ -11668,6 +11747,17 @@
           },
           "preset": {
             "$ref": "#/components/schemas/Preset"
+          },
+          "screen": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/DisplayTarget",
+                "description": "What a device with no `screen` of its own streams; absent is its own screen.\nHost-wide, orthogonal to `preset`. `PUNKTFUNK_CAPTURE_MONITOR` overrides it so\n`host.env` can pin without a console write undoing it."
+              }
+            ]
           },
           "topology": {
             "$ref": "#/components/schemas/Topology"
@@ -11760,6 +11850,67 @@
             "items": {
               "$ref": "#/components/schemas/ApiDisplayInfo"
             }
+          }
+        }
+      },
+      "DisplayTarget": {
+        "oneOf": [
+          {
+            "type": "string",
+            "description": "A virtual display the host creates for this device.",
+            "enum": [
+              "own"
+            ]
+          },
+          {
+            "type": "object",
+            "description": "A physical head, by connector (`DP-1`, `HDMI-A-2`).",
+            "required": [
+              "monitor"
+            ],
+            "properties": {
+              "monitor": {
+                "type": "string",
+                "description": "A physical head, by connector (`DP-1`, `HDMI-A-2`)."
+              }
+            }
+          }
+        ],
+        "description": "What a device streams: a screen of its own, or one of the host's monitors by connector.\nJSON `\"own\"` or `{\"monitor\": \"HDMI-A-1\"}`."
+      },
+      "DisplayTargets": {
+        "type": "object",
+        "description": "What a device may stream (`GET /display/targets`).",
+        "required": [
+          "locked",
+          "host_default",
+          "targets"
+        ],
+        "properties": {
+          "host_default": {
+            "$ref": "#/components/schemas/DisplayTarget",
+            "description": "What a device with no screen of its own streams."
+          },
+          "locked": {
+            "type": "boolean",
+            "description": "`PUNKTFUNK_CAPTURE_MONITOR` fixes the screen for every device."
+          },
+          "targets": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ScreenRow"
+            }
+          },
+          "yours": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/DisplayTarget",
+                "description": "What the calling device is set to, before a taken or missing monitor falls back to its\nown screen. Null on the operator and plugin lanes."
+              }
+            ]
           }
         }
       },
@@ -16943,6 +17094,57 @@
           }
         }
       },
+      "ScreenRow": {
+        "type": "object",
+        "description": "One row of the screen picker. The first is always `own`; the rest are the host's heads.",
+        "required": [
+          "id",
+          "label"
+        ],
+        "properties": {
+          "connector": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "enabled": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "Driven now. A head another device's exclusive screen switched off is `false`."
+          },
+          "id": {
+            "type": "string",
+            "description": "`own`, else the connector."
+          },
+          "in_use_by": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The pairing label of the other device streaming this monitor, else null. Absent on `own`."
+          },
+          "label": {
+            "type": "string",
+            "description": "The monitor's name (`make model`, else the connector). `Own screen` on the first row,\nwhich clients word themselves."
+          },
+          "mode": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`WIDTHxHEIGHT@HZ` of the current mode."
+          },
+          "primary": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          }
+        }
+      },
       "SeatCheck": {
         "type": "object",
         "description": "One thing the seat checks found.",
@@ -17695,6 +17897,14 @@
             "description": "Host wall clock at stream start, unix seconds."
           }
         }
+      },
+      "SetBy": {
+        "type": "string",
+        "description": "Who last wrote a device's `screen`.",
+        "enum": [
+          "device",
+          "console"
+        ]
       },
       "SetGpuPreference": {
         "type": "object",

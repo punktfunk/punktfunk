@@ -204,10 +204,8 @@ mod update;
 mod version;
 // The browser plane (design/web-client-implementation-plan.md Phase 1). Runtime opt-in.
 mod webtransport;
-// Shim: virtual-display lives in `pf-vdisplay`; keep `crate::vdisplay::*` for this crate's callers.
-mod vdisplay {
-    pub(crate) use pf_vdisplay::*;
-}
+// `pf-vdisplay` as `crate::vdisplay`, plus the screen a device gets (`resolve_screen`).
+mod vdisplay;
 // Shim: GPU import lives in `pf-zerocopy`; keep `crate::zerocopy::*` for `session_plan`.
 #[cfg(target_os = "linux")]
 mod zerocopy {
@@ -298,22 +296,29 @@ fn main() {
     }
 }
 
-/// Aim absolute input at the pinned capture monitor (env, else stored policy).
+/// Aim absolute input at the host-wide capture monitor (env, else stored policy).
 ///
 /// Called at startup and whenever the console writes the pin so a picker change
-/// re-aims without a host restart. Lives here, not in the mirror backend:
-/// `pf-vdisplay` must not depend on `pf-inject`, and the injector is host-lifetime
-/// (shared by every session) — design/per-monitor-portal-capture.md.
+/// re-aims without a host restart.
 #[cfg(target_os = "linux")]
 pub(crate) fn refresh_capture_monitor_anchor(context: &str) {
-    let Some(want) = pf_vdisplay::capture_monitor() else {
-        // Drop a stale anchor so a later virtual-display session does not inherit it.
+    aim_capture_anchor(pf_vdisplay::capture_monitor(), context);
+}
+
+/// Anchor absolute input at the monitor `want`, or at no monitor: one anchor per process,
+/// so the newest session's screen holds it (`vdisplay::open_for` aims it at each open).
+///
+/// Lives here, not in the mirror backend: `pf-vdisplay` must not depend on `pf-inject`, and
+/// the injector is host-lifetime (shared by every session) — design/per-monitor-portal-capture.md.
+#[cfg(target_os = "linux")]
+pub(crate) fn aim_capture_anchor(want: Option<String>, context: &str) {
+    let Some(want) = want else {
+        // Drop a stale anchor so a session on its own screen does not inherit it.
         // Log a clear only when an anchor was set; unpinned hosts must stay quiet at startup.
         if pf_inject::absolute_anchor().is_some() {
             tracing::info!(
                 context,
-                "capture monitor: cleared — sessions create a virtual display again and absolute \
-                 input is no longer anchored"
+                "capture monitor: cleared — absolute input is no longer anchored to a monitor"
             );
         }
         pf_inject::set_absolute_anchor(None);
@@ -333,18 +338,17 @@ pub(crate) fn refresh_capture_monitor_anchor(context: &str) {
                     description = %m.description,
                     mode = %m.mode_label(),
                     at = %format!("+{}+{}", m.x, m.y),
-                    "capture monitor: sessions will mirror this monitor (no virtual display) and \
-                     absolute input is anchored to it"
+                    "capture monitor: absolute input is anchored to this mirrored monitor"
                 );
             }
-            // Do not guess an anchor; `create` fails with the same unresolved pin.
+            // Do not guess an anchor; a session set to it gets its own screen instead.
             Err(e) => {
                 pf_inject::set_absolute_anchor(None);
                 tracing::warn!(
                     context,
                     error = %e,
-                    "capture monitor: the pinned monitor is not on this host — sessions will fail \
-                     to start until it is corrected or cleared"
+                    "capture monitor: the pinned monitor is not on this host — sessions get their \
+                     own screen until it is corrected or cleared"
                 );
             }
         },
