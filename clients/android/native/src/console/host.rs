@@ -108,6 +108,8 @@ pub(super) struct Shared {
     /// The shell's launch hold, as of the last frame. Written before the frame's events leave,
     /// so a `Launch` the shell raised is never read as unheld.
     holds_launch: AtomicBool,
+    /// The render thread runs. Cleared as it ends: nothing then tears a surface down.
+    alive: AtomicBool,
 }
 
 impl Shared {
@@ -120,6 +122,7 @@ impl Shared {
             surface_gen: Mutex::new(0),
             surface_cv: Condvar::new(),
             holds_launch: AtomicBool::new(false),
+            alive: AtomicBool::new(true),
         }
     }
 
@@ -160,8 +163,12 @@ impl Shared {
         q.pop_front()
     }
 
-    /// Ask for the surface to go and wait (bounded) until it has.
+    /// Ask for the surface to go and wait (bounded) until it has. A render thread that has
+    /// ended took its surface with it: nothing to wait for.
     pub(super) fn destroy_surface_blocking(&self) {
+        if !self.alive.load(Ordering::Acquire) {
+            return;
+        }
         let before = *self
             .surface_gen
             .lock()
@@ -175,8 +182,16 @@ impl Shared {
         // by then the EGL surface is gone with it anyway.
         let _ = self
             .surface_cv
-            .wait_timeout_while(g, Duration::from_secs(2), |g| *g == before)
+            .wait_timeout_while(g, Duration::from_secs(2), |g| {
+                *g == before && self.alive.load(Ordering::Acquire)
+            })
             .unwrap_or_else(std::sync::PoisonError::into_inner);
+    }
+
+    /// The render thread is ending: release a destroy that is waiting on it.
+    fn retire(&self) {
+        self.alive.store(false, Ordering::Release);
+        self.ack_surface_gone();
     }
 
     fn ack_surface_gone(&self) {
@@ -229,6 +244,7 @@ impl ConsoleHost {
                     log::error!("console: render thread ended: {msg}");
                     thread_shared.emit(HostEvent::Dead(msg));
                 }
+                thread_shared.retire();
             })?;
         Ok(ConsoleHost {
             shared,
