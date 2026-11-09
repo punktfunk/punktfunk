@@ -22,8 +22,9 @@ mod sink;
 pub(crate) mod surface_control;
 mod vsync;
 
+pub(crate) use crate::codec_format::codec_mime;
 use async_loop::run_async;
-pub(crate) use setup::{codec_label, codec_mime};
+pub(crate) use setup::codec_label;
 // Shared with the PyroWave lane, which exists only where the codec is built (see `crate::pyro`).
 #[cfg(target_pointer_width = "64")]
 pub(crate) use async_loop::start_hint;

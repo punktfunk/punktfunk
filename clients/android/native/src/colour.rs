@@ -1,7 +1,8 @@
 //! The colour rules `decode` hands the platform: which dataspace a stream or a decoder's report
-//! maps to. Plain values in and out; the NDK `DataSpace` is built in `decode/display.rs`.
+//! maps to, and the HDR static-info blob. Plain values in and out; the NDK `DataSpace` and
+//! `MediaFormat` are built in `decode/`.
 
-use punktfunk_core::quic::ColorInfo;
+use punktfunk_core::quic::{ColorInfo, HdrMeta};
 
 /// The `ADataSpace` tags a surface takes, named as the NDK's `DataSpace` names them. The `Itu`
 /// variants are studio range.
@@ -63,6 +64,38 @@ pub(crate) fn reported_space(transfer: Option<i32>, range: Option<i32>) -> Optio
 pub(crate) fn layer_space(color: &ColorInfo, sdk: u32) -> Option<Space> {
     let space = negotiated_space(color);
     (sdk >= 31 || matches!(space, Space::Srgb | Space::Bt2020Pq)).then_some(space)
+}
+
+/// Serialize [`HdrMeta`] into Android's `KEY_HDR_STATIC_INFO` (`hdr-static-info`) layout: a
+/// 25-byte CTA-861.3 / `HDRStaticInfo.Type1` blob — descriptor id 0, then primaries in **R, G, B**
+/// order, white point, max/min display luminance, MaxCLL, MaxFALL, all **little-endian** `u16`.
+/// Two conversions vs our wire form: HdrMeta stores primaries in ST.2086 **G, B, R** order
+/// (reorder to R, G, B), and `max_display_mastering_luminance` is in 0.0001-cd/m² units while
+/// Android wants **whole nits** (min stays 0.0001-nit). Chromaticities (1/50000) and
+/// MaxCLL/MaxFALL (nits) match 1:1.
+pub(crate) fn android_hdr_static_info(m: &HdrMeta) -> [u8; 25] {
+    let [g, b_, r] = m.display_primaries; // ST.2086 G, B, R
+    let max_nits = (m.max_display_mastering_luminance / 10_000).min(u16::MAX as u32) as u16;
+    let min_units = m.min_display_mastering_luminance.min(u16::MAX as u32) as u16;
+    let fields: [u16; 12] = [
+        r[0],
+        r[1],
+        g[0],
+        g[1],
+        b_[0],
+        b_[1], // R, G, B primaries
+        m.white_point[0],
+        m.white_point[1], // white point
+        max_nits,
+        min_units, // max (nits) / min (0.0001-nit) display luminance
+        m.max_cll,
+        m.max_fall, // MaxCLL / MaxFALL (nits)
+    ];
+    let mut out = [0u8; 25]; // out[0] = 0 (Type 1 descriptor id), already zero
+    for (i, v) in fields.iter().enumerate() {
+        out[1 + i * 2..3 + i * 2].copy_from_slice(&v.to_le_bytes());
+    }
+    out
 }
 
 #[cfg(test)]
