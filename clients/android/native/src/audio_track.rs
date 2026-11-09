@@ -6,7 +6,7 @@
 //! writer thread fills each chunk from the same jitter ring [`crate::audio`] drains, and blocks in
 //! `write` until the track takes it.
 
-use crate::audio_policy::heard_at;
+use crate::audio_policy::{grown, heard_at, XrunGrowth};
 use jni::errors::Result as JniResult;
 use jni::objects::{JObject, JValue};
 use jni::refs::Global;
@@ -32,8 +32,6 @@ const USAGE_GAME: i32 = 14;
 const CONTENT_TYPE_MOVIE: i32 = 3;
 /// Writes between `getTimestamp` reads, ~0.5 s. The play time in between is extrapolated.
 const TIMESTAMP_EVERY: u32 = 100;
-/// Writes between underrun checks, as AAudio's XRun check.
-const UNDERRUN_CHECK_EVERY: u32 = 128;
 
 /// Fills one chunk of interleaved f32 from the jitter ring.
 pub(crate) type Fill = Box<dyn FnMut(&mut [f32]) + Send>;
@@ -184,7 +182,8 @@ impl Writer {
             jni_sig!("()V"),
             &[],
         )?;
-        let (mut written, mut anchor, mut underruns, mut n) = (0i64, None, 0, 0u32);
+        let (mut written, mut anchor, mut n) = (0i64, None, 0u32);
+        let mut growth = XrunGrowth::default();
         while !self.stop.load(Ordering::Relaxed) {
             (self.fill)(&mut self.buf);
             arr.set_region(env, 0, &self.buf)?;
@@ -213,28 +212,31 @@ impl Writer {
                 let heard = heard_at(at, pos, written, self.rate_hz);
                 self.heard_at_ns.store(heard, Ordering::Relaxed);
             }
-            if n % UNDERRUN_CHECK_EVERY == 0 {
-                self.grow_on_underrun(env, track, &mut underruns)?;
+            if growth.due() {
+                self.grow_on_underrun(env, track, &mut growth)?;
             }
         }
         Ok(None)
     }
 
-    /// AAudio's anti-glitch step: on new underruns, grow the buffer by one chunk, up to capacity.
-    fn grow_on_underrun(&self, env: &mut Env, track: &JObject, seen: &mut i32) -> JniResult<()> {
-        let count = int(env, track, jni_str!("getUnderrunCount"))?;
-        if count <= *seen {
+    /// AAudio's anti-glitch step, by [`XrunGrowth`]: new underruns grow the buffer by one chunk,
+    /// up to capacity.
+    fn grow_on_underrun(
+        &self,
+        env: &mut Env,
+        track: &JObject,
+        growth: &mut XrunGrowth,
+    ) -> JniResult<()> {
+        if !growth.rose(int(env, track, jni_str!("getUnderrunCount"))?) {
             return Ok(());
         }
-        *seen = count;
         let size = int(env, track, jni_str!("getBufferSizeInFrames"))?;
         let cap = int(env, track, jni_str!("getBufferCapacityInFrames"))?;
-        let grown = (size + self.chunk_frames).min(cap);
         env.call_method(
             track,
             jni_str!("setBufferSizeInFrames"),
             jni_sig!("(I)I"),
-            &[JValue::Int(grown)],
+            &[JValue::Int(grown(size, self.chunk_frames, cap))],
         )?;
         Ok(())
     }

@@ -225,6 +225,40 @@ impl Supervisor {
     }
 }
 
+/// Data callbacks, or track writes, between xrun checks: the check is cheap, but not every
+/// quantum needs it.
+pub(crate) const XRUN_CHECK_EVERY: u32 = 128;
+
+/// When the device buffer grows: on every [`XRUN_CHECK_EVERY`]th call, if the device's running
+/// xrun count rose since the last grow. Two plain counters, so the realtime callback holds it.
+#[derive(Default)]
+pub(crate) struct XrunGrowth {
+    calls: u32,
+    seen: i32,
+}
+
+impl XrunGrowth {
+    /// Counts one call; `true` when this one reads the device's xrun count.
+    pub(crate) fn due(&mut self) -> bool {
+        self.calls = self.calls.wrapping_add(1);
+        self.calls % XRUN_CHECK_EVERY == 0
+    }
+
+    /// `xruns` is the device's running count: `true` when it rose since the last grow.
+    pub(crate) fn rose(&mut self, xruns: i32) -> bool {
+        if xruns <= self.seen {
+            return false;
+        }
+        self.seen = xruns;
+        true
+    }
+}
+
+/// The buffer `step` frames larger, never past `cap`.
+pub(crate) fn grown(size: i32, step: i32, cap: i32) -> i32 {
+    (size + step).min(cap)
+}
+
 /// When the newest frame written plays, ns on the timestamp's clock: the timestamp's time plus
 /// the frames written past its position, at `rate_hz`.
 pub(crate) fn heard_at(at_ns: i64, position: i64, written: i64, rate_hz: u32) -> i64 {
@@ -581,6 +615,44 @@ mod tests {
         sup.next(DecodeExit::Disconnected, true, false);
         assert_eq!(sup.no_device(true), NoDevice::Quit);
         assert_eq!(sup.no_device(false), NoDevice::Retry(1));
+    }
+
+    #[test]
+    fn the_xrun_count_is_read_on_every_128th_call() {
+        let mut growth = XrunGrowth::default();
+        let due: Vec<u32> = (1..=3 * XRUN_CHECK_EVERY)
+            .filter(|_| growth.due())
+            .collect();
+        assert_eq!(due, [128, 256, 384]);
+    }
+
+    #[test]
+    fn the_buffer_grows_once_per_rise_in_the_xrun_count() {
+        let mut growth = XrunGrowth::default();
+        // (row, running xrun count, grows)
+        let rows = [
+            ("no xrun yet", 0, false),
+            ("a first xrun grows", 2, true),
+            ("the same count grows once", 2, false),
+            ("a negative error code never grows", -1, false),
+            ("a later rise grows again", 3, true),
+        ];
+        for (row, xruns, grows) in rows {
+            assert_eq!(growth.rose(xruns), grows, "{row}");
+        }
+    }
+
+    #[test]
+    fn a_grow_adds_one_step_up_to_capacity() {
+        // (row, size, step, cap, grown)
+        let rows = [
+            ("one burst larger", 192, 96, 1024, 288),
+            ("capped at capacity", 960, 96, 1024, 1024),
+            ("a full buffer stays full", 1024, 96, 1024, 1024),
+        ];
+        for (row, size, step, cap, want) in rows {
+            assert_eq!(grown(size, step, cap), want, "{row}");
+        }
     }
 
     #[test]

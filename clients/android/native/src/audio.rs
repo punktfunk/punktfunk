@@ -13,8 +13,8 @@
 //! `design/audio-latency-overhaul.md` for the full policy.
 
 use crate::audio_policy::{
-    grant_matches, heard_at, ladder_for, sent, DecodeExit, Next, NoDevice, OpenRung, Perf, Sharing,
-    Supervisor, REOPEN_ATTEMPTS,
+    grant_matches, grown, heard_at, ladder_for, sent, DecodeExit, Next, NoDevice, OpenRung, Perf,
+    Sharing, Supervisor, XrunGrowth, REOPEN_ATTEMPTS,
 };
 use crate::sys::sysprop;
 use ndk::audio::{
@@ -114,21 +114,6 @@ const REOPEN_SETTLE_MS: u64 = 250;
 /// top of the rate ladder. A packet count would have meant ~0.2 s there and a warning that fires
 /// before a slow HAL has finished waking.
 const DEAD_STREAM_WARN_MS: u64 = 1_000;
-
-// --- Jitter-ring depths now come from the SHARED policy (`punktfunk_core::audio::JitterTuning`). --
-// They used to be four Android-only constants here. The rationale for Android being DEEPER than the
-// other clients still holds and is preserved in `JitterTuning::AAUDIO`: unlike PipeWire, which
-// adaptively rate-matches the stream to the graph clock and masks host↔DAC drift, AAudio hands us a
-// raw callback and we own the buffer, so drift and Wi-Fi power-save bunching land as
-// underruns/overflows = crackle.
-//
-// Two things changed with the move. The prime floor drops 40 ms → 25 ms, because the policy GROWS
-// the target on the devices that actually underrun instead of every device pre-paying for the worst
-// one. And the ring finally sheds: it had a hard cap but nothing that walked the depth back down, so
-// any drift or burst raised latency permanently and Android converged on its 120 ms ceiling and
-// stayed there — the "audio latency is too high" report.
-/// Throttle the AAudio XRun-driven HW-buffer grow check (cheap, but no need to poll every quantum).
-const XRUN_CHECK_EVERY: u32 = 128;
 
 /// Diagnostics — written by the decode thread + the realtime callback, logged periodically. The
 /// audio analogue of the video `fed`/`rendered` counters (we can't "screenshot" sound).
@@ -741,10 +726,7 @@ struct Render {
     channels: usize,
     ring: VecDeque<f32>,
     policy: punktfunk_core::audio::JitterPolicy,
-    /// Callbacks since open (throttles the XRun grow check).
-    cb_count: u32,
-    /// Last AAudio XRun count we grew the buffer for.
-    last_xrun: i32,
+    xrun: XrunGrowth,
 }
 
 impl Render {
@@ -772,8 +754,7 @@ impl Render {
             channels,
             ring,
             policy,
-            cb_count: 0,
-            last_xrun: 0,
+            xrun: XrunGrowth::default(),
         }
     }
 
@@ -864,21 +845,19 @@ impl Render {
             .store(self.policy.target_ms() as u64, Ordering::Relaxed);
     }
 
-    /// Google's AAudio anti-glitch technique: when the device reports new XRuns, grow the HW
-    /// buffer by one burst (up to capacity). Both calls are callback-safe and `set` clamps to
-    /// capacity, so it self-limits. Throttled to every `XRUN_CHECK_EVERY` callbacks.
+    /// Google's AAudio anti-glitch technique, by [`XrunGrowth`]: new XRuns grow the HW buffer by
+    /// one burst, up to capacity. Every call here is callback-safe.
     fn grow_on_xrun(&mut self, s: &AudioStream) {
-        self.cb_count = self.cb_count.wrapping_add(1);
-        if self.cb_count % XRUN_CHECK_EVERY != 0 {
+        if !self.xrun.due() || !self.xrun.rose(s.x_run_count()) {
             return;
         }
-        let xr = s.x_run_count();
-        if xr > self.last_xrun {
-            self.last_xrun = xr;
-            let burst = s.frames_per_burst().max(1);
-            let grown = (s.buffer_size_in_frames() + burst).min(s.buffer_capacity_in_frames());
-            let _ = s.set_buffer_size_in_frames(grown);
-        }
+        let burst = s.frames_per_burst().max(1);
+        let size = grown(
+            s.buffer_size_in_frames(),
+            burst,
+            s.buffer_capacity_in_frames(),
+        );
+        let _ = s.set_buffer_size_in_frames(size);
     }
 }
 
