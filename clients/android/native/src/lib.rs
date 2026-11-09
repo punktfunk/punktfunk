@@ -82,7 +82,8 @@ mod feedback;
 // `decode`'s hung-decoder checks, `test`-gated like `audio_format` so their proof runs off-device.
 #[cfg(any(target_os = "android", test))]
 mod input_stall;
-#[cfg(target_os = "android")]
+// The mic uplink; its open ladder is `test`-gated like `audio_format` so its walk runs off-device.
+#[cfg(any(target_os = "android", test))]
 mod mic;
 /// Tier-A DualSense pad audio: the 0xD1 plane rendered on the pad's own USB endpoint.
 mod pad_audio;

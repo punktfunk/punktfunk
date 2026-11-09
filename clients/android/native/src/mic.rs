@@ -14,18 +14,23 @@
 //! input stream, the input-preset ladder it settled on and its primed buffers all survive a
 //! mute/unmute untouched, so toggling costs an atomic load and nothing else. A disconnect (a
 //! headset plugged or pulled) reopens the stream on the same encoder; see [`supervise`].
+//!
+//! The open ladder and its [`walk`] hold no NDK type; their rows run on the host.
 
-use ndk::audio::{
-    AudioCallbackResult, AudioDirection, AudioFormat, AudioInputPreset, AudioPerformanceMode,
-    AudioSharingMode, AudioStream, AudioStreamBuilder, SessionId,
+#[cfg(target_os = "android")]
+use {
+    ndk::audio::{
+        AudioCallbackResult, AudioDirection, AudioFormat, AudioInputPreset, AudioPerformanceMode,
+        AudioSharingMode, AudioStream, AudioStreamBuilder, SessionId,
+    },
+    punktfunk_core::audio::mic::MicEncoder,
+    punktfunk_core::client::NativeClient,
+    std::ffi::c_void,
+    std::sync::atomic::{AtomicBool, AtomicU64, Ordering},
+    std::sync::mpsc::{sync_channel, Receiver, RecvTimeoutError, SyncSender, TrySendError},
+    std::sync::Arc,
+    std::time::Duration,
 };
-use punktfunk_core::audio::mic::MicEncoder;
-use punktfunk_core::client::NativeClient;
-use std::ffi::c_void;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::mpsc::{sync_channel, Receiver, RecvTimeoutError, SyncSender, TrySendError};
-use std::sync::Arc;
-use std::time::Duration;
 
 /// What one capture open attempt yields: the stream, plus both halves of the PCM hand-off — the
 /// receiver the encode worker drains and the sender that returns emptied buffers for reuse. Note
@@ -34,27 +39,36 @@ use std::time::Duration;
 ///
 /// Named rather than written inline for the same reason as that one — `clippy::type_complexity`,
 /// now that the Android target is actually linted (`:kit:cargoNdkClippy`).
+#[cfg(target_os = "android")]
 type OpenedCapture = ndk::audio::Result<(AudioStream, Receiver<Vec<f32>>, SyncSender<Vec<f32>>)>;
 /// A started stream from [`open_started`]: the capture plus the session id AAudio allocated.
+#[cfg(target_os = "android")]
 type StartedCapture = (AudioStream, Receiver<Vec<f32>>, SyncSender<Vec<f32>>, i32);
 
+#[cfg(target_os = "android")]
 const CHANNELS: usize = 1;
+#[cfg(target_os = "android")]
 const SAMPLE_RATE: i32 = 48_000;
 /// Captured-chunk hand-off depth (each ~ one burst); drops on overflow (best-effort uplink).
 /// Bursts are sized in frames, so the wall-time depth is unchanged by the stereo→mono move.
+#[cfg(target_os = "android")]
 const RING_CHUNKS: usize = 64;
 /// Free-list buffer capacity, in interleaved f32 samples: comfortably above a LowLatency input
 /// burst (typically ≤ ~480 frames — mono, so samples = frames). A device with larger bursts costs
 /// each buffer a one-time grow on the capture thread, after which the steady state is
 /// allocation-free again.
+#[cfg(target_os = "android")]
 const CHUNK_CAP_SAMPLES: usize = 960; // 20 ms mono — the same wall-time as the old stereo value
 /// Settling time between a disconnect and the reopen: a headset handing over the route.
+#[cfg(target_os = "android")]
 const REOPEN_SETTLE_MS: u64 = 250;
 /// Reopens that may find no input before the mic gives up: ~2 s, past a Bluetooth handover.
+#[cfg(target_os = "android")]
 const REOPEN_ATTEMPTS: u32 = 8;
 
 /// Owned by [`crate::session::SessionHandle`]: the encode thread, which owns the AAudio input
 /// stream (see [`supervise`]). Dropping this stops the thread, and the thread closes the stream.
+#[cfg(target_os = "android")]
 pub struct MicCapture {
     /// The audio-session id AAudio allocated (`> 0`) when echo cancellation asked for one — the
     /// hook Kotlin hangs the Java `AcousticEchoCanceler`/`NoiseSuppressor` on. `0` = none. The
@@ -65,6 +79,7 @@ pub struct MicCapture {
 }
 
 /// Why [`run`] returned.
+#[cfg(target_os = "android")]
 #[derive(Debug, PartialEq, Eq)]
 enum Exit {
     Shutdown,
@@ -72,32 +87,71 @@ enum Exit {
     Disconnected,
 }
 
+/// AAudio's sharing mode, as the ladder names it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Sharing {
+    Exclusive,
+    Shared,
+}
+
+/// One rung: a sharing mode, and whether the voice preset asks for echo cancellation.
+type Rung = (Sharing, bool);
+
 /// The open ladder: Exclusive first — MMAP-exclusive is AAudio's lowest-latency path — falling
 /// back to Shared when the device refuses (no MMAP, mic claimed, …); and each sharing mode with
 /// the voice preset before without it, because some HALs reject VoiceCommunication (or a session
-/// id) outright and a mic without echo cancellation still beats no mic. The started-log prints
-/// what the device actually GRANTED (`share=`/`session=`).
-fn capture_rungs(echo_cancel: bool) -> &'static [(AudioSharingMode, bool)] {
+/// id) outright and a mic without echo cancellation still beats no mic. Without echo cancellation
+/// the ladder is the last two rungs. The started-log prints what the device actually GRANTED
+/// (`share=`/`session=`).
+const RUNGS: [Rung; 4] = [
+    (Sharing::Exclusive, true),
+    (Sharing::Shared, true),
+    (Sharing::Exclusive, false),
+    (Sharing::Shared, false),
+];
+
+fn capture_rungs(echo_cancel: bool) -> &'static [Rung] {
     if echo_cancel {
-        &[
-            (AudioSharingMode::Exclusive, true),
-            (AudioSharingMode::Shared, true),
-            (AudioSharingMode::Exclusive, false),
-            (AudioSharingMode::Shared, false),
-        ]
+        &RUNGS
     } else {
-        &[
-            (AudioSharingMode::Exclusive, false),
-            (AudioSharingMode::Shared, false),
-        ]
+        &RUNGS[2..]
     }
+}
+
+/// Walks `rungs` best first and starts the first stream that opens. A refused open is the next
+/// rung; a start that fails ends the walk with `None`.
+fn walk<S, E: std::fmt::Display>(
+    rungs: &[Rung],
+    mut open: impl FnMut(Rung) -> Result<S, E>,
+    start: impl FnOnce(&S) -> Result<(), E>,
+) -> Option<S> {
+    let mut opened = None;
+    for &(sharing, voice) in rungs {
+        match open((sharing, voice)) {
+            Ok(o) => {
+                opened = Some(o);
+                break;
+            }
+            Err(e) => log::info!(
+                "mic: open {sharing:?}{} failed ({e}) — trying the next fallback",
+                if voice { "+VoiceCommunication" } else { "" },
+            ),
+        }
+    }
+    let stream = opened?;
+    if let Err(e) = start(&stream) {
+        log::error!("mic: request_start: {e}");
+        return None;
+    }
+    Some(stream)
 }
 
 /// One open attempt at a given sharing mode (same pattern as [`crate::audio`]: `open_stream`
 /// consumes the builder AND the callback, so each try rebuilds the channels it captures).
 /// `captured`/`dropped` are the counters the realtime callback bumps.
+#[cfg(target_os = "android")]
 fn open_capture(
-    sharing: AudioSharingMode,
+    sharing: Sharing,
     voice: bool,
     captured: &Arc<AtomicU64>,
     dropped: &Arc<AtomicU64>,
@@ -160,7 +214,10 @@ fn open_capture(
         .channel_count(CHANNELS as i32)
         .format(AudioFormat::PCM_Float)
         .performance_mode(AudioPerformanceMode::LowLatency)
-        .sharing_mode(sharing);
+        .sharing_mode(match sharing {
+            Sharing::Exclusive => AudioSharingMode::Exclusive,
+            Sharing::Shared => AudioSharingMode::Shared,
+        });
     if voice {
         // VoiceCommunication routes the capture through the HAL's AEC/NS; the allocated
         // session id (`None` = allocate) is what Kotlin attaches the Java effects to.
@@ -179,38 +236,26 @@ fn open_capture(
     Ok((stream, rx, free_tx))
 }
 
-/// Walk the ladder and start the first stream that opens: the stream, its hand-off pair, and
-/// the session id AAudio allocated (`0` = none). `None` = every rung refused, or start failed.
+/// [`walk`] the ladder over AAudio: the started stream, its hand-off pair, and the session id
+/// AAudio allocated (`0` = none). `None` when the walk found no stream.
+#[cfg(target_os = "android")]
 fn open_started(
     echo_cancel: bool,
     captured: &Arc<AtomicU64>,
     dropped: &Arc<AtomicU64>,
     disconnected: &Arc<AtomicBool>,
 ) -> Option<StartedCapture> {
-    let mut opened = None;
-    for &(sharing, voice) in capture_rungs(echo_cancel) {
-        match open_capture(sharing, voice, captured, dropped, disconnected) {
-            Ok(o) => {
-                opened = Some(o);
-                break;
-            }
-            Err(e) => log::info!(
-                "mic: open {sharing:?}{} failed ({e}) — trying the next fallback",
-                if voice { "+VoiceCommunication" } else { "" },
-            ),
-        }
-    }
-    let (stream, rx, free_tx) = opened?;
+    let (stream, rx, free_tx) = walk(
+        capture_rungs(echo_cancel),
+        |(sharing, voice)| open_capture(sharing, voice, captured, dropped, disconnected),
+        |(stream, ..)| stream.request_start(),
+    )?;
     // `> 0` is the handle Kotlin hangs the Java AcousticEchoCanceler/NoiseSuppressor off as the
     // HAL preset's backstop; only a voice rung asks for one.
     let session_id = match stream.session_id() {
         SessionId::Allocated(id) => id.get(),
         SessionId::None => 0,
     };
-    if let Err(e) = stream.request_start() {
-        log::error!("mic: request_start: {e}");
-        return None;
-    }
     log::info!(
         "mic: AAudio input started rate={} ch={} fmt={:?} share={:?} session={session_id}",
         stream.sample_rate(),
@@ -221,6 +266,7 @@ fn open_started(
     Some((stream, rx, free_tx, session_id))
 }
 
+#[cfg(target_os = "android")]
 impl MicCapture {
     /// Open low-latency 48 kHz mono capture and start the Opus uplink worker.
     ///
@@ -267,6 +313,7 @@ impl MicCapture {
     }
 }
 
+#[cfg(target_os = "android")]
 impl Drop for MicCapture {
     fn drop(&mut self) {
         self.shutdown.store(true, Ordering::SeqCst);
@@ -280,6 +327,7 @@ impl Drop for MicCapture {
 /// when AAudio disconnects it (a headset plugged or pulled, Bluetooth taking the route). The
 /// stream is dead by AAudio's contract then; without a reopen the mic stayed silent while the
 /// session still offered its mute. The encoder and `seq` carry over, so the host sees one stream.
+#[cfg(target_os = "android")]
 fn supervise(
     client: Arc<NativeClient>,
     echo_cancel: bool,
@@ -370,6 +418,7 @@ fn supervise(
 /// Consumer for one stream: drain captured f32 into the encoder, which sends 10 ms mono frames
 /// with `send_mic`, until shutdown or a disconnect. Drained chunk buffers go back to the
 /// callback's free-list. A mute drops formed frames; the stream itself runs on untouched.
+#[cfg(target_os = "android")]
 #[allow(clippy::too_many_arguments)] // one call site, `supervise`
 fn run(
     up: &mut MicEncoder,
@@ -420,4 +469,115 @@ fn run(
         }
     }
     Exit::Shutdown
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{capture_rungs, walk, Sharing};
+    use std::cell::RefCell;
+
+    /// What a rung's stream does in a scripted walk.
+    #[derive(Clone, Copy)]
+    enum At {
+        Refuses,
+        /// Opens; starts when `true`.
+        Opens(bool),
+    }
+
+    /// A stream that logs its close.
+    struct Stream<'a>(usize, &'a RefCell<Vec<String>>);
+
+    impl Drop for Stream<'_> {
+        fn drop(&mut self) {
+            self.1.borrow_mut().push(format!("close {}", self.0));
+        }
+    }
+
+    /// Walks a ladder whose rung `i` does `script[i]`: the rung used, then each start and close.
+    fn walked(script: &[At]) -> (Option<usize>, Vec<String>) {
+        let log = RefCell::new(Vec::new());
+        let rungs = vec![(Sharing::Shared, false); script.len()];
+        let mut next = 0;
+        let used = walk(
+            &rungs,
+            |_| {
+                next += 1;
+                match script[next - 1] {
+                    At::Refuses => Err("refused"),
+                    At::Opens(_) => Ok(Stream(next - 1, &log)),
+                }
+            },
+            |s| {
+                log.borrow_mut().push(format!("start {}", s.0));
+                match script[s.0] {
+                    At::Opens(true) => Ok(()),
+                    _ => Err("start failed"),
+                }
+            },
+        );
+        let events = log.borrow().clone();
+        (used.map(|s| s.0), events)
+    }
+
+    /// A row: its name, the script, the rung used, and each start and close.
+    type Row = (
+        &'static str,
+        &'static [At],
+        Option<usize>,
+        &'static [&'static str],
+    );
+
+    #[test]
+    fn the_ladder_starts_the_first_stream_that_opens() {
+        use At::{Opens, Refuses};
+        let rows: [Row; 4] = [
+            (
+                "the first rung is used",
+                &[Opens(true), Opens(true)],
+                Some(0),
+                &["start 0"],
+            ),
+            (
+                "a refused open is the next rung",
+                &[Refuses, Opens(true)],
+                Some(1),
+                &["start 1"],
+            ),
+            (
+                "every rung refused is no mic",
+                &[Refuses, Refuses],
+                None,
+                &[],
+            ),
+            (
+                "R5-2: a rung that opens and fails to start ends the walk",
+                &[Opens(false), Opens(true)],
+                None,
+                &["start 0", "close 0"],
+            ),
+        ];
+        for (name, script, used, events) in rows {
+            assert_eq!(
+                walked(script),
+                (used, events.iter().map(|e| e.to_string()).collect()),
+                "{name}"
+            );
+        }
+    }
+
+    /// Echo cancellation tries the voice preset in both modes before dropping it.
+    #[test]
+    fn the_voice_rungs_lead_and_the_plain_ladder_is_their_tail() {
+        use Sharing::{Exclusive, Shared};
+        assert_eq!(
+            capture_rungs(true),
+            [
+                (Exclusive, true),
+                (Shared, true),
+                (Exclusive, false),
+                (Shared, false)
+            ]
+        );
+        assert_eq!(capture_rungs(false), [(Exclusive, false), (Shared, false)]);
+    }
 }
