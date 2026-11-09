@@ -32,6 +32,14 @@ pub(crate) fn picture_dims(
     }
 }
 
+/// The buffer rect `[left, top, right, bottom]` for a crop in frame fractions on a `w` × `h`
+/// buffer, at least one pixel on each axis.
+pub(crate) fn crop_px([left, top, right, bottom]: [f32; 4], w: i32, h: i32) -> [i32; 4] {
+    let px = |f: f32, size: i32| ((f * size as f32).round() as i32).clamp(0, size);
+    let (l, t) = (px(left, w).min(w - 1), px(top, h).min(h - 1));
+    [l, t, px(right, w).max(l + 1), px(bottom, h).max(t + 1)]
+}
+
 /// The Qualcomm output-fence keys fit a Codec2 Qualcomm decoder on Android 13+. Only
 /// `CCodecBufferChannel` since 13 forwards the codec's fence to the consumer; earlier releases
 /// queue the buffer unfenced, and SurfaceFlinger would show it unfinished.

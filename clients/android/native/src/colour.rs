@@ -1,6 +1,6 @@
 //! The colour rules `decode` hands the platform: which dataspace a stream or a decoder's report
-//! maps to, and the HDR static-info blob. Plain values in and out; the NDK `DataSpace` and
-//! `MediaFormat` are built in `decode/`.
+//! maps to, and the HDR static metadata for a codec and for a layer. Plain values in and out; the
+//! NDK `DataSpace`, `MediaFormat` and transaction are built in `decode/`.
 
 use punktfunk_core::quic::{ColorInfo, HdrMeta};
 
@@ -96,6 +96,63 @@ pub(crate) fn android_hdr_static_info(m: &HdrMeta) -> [u8; 25] {
         out[1 + i * 2..3 + i * 2].copy_from_slice(&v.to_le_bytes());
     }
     out
+}
+
+/// `AColorXy`: a chromaticity as floats.
+#[repr(C)]
+#[derive(Debug, PartialEq)]
+struct AColorXy {
+    x: f32,
+    y: f32,
+}
+
+/// `AHdrMetadata_smpte2086`: chromaticities as floats, luminance in nits.
+#[repr(C)]
+#[derive(Debug, PartialEq)]
+pub(crate) struct AHdrMetadataSmpte2086 {
+    red: AColorXy,
+    green: AColorXy,
+    blue: AColorXy,
+    white: AColorXy,
+    max_luminance: f32,
+    min_luminance: f32,
+}
+
+/// `AHdrMetadata_cta861_3`, in nits.
+#[repr(C)]
+#[derive(Debug, PartialEq)]
+pub(crate) struct AHdrMetadataCta8613 {
+    max_content_light_level: f32,
+    max_frame_average_light_level: f32,
+}
+
+/// [`HdrMeta`] (ST.2086 G, B, R in 1/50000; mastering luminance in 0.0001 nits) as the NDK's
+/// float structs. A block with a zero field means "unknown" and is `None`, as Codec2 treats it for
+/// the decoder's own Surface: SurfaceFlinger takes a sent MaxCLL as the layer's peak, so a zero
+/// one declares a 0-nit picture.
+pub(crate) fn hdr_metadata(
+    m: &HdrMeta,
+) -> (Option<AHdrMetadataSmpte2086>, Option<AHdrMetadataCta8613>) {
+    let xy = |[x, y]: [u16; 2]| AColorXy {
+        x: f32::from(x) / 50_000.0,
+        y: f32::from(y) / 50_000.0,
+    };
+    let [g, b, r] = m.display_primaries;
+    let mastering = (m.max_display_mastering_luminance > 0
+        && m.min_display_mastering_luminance > 0)
+        .then(|| AHdrMetadataSmpte2086 {
+            red: xy(r),
+            green: xy(g),
+            blue: xy(b),
+            white: xy(m.white_point),
+            max_luminance: m.max_display_mastering_luminance as f32 / 10_000.0,
+            min_luminance: m.min_display_mastering_luminance as f32 / 10_000.0,
+        });
+    let light_level = (m.max_cll > 0 && m.max_fall > 0).then(|| AHdrMetadataCta8613 {
+        max_content_light_level: f32::from(m.max_cll),
+        max_frame_average_light_level: f32::from(m.max_fall),
+    });
+    (mastering, light_level)
 }
 
 #[cfg(test)]

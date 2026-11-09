@@ -29,6 +29,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{mpsc, Arc, OnceLock};
 
 use super::async_loop::DecodeEvent;
+use crate::codec_format::crop_px;
+use crate::colour::{hdr_metadata, AHdrMetadataCta8613, AHdrMetadataSmpte2086};
 
 // ---- Opaque native types (not in `ndk-sys 0.6`) ------------------------------------------------
 
@@ -62,35 +64,6 @@ const VISIBILITY_SHOW: i8 = 1;
 /// `ASURFACE_TRANSACTION_VISIBILITY_HIDE`.
 const VISIBILITY_HIDE: i8 = 0;
 
-/// [`HdrMeta`](punktfunk_core::quic::HdrMeta) (ST.2086 G, B, R in 1/50000; mastering luminance in
-/// 0.0001 nits) as the NDK's float structs. A block with a zero field means "unknown" and is
-/// `None`, as Codec2 treats it for the decoder's own Surface: SurfaceFlinger takes a sent MaxCLL
-/// as the layer's peak, so a zero one declares a 0-nit picture.
-fn hdr_metadata(
-    m: &punktfunk_core::quic::HdrMeta,
-) -> (Option<AHdrMetadataSmpte2086>, Option<AHdrMetadataCta8613>) {
-    let xy = |[x, y]: [u16; 2]| AColorXy {
-        x: f32::from(x) / 50_000.0,
-        y: f32::from(y) / 50_000.0,
-    };
-    let [g, b, r] = m.display_primaries;
-    let mastering = (m.max_display_mastering_luminance > 0
-        && m.min_display_mastering_luminance > 0)
-        .then(|| AHdrMetadataSmpte2086 {
-            red: xy(r),
-            green: xy(g),
-            blue: xy(b),
-            white: xy(m.white_point),
-            max_luminance: m.max_display_mastering_luminance as f32 / 10_000.0,
-            min_luminance: m.min_display_mastering_luminance as f32 / 10_000.0,
-        });
-    let light_level = (m.max_cll > 0 && m.max_fall > 0).then(|| AHdrMetadataCta8613 {
-        max_content_light_level: f32::from(m.max_cll),
-        max_frame_average_light_level: f32::from(m.max_fall),
-    });
-    (mastering, light_level)
-}
-
 // ---- The `dlsym`-resolved entry-point table ----------------------------------------------------
 
 type CreateFromWindowFn = unsafe extern "C" fn(
@@ -123,30 +96,6 @@ type TxnSetFrameRateFn =
     unsafe extern "C" fn(*mut ASurfaceTransaction, *mut ASurfaceControl, f32, i8);
 type TxnSetFrameRateStrategyFn =
     unsafe extern "C" fn(*mut ASurfaceTransaction, *mut ASurfaceControl, f32, i8, i8);
-
-#[repr(C)]
-struct AColorXy {
-    x: f32,
-    y: f32,
-}
-
-/// `AHdrMetadata_smpte2086`: chromaticities as floats, luminance in nits.
-#[repr(C)]
-struct AHdrMetadataSmpte2086 {
-    red: AColorXy,
-    green: AColorXy,
-    blue: AColorXy,
-    white: AColorXy,
-    max_luminance: f32,
-    min_luminance: f32,
-}
-
-/// `AHdrMetadata_cta861_3`, in nits.
-#[repr(C)]
-struct AHdrMetadataCta8613 {
-    max_content_light_level: f32,
-    max_frame_average_light_level: f32,
-}
 
 type TxnSetHdrSmpte2086Fn = unsafe extern "C" fn(
     *mut ASurfaceTransaction,
@@ -715,14 +664,13 @@ pub(super) fn fence_signal_ns(fence: BorrowedFd<'_>) -> Option<i64> {
     }
 }
 
-/// The buffer rect for a crop in frame fractions, at least one pixel on each axis.
-fn crop_rect([left, top, right, bottom]: [f32; 4], w: i32, h: i32) -> ARect {
-    let px = |f: f32, size: i32| ((f * size as f32).round() as i32).clamp(0, size);
-    let (l, t) = (px(left, w).min(w - 1), px(top, h).min(h - 1));
+/// The buffer rect for a crop in frame fractions ([`crop_px`]).
+fn crop_rect(crop: [f32; 4], w: i32, h: i32) -> ARect {
+    let [left, top, right, bottom] = crop_px(crop, w, h);
     ARect {
-        left: l,
-        top: t,
-        right: px(right, w).max(l + 1),
-        bottom: px(bottom, h).max(t + 1),
+        left,
+        top,
+        right,
+        bottom,
     }
 }
