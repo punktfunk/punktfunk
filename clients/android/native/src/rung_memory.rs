@@ -2,14 +2,18 @@
 //! there. [`RungFloor`](crate::input_stall::RungFloor) lives for one surface; without this a
 //! device whose first rung stops its decoder pays that freeze on every start.
 //!
-//! The file holds one line per (build fingerprint, decoder, codec): `\t`-separated, the fields
-//! of [`Entry`] in order. A line that does not parse is dropped. A rung is written only when the
-//! floor moved (two clean failures) and a decoder then settled on it ([`outcome`]). An entry
-//! from another OS build is dropped on the next write; one [`MAX_AGE_SECS`] old or from another
-//! app version gives rung 0 one more chance ([`Start::Retry`]).
+//! The file holds one line per (build fingerprint, decoder, codec, ladder): `\t`-separated, the
+//! fields of [`Entry`] in order. A line that does not parse is dropped, a six-field line written
+//! without the ladder too. A rung is written only when the floor moved (two clean failures) and a
+//! decoder then settled on it ([`outcome`]). An entry from another OS build is dropped on the
+//! next write; one [`MAX_AGE_SECS`] old or from another app version gives rung 0 one more chance
+//! ([`Start::Retry`]).
 //!
-//! Rungs are ladder indices, and the low-latency toggle reshapes the ladder. Toggled off, the
-//! session takes the platform's default decoder (keyed `default`), so it keys its own entry.
+//! Rungs are ladder indices, and the backend pick, the session's colour and the low-latency
+//! toggle reshape the ladder. The key carries its label
+//! ([`ladder_label`](crate::bring_up::ladder_label)), so a rung is read back only on the ladder
+//! it was learned on.
+//!
 //! [`Memory`] is one surface's copy; the decode loop reads the file, the build fingerprint and
 //! the clock for it, and logs and writes what it hands back.
 //! Plan: `design/android-presenter-overhaul-v3.md` §3.4.
@@ -30,6 +34,8 @@ pub(crate) struct Entry {
     pub(crate) fingerprint: String,
     pub(crate) decoder: String,
     pub(crate) codec: String,
+    /// The ladder `rung` indexes ([`ladder_label`](crate::bring_up::ladder_label)).
+    pub(crate) ladder: String,
     pub(crate) rung: usize,
     /// Unix seconds when the rung was proven.
     pub(crate) proven_at_secs: u64,
@@ -43,6 +49,7 @@ pub(crate) struct Key {
     pub(crate) fingerprint: String,
     pub(crate) decoder: String,
     pub(crate) codec: String,
+    pub(crate) ladder: String,
 }
 
 impl Entry {
@@ -50,6 +57,7 @@ impl Entry {
         self.fingerprint == key.fingerprint
             && self.decoder == key.decoder
             && self.codec == key.codec
+            && self.ladder == key.ladder
     }
 }
 
@@ -87,12 +95,13 @@ pub(crate) fn parse(text: &str) -> Vec<Entry> {
 }
 
 fn parse_line(line: &str) -> Option<Entry> {
-    let [fingerprint, decoder, codec, rung, proven_at_secs, version] =
-        <[&str; 6]>::try_from(line.split('\t').collect::<Vec<_>>()).ok()?;
+    let [fingerprint, decoder, codec, ladder, rung, proven_at_secs, version] =
+        <[&str; 7]>::try_from(line.split('\t').collect::<Vec<_>>()).ok()?;
     Some(Entry {
         fingerprint: fingerprint.to_owned(),
         decoder: decoder.to_owned(),
         codec: codec.to_owned(),
+        ladder: ladder.to_owned(),
         rung: rung.parse().ok()?,
         proven_at_secs: proven_at_secs.parse().ok()?,
         version: version.to_owned(),
@@ -104,8 +113,8 @@ pub(crate) fn render(entries: &[Entry]) -> String {
         .iter()
         .map(|e| {
             format!(
-                "{}\t{}\t{}\t{}\t{}\t{}\n",
-                e.fingerprint, e.decoder, e.codec, e.rung, e.proven_at_secs, e.version
+                "{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
+                e.fingerprint, e.decoder, e.codec, e.ladder, e.rung, e.proven_at_secs, e.version
             )
         })
         .collect()
@@ -150,6 +159,7 @@ pub(crate) fn record(
         fingerprint: key.fingerprint.clone(),
         decoder: key.decoder.clone(),
         codec: key.codec.clone(),
+        ladder: key.ladder.clone(),
         rung,
         proven_at_secs: now_secs,
         version: version.to_owned(),
@@ -279,12 +289,17 @@ mod tests {
     const V: &str = "0.45.0";
     const NOW: u64 = 1_800_000_000;
     const DAY: u64 = 86_400;
+    /// The five-rung ladder ([`crate::bring_up::ladder_label`]): ASC wanted, low latency on.
+    const FIVE: &str = "oa-ga-sa-sp-sn";
+    /// The three-rung ladder: the SurfaceView from the start, low latency on.
+    const THREE: &str = "sa-sp-sn";
 
     fn key(decoder: &str) -> Key {
         Key {
             fingerprint: "jmgo/n1s/1".into(),
             decoder: decoder.into(),
             codec: "video/av01".into(),
+            ladder: FIVE.into(),
         }
     }
 
@@ -293,6 +308,7 @@ mod tests {
             fingerprint: key.fingerprint.clone(),
             decoder: key.decoder.clone(),
             codec: key.codec.clone(),
+            ladder: key.ladder.clone(),
             rung,
             proven_at_secs,
             version: version.into(),
@@ -344,6 +360,14 @@ mod tests {
         let other_version = line(&k, 2, NOW - DAY, "0.0.0");
         let beside = line(&other_decoder, 3, NOW, APP_VERSION);
         let gone = line(&other_build, 3, NOW, APP_VERSION);
+        let three = Key {
+            ladder: THREE.into(),
+            ..k.clone()
+        };
+        // Rung 3 of five and rung 1 of three are both (SurfaceView, plain keys).
+        let five_at_3 = line(&k, 3, NOW - DAY, APP_VERSION);
+        let three_at_1 = line(&three, 1, NOW - DAY, APP_VERSION);
+        let unlabelled = format!("jmgo/n1s/1\tOMX.MS.av1\tvideo/av01\t3\t{NOW}\t{APP_VERSION}\n");
         // (row, session(file, key, (floor, rendered) shown in order), (start rung, texts written))
         let rows = [
             (
@@ -395,6 +419,29 @@ mod tests {
                 "a file that does not parse is no memory",
                 session("garbage\n", &k, &[(0, s)]),
                 (0, vec![]),
+            ),
+            (
+                "R3-4: a five-rung floor is not applied to the three-rung ladder",
+                session(&five_at_3, &three, &[(0, s)]),
+                (0, vec![]),
+            ),
+            (
+                "R3-4: a three-rung floor is not applied to the five-rung ladder",
+                session(&three_at_1, &k, &[(0, s)]),
+                (0, vec![]),
+            ),
+            (
+                "R3-4: each ladder keeps its own entry",
+                session(&five_at_3, &three, &[(1, s)]),
+                (
+                    0,
+                    vec![five_at_3.clone() + &line(&three, 1, NOW, APP_VERSION)],
+                ),
+            ),
+            (
+                "R3-4: a line without the ladder is inert, gone on the next write",
+                session(&unlabelled, &k, &[(0, s), (2, s)]),
+                (0, vec![now(2)]),
             ),
         ];
         for (row, got, want) in rows {
@@ -476,7 +523,8 @@ mod tests {
         ];
         assert_eq!(parse(&render(&entries)), entries);
         let text = format!(
-            "{}a\tb\tc\tnot-a-rung\t1\tv\nshort\tline\na\tb\tc\t1\t1\tv\textra\n{}",
+            "{}a\tb\tc\tl\tnot-a-rung\t1\tv\nshort\tline\na\tb\tc\tl\t1\t1\tv\textra\n\
+             a\tb\tc\t1\t1\tv\n{}",
             render(&entries[..1]),
             render(&entries[1..]).trim_end()
         );

@@ -25,7 +25,7 @@ use super::surface_control::{Layer, PresentComplete};
 use super::vsync::{VsyncClock, VsyncShared};
 use super::{Backstops, DecodeOptions, IN_FLIGHT_CAP};
 use crate::au_intake::{Delivery, Intake};
-use crate::bring_up::bring_up_rungs;
+use crate::bring_up::{bring_up_rungs, ladder_label, Rung};
 use crate::codec_format::{codec_mime, take_by_pts, take_flags};
 use crate::feed_rules::{colour_after, render_after, Cause, Piece, Spoiled};
 use crate::feed_step::{Feed, Handoff, Step, OVERSIZE_RUN};
@@ -193,7 +193,8 @@ fn load_memory() -> Memory {
     Memory::load(path, &text)
 }
 
-/// Key the rung memory on the stream's codec: the floor its first decoder starts on.
+/// Key the rung memory on the stream's codec and its ladder: the floor its first decoder starts
+/// on.
 fn begin_memory(memory: &mut Memory, client: &NativeClient, opts: &DecodeOptions) -> RungFloor {
     let mime = codec_mime(client.video_format().codec);
     let key = Key {
@@ -206,6 +207,7 @@ fn begin_memory(memory: &mut Memory, client: &NativeClient, opts: &DecodeOptions
             .unwrap_or("default")
             .to_owned(),
         codec: mime.to_owned(),
+        ladder: ladder_label(&ladder_for(client, opts).0),
     };
     let (floor, note) = memory.begin(key, unix_secs());
     if let Some(note) = note {
@@ -677,6 +679,17 @@ fn teardown(
     }
 }
 
+/// The bring-up ladder for this stream ([`bring_up_rungs`]), with the backend pick
+/// ([`asc_backend_selected`]) and the layer's colour tag it follows. The tag is `None` on
+/// Android 10 and 11 for a studio-range session, which then presents through the SurfaceView
+/// (its decoder tags its own buffers).
+fn ladder_for(client: &NativeClient, opts: &DecodeOptions) -> (Vec<Rung>, bool, Option<i32>) {
+    let dataspace = layer_dataspace(&client.video_format().color, crate::sys::sdk_int());
+    let selected = asc_backend_selected(opts.chromeos);
+    let rungs = bring_up_rungs(selected && dataspace.is_some(), opts.low_latency_mode);
+    (rungs, selected, dataspace)
+}
+
 /// A codec [`bring_up`] started, and where on the ladder it runs.
 struct Started {
     codec: MediaCodec,
@@ -719,12 +732,8 @@ fn bring_up(
     // Fetched ONCE, ahead of the ladder, so a retry rung never pays the wait again.
     let hdr_static = hdr_static(client);
     let priority = sink::priority(opts);
-    // The layer's colour tag; `None` on Android 10 and 11 for a studio-range session, which
-    // then presents through the SurfaceView (its decoder tags its own buffers).
-    let sdk = crate::sys::sdk_int();
-    let dataspace = layer_dataspace(&client.video_format().color, sdk);
-    let selected = asc_backend_selected(opts.chromeos);
-    let asc_wanted = selected && dataspace.is_some();
+    let (rungs, selected, dataspace) = ladder_for(client, opts);
+    let asc_wanted = rungs[0].0.is_some();
     if !asc_wanted {
         log::info!(
             "decode: present backend = SurfaceView ({})",
@@ -733,11 +742,13 @@ fn bring_up(
             } else if !selected {
                 "present_backend sysprop".to_string()
             } else {
-                format!("Android {sdk} has no layer dataspace for a studio-range session")
+                format!(
+                    "Android {} has no layer dataspace for a studio-range session",
+                    crate::sys::sdk_int()
+                )
             }
         );
     }
-    let rungs = bring_up_rungs(asc_wanted, opts.low_latency_mode);
     // The ladder is never empty; the sysprop can shorten it under a floor already raised.
     let floor = floor.min(rungs.len() - 1);
     for (rung, &(backend, keys)) in rungs.iter().enumerate().skip(floor) {

@@ -1,7 +1,11 @@
 //! Where a MediaCodec decoder's bring-up starts: the ladder of present backends and low-latency
-//! keys it climbs ([`bring_up_rungs`]), and the decoder Kotlin's pick names ([`ranked_for`]). No
-//! codec: `bring_up` in `decode/async_loop.rs` climbs the ladder, and `DecodeOptions::decoder_for`
-//! in `decode/mod.rs` takes the pick.
+//! keys it climbs ([`bring_up_rungs`]) and its label in the rung memory ([`ladder_label`]), and
+//! the decoder Kotlin's pick names ([`ranked_for`]). No codec: `bring_up` in
+//! `decode/async_loop.rs` climbs the ladder, and `DecodeOptions::decoder_for` in `decode/mod.rs`
+//! takes the pick.
+
+/// One bring-up rung: `(present backend, low-latency keys)`, as [`bring_up_rungs`] lists them.
+pub(crate) type Rung = (Option<bool>, Option<bool>);
 
 /// The decoder bring-up rungs, in order, as `(present backend, low-latency keys)`.
 /// The backend is `Some(overlay)` for ASC with that reader-usage profile (see `AscSink::create`'s
@@ -13,10 +17,7 @@
 /// may each already have shed what a rung was going to shed, and re-running a configuration the
 /// codec just refused buys nothing but another failed `start`. The first rung is always exactly
 /// what the session asked for, so a device that works is never charged for this ladder.
-pub(crate) fn bring_up_rungs(
-    asc_wanted: bool,
-    low_latency: bool,
-) -> Vec<(Option<bool>, Option<bool>)> {
+pub(crate) fn bring_up_rungs(asc_wanted: bool, low_latency: bool) -> Vec<Rung> {
     let mut rungs = vec![
         (asc_wanted.then_some(true), Some(low_latency)),
         (asc_wanted.then_some(false), Some(low_latency)),
@@ -28,6 +29,26 @@ pub(crate) fn bring_up_rungs(
     rungs
 }
 
+/// The ladder as the rung memory keys it, so a rung is read back only on the ladder it was
+/// learned on. Each rung is its backend (`o` overlay reader, `g` GPU-composited reader, `s`
+/// SurfaceView) and its keys (`a` aggressive, `p` plain, `n` none), joined by `-`.
+pub(crate) fn ladder_label(rungs: &[Rung]) -> String {
+    let label = |&(backend, keys): &Rung| {
+        let backend = match backend {
+            Some(true) => 'o',
+            Some(false) => 'g',
+            None => 's',
+        };
+        let keys = match keys {
+            Some(true) => 'a',
+            Some(false) => 'p',
+            None => 'n',
+        };
+        format!("{backend}{keys}")
+    };
+    rungs.iter().map(label).collect::<Vec<_>>().join("-")
+}
+
 /// Kotlin's pick `name`, ranked for `ranked`, when `mime` is that MIME; else the platform's
 /// default, which low-latency mode off always takes.
 pub(crate) fn ranked_for<'a>(name: Option<&'a str>, ranked: &str, mime: &str) -> Option<&'a str> {
@@ -36,7 +57,7 @@ pub(crate) fn ranked_for<'a>(name: Option<&'a str>, ranked: &str, mime: &str) ->
 
 #[cfg(test)]
 mod tests {
-    use super::{bring_up_rungs, ranked_for};
+    use super::{bring_up_rungs, ladder_label, ranked_for};
 
     /// The ladder that turns a decoder which refuses to configure or start into a retry or two
     /// away from a picture. Order and de-duplication are the whole of its logic — everything else
@@ -93,6 +114,16 @@ mod tests {
                     .all(|w| w[1].0 <= w[0].0 && w[1].1 <= w[0].1));
             }
         }
+    }
+
+    #[test]
+    fn each_ladder_has_its_own_label() {
+        let labels = [(true, true), (false, true), (true, false), (false, false)]
+            .map(|(asc, ll)| ladder_label(&bring_up_rungs(asc, ll)));
+        assert_eq!(
+            labels,
+            ["oa-ga-sa-sp-sn", "sa-sp-sn", "op-gp-sp-sn", "sp-sn"]
+        );
     }
 
     /// A codec the host moved to after the pick never gets a decoder ranked for another MIME.
