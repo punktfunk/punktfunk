@@ -48,6 +48,8 @@ pub(crate) enum Action {
     DropSurface,
     /// Drop the Skia surface, the EGL surface and the window.
     Detach,
+    /// Trade the 10-bit context for an 8-bit one; keep the window for the next attach.
+    FallBack,
     /// Detach and end the thread.
     Die,
 }
@@ -57,9 +59,19 @@ pub(crate) struct Lifecycle {
     failures: u32,
     /// The window is kept with no EGL surface over it: the next pass attaches again.
     retry: bool,
+    /// The context is 10-bit and no frame has shown on it: a failed attach or wrap falls back.
+    ten_bit: bool,
 }
 
 impl Lifecycle {
+    /// `ten_bit`: the context's config is 10/10/10/2.
+    pub(crate) fn new(ten_bit: bool) -> Lifecycle {
+        Lifecycle {
+            ten_bit,
+            ..Lifecycle::default()
+        }
+    }
+
     /// GL failures since a frame last reached the panel.
     pub(crate) fn failures(&self) -> u32 {
         self.failures
@@ -76,6 +88,12 @@ impl Lifecycle {
                 self.retry = false;
                 Action::Nothing
             }
+            // A 10-bit config that has never shown a frame is the likelier fault than the GL.
+            Event::AttachFailed | Event::WrapFailed if self.ten_bit => {
+                self.ten_bit = false;
+                self.retry = true;
+                Action::FallBack
+            }
             // Kotlin sends nothing more for a window it still holds: the retry is ours.
             Event::AttachFailed => {
                 self.failures += 1;
@@ -90,6 +108,7 @@ impl Lifecycle {
             }
             Event::Shown => {
                 self.failures = 0;
+                self.ten_bit = false;
                 Action::Nothing
             }
             Event::SwapFailed => {
@@ -248,7 +267,7 @@ impl<C, E> Shared<C, E> {
 
 #[cfg(test)]
 mod tests {
-    use super::Action::{self, Attach, Detach, Die, DropSurface, Nothing};
+    use super::Action::{self, Attach, Detach, Die, DropSurface, FallBack, Nothing};
     use super::Event::{
         self, AttachFailed, Attached, Created, Destroyed, Shown, SwapFailed, Tick, WrapFailed,
         Wrapped,
@@ -376,13 +395,67 @@ mod tests {
         ),
     ];
 
+    /// Cases on a 10/10/10/2 context.
+    const TEN_BIT: &[Case] = &[
+        (
+            "R7-6: a 10-bit window that does not attach falls back to 8 bit uncounted",
+            &[
+                (Created, Attach, 0),
+                (AttachFailed, FallBack, 0),
+                (Tick, Attach, 0),
+                (Attached, Nothing, 0),
+                (Wrapped, Nothing, 0),
+                (Shown, Nothing, 0),
+            ],
+        ),
+        (
+            "R7-6: a 10-bit surface Skia does not wrap falls back to 8 bit uncounted",
+            &[
+                (Created, Attach, 0),
+                (Attached, Nothing, 0),
+                (WrapFailed, FallBack, 0),
+                (Tick, Attach, 0),
+                (Attached, Nothing, 0),
+                (Wrapped, Nothing, 0),
+                (Shown, Nothing, 0),
+            ],
+        ),
+        (
+            "R7-6: the 8-bit context counts its own failures",
+            &[
+                (Created, Attach, 0),
+                (AttachFailed, FallBack, 0),
+                (Tick, Attach, 0),
+                (AttachFailed, Nothing, 1),
+                (Tick, Attach, 1),
+                (AttachFailed, Nothing, 2),
+                (Tick, Attach, 2),
+                (AttachFailed, Nothing, 3),
+                (Tick, Die, 3),
+            ],
+        ),
+        (
+            "a 10-bit context that has shown a frame stays 10-bit",
+            &[
+                (Created, Attach, 0),
+                (Attached, Nothing, 0),
+                (Wrapped, Nothing, 0),
+                (Shown, Nothing, 0),
+                (Destroyed, Detach, 0),
+                (Created, Attach, 0),
+                (AttachFailed, Nothing, 1),
+            ],
+        ),
+    ];
+
     /// The name and first wrong step of every case that breaks.
     #[test]
     fn the_lifecycle_table() {
-        let broken: Vec<String> = CASES
-            .iter()
-            .filter_map(|&(name, steps)| {
-                let mut life = Lifecycle::default();
+        let cases = CASES.iter().map(|c| (false, c));
+        let broken: Vec<String> = cases
+            .chain(TEN_BIT.iter().map(|c| (true, c)))
+            .filter_map(|(ten_bit, &(name, steps))| {
+                let mut life = Lifecycle::new(ten_bit);
                 steps
                     .iter()
                     .enumerate()

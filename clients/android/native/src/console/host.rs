@@ -183,7 +183,7 @@ const IDLE_FRAME_STEP: Duration = Duration::from_millis(16);
 
 /// The render thread. Owns EGL + Skia + the console; runs until `Cmd::Quit`.
 fn render_loop(mut console: Console, shared: Arc<Shared>, store: Arc<SnapshotStore>) -> Result<()> {
-    let mut glass = Glass::new(EglContext::new()?, console.gpu_cache_bytes());
+    let mut glass = Glass::new(EglContext::new(true)?, console.gpu_cache_bytes());
     shared.emit(HostEvent::Gles(glass.egl.version));
     let mut ui = Ui::new();
     let mut published = Published::new(&console, &store);
@@ -249,13 +249,13 @@ struct Glass {
 impl Glass {
     fn new(egl: EglContext, cache_bytes: usize) -> Glass {
         Glass {
+            life: Lifecycle::new(egl.ten_bit),
             egl,
             gpu: None,
             window: None,
             surface: None,
             skia: None,
             cache_bytes,
-            life: Lifecycle::default(),
             attached_at: Instant::now(),
             cost: FrameCost::default(),
         }
@@ -274,6 +274,10 @@ impl Glass {
                 }
                 Action::Detach => {
                     self.detach();
+                    return Ok(());
+                }
+                Action::FallBack => {
+                    self.fall_back()?;
                     return Ok(());
                 }
                 Action::Die => {
@@ -309,6 +313,19 @@ impl Glass {
             self.egl.release_current();
         }
         self.surface = None;
+    }
+
+    /// Trade the 10-bit context for an 8-bit one, in drop order: the surfaces, then Skia's
+    /// context, then the EGL context. The window stays for the next attach.
+    fn fall_back(&mut self) -> Result<()> {
+        self.drop_surface();
+        if let Some(mut g) = self.gpu.take() {
+            // Nothing is current: its GL objects go with the EGL context below.
+            g.context.abandon();
+        }
+        log::warn!("console: no 10-bit surface — falling back to 8 bit");
+        self.egl = EglContext::new(false)?;
+        Ok(())
     }
 
     /// Put an EGL surface over the window held: `Attached` or `AttachFailed`. `Err` = no Skia
