@@ -1250,7 +1250,9 @@ impl<'a> Plane<'a> {
         }
         match self.live.tx.try_send(buf) {
             Ok(()) | Err(TrySendError::Full(_)) => Ok(()),
-            Err(TrySendError::Disconnected(_)) => Err(DecodeExit::Shutdown),
+            // The renderer is gone: an AudioTrack writer ends on a failed write and takes
+            // the ring with it. The supervisor reopens unless the session is stopping.
+            Err(TrySendError::Disconnected(_)) => Err(DecodeExit::Disconnected),
         }
     }
 
