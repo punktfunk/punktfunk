@@ -1289,11 +1289,13 @@ impl State {
                 Step::Go { slot, frame, piece } => (slot, frame, piece),
                 Step::Close { slot, open } => {
                     // Spend THIS slot on the close; the parked delivery waits for the next one.
-                    let closed = codec.queue_input_buffer_by_index(slot, 0, 0, open.pts_us, 0);
-                    if let Err(e) = &closed {
+                    // A refused close is a refused queue call, tried again at the next slot.
+                    if let Err(e) = codec.queue_input_buffer_by_index(slot, 0, 0, open.pts_us, 0) {
                         log::warn!("decode: close of abandoned partial AU {}: {e}", open.index);
+                        self.inputs.close_failed(slot, open);
+                        self.refusing();
+                        break;
                     }
-                    self.inputs.closed(slot, closed.is_ok());
                     log::warn!(
                         "decode: partial AU {} abandoned mid-feed — closed empty, requesting keyframe",
                         open.index

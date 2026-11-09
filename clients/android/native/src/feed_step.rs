@@ -36,7 +36,7 @@ pub(crate) enum Step {
         piece: Piece,
     },
     /// Queue an empty buffer at `open.pts_us` into `slot`: the AU open in the codec died. The
-    /// park's head waits for the next slot. Report with [`Feed::closed`].
+    /// park's head waits for the next slot. Report a refused call with [`Feed::close_failed`].
     Close { slot: usize, open: PartFeed },
     /// The park's head lost its AU's head upstream and is dropped. No slot is spent.
     Orphan,
@@ -106,11 +106,15 @@ impl Feed {
         })
     }
 
-    /// The close [`Step::Close`] asked for went in (`taken`), or its slot is still ours.
-    pub(crate) fn closed(&mut self, slot: usize, taken: bool) {
-        if !taken {
-            self.slots.push_front(slot);
-        }
+    /// The codec refused the close of `open`. The slot is still ours, and the codec still holds
+    /// the AU's pieces, so the ledger stays poisoned: the next slot closes it again before any
+    /// other piece goes in, which would land on the dead AU's prefix.
+    pub(crate) fn close_failed(&mut self, slot: usize, open: PartFeed) {
+        self.slots.push_front(slot);
+        self.open = Some(PartFeed {
+            expected: usize::MAX,
+            ..open
+        });
     }
 
     /// The codec handed back no buffer for `slot`. Slot and delivery stay ours, first in line:
@@ -235,13 +239,12 @@ mod tests {
             match step {
                 Step::Orphan => out.push(Orphan),
                 Step::Close { slot, open } => {
-                    let taken = !matches!(answers.next(), Some(Refuses));
-                    feed.closed(slot, taken);
-                    out.push(if taken {
-                        Closed(open.index)
-                    } else {
-                        Out::CloseRefused(open.index)
-                    });
+                    if let Some(Refuses) = answers.next() {
+                        feed.close_failed(slot, open);
+                        out.push(Out::CloseRefused(open.index));
+                        break;
+                    }
+                    out.push(Closed(open.index));
                 }
                 Step::Go { slot, frame, piece } => match answers.next().unwrap_or(Answer::Takes) {
                     NoBuffer => {
@@ -377,6 +380,19 @@ mod tests {
                 Pass(&[Answer::Takes, Refuses]),
             ],
             &[Fed(1, 0), Out::Refused(1, Left::Poison), Closed(1), Orphan],
+        ),
+        (
+            "R1-5: a refused close is tried again before the next AU goes in",
+            &[
+                Part(1, 0, true, false),
+                Whole(2),
+                Slot(0),
+                Slot(1),
+                Pass(&[Answer::Takes, Refuses]),
+                Slot(2),
+                Pass(&[]),
+            ],
+            &[Fed(1, 0), Out::CloseRefused(1), Closed(1), Fed(2, 2)],
         ),
         (
             "park: past the cap the oldest AU is dropped",
