@@ -88,9 +88,12 @@ impl Lifecycle {
                 self.retry = false;
                 Action::Nothing
             }
-            // A 10-bit config that has never shown a frame is the likelier fault than the GL.
-            Event::AttachFailed | Event::WrapFailed if self.ten_bit => {
+            // A 10-bit config that failed twice and never showed a frame is the likelier fault
+            // than the GL. One failure is a transient and keeps 10 bit; the 8-bit context starts
+            // its own run.
+            Event::AttachFailed | Event::WrapFailed if self.ten_bit && self.failures >= 1 => {
                 self.ten_bit = false;
+                self.failures = 0;
                 self.retry = true;
                 Action::FallBack
             }
@@ -398,9 +401,11 @@ mod tests {
     /// Cases on a 10/10/10/2 context.
     const TEN_BIT: &[Case] = &[
         (
-            "R7-6: a 10-bit window that does not attach falls back to 8 bit uncounted",
+            "R7-6: a 10-bit window that fails to attach twice falls back to 8 bit",
             &[
                 (Created, Attach, 0),
+                (AttachFailed, Nothing, 1),
+                (Tick, Attach, 1),
                 (AttachFailed, FallBack, 0),
                 (Tick, Attach, 0),
                 (Attached, Nothing, 0),
@@ -409,10 +414,26 @@ mod tests {
             ],
         ),
         (
-            "R7-6: a 10-bit surface Skia does not wrap falls back to 8 bit uncounted",
+            "one failure is a transient and keeps the 10-bit context",
+            &[
+                (Created, Attach, 0),
+                (AttachFailed, Nothing, 1),
+                (Tick, Attach, 1),
+                (Attached, Nothing, 1),
+                (Wrapped, Nothing, 1),
+                (Shown, Nothing, 0),
+                (SwapFailed, DropSurface, 1),
+                (Tick, Attach, 1),
+                (AttachFailed, Nothing, 2),
+            ],
+        ),
+        (
+            "R7-6: a 10-bit surface Skia fails to wrap twice falls back to 8 bit",
             &[
                 (Created, Attach, 0),
                 (Attached, Nothing, 0),
+                (WrapFailed, Nothing, 1),
+                (Tick, Nothing, 1),
                 (WrapFailed, FallBack, 0),
                 (Tick, Attach, 0),
                 (Attached, Nothing, 0),
@@ -424,6 +445,8 @@ mod tests {
             "R7-6: the 8-bit context counts its own failures",
             &[
                 (Created, Attach, 0),
+                (AttachFailed, Nothing, 1),
+                (Tick, Attach, 1),
                 (AttachFailed, FallBack, 0),
                 (Tick, Attach, 0),
                 (AttachFailed, Nothing, 1),
