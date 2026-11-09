@@ -105,12 +105,10 @@ enum Target {
     Grants,
 }
 
-/// The hosts that send a pad's readings for the input test.
+/// The hosts that send a pad's readings for the input test. The browser page has its own
+/// recorder, so its console never gets them.
 pub(super) fn can_test(platform: Platform) -> bool {
-    matches!(
-        platform,
-        Platform::Android | Platform::Apple | Platform::Desktop
-    )
+    !matches!(platform, Platform::Web | Platform::Tizen)
 }
 
 fn targets(ctx: &Ctx, others: &[OtherDevice]) -> Vec<Target> {
@@ -723,7 +721,7 @@ mod tests {
         let mut s = PlayersScreen::new();
         let out = drive(
             &mut s,
-            Platform::WebOS,
+            Platform::Web,
             &[pad("DualSense", true)],
             &[MenuEvent::Confirm],
         );
