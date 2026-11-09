@@ -91,6 +91,7 @@
 	"apple_ring_note_no_touch_tv": "Indisponible sur Apple TV — pas d’écran tactile",
 	"apple_ring_note_keyboard_tv": "Indisponible sur Apple TV",
 	"apple_ring_note_mic_tv": "Indisponible sur Apple TV — pas de microphone",
+	"apple_ring_mac_only": "Uniquement sur Mac",
 	"apple_tv_ring_footer": "Une brève pression sur {remote} ouvre les actions rapides pendant un stream, tout comme {pad} sur une manette.",
 	"apple_tv_ring_move": "Déplacer",
 	"apple_tv_ring_clear": "Vider",

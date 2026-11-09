@@ -92,6 +92,8 @@
 	"desktop_shortcut_capture_tooltip": "Luego pulsa las teclas en tu teclado",
 	"desktop_shortcuts_this_window": "Esta ventana",
 	"desktop_shortcuts_stream_window": "Transmisión (ventana de sesión)",
+	"desktop_shortcuts_reset_title": "¿Restablecer los atajos?",
+	"desktop_shortcuts_reset_body": "Cada atajo vuelve a su valor predeterminado y se eliminan los que añadiste.",
 	"desktop_accel_show_hosts": "Mostrar hosts",
 	"desktop_accel_show_library": "Mostrar biblioteca",
 	"desktop_accel_search_library": "Buscar en la biblioteca",

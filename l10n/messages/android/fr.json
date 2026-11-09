@@ -72,6 +72,7 @@
 	"android_keycapture_service_label": "Raccourcis clavier Punktfunk",
 	"android_keycapture_service_description": "Permet à un flux de capter tous les raccourcis clavier, y compris Alt+Tab et la touche Windows. Les touches ne vont qu’à l’ordinateur depuis lequel vous diffusez, et seulement tant qu’un flux est affiché à l’écran ; en dehors d’un flux, toutes les touches passent sans être modifiées. Rien n’est stocké.",
 	"android_remote_pointer_hint": "Pointeur de la télécommande — {select} : clic · {play_pause} : clic droit · maintenez {select} pour quitter",
+	"android_controls_remote_pointer": "Piloter le pointeur de l’hôte avec la télécommande, ou arrêter",
 	"android_grant_expired": "Votre accès à cet hôte a expiré.",
 	"android_keepalive_streaming": "Streaming",
 	"android_keepalive_background": "Streaming en arrière-plan",

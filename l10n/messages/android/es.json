@@ -72,6 +72,7 @@
 	"android_keycapture_service_label": "Atajos de teclado de Punktfunk",
 	"android_keycapture_service_description": "Permite que una transmisión capture todos los atajos de teclado, incluidos Alt+Tab y la tecla Windows. Las teclas solo se envían al equipo desde el que transmites, y únicamente mientras la transmisión esté en pantalla; fuera de ella, todas las teclas pasan sin modificar. No se almacena nada.",
 	"android_remote_pointer_hint": "Puntero remoto — {select} clic · {play_pause} clic derecho · mantén {select} para salir",
+	"android_controls_remote_pointer": "Controlar el puntero del host con el mando a distancia, o dejar de hacerlo",
 	"android_grant_expired": "Tu acceso a este host ha caducado.",
 	"android_keepalive_streaming": "Transmitiendo",
 	"android_keepalive_background": "Transmitiendo en segundo plano",
