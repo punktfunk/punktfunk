@@ -790,14 +790,10 @@ object SkiaConsole {
             NativeBridge.nativeConsoleSessionPhase(handle, 2, identities.blockedMessage())
             return
         }
-        // The shell raises its hold for a GAME launch off a shelf; a desktop connect and a
-        // launcher tile go straight through, so the session is handed over at once. Mirrors
-        // `Shell::launch_hold`, and reads the same cached catalog the shelf was drawn from, which
-        // also carries the host's overrides for the title.
+        // The cached catalog the shelf was drawn from: it holds the host's overrides for the title.
         val entry = launchId?.let { id ->
             LibraryCache.standard(app.cacheDir).load(LibraryCache.keyFor(kh, fp))?.games?.firstOrNull { it.id == id }
         }
-        holdsLaunch = entry?.isLauncher == false
         val preset: StreamPreset? = presetStore.resolveFor(kh, presetId, launchId)
         val effective = settings.effectiveFor(preset)
         val ticket = HostServices.Ticket()
@@ -838,14 +834,13 @@ object SkiaConsole {
                 val h = dialed.session.handle
                 val session = dialed.session
                     .copy(launchedFromLibrary = launchId != null, libraryPresetId = presetId)
-                // The console learns the dial landed and keeps the screen: its launch hold
-                // is still waiting on the game. Handing the session over here instead would
-                // swap the console for the stream view mid-wait, which is the seam this
-                // whole screen exists to remove. `ShowStream` releases it.
+                // The console learns the dial landed and keeps the screen while its launch hold
+                // waits on the game; `ShowStream` releases the session. Only the shell knows
+                // whether it holds: a link, a desktop and a launcher tile start none.
                 NativeBridge.nativeConsoleSessionPhase(handle, 1, "")
                 val take = onConnected
                 when {
-                    holdsLaunch -> pendingSession = session
+                    NativeBridge.nativeConsoleHoldsLaunch(handle) -> pendingSession = session
                     take != null -> take(session)
                     // Nothing on screen to hand it to (the console is parked behind a
                     // stream): close it rather than leave the host feeding a session

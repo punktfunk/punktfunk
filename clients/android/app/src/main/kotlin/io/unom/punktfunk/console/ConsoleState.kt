@@ -54,14 +54,10 @@ internal class ConsoleState {
     /**
      * The connected session the console's launch hold is still standing in front of.
      *
-     * Handed to the app on `ShowStream`, dropped on a cancel. Null whenever the console is not
-     * holding one — a desktop-session connect, or a launch the shell decided not to hold (a
-     * launcher tile, which the host never tracks).
+     * Handed to the app on `ShowStream`, dropped on a cancel. Null whenever the shell holds no
+     * launch — a desktop-session connect, a launcher tile or a link.
      */
     var pendingSession: ActiveSession? = null
-
-    /** Whether the launch just dialled is one the shell will hold: a game, not a launcher. */
-    var holdsLaunch = false
 
     /** The driving pad's reading while the console's input test is on (`ConsoleCmd::PadTest`). */
     var padTest: PadTestReading? = null

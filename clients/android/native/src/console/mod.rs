@@ -347,6 +347,22 @@ pub extern "system" fn Java_io_unom_punktfunk_kit_NativeBridge_nativeConsoleSess
     .resolve::<LogErrorAndDefault>()
 }
 
+/// `NativeBridge.nativeConsoleHoldsLaunch(handle): Boolean` — the shell's launch hold is up, so
+/// the session it launched waits for `ShowStream`. False when the shell raised no hold, as for a
+/// link's launch.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_io_unom_punktfunk_kit_NativeBridge_nativeConsoleHoldsLaunch(
+    _env: EnvUnowned,
+    _this: JObject,
+    handle: jlong,
+) -> jboolean {
+    jni_guard(false, || {
+        CONSOLES
+            .get(handle)
+            .is_some_and(|h| h.shared.holds_launch())
+    })
+}
+
 /// `NativeBridge.nativeConsoleTakeUnlock(handle, stays): ByteArray?` — the password the
 /// console's prompt holds for the `Launch` it just raised, moved out of the console's model:
 /// null when it holds none. `stays[0]` gets its "Stay signed in" switch. The model's copy wipes

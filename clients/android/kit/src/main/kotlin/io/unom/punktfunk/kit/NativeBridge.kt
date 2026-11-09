@@ -1036,6 +1036,12 @@ object NativeBridge {
     external fun nativeConsoleSessionPhase(handle: Long, phase: Int, message: String)
 
     /**
+     * Whether the console's launch hold is up: the session it launched waits for its `ShowStream`
+     * action. False for a launch the shell raised no hold for, such as a link's.
+     */
+    external fun nativeConsoleHoldsLaunch(handle: Long): Boolean
+
+    /**
      * The password the console's prompt holds for the `Launch` it just raised, moved out of the
      * console: null when it holds none. [stays] gets its "Stay signed in" switch at index 0. The
      * console's copy is wiped as this returns; the caller wipes the array once its dial returns.
