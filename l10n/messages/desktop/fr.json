@@ -92,6 +92,8 @@
 	"desktop_shortcut_capture_tooltip": "Appuyez ensuite sur les touches de votre clavier",
 	"desktop_shortcuts_this_window": "Cette fenêtre",
 	"desktop_shortcuts_stream_window": "Stream (fenêtre de session)",
+	"desktop_shortcuts_reset_title": "Réinitialiser les raccourcis ?",
+	"desktop_shortcuts_reset_body": "Chaque raccourci revient à sa valeur par défaut, et ceux que vous avez ajoutés sont supprimés.",
 	"desktop_accel_show_hosts": "Afficher les hôtes",
 	"desktop_accel_show_library": "Afficher la bibliothèque",
 	"desktop_accel_search_library": "Rechercher dans la bibliothèque",

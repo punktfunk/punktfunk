@@ -91,6 +91,7 @@
 	"apple_ring_note_no_touch_tv": "No disponible en Apple TV — sin pantalla táctil",
 	"apple_ring_note_keyboard_tv": "No disponible en Apple TV",
 	"apple_ring_note_mic_tv": "No disponible en Apple TV — sin micrófono",
+	"apple_ring_mac_only": "Solo en Mac",
 	"apple_tv_ring_footer": "Una pulsación corta de {remote} abre las acciones rápidas durante la transmisión, y {pad} en un mando también.",
 	"apple_tv_ring_move": "Mover",
 	"apple_tv_ring_clear": "Vaciar",

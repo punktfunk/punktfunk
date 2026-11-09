@@ -99,6 +99,8 @@
 	"desktop_shortcut_capture_tooltip": "Drücke dann die Tasten auf deiner Tastatur",
 	"desktop_shortcuts_this_window": "Dieses Fenster",
 	"desktop_shortcuts_stream_window": "Stream (Sitzungsfenster)",
+	"desktop_shortcuts_reset_title": "Kurzbefehle zurücksetzen?",
+	"desktop_shortcuts_reset_body": "Jeder Kurzbefehl kehrt zu seinem Standard zurück, und die von dir hinzugefügten werden entfernt.",
 	"desktop_accel_show_hosts": "Hosts anzeigen",
 	"desktop_accel_show_library": "Bibliothek anzeigen",
 	"desktop_accel_search_library": "Bibliothek durchsuchen",

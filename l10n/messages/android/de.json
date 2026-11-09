@@ -72,6 +72,7 @@
 	"android_keycapture_service_label": "Punktfunk-Tastenkürzel",
 	"android_keycapture_service_description": "Lässt einen Stream jedes Tastenkürzel übernehmen, auch Alt+Tab und die Windows-Taste. Tasten gehen nur an den Computer, von dem du streamst, und nur solange ein Stream zu sehen ist; außerhalb eines Streams gehen alle Tasten unverändert durch. Nichts wird gespeichert.",
 	"android_remote_pointer_hint": "Fernbedienungszeiger – {select} klickt · {play_pause} Rechtsklick · {select} halten zum Beenden",
+	"android_controls_remote_pointer": "Den Zeiger des Hosts mit der Fernbedienung steuern oder damit aufhören",
 	"android_grant_expired": "Dein Zugriff auf diesen Host ist abgelaufen.",
 	"android_keepalive_streaming": "Streamt",
 	"android_keepalive_background": "Streamt im Hintergrund",

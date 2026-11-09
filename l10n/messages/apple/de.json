@@ -91,6 +91,7 @@
 	"apple_ring_note_no_touch_tv": "Nicht auf Apple TV – kein Touchscreen",
 	"apple_ring_note_keyboard_tv": "Nicht auf Apple TV",
 	"apple_ring_note_mic_tv": "Nicht auf Apple TV – kein Mikrofon",
+	"apple_ring_mac_only": "Nur auf dem Mac",
 	"apple_tv_ring_footer": "Ein kurzer Druck auf {remote} öffnet die Schnellaktionen im Stream, ebenso {pad} am Controller.",
 	"apple_tv_ring_move": "Verschieben",
 	"apple_tv_ring_clear": "Leeren",
