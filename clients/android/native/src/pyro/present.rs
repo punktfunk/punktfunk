@@ -483,10 +483,10 @@ impl<'d> Present<'d> {
         match outcome {
             Ok(false) if !suboptimal => Ok(true),
             // Suboptimal is not an error — the picture was shown. Android reports it on every
-            // present whose IDENTITY transform differs from the panel's rotation, so only a
-            // size change (the bars retracting) earns a rebuild.
+            // present whose IDENTITY transform differs from the panel's rotation, so only a size
+            // change earns a rebuild. Once Kotlin reports sizes, `follow` catches every one.
             Ok(_) => {
-                if self.extent_changed()? {
+                if self.followed == 0 && self.extent_changed()? {
                     self.recreate()?;
                 }
                 Ok(true)
