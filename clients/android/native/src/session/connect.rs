@@ -806,12 +806,13 @@ pub extern "system" fn Java_io_unom_punktfunk_kit_NativeBridge_nativeClose(
     handle: jlong,
 ) {
     jni_guard((), || {
-        let Some(session) = SESSIONS.remove(handle) else {
-            return;
-        };
+        // Joined while the key still resolves: a `nativeStopPadAudio` racing this close then
+        // waits on the same join instead of finding no session and returning at once.
         #[cfg(target_os = "android")]
-        session.stop_pad_audio();
-        drop(session);
+        if let Some(session) = SESSIONS.get(handle) {
+            session.stop_pad_audio();
+        }
+        drop(SESSIONS.remove(handle));
     })
 }
 
