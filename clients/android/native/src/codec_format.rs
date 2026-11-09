@@ -222,6 +222,99 @@ mod tests {
     }
 
     #[test]
+    fn take_by_pts_rows() {
+        type Queue = [(u64, char)];
+        // (name, queue, pts, result, what is left)
+        let rows: [(&str, &Queue, u64, Option<char>, &Queue); 7] = [
+            (
+                "the front is the match",
+                &[(10, 'a'), (20, 'b')],
+                10,
+                Some('a'),
+                &[(20, 'b')],
+            ),
+            (
+                "a match pops every older entry",
+                &[(10, 'a'), (20, 'b'), (30, 'c')],
+                20,
+                Some('b'),
+                &[(30, 'c')],
+            ),
+            (
+                "a miss between entries evicts the older",
+                &[(10, 'a'), (30, 'c')],
+                20,
+                None,
+                &[(30, 'c')],
+            ),
+            (
+                "a pts below the queue keeps it whole",
+                &[(30, 'c')],
+                10,
+                None,
+                &[(30, 'c')],
+            ),
+            (
+                "a pts above the queue empties it",
+                &[(10, 'a'), (20, 'b')],
+                99,
+                None,
+                &[],
+            ),
+            ("an empty queue misses", &[], 10, None, &[]),
+            (
+                "equal pts pair one at a time",
+                &[(10, 'a'), (10, 'b')],
+                10,
+                Some('a'),
+                &[(10, 'b')],
+            ),
+        ];
+        for (name, queue, pts, want, left) in rows {
+            let mut q: VecDeque<_> = queue.iter().copied().collect();
+            assert_eq!(take_by_pts(&mut q, pts), want, "{name}");
+            assert_eq!(q, VecDeque::from(left.to_vec()), "{name}: what is left");
+        }
+    }
+
+    #[test]
+    fn take_flags_reads_zero_on_a_miss() {
+        let mut q: VecDeque<(u64, u32)> = [(10, 0b101), (20, 0), (30, 0b10)].into();
+        assert_eq!(take_flags(&mut q, 10), 0b101, "a parked AU's flags");
+        assert_eq!(take_flags(&mut q, 25), 0, "a miss evicts 20 and reads 0");
+        assert_eq!(take_flags(&mut q, 30), 0b10, "the next AU is still there");
+        assert_eq!(take_flags(&mut q, 30), 0, "a taken entry is gone");
+    }
+
+    #[test]
+    fn p50_max_ms_summarises_microsecond_samples() {
+        // (name, samples in µs, (p50, max) in ms)
+        let rows: [(&str, &[u64], (f64, f64)); 6] = [
+            ("no samples", &[], (0.0, 0.0)),
+            ("one sample", &[1500], (1.5, 1.5)),
+            (
+                "an odd count takes the middle",
+                &[3000, 1000, 2000],
+                (2.0, 3.0),
+            ),
+            (
+                "an even count takes the upper middle",
+                &[4000, 1000, 3000, 2000],
+                (3.0, 4.0),
+            ),
+            (
+                "the max is not the last sample",
+                &[9000, 1000, 2000, 3000, 4000],
+                (3.0, 9.0),
+            ),
+            ("repeats", &[2000, 2000, 2000], (2.0, 2.0)),
+        ];
+        for (name, samples, want) in rows {
+            assert_eq!(p50_max_ms(samples.to_vec()), want, "{name}");
+        }
+    }
+
+    #[test]
     fn the_mime_follows_the_codec_and_anything_else_is_hevc() {
         use punktfunk_core::quic::{CODEC_AV1, CODEC_H264, CODEC_HEVC, CODEC_PYROWAVE};
         // (name, wire codec, mime)
