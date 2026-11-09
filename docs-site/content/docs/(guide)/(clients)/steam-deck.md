@@ -80,10 +80,13 @@ installed on the Deck. Pick **This device** to hand the button back to Steam. Th
   **Show advanced** first).
 - **End game:** a stream started from a game's page adds **End game** to **Host menus**. It closes
   the game on the host, then the stream.
-- **Steam Input.** The plugin installs a Steam Input layout called **Punktfunk**. With Steam Input
-  on, the touchscreen reaches the host as real touch and the Deck is a standard gamepad. With Steam
-  Input off, the host gets a full Steam Deck pad (paddles, both trackpads, gyro) and the touchscreen
-  stops working as touch. Set it per game: game page → ⚙ → **Controller Settings**.
+- **Steam Input.** The host always gets the full Steam Deck controller: paddles, both trackpads
+  and gyro. Set a game's controls in Steam on the host, during a stream so Steam there sees the
+  Deck: send the Steam button to the host as above, then open the game's controller settings.
+  On the Deck, every stream uses the **Punktfunk** layout the plugin installs, even when the
+  overlay shows the game's name. That layout sends the touchscreen as real touch. A different
+  layout stops touch, and any key or mouse binding in it reaches the host on top of the
+  controller.
 
 ## Updating
 
