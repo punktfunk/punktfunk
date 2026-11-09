@@ -33,13 +33,6 @@ const SYSTEM_BUTTONS: &[(&str, Label)] = &[
     ("forward", client::player_system_buttons_forward),
     ("local", client::player_system_buttons_local),
 ];
-/// The hold-Select guide gesture: `(stored value, display label)` — the cross-client
-/// `guide_gesture` key. Automatic arms it only where the raw press can't reach the host.
-const GUIDE_GESTURES: &[(&str, Label)] = &[
-    ("auto", client::player_guide_gesture_auto),
-    ("on", client::player_guide_gesture_on),
-    ("off", client::player_guide_gesture_off),
-];
 
 /// Controllers: the pad inventory, forwarding and the emulated pad.
 pub(super) fn controllers_section(cx: &Cx) -> Vec<View> {
@@ -146,18 +139,6 @@ pub(super) fn controllers_section(cx: &Cx) -> Vec<View> {
         },
     )
     .is_enabled(s.gamepad_forwarding);
-    let (gesture_names, gesture_i) = presets(&labeled(GUIDE_GESTURES), |v| *v == s.guide_gesture);
-    let gesture_combo = setting_combo(
-        cx,
-        scope,
-        "guide_gesture",
-        gesture_names,
-        gesture_i,
-        |s, i| {
-            s.guide_gesture = GUIDE_GESTURES[i].0.to_string();
-        },
-    )
-    .is_enabled(s.gamepad_forwarding);
 
     let mut out = group(
         cx.pal,
@@ -245,20 +226,12 @@ pub(super) fn controllers_section(cx: &Cx) -> Vec<View> {
             client::player_forward_pad_hint(),
         ));
     }
-    advanced.extend([
-        described_overridable(
-            cx,
-            &rows::SYSTEM_BUTTONS,
-            sysbtn_combo,
-            client::player_system_buttons_hint(),
-        ),
-        described_overridable(
-            cx,
-            &rows::GUIDE_GESTURE,
-            gesture_combo,
-            &client::player_guide_gesture_hint("Select"),
-        ),
-    ]);
+    advanced.push(described_overridable(
+        cx,
+        &rows::SYSTEM_BUTTONS,
+        sysbtn_combo,
+        client::player_system_buttons_hint(),
+    ));
     if !preset_mode {
         advanced.push(described_labeled(
             cx.pal,
@@ -277,7 +250,6 @@ pub(super) fn controllers_section(cx: &Cx) -> Vec<View> {
         s.gamepad_forwarding != d.gamepad_forwarding,
         !s.forward_pad.is_empty(),
         s.system_buttons != d.system_buttons,
-        s.guide_gesture != d.guide_gesture,
         s.pad_haptics != d.pad_haptics,
         s.pad_speaker != d.pad_speaker,
     ];
@@ -285,7 +257,7 @@ pub(super) fn controllers_section(cx: &Cx) -> Vec<View> {
         cx,
         advanced,
         changed.into_iter().filter(|c| *c).count(),
-        ["gamepad_forwarding", "system_buttons", "guide_gesture"]
+        ["gamepad_forwarding", "system_buttons"]
             .into_iter()
             .any(|f| cx.overrides(f)),
     ));

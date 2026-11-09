@@ -10,7 +10,7 @@ Fixes for keyboard, mouse, controller and clipboard problems.
 ### My mouse and keyboard are stuck in the stream
 
 The stream captures them on purpose. **Ctrl+Alt+Shift+Q** (**⌃⌥⇧Q** on a Mac) hands them back;
-every client's shortcut is in [Getting your input back](/docs/input#getting-your-input-back).
+every client's shortcut is in [Getting your input back](/docs/shortcuts#getting-your-input-back).
 
 ### My keyboard types the wrong characters (`#` comes out as `\`)
 

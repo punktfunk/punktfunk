@@ -18,18 +18,19 @@
 use crate::session_main::{
     arg_flag, arg_value, fullscreen_mode, parse_host_port, session_params, stats_tier, window_pos,
 };
-use pf_client_core::gamepad::is_steam_deck;
+use pf_client_core::gamepad::{is_steam_deck, PadReading};
 use pf_client_core::orchestrate::{
     self, emit, exit, SessionLine, WakeOutcome, WAKE_RESEND_SECS, WAKE_TIMEOUT_SECS,
 };
 use pf_client_core::{discovery, library, profiles, start, trust, wol};
 use pf_console_ui::{
     ConsoleCmd, ConsoleEntry, ConsoleHandles, ConsoleOptions, ConsoleShared, HostRow, LibraryGame,
-    LibraryPhase, LibraryShared, PairPhase, PairStatus, ProfilesAnswer, RequestKey, SkiaOverlay,
-    SpeedPhase, WakeStatus,
+    LibraryPhase, LibraryShared, PadTestState, PairPhase, PairStatus, ProfilesAnswer, RequestKey,
+    SkiaOverlay, SpeedPhase, WakeStatus,
 };
 use pf_presenter::overlay::OverlayAction;
 use pf_presenter::ActionOutcome;
+use punktfunk_core::input::gamepad as wire;
 use std::collections::{HashMap, VecDeque};
 use std::net::Ipv4Addr;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -335,6 +336,7 @@ pub fn run(target: Option<&str>) -> u8 {
         touch_mode: settings_at_start.touch_mode(),
         mouse_mode: settings_at_start.mouse_mode(),
         invert_scroll: settings_at_start.invert_scroll,
+        shortcuts: crate::session_main::shortcuts_blob(&settings_at_start),
         inhibit_shortcuts: settings_at_start.inhibit_shortcuts,
         present_priority: settings_at_start.present_priority(),
         vsync: settings_at_start.vsync,
@@ -784,8 +786,13 @@ impl ServiceState {
             // Grants and rumble tests from the controllers screen, Android-only: the settings row
             // that opens that screen is not on the desktop's list.
             ConsoleCmd::PadAction { .. } => {}
-            // The Controllers tab offers no input test on the desktop.
-            ConsoleCmd::PadTest { .. } => {}
+            // While on, the menu pads feed the test instead of moving the menu.
+            ConsoleCmd::PadTest { on } => {
+                let console = self.console.clone();
+                pf_client_core::gamepad::set_pad_test(on.then(|| {
+                    Box::new(move |r: PadReading| console.set_pad_test(pad_test_state(r))) as _
+                }));
+            }
             // Only a host that raised a prompt hears its answer; the desktop raises none.
             ConsoleCmd::PromptAnswer { .. } => {}
             // The console reads the catalog straight from this file, so a save is the whole job.
@@ -1882,6 +1889,51 @@ fn to_model(games: &[library::GameEntry]) -> Vec<LibraryGame> {
             overrides: g.overrides.clone(),
         })
         .collect()
+}
+
+/// The input test's names for a pad reading: Xbox positions, the drawn pads' paddle names,
+/// and a trigger past half travel as held.
+fn pad_test_state(r: PadReading) -> PadTestState {
+    const NAMES: [(u32, &str); 21] = [
+        (wire::BTN_A, "A"),
+        (wire::BTN_B, "B"),
+        (wire::BTN_X, "X"),
+        (wire::BTN_Y, "Y"),
+        (wire::BTN_LB, "LB"),
+        (wire::BTN_RB, "RB"),
+        (wire::BTN_BACK, "Back"),
+        (wire::BTN_START, "Start"),
+        (wire::BTN_GUIDE, "Guide"),
+        (wire::BTN_LS_CLICK, "LS"),
+        (wire::BTN_RS_CLICK, "RS"),
+        (wire::BTN_DPAD_UP, "Up"),
+        (wire::BTN_DPAD_DOWN, "Down"),
+        (wire::BTN_DPAD_LEFT, "Left"),
+        (wire::BTN_DPAD_RIGHT, "Right"),
+        (wire::BTN_TOUCHPAD, "Touchpad"),
+        (wire::BTN_MISC1, "Misc"),
+        (wire::BTN_PADDLE1, "R4"),
+        (wire::BTN_PADDLE2, "L4"),
+        (wire::BTN_PADDLE3, "R5"),
+        (wire::BTN_PADDLE4, "L5"),
+    ];
+    const AXES: [&str; 6] = ["LX", "LY", "RX", "RY", "LT", "RT"];
+    let mut held: Vec<String> = NAMES
+        .iter()
+        .filter(|(bit, _)| r.buttons & bit != 0)
+        .map(|(_, name)| (*name).to_string())
+        .collect();
+    for (name, v) in [("LT", r.axes[4]), ("RT", r.axes[5])] {
+        if v > 0.5 {
+            held.push(name.to_string());
+        }
+    }
+    let axes = AXES
+        .iter()
+        .zip(r.axes)
+        .map(|(n, v)| ((*n).to_string(), v))
+        .collect();
+    PadTestState { held, axes }
 }
 
 /// Dev hook: entries from a JSON file; portrait paths starting with `/` load from disk.

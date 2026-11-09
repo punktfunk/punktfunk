@@ -115,6 +115,19 @@ final class RingState: ObservableObject {
         commit()
     }
 
+    /// A pad chord: on tvOS and macOS it toggles the ring, since neither has a finger to tap the
+    /// scrim with; iOS opens only, the twist that opened it also winds it back. `pad` is the
+    /// wire pad that asked.
+    func chordToggle(pad: UInt32?) {
+        #if os(tvOS) || os(macOS)
+        toggleCentred()
+        #else
+        pressTick &+= 1
+        openCentred()
+        #endif
+        if committed { opener = pad }
+    }
+
     /// A chord, a menu item or a remote's Back: open it in the middle of the stage, or close the
     /// one already up. The routes that carry no point are also the routes with no other way out.
     func toggleCentred() {
@@ -169,8 +182,9 @@ struct RingActions {
     var padAvailable: () -> Bool
     var padShown: () -> Bool
     var togglePad: () -> Void
-    /// One synthetic system-button tap on the host's pad (a `GamepadWire` bit).
-    var tapPadButton: (UInt32) -> Void
+    /// One synthetic system-button tap (a `GamepadWire` bit) on a wire pad, `nil` for the
+    /// first forwarded one.
+    var tapPadButton: (UInt32, UInt32?) -> Void
     /// Controller mouse: the pointer grant it needs, the wire pads it acts on (a bit per pad,
     /// `0` = none), the mode they share, and the step to the next one.
     var pointerGranted: () -> Bool
@@ -191,6 +205,18 @@ struct RingActions {
     var padType: () -> PunktfunkConnection.GamepadType = { .auto }
     var padTypeAvailable: () -> Bool = { false }
     var cyclePadType: () -> Void = {}
+    /// Release the captured mouse and keyboard, or capture them again.
+    var toggleCapture: () -> Void = {}
+    var toggleMouseMode: () -> Void = {}
+    var toggleFullscreen: () -> Void = {}
+    var minimize: () -> Void = {}
+    /// Clipboard sharing: whether this host and grant allow it, and the switch.
+    var clipboardAvailable: () -> Bool = { false }
+    var toggleClipboard: () -> Void = {}
+    /// A shortcut held past its hold: a key combination's keys, or a system button on the
+    /// pad that fired it, down on the host until the shortcut lifts.
+    var holdKeys: ([String], Bool) -> Void = { _, _ in }
+    var holdPadButton: (UInt32, Bool, UInt32?) -> Void = { _, _, _ in }
 }
 
 /// The editor's hooks (design §3.3): a tap on a slot picks its action instead of firing it, and
@@ -335,6 +361,23 @@ func spec(_ slot: SlotId, _ cfg: OverlayConfig, _ a: RingActions) -> SlotSpec {
         return SlotSpec(id: "swap_screens", label: String(localized: L10n.ringSwapScreens),
                         icon: "arrow.up.arrow.down",
                         enabled: false, reason: String(localized: L10n.ringSwapScreensUnavailable))
+    case .releaseInput:
+        return SlotSpec(id: slot.id, label: slot.label(), icon: "lock.open",
+                        enabled: slot.runsHere, reason: String(localized: L10n.ringNoPointerCapture))
+    case .mouseMode:
+        return SlotSpec(id: slot.id, label: slot.label(), icon: "cursorarrow.rays",
+                        enabled: slot.runsHere, reason: String(localized: L10n.appleRingMacOnly))
+    case .fullscreen:
+        return SlotSpec(id: slot.id, label: slot.label(), icon: "arrow.up.left.and.arrow.down.right",
+                        enabled: slot.runsHere, reason: String(localized: L10n.appleRingMacOnly))
+    case .minimize:
+        return SlotSpec(id: slot.id, label: slot.label(), icon: "minus.square",
+                        enabled: slot.runsHere, reason: String(localized: L10n.appleRingMacOnly))
+    case .clipboard:
+        return SlotSpec(id: slot.id, label: slot.label(), icon: "doc.on.clipboard",
+                        enabled: slot.runsHere && a.clipboardAvailable(),
+                        reason: String(localized: slot.runsHere ? L10n.ringHostNotOffered
+                            : L10n.ringClipboardUnavailable))
     case .host(let id):
         let act = a.hostActions().first { $0.id == id }
         // Three power actions, three glyphs — the same icon on all three made them one button.
@@ -358,11 +401,51 @@ func spec(_ slot: SlotId, _ cfg: OverlayConfig, _ a: RingActions) -> SlotSpec {
     }
 }
 
+/// What a slot does once it may fire: the dial's press and a shortcut share it. The ring closes
+/// first wherever the action takes the screen, the pointer or the stream. `pad` is the wire pad
+/// that asked; `nil` falls back to the dial's opener.
+@MainActor
+func perform(_ slot: SlotId, _ cfg: OverlayConfig, _ a: RingActions, _ ring: RingState, pad: UInt32? = nil) {
+    switch slot {
+    case .endStream: ring.close(); a.endStream()
+    case .endGame: ring.close(); a.endGame()
+    case .disconnectLinger: ring.close(); a.disconnectLinger()
+    case .touchMode: a.cycleTouchMode()
+    case .keyboard: ring.close(); a.keyboard()
+    case .stats: a.cycleStats()
+    case .mic: a.toggleMic()
+    case .pad: a.togglePad()
+    case .sendText, .streamMute, .swapScreens: break
+    // The host's own overlay is taking the screen: close first, like End stream.
+    case .guide, .qam:
+        let target = pad ?? ring.opener
+        ring.close()
+        a.tapPadButton(slot == .guide ? GamepadWire.guide : GamepadWire.misc1, target)
+    case .padMouse: a.cyclePadMouse()
+    case .padType: a.cyclePadType()
+    case .releaseInput: ring.close(); a.toggleCapture()
+    case .mouseMode: ring.close(); a.toggleMouseMode()
+    case .fullscreen: ring.close(); a.toggleFullscreen()
+    case .minimize: ring.close(); a.minimize()
+    case .clipboard: a.toggleClipboard()
+    case .host(let id):
+        if let act = a.hostActions().first(where: { $0.id == id }) {
+            ring.close()
+            a.invokeHost(act)
+        }
+    case .shortcut(let id):
+        if let sc = cfg.shortcut(id) {
+            ring.close()
+            a.sendShortcut(sc.keys)
+        }
+    }
+}
+
 /// The second-press prompt in the sheet's value column.
 private var againHint: String { String(localized: L10n.ringPressAgain) }
 
 /// The ring's question for a destructive slot: one whole message per slot, chosen by id.
-private func confirmHint(_ s: SlotSpec) -> String {
+func confirmHint(_ s: SlotSpec) -> String {
     switch s.id {
     case "end_stream": return String(localized: L10n.ringEndStreamConfirm)
     case "end_game": return String(localized: L10n.ringEndGameConfirm)
@@ -651,32 +734,7 @@ struct RingOverlay: View {
         state.pressTick &+= 1
         state.armed = nil
         state.hint = nil
-        switch slot {
-        case .endStream: state.close(); actions.endStream()
-        case .endGame: state.close(); actions.endGame()
-        case .disconnectLinger: state.close(); actions.disconnectLinger()
-        case .touchMode: actions.cycleTouchMode()
-        case .keyboard: state.close(); actions.keyboard()
-        case .stats: actions.cycleStats()
-        case .mic: actions.toggleMic()
-        case .pad: actions.togglePad()
-        case .sendText, .streamMute, .swapScreens: break
-        // The host's own overlay is taking the screen: close first, like End stream.
-        case .guide: state.close(); actions.tapPadButton(GamepadWire.guide)
-        case .qam: state.close(); actions.tapPadButton(GamepadWire.misc1)
-        case .padMouse: actions.cyclePadMouse()
-        case .padType: actions.cyclePadType()
-        case .host(let id):
-            if let act = actions.hostActions().first(where: { $0.id == id }) {
-                state.close()
-                actions.invokeHost(act)
-            }
-        case .shortcut(let id):
-            if let sc = cfg.shortcut(id) {
-                state.close()
-                actions.sendShortcut(sc.keys)
-            }
-        }
+        perform(slot, cfg, actions, state)
         if s.toggle {
             let after = spec(slot, cfg, actions)
             state.hint = "\(after.label): \(after.state)"
@@ -905,8 +963,9 @@ extension RingOverlay {
             rows.append(SheetRowSpec(label: sys.label, value: sys.enabled ? "" : sys.reason,
                                      enabled: sys.enabled) { [state] in
                 guard sys.enabled else { state.refuseTick &+= 1; return }
+                let opener = state.opener
                 state.close()
-                a.tapPadButton(bit)
+                a.tapPadButton(bit, opener)
             })
         }
         let pm = spec(.padMouse, cfg, a)

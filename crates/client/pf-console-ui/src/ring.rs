@@ -532,6 +532,44 @@ impl Ring {
                     c::ring_swap_screens_short(),
                 )
             },
+            SlotId::ReleaseInput => Spec {
+                enabled: f.pointer_capture,
+                reason: c::ring_no_pointer_capture().into(),
+                ..plain(
+                    "release_input",
+                    c::ring_release_input(),
+                    c::ring_release_input_short(),
+                )
+            },
+            SlotId::MouseMode => Spec {
+                enabled: f.pointer_capture,
+                reason: c::ring_no_pointer_capture().into(),
+                ..plain(
+                    "mouse_mode",
+                    c::ring_mouse_mode(),
+                    c::ring_mouse_mode_short(),
+                )
+            },
+            SlotId::Fullscreen => Spec {
+                enabled: f.windowed,
+                reason: c::ring_no_window().into(),
+                ..plain(
+                    "fullscreen",
+                    c::ring_fullscreen(),
+                    c::ring_fullscreen_short(),
+                )
+            },
+            SlotId::Minimize => Spec {
+                enabled: f.windowed,
+                reason: c::ring_no_window().into(),
+                ..plain("minimize", c::ring_minimize(), c::ring_minimize_short())
+            },
+            // Only the Apple client starts and stops clipboard sharing mid-stream.
+            SlotId::Clipboard => Spec {
+                enabled: false,
+                reason: c::ring_clipboard_unavailable().into(),
+                ..plain("clipboard", c::ring_clipboard(), c::ring_clipboard_short())
+            },
             SlotId::Guide => plain("guide", c::ring_guide(), c::ring_guide_short()),
             SlotId::Qam => plain("qam", c::ring_qam(), c::ring_qam_short()),
             SlotId::PadMouse => Spec {
@@ -675,7 +713,24 @@ impl Ring {
             SlotId::PadMouse => self.pending.push_back(RingCommand::CyclePadMouse),
             SlotId::PadType => self.pending.push_back(RingCommand::CyclePadType),
             SlotId::StreamMute => self.pending.push_back(RingCommand::ToggleStreamMute),
-            SlotId::Pad | SlotId::SendText | SlotId::SwapScreens => {}
+            SlotId::Pad | SlotId::SendText | SlotId::SwapScreens | SlotId::Clipboard => {}
+            // These change the window or the capture under the ring, so it closes first.
+            SlotId::ReleaseInput => {
+                self.close();
+                self.pending.push_back(RingCommand::ToggleCapture);
+            }
+            SlotId::MouseMode => {
+                self.close();
+                self.pending.push_back(RingCommand::ToggleMouseMode);
+            }
+            SlotId::Fullscreen => {
+                self.close();
+                self.pending.push_back(RingCommand::ToggleFullscreen);
+            }
+            SlotId::Minimize => {
+                self.close();
+                self.pending.push_back(RingCommand::Minimize);
+            }
             // The host's own overlay is about to take the screen: close first, like End stream.
             SlotId::Guide | SlotId::Qam => {
                 let bit = if *slot == SlotId::Guide {
@@ -732,6 +787,14 @@ impl Ring {
             SheetRow::Slot(SlotId::Mic),
             SheetRow::Slot(SlotId::StreamMute),
         ]);
+        if self.facts.pointer_capture {
+            rows.push(SheetRow::Slot(SlotId::ReleaseInput));
+            rows.push(SheetRow::Slot(SlotId::MouseMode));
+        }
+        if self.facts.windowed {
+            rows.push(SheetRow::Slot(SlotId::Fullscreen));
+            rows.push(SheetRow::Slot(SlotId::Minimize));
+        }
         rows.extend(
             self.actions()
                 .into_iter()
@@ -1755,8 +1818,19 @@ mod tests {
     /// client spending one of its six discs to silence itself.
     #[test]
     fn the_sheet_offers_every_action_this_platform_can_fire() {
+        let desktop = RingFacts {
+            windowed: true,
+            pointer_capture: true,
+            ..facts()
+        };
+        for f in [facts(), desktop] {
+            sheet_offers_every_fireable_action(&f);
+        }
+    }
+
+    fn sheet_offers_every_fireable_action(f: &RingFacts) {
         let mut r = Ring::new();
-        r.set_facts(&facts());
+        r.set_facts(f);
         let on_sheet: Vec<String> = r
             .sheet_rows()
             .iter()
@@ -1789,6 +1863,59 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// Release input and Mouse mode need a captured pointer, Fullscreen and Minimize a window;
+    /// each closes the ring and asks once. Clipboard sharing stays dimmed.
+    #[test]
+    fn the_window_and_capture_slots_follow_their_facts() {
+        let slots = [
+            (SlotId::ReleaseInput, RingCommand::ToggleCapture),
+            (SlotId::MouseMode, RingCommand::ToggleMouseMode),
+            (SlotId::Fullscreen, RingCommand::ToggleFullscreen),
+            (SlotId::Minimize, RingCommand::Minimize),
+        ];
+        let mut r = Ring::new();
+        r.set_facts(&facts());
+        for (slot, _) in &slots {
+            r.fire(slot);
+            assert_eq!(r.take_command(), None, "{slot:?} is dimmed on a TV");
+        }
+        assert_eq!(r.hint.as_deref(), Some("This device has no window"));
+        r.set_facts(&RingFacts {
+            windowed: true,
+            pointer_capture: true,
+            ..facts()
+        });
+        for (slot, cmd) in slots {
+            r.input(RingInput::Toggle { x: 1.0, y: 1.0 });
+            r.fire(&slot);
+            assert_eq!(r.take_command(), Some(cmd));
+            assert!(!r.open(), "{slot:?} closes the ring");
+        }
+        r.fire(&SlotId::Clipboard);
+        assert_eq!(r.take_command(), None);
+        assert_eq!(r.hint.as_deref(), Some("Not on this device yet"));
+    }
+
+    /// A key combination may be a modifier alone: the Windows key opens the Start menu.
+    #[test]
+    fn a_modifier_alone_is_a_key_combination_the_ring_sends() {
+        let mut r = Ring::new();
+        r.set_facts(&RingFacts {
+            overlay_actions:
+                r#"{"v":2,"ring":["shortcut:s1"],"shortcuts":[{"id":"s1","keys":["win"]}]}"#.into(),
+            ..facts()
+        });
+        let slot = SlotId::Shortcut("s1".into());
+        let s = r.spec(&slot);
+        assert!(s.enabled);
+        assert_eq!((s.label.as_str(), s.short.as_str()), ("Win", "Win"));
+        r.fire(&slot);
+        assert_eq!(
+            r.take_command(),
+            Some(RingCommand::Shortcut(vec!["win".into()]))
+        );
     }
 
     /// The sheet lists End game only while a game this device launched is on the stream;

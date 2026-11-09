@@ -1,21 +1,23 @@
 //! Console editor for the in-stream quick-action [`Ring`].
 //!
 //! Same type as the overlay, in editing mode. Stick or D-pad to a slot; A opens
-//! the catalogue picker; Y lifts a disc and A on another swaps. Shortcut rows
+//! the catalogue [`Picker`]; Y lifts a disc and A on another swaps. Key-combination rows
 //! under the ring open [`super::shortcut_editor::ShortcutEditorScreen`].
 //!
-//! Writes load-then-save like the settings screen, so another writer's edits
-//! are never reverted. Design: `design/touch-client-overlay.md`.
+//! Writes go through a [`Scope`]: load-then-save on the device's settings, so another
+//! writer's edits are never reverted, or a preset's overlay. Design:
+//! `design/touch-client-overlay.md`.
 
+use super::preset::Scope;
 use crate::glyphs::{Hint, HintKey};
 use crate::pointer::{Pointer, PointerKind};
 use crate::ring::{EditEvent, Ring, LABEL_H};
 use crate::screens::{Ctx, Outbox, Screen, ScreenView};
-use crate::theme::{fill, focus_halo, stroke, Fonts};
+use crate::theme::{fill, focus_halo, stroke, Fonts, Frame};
 use crate::widgets::{ListMsg, MenuList, RowSpec, ROW_MAX_W};
 use pf_client_core::menu_nav::{MenuDir, MenuEvent, MenuPulse};
 use pf_client_core::overlay_actions::{
-    catalogue, chord_chip, CatalogueEntry, OverlayConfig, RingPlatform, SlotId,
+    catalogue, chord_chip, CatalogueEntry, CatalogueGroup, OverlayConfig, RingPlatform, SlotId,
 };
 use pf_client_core::ring::{RingFacts, RING_RADIUS, SLOT_DIAMETER};
 use pf_l10n::client as c;
@@ -47,137 +49,33 @@ pub(crate) fn ring_platform(platform: crate::platform::Platform) -> RingPlatform
         // Not `Touch`: the TV's ring is driven by a pad or the remote's D-pad, so it wants the
         // keyboard/pad default blob. The Magic Remote is a pointer, but it never makes the
         // ring a touch surface.
-        crate::platform::Platform::WebOS | crate::platform::Platform::Ps5 => RingPlatform::Desktop,
+        crate::platform::Platform::WebOS
+        | crate::platform::Platform::Ps5
+        | crate::platform::Platform::Switch => RingPlatform::Desktop,
     }
 }
 
-struct Picker {
-    slot: usize,
+/// The action catalogue as a modal list over the screen: a ring slot's pick, and a
+/// shortcut's action ([`super::shortcuts`]).
+pub(crate) struct Picker {
     list: MenuList,
     rows: Vec<(String, RowSpec)>,
     rect: Rect,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Focus {
-    Ring,
-    List,
+/// What a picker event came to.
+pub(crate) enum Picked {
+    Stay(Option<MenuPulse>),
+    Chose(String),
+    Closed,
 }
 
-pub(crate) struct RingEditorScreen {
-    ring: Ring,
-    cfg: OverlayConfig,
-    platform: crate::platform::Platform,
-    /// Settings string `cfg` was parsed from. Re-adopted when the shortcut editor pops
-    /// back after writing it.
-    blob: String,
-    list: MenuList,
-    focus: Focus,
-    picker: Option<Picker>,
-    stage: Rect,
-    list_rect: Rect,
-    reset_armed: bool,
-    /// Last stick sector, even while the list is focused, so a handoff back to the ring
-    /// knows whether the stick is still held.
-    stick: Option<u8>,
-    /// Stick sector just entered the list; the four-way Move in the same sample must not
-    /// also step a row.
-    swallow_move: bool,
-}
-
-impl RingEditorScreen {
-    pub(crate) fn new(ctx: &Ctx) -> RingEditorScreen {
-        let mut s = RingEditorScreen {
-            ring: Ring::new(),
-            cfg: OverlayConfig::platform_default(ring_platform(ctx.device.platform)),
-            platform: ctx.device.platform,
-            blob: String::new(),
-            list: MenuList::new(),
-            focus: Focus::Ring,
-            picker: None,
-            stage: Rect::new_empty(),
-            list_rect: Rect::new_empty(),
-            reset_armed: false,
-            stick: None,
-            swallow_move: false,
-        };
-        s.ring.edit_at(0.0, 0.0);
-        s.adopt(&ctx.settings.overlay_actions, ctx.device.platform);
-        s
-    }
-
-    /// Parse `blob` into the ring. Empty is replaced with this platform's default JSON:
-    /// the ring parser otherwise assumes desktop.
-    fn adopt(&mut self, blob: &str, platform: crate::platform::Platform) {
-        self.platform = platform;
-        self.blob = blob.to_string();
-        self.cfg = OverlayConfig::parse(blob, ring_platform(platform));
-        let effective = if blob.trim().is_empty() {
-            self.cfg.to_json()
-        } else {
-            blob.to_string()
-        };
-        self.ring.set_facts(&RingFacts {
-            overlay_actions: effective,
-            touch_mode: "trackpad".into(),
-            stats_tier: pf_l10n::client::player_stats_verbosity_compact().into(),
-            mic_available: true,
-            pad_mouse_target: 0b1,
-            pointer_granted: true,
-            mode: (1920, 1080, 60),
-            native_mode: (1920, 1080, 60),
-            ..RingFacts::default()
-        });
-    }
-
-    /// Stores `blob` as the ring and adopts it.
-    fn write(&mut self, blob: String, ctx: &mut Ctx) {
-        ctx.write(|c| {
-            c.settings.overlay_actions = blob;
-            true
-        });
-        let b = ctx.settings.overlay_actions.clone();
-        self.adopt(&b, ctx.device.platform);
-    }
-
-    fn pick(&mut self, slot: usize, id: &str, ctx: &mut Ctx) {
-        let mut cfg = self.cfg.clone();
-        cfg.ring[slot] = if id.is_empty() {
-            None
-        } else {
-            SlotId::parse(id)
-        };
-        self.write(cfg.to_json(), ctx);
-    }
-
-    fn swap(&mut self, a: usize, b: usize, ctx: &mut Ctx) {
-        let mut cfg = self.cfg.clone();
-        cfg.ring.swap(a, b);
-        self.write(cfg.to_json(), ctx);
-    }
-
-    /// Empty blob = platform default, same as the settings row.
-    fn reset(&mut self, ctx: &mut Ctx, fx: &mut Outbox) {
-        self.write(String::new(), ctx);
-        fx.toast = Some(pf_l10n::console::console_ring_reset_toast().into());
-    }
-
-    /// The picker's list while it is open, else the slot list.
-    pub(super) fn pan_list(&mut self) -> &mut MenuList {
-        match &mut self.picker {
-            Some(pk) => &mut pk.list,
-            None => &mut self.list,
-        }
-    }
-
-    fn open_picker(&mut self, slot: usize) {
-        let current = self.cfg.ring[slot]
-            .as_ref()
-            .map(SlotId::id)
-            .unwrap_or_default();
+impl Picker {
+    /// `groups` as rows, `current`'s marked and under the cursor.
+    pub(crate) fn new(groups: Vec<CatalogueGroup>, current: &str) -> Picker {
         let mut rows: Vec<(String, RowSpec)> = Vec::new();
         let mut cursor = 0;
-        for group in catalogue(&self.cfg, ring_platform(self.platform)) {
+        for group in groups {
             for (i, entry) in group.entries.into_iter().enumerate() {
                 let CatalogueEntry { id, label, note } = entry;
                 let is_current = id == current;
@@ -201,19 +99,234 @@ impl RingEditorScreen {
         }
         let mut list = MenuList::new();
         list.jump_to(cursor);
-        self.picker = Some(Picker {
-            slot,
+        Picker {
             list,
             rows,
             rect: Rect::new_empty(),
+        }
+    }
+
+    pub(crate) fn list(&mut self) -> &mut MenuList {
+        &mut self.list
+    }
+
+    fn chosen(&self) -> Picked {
+        match self.rows.get(self.list.cursor) {
+            Some((id, _)) => Picked::Chose(id.clone()),
+            None => Picked::Closed,
+        }
+    }
+
+    pub(crate) fn menu(&mut self, ev: MenuEvent) -> Picked {
+        if ev == MenuEvent::Back {
+            return Picked::Closed;
+        }
+        let (msg, pulse) = self.list.menu(ev, self.rows.len());
+        match msg {
+            ListMsg::Activate => self.chosen(),
+            ListMsg::Adjust(_) => Picked::Stay(Some(MenuPulse::Boundary)),
+            ListMsg::None => Picked::Stay(pulse),
+        }
+    }
+
+    /// Modal: every pointer event is the picker's. A press outside the card closes it.
+    pub(crate) fn pointer(&mut self, p: Pointer) -> Picked {
+        if p.hits(self.rect) || matches!(p.kind, PointerKind::Scroll { .. }) {
+            let (msg, _) = self.list.pointer(p, self.rows.len());
+            if msg == ListMsg::Activate {
+                return self.chosen();
+            }
+        } else if p.press() {
+            return Picked::Closed;
+        }
+        Picked::Stay(None)
+    }
+
+    pub(crate) fn hints() -> Vec<Hint> {
+        use pf_l10n::common as m;
+        vec![
+            Hint::new(HintKey::Confirm, m::common_choose()),
+            Hint::new(HintKey::Back, m::common_cancel()),
+        ]
+    }
+
+    /// The card centred in `rect`, over a scrim of the whole canvas.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn render(
+        &mut self,
+        canvas: &Canvas,
+        ui: &Frame,
+        rect: Rect,
+        fonts: &Fonts,
+        k: f64,
+        dt: f64,
+    ) {
+        let kf = k as f32;
+        // Scrim the full canvas, not `rect`: the content rect is not the screen, and
+        // the canvas is translated (insets, transitions). 2000 px overshoots any
+        // heading or inset; the hint bar draws after this and stays legible.
+        canvas.draw_rect(
+            rect.with_outset((2000.0 * kf, 2000.0 * kf)),
+            &fill(Color4f::new(0.0, 0.0, 0.0, 0.45)),
+        );
+        let w = (520.0 * kf).min(rect.width() * 0.92);
+        let h = ((self.rows.len() as f32 * 50.0 + 60.0) * kf).min(rect.height() * 0.9);
+        let card = Rect::from_xywh(rect.center_x() - w / 2.0, rect.center_y() - h / 2.0, w, h);
+        canvas.draw_rrect(
+            RRect::new_rect_xy(card, 16.0 * kf, 16.0 * kf),
+            &fill(Color4f::new(0.06, 0.055, 0.1, 0.96)),
+        );
+        canvas.draw_rrect(
+            RRect::new_rect_xy(card, 16.0 * kf, 16.0 * kf),
+            &stroke(ui.fg(0.18), kf),
+        );
+        let inner = Rect::from_ltrb(
+            card.left + 8.0 * kf,
+            card.top + 12.0 * kf,
+            card.right - 8.0 * kf,
+            card.bottom - 12.0 * kf,
+        );
+        let specs: Vec<RowSpec> = self.rows.iter().map(|(_, r)| r.clone()).collect();
+        canvas.save();
+        canvas.clip_rect(inner, None, None);
+        self.list
+            .render(canvas, ui, inner, &specs, fonts, k, dt, true);
+        canvas.restore();
+        self.rect = card;
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Focus {
+    Ring,
+    List,
+}
+
+pub(crate) struct RingEditorScreen {
+    ring: Ring,
+    cfg: OverlayConfig,
+    platform: crate::platform::Platform,
+    scope: Scope,
+    /// Settings string `cfg` was parsed from. Re-adopted when the shortcut editor pops
+    /// back after writing it.
+    blob: String,
+    list: MenuList,
+    focus: Focus,
+    /// The slot being picked for, and its picker.
+    picker: Option<(usize, Picker)>,
+    stage: Rect,
+    list_rect: Rect,
+    reset_armed: bool,
+    /// Last stick sector, even while the list is focused, so a handoff back to the ring
+    /// knows whether the stick is still held.
+    stick: Option<u8>,
+    /// Stick sector just entered the list; the four-way Move in the same sample must not
+    /// also step a row.
+    swallow_move: bool,
+}
+
+impl RingEditorScreen {
+    pub(crate) fn new(ctx: &Ctx, scope: Scope) -> RingEditorScreen {
+        let mut s = RingEditorScreen {
+            ring: Ring::new(),
+            cfg: OverlayConfig::platform_default(ring_platform(ctx.device.platform)),
+            platform: ctx.device.platform,
+            scope,
+            blob: String::new(),
+            list: MenuList::new(),
+            focus: Focus::Ring,
+            picker: None,
+            stage: Rect::new_empty(),
+            list_rect: Rect::new_empty(),
+            reset_armed: false,
+            stick: None,
+            swallow_move: false,
+        };
+        s.ring.edit_at(0.0, 0.0);
+        let blob = s.scope.settings(ctx).overlay_actions.clone();
+        s.adopt(&blob, ctx.device.platform);
+        s
+    }
+
+    /// Parse `blob` into the ring. Empty is replaced with this platform's default JSON:
+    /// the ring parser otherwise assumes desktop.
+    fn adopt(&mut self, blob: &str, platform: crate::platform::Platform) {
+        self.platform = platform;
+        self.blob = blob.to_string();
+        self.cfg = OverlayConfig::parse(blob, ring_platform(platform));
+        let effective = if blob.trim().is_empty() {
+            self.cfg.to_json()
+        } else {
+            blob.to_string()
+        };
+        self.ring.set_facts(&RingFacts {
+            overlay_actions: effective,
+            touch_mode: "trackpad".into(),
+            stats_tier: pf_l10n::client::player_stats_verbosity_compact().into(),
+            mic_available: true,
+            pad_mouse_target: 0b1,
+            pointer_granted: true,
+            // The desktop's stream sits in a window and captures the pointer.
+            windowed: matches!(platform, crate::platform::Platform::Desktop),
+            pointer_capture: matches!(platform, crate::platform::Platform::Desktop),
+            mode: (1920, 1080, 60),
+            native_mode: (1920, 1080, 60),
+            ..RingFacts::default()
         });
     }
 
-    fn drain_edits(&mut self, ctx: &mut Ctx) {
+    /// Stores `blob` as the ring and adopts it.
+    fn write(&mut self, blob: String, ctx: &mut Ctx, fx: &mut Outbox) {
+        self.scope
+            .write("overlay_actions", ctx, fx, |s| s.overlay_actions = blob);
+        let b = self.scope.settings(ctx).overlay_actions.clone();
+        self.adopt(&b, ctx.device.platform);
+    }
+
+    fn pick(&mut self, slot: usize, id: &str, ctx: &mut Ctx, fx: &mut Outbox) {
+        let mut cfg = self.cfg.clone();
+        cfg.ring[slot] = if id.is_empty() {
+            None
+        } else {
+            SlotId::parse(id)
+        };
+        self.write(cfg.to_json(), ctx, fx);
+    }
+
+    fn swap(&mut self, a: usize, b: usize, ctx: &mut Ctx, fx: &mut Outbox) {
+        let mut cfg = self.cfg.clone();
+        cfg.ring.swap(a, b);
+        self.write(cfg.to_json(), ctx, fx);
+    }
+
+    /// Empty blob = platform default, same as the settings row.
+    fn reset(&mut self, ctx: &mut Ctx, fx: &mut Outbox) {
+        self.write(String::new(), ctx, fx);
+        fx.toast = Some(pf_l10n::console::console_ring_reset_toast().into());
+    }
+
+    /// The picker's list while it is open, else the slot list.
+    pub(super) fn pan_list(&mut self) -> &mut MenuList {
+        match &mut self.picker {
+            Some((_, pk)) => pk.list(),
+            None => &mut self.list,
+        }
+    }
+
+    fn open_picker(&mut self, slot: usize) {
+        let current = self.cfg.ring[slot]
+            .as_ref()
+            .map(SlotId::id)
+            .unwrap_or_default();
+        let groups = catalogue(&self.cfg, ring_platform(self.platform));
+        self.picker = Some((slot, Picker::new(groups, &current)));
+    }
+
+    fn drain_edits(&mut self, ctx: &mut Ctx, fx: &mut Outbox) {
         while let Some(ev) = self.ring.take_edit() {
             match ev {
                 EditEvent::Pick(k) => self.open_picker(k),
-                EditEvent::Swap(a, b) => self.swap(a, b, ctx),
+                EditEvent::Swap(a, b) => self.swap(a, b, ctx, fx),
             }
         }
     }
@@ -259,21 +372,12 @@ impl RingEditorScreen {
     }
 
     fn activate_row(&mut self, i: usize, ctx: &mut Ctx, fx: &mut Outbox) -> Option<MenuPulse> {
+        use super::shortcut_editor::ShortcutEditorScreen;
         let n = self.cfg.shortcuts.len();
-        if i < n {
-            fx.push(Screen::ShortcutEditor(
-                super::shortcut_editor::ShortcutEditorScreen::new(
-                    ctx,
-                    Some(&self.cfg.shortcuts[i]),
-                ),
-            ));
-            self.reset_armed = false;
-            return Some(MenuPulse::Confirm);
-        }
-        if i == n {
-            fx.push(Screen::ShortcutEditor(
-                super::shortcut_editor::ShortcutEditorScreen::new(ctx, None),
-            ));
+        if i <= n {
+            let existing = self.cfg.shortcuts.get(i);
+            let editor = ShortcutEditorScreen::new(ctx, existing, self.scope.clone());
+            fx.push(Screen::ShortcutEditor(editor));
             self.reset_armed = false;
             return Some(MenuPulse::Confirm);
         }
@@ -287,13 +391,21 @@ impl RingEditorScreen {
         }
     }
 
-    fn picker_choose(&mut self, ctx: &mut Ctx) {
-        let Some(p) = self.picker.take() else { return };
-        let Some((id, _)) = p.rows.get(p.list.cursor) else {
-            return;
-        };
-        let id = id.clone();
-        self.pick(p.slot, &id, ctx);
+    /// A picker event: the slot takes a pick, and the picker closes on it or on Back.
+    fn picked(&mut self, picked: Picked, ctx: &mut Ctx, fx: &mut Outbox) -> Option<MenuPulse> {
+        match picked {
+            Picked::Stay(pulse) => pulse,
+            Picked::Closed => {
+                self.picker = None;
+                Some(MenuPulse::Confirm)
+            }
+            Picked::Chose(id) => {
+                if let Some((slot, _)) = self.picker.take() {
+                    self.pick(slot, &id, ctx, fx);
+                }
+                Some(MenuPulse::Confirm)
+            }
+        }
     }
 }
 
@@ -306,20 +418,9 @@ impl ScreenView for RingEditorScreen {
         if let MenuEvent::Sector(s) = ev {
             self.stick = s;
         }
-        if let Some(p) = self.picker.as_mut() {
-            if ev == MenuEvent::Back {
-                self.picker = None;
-                return Some(MenuPulse::Confirm);
-            }
-            let (msg, pulse) = p.list.menu(ev, p.rows.len());
-            return match msg {
-                ListMsg::Activate => {
-                    self.picker_choose(ctx);
-                    Some(MenuPulse::Confirm)
-                }
-                ListMsg::Adjust(_) => Some(MenuPulse::Boundary),
-                ListMsg::None => pulse,
-            };
+        if let Some((_, p)) = self.picker.as_mut() {
+            let picked = p.menu(ev);
+            return self.picked(picked, ctx, fx);
         }
         if matches!(ev, MenuEvent::Move(_)) {
             self.reset_armed = false;
@@ -342,7 +443,7 @@ impl ScreenView for RingEditorScreen {
                     return Some(MenuPulse::Move);
                 }
                 let pulse = self.ring.menu(ev);
-                self.drain_edits(ctx);
+                self.drain_edits(ctx, fx);
                 if pulse.is_none() && ev == MenuEvent::Back {
                     fx.pop();
                 }
@@ -375,22 +476,15 @@ impl ScreenView for RingEditorScreen {
     }
 
     fn pointer(&mut self, p: Pointer, ctx: &mut Ctx, fx: &mut Outbox) -> bool {
-        if let Some(pk) = self.picker.as_mut() {
-            // Modal: eat every pointer event. A press outside the card dismisses it.
-            if p.hits(pk.rect) || matches!(p.kind, PointerKind::Scroll { .. }) {
-                let (msg, _) = pk.list.pointer(p, pk.rows.len());
-                if msg == ListMsg::Activate {
-                    self.picker_choose(ctx);
-                }
-            } else if p.press() {
-                self.picker = None;
-            }
+        if let Some((_, pk)) = self.picker.as_mut() {
+            let picked = pk.pointer(p);
+            self.picked(picked, ctx, fx);
             return true;
         }
         if self.ring.pointer(p) {
             self.focus = Focus::Ring;
             self.reset_armed = false;
-            self.drain_edits(ctx);
+            self.drain_edits(ctx, fx);
             return true;
         }
         if p.hits(self.list_rect) || matches!(p.kind, PointerKind::Scroll { .. }) {
@@ -414,10 +508,7 @@ impl ScreenView for RingEditorScreen {
         use pf_l10n::common as m;
         use pf_l10n::console as con;
         if self.picker.is_some() {
-            return vec![
-                Hint::new(HintKey::Confirm, m::common_choose()),
-                Hint::new(HintKey::Back, m::common_cancel()),
-            ];
+            return Picker::hints();
         }
         match self.focus {
             Focus::Ring => {
@@ -463,9 +554,9 @@ impl ScreenView for RingEditorScreen {
         ctx: &mut Ctx,
     ) {
         let ui = ctx.ui;
-        if ctx.settings.overlay_actions != self.blob {
-            let b = ctx.settings.overlay_actions.clone();
-            self.adopt(&b, ctx.device.platform);
+        let blob = self.scope.settings(ctx).overlay_actions.clone();
+        if blob != self.blob {
+            self.adopt(&blob, ctx.device.platform);
         }
         self.ring.tick();
         let kf = k as f32;
@@ -553,38 +644,8 @@ impl ScreenView for RingEditorScreen {
             self.focus == Focus::List && self.picker.is_none(),
         );
 
-        if let Some(pk) = self.picker.as_mut() {
-            // Scrim the full canvas, not `rect`: the content rect is not the screen, and
-            // the canvas is translated (insets, transitions). 2000 px overshoots any
-            // heading or inset; the hint bar draws after this and stays legible.
-            canvas.draw_rect(
-                rect.with_outset((2000.0 * kf, 2000.0 * kf)),
-                &fill(Color4f::new(0.0, 0.0, 0.0, 0.45)),
-            );
-            let w = (520.0 * kf).min(rect.width() * 0.92);
-            let h = ((pk.rows.len() as f32 * 50.0 + 60.0) * kf).min(rect.height() * 0.9);
-            let card = Rect::from_xywh(rect.center_x() - w / 2.0, rect.center_y() - h / 2.0, w, h);
-            canvas.draw_rrect(
-                RRect::new_rect_xy(card, 16.0 * kf, 16.0 * kf),
-                &fill(Color4f::new(0.06, 0.055, 0.1, 0.96)),
-            );
-            canvas.draw_rrect(
-                RRect::new_rect_xy(card, 16.0 * kf, 16.0 * kf),
-                &stroke(ui.fg(0.18), kf),
-            );
-            let inner = Rect::from_ltrb(
-                card.left + 8.0 * kf,
-                card.top + 12.0 * kf,
-                card.right - 8.0 * kf,
-                card.bottom - 12.0 * kf,
-            );
-            let specs: Vec<RowSpec> = pk.rows.iter().map(|(_, r)| r.clone()).collect();
-            canvas.save();
-            canvas.clip_rect(inner, None, None);
-            pk.list
-                .render(canvas, ui, inner, &specs, fonts, k, dt, true);
-            canvas.restore();
-            pk.rect = card;
+        if let Some((_, pk)) = self.picker.as_mut() {
+            pk.render(canvas, ui, rect, fonts, k, dt);
         }
     }
 
@@ -609,6 +670,7 @@ mod tests {
             ring: Ring::new(),
             cfg,
             platform: crate::platform::Platform::Desktop,
+            scope: Scope::Global,
             blob: blob.into(),
             list: MenuList::new(),
             focus: Focus::Ring,
@@ -620,7 +682,7 @@ mod tests {
             swallow_move: false,
         };
         s.open_picker(0);
-        let p = s.picker.as_ref().expect("the picker");
+        let (_, p) = s.picker.as_ref().expect("the picker");
         let (id, row) = &p.rows[p.list.cursor];
         assert_eq!(id, "stats");
         assert_eq!(row.value.as_deref(), Some("Current"));

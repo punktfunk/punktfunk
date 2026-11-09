@@ -24,7 +24,7 @@ Pick the app for the device you stream *to*. Install steps for each are on
 Every Punktfunk app finds hosts on your network, [pairs](/docs/pairing) once and reconnects on its
 own, browses the host's [game library](/docs/game-library), and has a controller interface for the
 couch. They share [presets and `punktfunk://` links](/docs/presets-and-links), the
-[in-stream keys](/docs/input#getting-your-input-back) and the settings on
+[in-stream keys](/docs/shortcuts#getting-your-input-back) and the settings on
 [Client settings](/docs/client-settings). The Apple, Android, Linux and Windows apps also ask which
 [profile](/docs/profiles#how-players-pick) plays.
 
@@ -81,7 +81,7 @@ this off.
 On a handheld with a second, smaller screen below the first (an Ayn Thor, a Retroid Pocket with the
 Dual Screen add-on) or a foldable half-opened like a laptop, the stream takes the top screen. The
 lower one shows **Stats**, **Actions** (the buttons of the
-[quick-action dial](/docs/input#the-quick-action-dial)), a **Keyboard**, a **Trackpad** and the
+[quick-action dial](/docs/shortcuts#the-quick-action-dial)), a **Keyboard**, a **Trackpad** and the
 **Controller** (the [virtual controller](/docs/input#virtual-controller)) — or, with **Screens**,
 the picture itself, below or across both screens
 ([dual-screen handhelds](/docs/input#dual-screen-handhelds)). **Settings → Display → Second screen** turns it off — for a phone on a TV — and a preset can carry that. If the lower screen stays dark while you stream, end the stream and

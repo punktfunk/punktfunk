@@ -23,6 +23,14 @@ public enum SlotId: Equatable, Sendable {
     case padType
     /// Another client's picks this one does not offer: kept so a rewrite keeps them, drawn disabled.
     case streamMute, swapScreens
+    /// Release the captured mouse and keyboard, or capture them again.
+    case releaseInput
+    /// Switch the mouse between capture (relative) and desktop (absolute) mode.
+    case mouseMode
+    /// The window into or out of fullscreen, or down to the Dock; the stream keeps running.
+    case fullscreen, minimize
+    /// Start or stop sharing the clipboard with the host, mid-stream.
+    case clipboard
     case host(String)
     case shortcut(String)
 
@@ -44,6 +52,11 @@ public enum SlotId: Equatable, Sendable {
         case .padType: return "pad_type"
         case .streamMute: return "stream_mute"
         case .swapScreens: return "swap_screens"
+        case .releaseInput: return "release_input"
+        case .mouseMode: return "mouse_mode"
+        case .fullscreen: return "fullscreen"
+        case .minimize: return "minimize"
+        case .clipboard: return "clipboard"
         case .host(let id): return "host:\(id)"
         case .shortcut(let id): return "shortcut:\(id)"
         }
@@ -67,6 +80,11 @@ public enum SlotId: Equatable, Sendable {
         case "pad_type": return .padType
         case "stream_mute": return .streamMute
         case "swap_screens": return .swapScreens
+        case "release_input": return .releaseInput
+        case "mouse_mode": return .mouseMode
+        case "fullscreen": return .fullscreen
+        case "minimize": return .minimize
+        case "clipboard": return .clipboard
         default:
             if s.hasPrefix("host:"), s.count > 5 { return .host(String(s.dropFirst(5))) }
             if s.hasPrefix("shortcut:"), s.count > 9 { return .shortcut(String(s.dropFirst(9))) }

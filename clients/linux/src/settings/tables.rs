@@ -131,13 +131,6 @@ pub mod index {
             .unwrap_or(0) as u32
     }
 
-    pub fn guide_gesture(s: &Settings) -> u32 {
-        GUIDE_GESTURES
-            .iter()
-            .position(|&v| v == s.guide_gesture)
-            .unwrap_or(0) as u32
-    }
-
     pub fn video_fit(s: &Settings) -> u32 {
         // Unknown values (a newer client's mode) read as Fit, as the presenter does.
         VIDEO_FITS
@@ -215,14 +208,6 @@ pub const SYSTEM_BUTTON_LABELS: &[Text] = &[
     client::player_system_buttons_auto,
     client::player_system_buttons_forward,
     client::player_system_buttons_local,
-];
-/// Hold-Select guide gesture values (the cross-client `guide_gesture` key). Auto arms it
-/// only where the raw guide press can't reach the host (Gaming Mode here).
-pub const GUIDE_GESTURES: &[&str] = &["auto", "on", "off"];
-pub const GUIDE_GESTURE_LABELS: &[Text] = &[
-    client::player_guide_gesture_auto,
-    client::player_guide_gesture_on,
-    client::player_guide_gesture_off,
 ];
 pub const COMPOSITORS: &[&str] = &[
     "auto",

@@ -88,6 +88,8 @@ import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import io.unom.punktfunk.kit.DeviceGyro
 import io.unom.punktfunk.kit.R
+import io.unom.punktfunk.kit.Shortcuts
+import io.unom.punktfunk.kit.SlotId
 import io.unom.punktfunk.kit.VideoDecoders
 import io.unom.punktfunk.kit.deviceBodyVibrator
 import io.unom.punktfunk.kit.link.StartIn
@@ -217,7 +219,15 @@ fun SettingsScreen(
         return
     }
     if (showShortcuts) {
-        ShortcutsScreen(onBack = { showShortcuts = false })
+        ShortcutsScreen(
+            settings = s,
+            onChange = { update("shortcuts", s.copy(shortcuts = it)) },
+            // Reset drops a preset's own shortcuts, and writes the defaults' empty blob otherwise.
+            onReset = {
+                if (active != null) resetField("shortcuts") else update("shortcuts", s.copy(shortcuts = ""))
+            },
+            onBack = { showShortcuts = false },
+        )
         return
     }
     if (showControllers) {
@@ -668,10 +678,10 @@ private fun CategoryDetail(
         when (category) {
             SettingsCategory.General -> GeneralSettings(settings, onChange, onResetAll)
             SettingsCategory.Display -> DisplaySettings(settings, onChange, context)
-            SettingsCategory.Input -> InputSettings(settings, onChange, onOpenQuickActions)
+            SettingsCategory.Input -> InputSettings(settings, onChange, onOpenQuickActions, onOpenShortcuts)
             SettingsCategory.Audio -> AudioSettings(settings, onChange, onMicChange)
             SettingsCategory.Controllers -> ControllerSettings(settings, onChange, onOpenControllers)
-            SettingsCategory.About -> AboutSettings(context, onOpenShortcuts, onOpenLicenses)
+            SettingsCategory.About -> AboutSettings(context, onOpenLicenses)
         }
     }
 }
@@ -728,8 +738,9 @@ private fun GeneralSettings(s: Settings, update: (String, Settings) -> Unit, onR
             options = STATS_VERBOSITY_OPTIONS.worded(),
             selected = s.statsVerbosity,
             field = "stats_verbosity",
-            caption = stringResource(R.string.player_stats_verbosity_hint) + " " +
-                stringResource(R.string.player_stats_verbosity_cycle_touch_hint, PAD_CHORD_STATS),
+            caption = stringResource(R.string.player_stats_verbosity_hint) +
+                s.shortcutHint(Shortcuts.Action.Slot(SlotId.Stats), Shortcuts.Device.PAD)
+                    ?.let { " " + stringResource(R.string.player_stats_verbosity_cycle_touch_hint, it) }.orEmpty(),
         ) { v -> update("stats_verbosity", s.copy(statsVerbosity = v)) }
         DeviceScopeOnly {
             ClickableRow(
@@ -1192,8 +1203,15 @@ private fun DisplaySettings(s: Settings, update: (String, Settings) -> Unit, con
 }
 
 @Composable
-private fun InputSettings(s: Settings, update: (String, Settings) -> Unit, onOpenQuickActions: () -> Unit) {
+private fun InputSettings(
+    s: Settings,
+    update: (String, Settings) -> Unit,
+    onOpenQuickActions: () -> Unit,
+    onOpenShortcuts: () -> Unit,
+) {
     val back = stringResource(R.string.common_back)
+    val ringKeys = s.shortcutHint(Shortcuts.Action.Ring, Shortcuts.Device.KEYBOARD)
+    val ringPad = s.shortcutHint(Shortcuts.Action.Ring, Shortcuts.Device.PAD)
     SettingsGroup(stringResource(R.string.prefs_group_touch_pointer)) {
         SettingDropdown(
             label = stringResource(R.string.player_touch_mode),
@@ -1206,10 +1224,23 @@ private fun InputSettings(s: Settings, update: (String, Settings) -> Unit, onOpe
             OverrideBadge("overlay_actions")
             ClickableRow(
                 title = stringResource(R.string.player_overlay_actions),
-                subtitle = stringResource(
-                    R.string.android_player_overlay_actions_opener, back, CHORD_RING, PAD_CHORD_RING,
-                ) + " " + stringResource(R.string.player_overlay_actions_hint),
+                subtitle = listOfNotNull(
+                    if (ringKeys != null && ringPad != null) {
+                        stringResource(R.string.android_player_overlay_actions_opener, back, ringKeys, ringPad)
+                    } else {
+                        null
+                    },
+                    stringResource(R.string.player_overlay_actions_hint),
+                ).joinToString(" "),
                 onClick = onOpenQuickActions,
+            )
+        }
+        Column {
+            OverrideBadge("shortcuts")
+            ClickableRow(
+                title = stringResource(R.string.player_shortcuts),
+                subtitle = stringResource(R.string.player_shortcuts_hint),
+                onClick = onOpenShortcuts,
             )
         }
         // A device setting: a preset carries no value for it.
@@ -1228,8 +1259,9 @@ private fun InputSettings(s: Settings, update: (String, Settings) -> Unit, onOpe
             options = MOUSE_MODE_OPTIONS.worded(),
             selected = s.mouseMode,
             field = "mouse_mode",
-            caption = stringResource(R.string.player_mouse_mode_hint) + " " +
-                stringResource(R.string.player_mouse_mode_keys_hint, CHORD_MOUSE),
+            caption = stringResource(R.string.player_mouse_mode_hint) +
+                s.shortcutHint(Shortcuts.Action.Slot(SlotId.ReleaseInput), Shortcuts.Device.KEYBOARD)
+                    ?.let { " " + stringResource(R.string.player_mouse_mode_keys_hint, it) }.orEmpty(),
         ) { mode -> update("mouse_mode", s.copy(mouseMode = mode)) }
         ToggleRow(
             title = stringResource(R.string.player_invert_scroll),
@@ -1369,12 +1401,11 @@ private fun ControllerSettings(s: Settings, update: (String, Settings) -> Unit, 
         changed = changedCount(
             s.gamepadForwarding != d.gamepadForwarding,
             s.systemButtons != d.systemButtons,
-            s.guideGesture != d.guideGesture,
             s.dsCapture != d.dsCapture,
             s.padHaptics != d.padHaptics,
             s.padSpeaker != d.padSpeaker,
         ),
-        fields = setOf("gamepad_forwarding", "system_buttons", "guide_gesture"),
+        fields = setOf("gamepad_forwarding", "system_buttons"),
     ) {
         // The master switch, above everything it governs. Presetable, so it shows in both
         // scopes: a "Work" preset can decline to forward what "Game" forwards.
@@ -1393,14 +1424,6 @@ private fun ControllerSettings(s: Settings, update: (String, Settings) -> Unit, 
             enabled = s.gamepadForwarding,
             caption = stringResource(R.string.player_system_buttons_hint),
         ) { v -> update("system_buttons", s.copy(systemButtons = v)) }
-        SettingDropdown(
-            label = stringResource(R.string.player_guide_gesture),
-            options = GUIDE_GESTURE_OPTIONS.worded(),
-            selected = s.guideGesture,
-            field = "guide_gesture",
-            enabled = s.gamepadForwarding,
-            caption = stringResource(R.string.player_guide_gesture_hint, PAD_BUTTON_SELECT),
-        ) { v -> update("guide_gesture", s.copy(guideGesture = v)) }
         DeviceScopeOnly {
             // Feedback lands on the CONTROLLER's own motors and LEDs, so no vibrator gate.
             ToggleRow(
@@ -1434,7 +1457,6 @@ private fun ControllerSettings(s: Settings, update: (String, Settings) -> Unit, 
 @Composable
 private fun AboutSettings(
     context: android.content.Context,
-    onOpenShortcuts: () -> Unit,
     onOpenLicenses: () -> Unit,
 ) {
     // The app's own version, read from the installed package (the WinUI/Apple About convention:
@@ -1456,11 +1478,6 @@ private fun AboutSettings(
                 )
             }
         }
-        ClickableRow(
-            title = stringResource(R.string.about_stream_controls),
-            subtitle = stringResource(R.string.about_stream_controls_hint),
-            onClick = onOpenShortcuts,
-        )
         ClickableRow(
             title = stringResource(R.string.about_licenses),
             subtitle = stringResource(R.string.about_licenses_hint),
@@ -1779,10 +1796,8 @@ private fun renderScaleLabel(scale: Double): String = when {
     else -> "${RenderScale.digits(scale)}×"
 }
 
-// Key chords and controller buttons the hints name. They are data, not words, so no language
-// changes them; the keyboard ones are the bindings in MainActivity and MouseInput.
-private const val CHORD_RING = "Ctrl+Alt+Shift+O"
-private const val CHORD_MOUSE = "Ctrl+Alt+Shift+Q"
-private const val PAD_CHORD_RING = "Select + A"
-private const val PAD_CHORD_STATS = "Select + X"
-private const val PAD_BUTTON_SELECT = "Select"
+/** The first trigger [s] binds to [action] on [device], worded: a caption names the live chord. */
+@Composable
+private fun Settings.shortcutHint(action: Shortcuts.Action, device: Shortcuts.Device): String? {
+    return shortcutBindings().hint(action, device)?.words(LocalContext.current.resources)
+}

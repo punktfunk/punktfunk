@@ -4,7 +4,7 @@
 //! `Install folder <path> not mounted.` The check reads the log of every Steam folder in the
 //! seat's home ([`shared::STEAM_ROOTS`]) and takes the last load of the unit's run. For each
 //! folder of ours it missed, it tries the folder as that Steam does: its user, its groups, its
-//! mount namespace. The error that try meets, beside the folder's owner and mode on the host,
+//! mount namespace, which for the `steamrt64` client is its container's. The error that try meets
 //! names the cause. A Steam the library list doesn't reach, a Flatpak's or a Snap's, is named,
 //! and a Steam the check can't find is logged with what the seat's user runs.
 
@@ -12,7 +12,6 @@ use super::accounts::Passwd;
 use super::{libraries, output, run, safe_open, shared};
 use crate::model::SeatId;
 use std::io::{Read as _, Seek as _, SeekFrom};
-use std::os::unix::fs::MetadataExt as _;
 use std::path::Path;
 
 /// One library load and what Steam logs after it fit many times over.
@@ -45,15 +44,11 @@ impl Missed {
     }
 }
 
-/// What the Steam in `home` that loaded its libraries last missed of seat `id`'s folders. `None`
-/// when that Steam opened every folder of ours and is one the list reaches, or none logged a load.
-pub(super) fn missed(state: &Path, id: &SeatId, home: &Path) -> Option<Missed> {
-    let games = shared::games_dir(state);
-    let libraries = libraries::libraries_dir(state, id);
-    let ours = |folder: &str| {
-        let folder = Path::new(folder);
-        folder == games || folder.starts_with(&libraries)
-    };
+/// What the Steam in `home` that loaded its libraries last missed of the seat's folders, those
+/// under [`libraries::VIEW`]. `None` when that Steam opened every folder of ours and is one the
+/// list reaches, or none logged a load.
+pub(super) fn missed(home: &Path) -> Option<Missed> {
+    let ours = |folder: &str| Path::new(folder).starts_with(libraries::VIEW);
     let mut last: Option<Missed> = None;
     // `.steam/steam` is a link to one of the others, which `safe_open` doesn't follow.
     for root in shared::STEAM_ROOTS
@@ -145,7 +140,7 @@ pub(super) fn explain(id: &SeatId, seat: &Passwd, missed: &Missed) {
         tracing::warn!(seat = %id, steam_root, "seat Steam without the host's library list");
     }
     let processes = processes(Path::new("/proc"), seat.uid);
-    let Some(steam) = processes.iter().find(|process| process.is_client()) else {
+    let Some(steam) = client(&processes) else {
         let steam_like: Vec<String> = (processes.iter())
             .filter(|process| process.cmdline.to_lowercase().contains("steam"))
             .take(LISTED)
@@ -177,10 +172,18 @@ pub(super) fn explain(id: &SeatId, seat: &Passwd, missed: &Missed) {
         "seat Steam missed library folders"
     );
     for folder in &missed.folders {
-        let host = on_host(Path::new(folder));
         let as_steam = open_as(steam, folder);
-        tracing::warn!(seat = %id, folder, host, %as_steam, "seat Steam library folder out of reach");
+        tracing::warn!(seat = %id, folder, %as_steam, "seat Steam library folder out of reach");
     }
+}
+
+/// The seat's Steam client. The one in `steamrt64` runs twice, a launcher on the host and the
+/// client in its container, so the higher pid, the later start, wins. After a pid wrap that is
+/// the launcher, whose root is the host's.
+fn client(processes: &[Process]) -> Option<&Process> {
+    (processes.iter())
+        .filter(|process| process.is_client())
+        .max_by_key(|process| process.pid)
 }
 
 /// A process of the seat's user, as `/proc` shows it.
@@ -197,13 +200,14 @@ struct Process {
 }
 
 impl Process {
-    /// The Steam client, the binary that writes the content log: `steam` in `ubuntu12_32`, or
-    /// `ubuntu12_64` for a 64-bit client.
+    /// The Steam client, the binary that writes the content log: `steam` in `ubuntu12_32` or
+    /// `ubuntu12_64`, or in `steamrt64` for the client that runs in a container of its own.
     fn is_client(&self) -> bool {
         let binary = Path::new(&self.argv0);
         let dir = binary.parent().and_then(Path::file_name);
+        let dir = dir.map(|dir| dir.to_string_lossy());
         binary.file_name() == Some("steam".as_ref())
-            && dir.is_some_and(|dir| dir.to_string_lossy().starts_with("ubuntu12_"))
+            && dir.is_some_and(|dir| dir.starts_with("ubuntu12_") || dir == "steamrt64")
     }
 }
 
@@ -242,14 +246,6 @@ fn processes(proc: &Path, uid: u32) -> Vec<Process> {
         })
     };
     entries.flatten().filter_map(process).collect()
-}
-
-/// The folder's owner and mode, or why the host can't stat it.
-fn on_host(folder: &Path) -> String {
-    match std::fs::metadata(folder) {
-        Ok(meta) => format!("{:o} {}:{}", meta.mode() & 0o7777, meta.uid(), meta.gid()),
-        Err(error) => error.to_string(),
-    }
 }
 
 /// What listing `folder` meets as `steam` does: its ids and groups, through its root. The
@@ -336,9 +332,8 @@ mod tests {
     #[test]
     fn the_steam_that_loaded_last_is_the_one_judged() {
         let temp = tempfile::tempdir().unwrap();
-        let (home, state) = (temp.path().join("home"), temp.path().join("state"));
-        let id = SeatId::parse("0123456789abcdef0123456789abcdef").unwrap();
-        let games = shared::games_dir(&state);
+        let home = temp.path().join("home");
+        let games = libraries::games_view();
         let log = |root: &str, stamp: &str, missed: &str| {
             let logs = home.join(root).join("logs");
             std::fs::create_dir_all(&logs).unwrap();
@@ -353,7 +348,7 @@ mod tests {
             "2026-11-07 19:37:06",
             &games.to_string_lossy(),
         );
-        let found = missed(&state, &id, &home).expect("its own copy missed the games");
+        let found = missed(&home).expect("its own copy missed the games");
         assert_eq!((found.root, found.listed()), (".local/share/Steam", true));
         assert_eq!(found.folders, [games.to_string_lossy()]);
         log(
@@ -361,18 +356,14 @@ mod tests {
             "2026-11-07 20:01:00",
             "",
         );
-        let found = missed(&state, &id, &home).expect("the Flatpak ran last");
+        let found = missed(&home).expect("the Flatpak ran last");
         assert_eq!(
             found.root,
             ".var/app/com.valvesoftware.Steam/.local/share/Steam"
         );
         assert!(!found.listed() && found.folders.is_empty());
         log(".local/share/Steam", "2026-11-07 20:05:00", "");
-        assert_eq!(
-            missed(&state, &id, &home),
-            None,
-            "its own copy opened everything last"
-        );
+        assert_eq!(missed(&home), None, "its own copy opened everything last");
     }
 
     #[test]
@@ -409,7 +400,7 @@ mod tests {
         process("12", "/h/.local/share/Steam/ubuntu12_64/steam -silent", 946);
         let seat = processes(proc.path(), 946);
         assert_eq!(seat.len(), 2, "the seat user's only");
-        let found = seat.iter().find(|p| p.is_client()).expect("its Steam");
+        let found = client(&seat).expect("its Steam");
         assert_eq!((found.pid, found.gid), (12, 946));
         assert_eq!(found.groups, [977, 946]);
         assert_eq!(found.cgroup, "/user.slice/app-steam.scope");
@@ -419,5 +410,15 @@ mod tests {
             "a script named steam runs under its shell"
         );
         assert_eq!(launcher.cmdline, "/bin/bash /usr/bin/steam -silent");
+
+        let container = "/h/.local/share/Steam/steamrt64/steam -srt-logger-opened";
+        process("13", container, 946);
+        process("14", container, 946);
+        let seat = processes(proc.path(), 946);
+        assert_eq!(
+            client(&seat).map(|p| p.pid),
+            Some(14),
+            "the one started in its container"
+        );
     }
 }

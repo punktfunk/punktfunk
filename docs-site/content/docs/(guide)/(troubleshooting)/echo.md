@@ -12,7 +12,7 @@ Your device's microphone picks up the stream playing from its speakers and sends
 
 Use headphones. **Echo cancellation** in [client settings](/docs/client-settings#audio) is on by
 default and removes some of it; how much depends on the device. To stop talking for a moment,
-[mute your microphone](/docs/input#muting-your-microphone) without leaving the stream.
+[mute your microphone](/docs/shortcuts#muting-your-microphone) without leaving the stream.
 
 ## "Listen to this device" and app monitoring (Windows hosts)
 

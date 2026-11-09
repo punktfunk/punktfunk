@@ -105,9 +105,10 @@ enum Target {
     Grants,
 }
 
-/// The hosts that send a pad's readings for the input test.
-fn can_test(platform: Platform) -> bool {
-    matches!(platform, Platform::Android | Platform::Apple)
+/// The hosts that send a pad's readings for the input test. The browser page has its own
+/// recorder, so its console never gets them.
+pub(super) fn can_test(platform: Platform) -> bool {
+    !matches!(platform, Platform::Web | Platform::Tizen)
 }
 
 fn targets(ctx: &Ctx, others: &[OtherDevice]) -> Vec<Target> {
@@ -325,19 +326,21 @@ impl ScreenView for PlayersScreen {
     }
 }
 
-/// OK on `t`: a pad's menu where the host can test or pulse it; the grants list for the
-/// last card. Anything else is a thud.
+/// OK on `t`: a pad's menu where the host can test or pulse it, or this client plays the
+/// pad's audio; the grants list for the last card. Anything else is a thud.
 fn activate(t: Target, ctx: &Ctx, fx: &mut Outbox) -> Option<MenuPulse> {
     match t {
         Target::Pad(i) => {
             let p = &ctx.pads[i];
             let platform = ctx.device.platform;
             let (test, rumble) = (can_test(platform), can_rumble(p, platform));
-            if !test && !rumble {
+            // The volume matters only while the setting plays the pad's speaker (`"pad"`).
+            let speaker = p.audio && ctx.settings.pad_speaker == "pad";
+            if !test && !rumble && !speaker {
                 return Some(MenuPulse::Boundary);
             }
             fx.push(Screen::PadMenu(super::pad_menu::PadMenuScreen::new(
-                p, test, rumble,
+                p, test, rumble, speaker,
             )));
             Some(MenuPulse::Confirm)
         }
@@ -605,6 +608,7 @@ mod tests {
             detail: "054C:0CE6 · gamepad".into(),
             forwarded: true,
             rumble,
+            audio: false,
         }
     }
 
@@ -686,7 +690,7 @@ mod tests {
     }
 
     /// OK, or a hold, on a pad the host can test or pulse opens its menu; Right reaches the
-    /// next pad. A desktop has neither, so OK thuds there.
+    /// next pad. A TV has neither, so OK thuds there.
     #[test]
     fn ok_or_a_hold_on_a_pad_opens_its_menu() {
         let pads = [pad("DualSense", true), pad("Edge", true)];
@@ -717,12 +721,28 @@ mod tests {
         let mut s = PlayersScreen::new();
         let out = drive(
             &mut s,
-            Platform::Desktop,
+            Platform::Web,
             &[pad("DualSense", true)],
             &[MenuEvent::Confirm],
         );
         assert!(out[0].0.nav.is_none() && out[0].0.cmds.is_empty());
         assert!(matches!(out[0].1, Some(MenuPulse::Boundary)));
+    }
+
+    /// A pad this client plays audio on opens its menu on a desktop too, for the volume.
+    #[test]
+    fn a_pad_with_audio_opens_its_menu_on_a_desktop() {
+        let mut dualsense = pad("DualSense", false);
+        dualsense.audio = true;
+        let mut s = PlayersScreen::new();
+        let out = drive(
+            &mut s,
+            Platform::Desktop,
+            &[dualsense],
+            &[MenuEvent::Confirm],
+        );
+        assert!(opens(&out[0].0, true));
+        assert!(matches!(out[0].1, Some(MenuPulse::Confirm)));
     }
 
     /// Right past the last pad lands on the one card for every other device, which OK

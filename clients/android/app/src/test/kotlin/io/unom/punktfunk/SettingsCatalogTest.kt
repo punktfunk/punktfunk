@@ -146,7 +146,6 @@ class SettingsCatalogTest {
         "mouse_mode" -> MOUSE_MODE_OPTIONS.map { it.first.storedName }
         "gamepad" -> GAMEPAD_OPTIONS.map { o -> Gamepad.PREFS.first { it.wire == o.first }.name }
         "system_buttons" -> SYSTEM_BUTTON_OPTIONS.map { it.first }
-        "guide_gesture" -> GUIDE_GESTURE_OPTIONS.map { it.first }
         else -> null
     }
 

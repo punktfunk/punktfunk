@@ -1941,6 +1941,7 @@ mod tests {
         assert!(!offers(true, Platform::WebOS));
         assert!(!offers(true, Platform::Apple));
         assert!(!offers(true, Platform::Ps5));
+        assert!(!offers(true, Platform::Switch));
     }
 
     /// An Android handheld's title card offers a home-screen shortcut and a launcher file; a

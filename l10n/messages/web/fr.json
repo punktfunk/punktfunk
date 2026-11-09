@@ -494,6 +494,88 @@
 	"library_source_settings_refused": "l’hôte a refusé",
 	"library_source_settings_own_page": "{source} garde ses paramètres sur sa propre page.",
 	"library_source_settings_open_page": "Ouvrir {source}",
+	"library_stream_title": "Flux",
+	"library_stream_hint": "Chaque appareil applique ces paramètres et complète le reste avec les siens",
+	"library_stream_source_title": "Flux pour tous les titres de {source}",
+	"library_stream_use": "Utiliser",
+	"library_stream_device": "L’appareil décide",
+	"library_stream_same_as_source": "Comme {source}",
+	"library_stream_custom": "Personnalisé",
+	"library_stream_new": "Nouvelle configuration partagée…",
+	"library_stream_resolution": "Résolution",
+	"library_stream_beyond": "Également sur les écrans plus petits",
+	"library_stream_refresh": "Fréquence de rafraîchissement",
+	"library_stream_hz": "{hz} Hz",
+	"library_stream_hdr": "HDR",
+	"library_stream_hdr_on": "HDR activé",
+	"library_stream_hdr_off": "HDR désactivé",
+	"library_stream_controller": "Manette",
+	"library_stream_from": "depuis {source}",
+	"library_stream_edit_shared": "Modifier la configuration partagée",
+	"library_stream_failed": "Impossible d’enregistrer les paramètres du flux",
+	"library_stream_shared": "Configurations partagées",
+	"library_stream_shared_empty": "Aucune configuration partagée pour l’instant",
+	"library_stream_name": "Nom",
+	"library_stream_new_title": "Nouvelle configuration partagée",
+	"library_stream_rename_title": "Renommer la configuration partagée",
+	"library_stream_unused": "Pas encore utilisée",
+	"library_stream_used_games": [{
+		"declarations": ["input count", "local n = count: plural"],
+		"selectors": ["n"],
+		"match": {
+			"n=one": "{count} jeu",
+			"n=many": "{count} jeux",
+			"n=*": "{count} jeux"
+		}
+	}],
+	"library_stream_used_sources": [{
+		"declarations": ["input count", "local n = count: plural"],
+		"selectors": ["n"],
+		"match": {
+			"n=one": "{count} source",
+			"n=many": "{count} sources",
+			"n=*": "{count} sources"
+		}
+	}],
+	"library_stream_delete_title": "Supprimer {name} ?",
+	"library_stream_delete_body": [{
+		"declarations": ["input count", "local n = count: plural"],
+		"selectors": ["n"],
+		"match": {
+			"n=one": "Utilisée par {count} jeu. Il revient aux paramètres de sa source ou à « L’appareil décide ».",
+			"n=many": "Utilisée par {count} jeux. Ils reviennent aux paramètres de leur source ou à « L’appareil décide ».",
+			"n=*": "Utilisée par {count} jeux. Ils reviennent aux paramètres de leur source ou à « L’appareil décide »."
+		}
+	}],
+	"library_stream_delete_sources_body": [{
+		"declarations": ["input count", "local n = count: plural"],
+		"selectors": ["n"],
+		"match": {
+			"n=one": "Utilisée par {count} source. Ses jeux reviennent à « L’appareil décide ».",
+			"n=many": "Utilisée par {count} sources. Leurs jeux reviennent à « L’appareil décide ».",
+			"n=*": "Utilisée par {count} sources. Leurs jeux reviennent à « L’appareil décide »."
+		}
+	}],
+	"library_stream_select": "Sélectionner des jeux",
+	"library_stream_selected": [{
+		"declarations": ["input count", "local n = count: plural"],
+		"selectors": ["n"],
+		"match": {
+			"n=one": "{count} sélectionné",
+			"n=many": "{count} sélectionnés",
+			"n=*": "{count} sélectionnés"
+		}
+	}],
+	"library_stream_bulk": "Utiliser une configuration partagée…",
+	"library_stream_bulk_failed": [{
+		"declarations": ["input count", "local n = count: plural"],
+		"selectors": ["n"],
+		"match": {
+			"n=one": "Impossible de modifier {count} jeu",
+			"n=many": "Impossible de modifier {count} jeux",
+			"n=*": "Impossible de modifier {count} jeux"
+		}
+	}],
 	"library_migrate_title": "Les sources de jeux passent aux plugins",
 	"library_migrate_help": "Chaque lanceur devient son propre plugin. Installez-en un et il prend le relais ; vos jeux gardent leurs vignettes.",
 	"library_migrate_install": "Installer la source {source}",

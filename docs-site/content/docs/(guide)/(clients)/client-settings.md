@@ -25,7 +25,7 @@ The advanced rows are **Advanced statistics**, **Statistics position**, **Statis
 hint**, **Reduce interface resolution**, **Smoothness buffer**, **Render scale**,
 **Full chroma (4:4:4)**, **10-bit SDR**, **V-Sync**, **Follow variable refresh**, **Host
 compositor**, **Video decoder**, **GPU**, **Low-latency mode**, **Keep screen awake**, **Audio quality**, **Keep host audio playing**, **Echo cancellation**, **Forward controllers**,
-**Use controller**, **Guide button**, **Guide gesture**, **Controller haptics**,
+**Use controller**, **Guide button**, **Controller haptics**,
 **Controller speaker**, **Steam Controller 2 passthrough** and **DualSense over USB**.
 
 ## Screen
@@ -96,25 +96,25 @@ the rate instead of **Bitrate**.
 | **Audio channels** | Stereo | Stereo, 5.1 or 7.1. A Linux host sends real surround; a Windows host converts its current output. | All |
 | **Audio quality** | Standard (Opus) | **Lossless** sends uncompressed PCM, 2.3 Mbps and up, outside the video budget. The host can refuse it: see [Configuration](/docs/configuration#audio--microphone). | All. Linux and Windows offer 48 and 96 kHz in stereo; Apple and Android add 44.1, 88.2 and 176.4 kHz. |
 | **Keep host audio playing** | Off | Off, the host goes quiet while you stream. On, its own speakers keep playing too. With several clients, one asking is enough. | All |
-| **Stream microphone** | Off | Sends this device's microphone to the host. **Ctrl+Alt+Shift+V** [mutes it](/docs/input#muting-your-microphone). | All but Apple TV |
+| **Stream microphone** | Off | Sends this device's microphone to the host. **Ctrl+Alt+Shift+V** [mutes it](/docs/shortcuts#muting-your-microphone). | All but Apple TV |
 | **Echo cancellation** | On | Keeps the host's audio, playing from your speakers, out of the microphone. Turn it off if your microphone does its own processing. See [Why do I hear myself](/docs/echo). | All but Apple TV |
 | **Spatial audio** | On | On, the sound comes from the window. Off plays the game's own mix straight to your ears. | Apple Vision Pro |
 | **Speaker**, **Microphone** | System default | Which output plays the stream and which input feeds the microphone. | Linux, Windows, Mac (plus **Microphone channel**) |
 
 ## Input
 
-Touch modes, mouse modes and the in-stream keys are explained on [Input](/docs/input).
+Touch and mouse modes are explained on [Mouse, touch and pen](/docs/input), the in-stream keys on
+[Shortcuts and quick actions](/docs/shortcuts).
 
 ### Controllers
 
 | Setting | Default | What it does | Where |
 |---|---|---|---|
-| **Forward controllers** | On | Off, this device's controllers aren't sent. Use it when a pad reaches the host another way, such as [USB passthrough](/docs/automation#recipe-full-controller-passthrough-virtualhere). On Linux and Windows, off also disables the [controller exit chord](/docs/input#leaving-with-a-controller). | All |
+| **Forward controllers** | On | Off, this device's controllers aren't sent. Use it when a pad reaches the host another way, such as [USB passthrough](/docs/automation#recipe-full-controller-passthrough-virtualhere). On Linux and Windows, off also disables the [controller exit chord](/docs/shortcuts#leaving-with-a-controller). | All |
 | **Controller type** | Automatic | The virtual pad the host creates; Automatic matches each controller. An Xbox pad has no gyro: for motion, pick DualSense, DualShock 4 or Steam Deck. | All. **Steam Controller 2**: Linux, Windows, console. |
 | **Controller rumble** | On | Off, controllers don't vibrate from the stream or in the menus, whatever the game sends. A DualSense's haptics follow **Controller haptics**; a Steam Controller 2 in passthrough follows Steam on the host. | Linux, Windows, Android, Apple |
 | **Use controller** | Automatic (all controllers) | Forward only the controller you pick. | Linux, Windows, Apple, console |
-| **Guide button** | Automatic | Where the guide and quick-access buttons go: **Send to host** or **This device**. Automatic keeps them on the device only in Steam Deck Gaming Mode. See [the guide button](/docs/input#the-guide-button-xbox--ps--steam-and-quick-access). | All |
-| **Guide gesture** | Automatic | Hold Select about ⅓ s to press the host's guide button. A Select tap then arrives a beat late. Automatic turns it on in Gaming Mode and on iPhone, iPad and Apple TV. | All |
+| **Guide button** | Automatic | Where the guide and quick-access buttons go: **Send to host** or **This device**. Automatic keeps them on the device only in Steam Deck Gaming Mode. See [the guide button](/docs/shortcuts#the-guide-button-xbox--ps--steam-and-quick-access). | All |
 | **Controller haptics** | On | Plays a DualSense's voice-coil haptics, over USB or Bluetooth (Android: USB). See [Controller audio](/docs/controller-audio). | Linux, Windows, Android |
 | **Controller speaker** | On (Android: off) | Plays the game's pad audio on a DualSense's speaker. | Linux, Windows, Android |
 | **Steam Controller 2 passthrough** | Off | Passes a Steam Controller 2 or a 2015 Steam Controller to a Linux or Windows host as itself, so its trackpads, gyro and haptics work as they do locally. Mac: USB, a dongle or Bluetooth. iPhone, iPad, Apple TV: Bluetooth. Android and the desktop clients always pass one through. | Apple |
@@ -128,16 +128,16 @@ Touch modes, mouse modes and the in-stream keys are explained on [Input](/docs/i
 | **Touch input** | Trackpad | **Trackpad**, **Direct pointer**, **Touch passthrough** or **Off**. | Linux, Windows, iPhone, iPad, Android |
 | **Mouse input** | Capture (games) (Android: Desktop) | **Capture** locks the pointer for games; **Desktop** points absolutely. | Linux, Windows, Mac, Android |
 | **Capture pointer for games** | On | Locks a hardware mouse for mouse-look in fullscreen. | iPad |
-| **Capture system shortcuts** | On | While input is captured, Alt+Tab and the Windows key (⌘ shortcuts on a Mac) go to the host. **Ctrl+Alt+Shift+Q** or ⌘⎋ always releases capture. On Linux it needs KDE Plasma, GNOME or a wlroots compositor. | Linux, Windows, Mac |
+| **Capture system shortcuts** | On | While input is captured, Alt+Tab and the Windows key (⌘ shortcuts on a Mac) go to the host. The release shortcut (**Ctrl+Alt+Shift+Q** by default) or ⌘⎋ still releases capture. On Linux it needs KDE Plasma, GNOME or a wlroots compositor. | Linux, Windows, Mac |
 | **Modifier keys** | Mac (⌥ Alt · ⌘ Super) | **Windows (⌘ Alt · ⌥ Super)** makes the key beside the space bar send Alt, like a PC keyboard. | Mac, iPhone, iPad |
 | **Invert scroll direction** | Off | Reverses the scrolling sent to the host. | All but Apple TV |
 
 ### Quick actions
 
-**Quick actions** edits the in-stream [quick-action dial](/docs/input#the-quick-action-dial) on the
+**Quick actions** edits the in-stream [quick-action dial](/docs/shortcuts#the-quick-action-dial) on the
 dial itself: click or tap a button to change it, drag one onto another to swap them, and add key
-shortcuts. It's on every app and in the console (which edits your defaults only). On Android,
-**Back opens quick actions** (on) sets what Back does mid-stream.
+combinations. It's on every app and in the console. On Android, **Back opens quick actions** (on)
+sets what Back does mid-stream.
 
 **Virtual controller** (iPhone, iPad, Android) is under Quick actions:
 
@@ -147,6 +147,11 @@ shortcuts. It's on every app and in the console (which edits your defaults only)
 | **Opacity** | 45 % | 15–100 % |
 | **Scale** | 100 % | 60–160 % |
 | **Edit layout** | — | Move, resize (50–200 %) or hide each control. Wide and upright screens keep separate layouts. |
+
+### Shortcuts
+
+**Shortcuts** binds a controller chord, a held button or a key to any quick action, and lists this
+device's touch and remote controls. See [Changing a shortcut](/docs/shortcuts#changing-a-shortcut).
 
 ## Behavior
 

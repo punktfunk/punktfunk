@@ -108,8 +108,10 @@ struct SettingsView: View {
     #endif
     // The quick-action ring's blob — every platform, tvOS included (the pad opens the ring there).
     @AppStorage(DefaultsKey.overlayActions) var overlayActions = SettingDefault.overlayActions
+    @AppStorage(DefaultsKey.shortcuts) var shortcuts = SettingDefault.shortcuts
     /// The quick-actions editor, as a sheet (the detail column is not a NavigationStack).
     @State var showQuickActions = false
+    @State var showShortcuts = false
     #if DEBUG && !os(tvOS)
     @State var showControllerTest = false
     #endif
@@ -560,7 +562,9 @@ struct SettingsView: View {
     private var tvQuickActions: TVQuickActionsEditor {
         var editor = TVQuickActionsEditor(
             blob: scoped(SettingsFields.overlayActions),
-            overridden: isOverridden("overlay_actions")
+            overridden: isOverridden("overlay_actions"),
+            shortcuts: shortcutsEditor,
+            padOpener: editedShortcuts.hint(.ring, device: .pad)
         ) {
             if inPresetScope {
                 resetOverride("overlay_actions")

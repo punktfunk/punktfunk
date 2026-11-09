@@ -99,6 +99,8 @@
 	"desktop_shortcut_capture_tooltip": "Then press the keys on your keyboard",
 	"desktop_shortcuts_this_window": "This window",
 	"desktop_shortcuts_stream_window": "Stream (session window)",
+	"desktop_shortcuts_reset_title": "Reset shortcuts?",
+	"desktop_shortcuts_reset_body": "Every shortcut goes back to its default, and the ones you added are removed.",
 	"desktop_accel_show_hosts": "Show hosts",
 	"desktop_accel_show_library": "Show library",
 	"desktop_accel_search_library": "Search the library",

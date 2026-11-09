@@ -185,7 +185,8 @@ pub fn run_shot(ctx: &ShotCtx, scene: &str) {
             let _ = hosts.send(HostsMsg::ShowAddHost);
         }
         "shortcuts" | "07-shortcuts" => {
-            adw::prelude::AdwDialogExt::present(&crate::app::shortcuts_dialog(), Some(&ctx.window));
+            let dialog = crate::app::shortcuts_dialog(&ctx.store.settings());
+            adw::prelude::AdwDialogExt::present(&dialog, Some(&ctx.window));
         }
         // The Library on the first shelf with injected titles: mixed stores for the badge
         // set, a launcher, placeholders, and one solid-colour texture standing in for a poster.

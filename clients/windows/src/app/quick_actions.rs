@@ -4,7 +4,7 @@
 //! for it, and the name of the disc under the pointer reads out in the band below the ring. A
 //! click on a disc opens its picker (the catalogue by group, notes where a slot is unavailable
 //! here); a disc dragged onto another swaps the two; a row of six buttons under the ring gives a
-//! keyboard and a screen reader the same reach. Under it the shortcuts: a name, the four
+//! keyboard and a screen reader the same reach. Under it the key combinations: a name, the four
 //! modifiers as toggles, the key on a keyboard-shaped grid or pressed on the real keyboard, Save
 //! and Remove. Every edit commits at once through the settings page's own
 //! [`super::settings::commit`], so a preset owns the whole ring the moment it touches it (D10).
@@ -14,9 +14,10 @@ use super::lucide;
 use super::settings::{active_preset, commit};
 use super::style::*;
 use super::{AppCtx, AsyncSetState};
+use crate::trust::Settings;
 use pf_client_core::overlay_actions::{
-    catalogue, chord_chip, key_legend, slot_icon, Chord, OverlayConfig, RingPlatform, Shortcut,
-    SlotId, CHORD_MODIFIERS, KEY_GRID, RING_SLOTS,
+    catalogue, chord_chip, key_legend, slot_icon, CatalogueGroup, Chord, GroupId, OverlayConfig,
+    RingPlatform, Shortcut, SlotId, CHORD_MODIFIERS, KEY_GRID, RING_SLOTS,
 };
 use pf_client_core::ring::{slot_offset, CENTRE_DIAMETER, RING_RADIUS, SLOT_DIAMETER};
 use pf_fluent::Palette;
@@ -109,14 +110,18 @@ pub(super) struct Ui {
     reset_armed: bool,
 }
 
-/// The scope's effective ring: the globals with the preset's overrides on top.
-fn current(props: &Props) -> OverlayConfig {
+/// The scope's effective settings: the globals with the preset's overrides on top.
+pub(super) fn effective(props: &Props) -> Settings {
     let base = props.ctx.settings.lock().unwrap().clone();
-    let effective = match active_preset(&props.scope) {
+    match active_preset(&props.scope) {
         Some(p) => p.overrides.apply(&base),
         None => base,
-    };
-    OverlayConfig::parse(&effective.overlay_actions, RingPlatform::Desktop)
+    }
+}
+
+/// The scope's effective ring.
+fn current(props: &Props) -> OverlayConfig {
+    OverlayConfig::parse(&effective(props).overlay_actions, RingPlatform::Desktop)
 }
 
 /// Write the ring: the whole blob, through the page's commit, into the scope being edited.
@@ -152,6 +157,11 @@ fn short_label(cfg: &OverlayConfig, slot: &SlotId) -> String {
         SlotId::PadType => client::ring_pad_type_short().into(),
         SlotId::StreamMute => client::ring_stream_mute_short().into(),
         SlotId::SwapScreens => client::ring_swap_screens_short().into(),
+        SlotId::ReleaseInput => client::ring_release_input_short().into(),
+        SlotId::MouseMode => client::ring_mouse_mode_short().into(),
+        SlotId::Fullscreen => client::ring_fullscreen_short().into(),
+        SlotId::Minimize => client::ring_minimize_short().into(),
+        SlotId::Clipboard => client::ring_clipboard_short().into(),
         SlotId::Host(_) => client::ring_host_short().into(),
         SlotId::Shortcut(id) => cfg
             .shortcut(id)
@@ -161,7 +171,7 @@ fn short_label(cfg: &OverlayConfig, slot: &SlotId) -> String {
 }
 
 /// A slot's name with its availability note after it, where there is one.
-fn with_note(label: &str, note: &str) -> String {
+pub(super) fn with_note(label: &str, note: &str) -> String {
     if note.is_empty() {
         label.to_string()
     } else {
@@ -170,7 +180,7 @@ fn with_note(label: &str, note: &str) -> String {
 }
 
 /// A slot's full name and its availability note on this shell, from the shared catalogue.
-fn describe(cfg: &OverlayConfig, slot: &SlotId) -> (String, String) {
+pub(super) fn describe(cfg: &OverlayConfig, slot: &SlotId) -> (String, String) {
     let id = slot.id();
     catalogue(cfg, RingPlatform::Desktop)
         .into_iter()
@@ -199,7 +209,7 @@ fn disc_at(x: f64, y: f64) -> Option<usize> {
 
 /// A key event's Ctrl, Alt and Shift as a chord's modifier row. The Windows key is the
 /// toggle's: the shell never sees a chord that Windows itself owns.
-fn mods_of(m: InputModifiers) -> [bool; 4] {
+pub(super) fn mods_of(m: InputModifiers) -> [bool; 4] {
     [
         m.contains(InputModifiers::CONTROL),
         m.contains(InputModifiers::ALT),
@@ -209,7 +219,7 @@ fn mods_of(m: InputModifiers) -> [bool; 4] {
 }
 
 /// The grid key a pressed virtual key is, by the VK the session injects for each name.
-fn grid_key(vk: u32) -> Option<&'static str> {
+pub(super) fn grid_key(vk: u32) -> Option<&'static str> {
     KEY_GRID
         .iter()
         .flat_map(|row| row.iter().copied())
@@ -242,14 +252,17 @@ impl Component for QuickActions {
     fn view(&self, props: &Props, cx: &mut ViewContext<'_, Self>) -> View {
         let (ui, set_ui) = (&self.ui, &cx.forward());
         let cfg = current(props);
+        // The open hint names the scope's own Quick actions shortcuts, and only while both exist.
+        let opens = super::shortcuts::ring_keys(&super::shortcuts::resolved(&effective(props)))
+            .map(|(keys, pad)| desktop::desktop_ring_editor_open_hint(&keys, &pad));
         let mut parts: Vec<View> = vec![
             muted(
                 &props.pal,
-                format!(
-                    "{} {}",
-                    desktop::desktop_ring_editor_hint(),
-                    desktop::desktop_ring_editor_open_hint("Ctrl+Alt+Shift+O", "Select+A"),
-                ),
+                [desktop::desktop_ring_editor_hint().to_string()]
+                    .into_iter()
+                    .chain(opens)
+                    .collect::<Vec<_>>()
+                    .join(" "),
             )
             .font_size(12.0)
             .text_wrapping(TextWrapping::Wrap)
@@ -559,33 +572,46 @@ fn legend_row(cfg: &OverlayConfig, ui: &Ui, set_ui: &SetUi) -> View {
         .into()
 }
 
-/// The picker for one disc: the catalogue by group, the current pick marked, a note where a
-/// slot cannot work on this shell, and the swap targets for a keyboard.
+/// The picker for one disc. No title and no Done: the band above names the slot, the disc is
+/// ringed while its picker is open, and a pick closes the card.
 fn picker(props: &Props, cfg: &OverlayConfig, k: usize, ui: &Ui, set_ui: &SetUi) -> View {
     let current = cfg.ring[k].as_ref().map(SlotId::id).unwrap_or_default();
-    // No title and no Done: the band above already names the slot being edited, the disc is
-    // ringed white while its picker is open, and a pick closes the card — the GTK popover's
-    // behaviour, which needed neither either.
+    let (props2, cfg2, ui, set_ui) = (props.clone(), cfg.clone(), ui.clone(), set_ui.clone());
+    catalogue_picker(
+        &props.pal,
+        catalogue(cfg, RingPlatform::Desktop),
+        &current,
+        Rc::new(move |id: String| {
+            let mut next = cfg2.clone();
+            next.ring[k] = SlotId::parse(&id);
+            write(&props2, &next);
+            let mut u = ui.clone();
+            u.selected = None;
+            set_ui.call(u);
+        }),
+    )
+}
+
+/// The catalogue by group as buttons, the current pick marked. An entry with a note is dimmed:
+/// it cannot work on this shell. A host action's note and a key combination's chord are not that.
+pub(super) fn catalogue_picker(
+    pal: &Palette,
+    groups: Vec<CatalogueGroup>,
+    current: &str,
+    pick: Rc<dyn Fn(String)>,
+) -> View {
     let mut parts: Vec<View> = Vec::new();
-    for group in catalogue(cfg, RingPlatform::Desktop) {
-        parts.push(section(&props.pal, group.title));
+    for group in groups {
+        let plain = matches!(group.id, GroupId::Host | GroupId::Shortcuts);
+        parts.push(section(pal, group.title));
         let mut row: Vec<View> = Vec::new();
         for entry in group.entries {
             let is_current = entry.id == current;
-            let unavailable =
-                !entry.note.is_empty() && !entry.id.starts_with("host:") && !is_current;
+            let unavailable = !entry.note.is_empty() && !plain && !is_current;
             let line = with_note(&entry.label, &entry.note);
             let mut b = button(line).on_click({
-                let (props, cfg, id) = (props.clone(), cfg.clone(), entry.id.clone());
-                let (ui, set_ui) = (ui.clone(), set_ui.clone());
-                move || {
-                    let mut next = cfg.clone();
-                    next.ring[k] = SlotId::parse(&id);
-                    write(&props, &next);
-                    let mut u = ui.clone();
-                    u.selected = None;
-                    set_ui.call(u);
-                }
+                let (pick, id) = (pick.clone(), entry.id.clone());
+                move || pick(id.clone())
             });
             b = if is_current {
                 b.style(ButtonStyle::Accent)
@@ -600,7 +626,7 @@ fn picker(props: &Props, cfg: &OverlayConfig, k: usize, ui: &Ui, set_ui: &SetUi)
 }
 
 /// Buttons that wrap into rows of at most five, so a group never runs off the card.
-fn wrap_row(buttons: Vec<View>) -> View {
+pub(super) fn wrap_row(buttons: Vec<View>) -> View {
     let rows: Vec<View> = buttons
         .chunks(5)
         .map(|chunk| hstack(chunk.to_vec()).spacing(6.0).into())
@@ -712,9 +738,9 @@ fn shortcuts(props: &Props, cfg: &OverlayConfig, ui: &Ui, set_ui: &SetUi) -> Vie
     card(vstack(parts).spacing(10.0)).into()
 }
 
-/// The shortcut editor: the disc as the ring will draw it, the name, the modifiers as
-/// toggles, the key on a keyboard-shaped grid or captured from the real keyboard, Save,
-/// Remove, Cancel.
+/// The key-combination editor: the disc as the ring will draw it, the name, the modifiers as
+/// toggles, the key on a grid or captured from the real keyboard, Save, Remove, Cancel. A
+/// modifier alone saves: Win opens the Start menu.
 fn shortcut_editor(
     props: &Props,
     cfg: &OverlayConfig,
@@ -820,7 +846,7 @@ fn shortcut_editor(
         common::common_add()
     })
     .style(ButtonStyle::Accent)
-    .is_enabled(draft.chord.key.is_some())
+    .is_enabled(savable(&draft.chord))
     .on_click({
         let (props, cfg, ui, set_ui, d) = (
             props.clone(),
@@ -924,8 +950,17 @@ fn shortcut_editor(
         .into()
 }
 
+/// Whether the editor may save a chord: any key or modifier.
+fn savable(chord: &Chord) -> bool {
+    !chord.keys().is_empty()
+}
+
 /// A toggle button that hands its handler the new state.
-fn toggle(label: impl Into<View>, on: bool, changed: impl Fn(bool) + 'static) -> ToggleButton {
+pub(super) fn toggle(
+    label: impl Into<View>,
+    on: bool,
+    changed: impl Fn(bool) + 'static,
+) -> ToggleButton {
     ToggleButton::new()
         .content(label)
         .is_checked(on)
@@ -998,8 +1033,14 @@ mod tests {
         assert_eq!(
             grid_key(VirtualKey::CONTROL.0),
             None,
-            "a modifier alone is no key"
+            "a modifier is a toggle"
         );
+        let win = Chord {
+            mods: [false, false, false, true],
+            key: None,
+        };
+        assert!(savable(&win), "a modifier alone is a combination");
+        assert!(!savable(&Chord::default()));
         let sc = Shortcut {
             id: "s1".into(),
             label: "Tasks".into(),

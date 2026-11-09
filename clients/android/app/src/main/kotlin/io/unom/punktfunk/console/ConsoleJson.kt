@@ -11,6 +11,7 @@ import io.unom.punktfunk.SettingsFields
 import io.unom.punktfunk.SpeedTestPhase
 import io.unom.punktfunk.StatsVerbosity
 import io.unom.punktfunk.StreamPreset
+import io.unom.punktfunk.kit.DsDevice
 import io.unom.punktfunk.kit.Gamepad
 import io.unom.punktfunk.kit.discovery.DiscoveredHost
 import io.unom.punktfunk.kit.library.DEFAULT_MGMT_PORT
@@ -443,6 +444,9 @@ internal object ConsoleJson {
      * console's Connected-controllers screen. [extras] are appended, and the first one names the
      * chip when no `InputDevice` drives it. [body] is this device's own vibrator.
      *
+     * [padAudio] says this client plays pad audio on a USB DualSense; those pads' rows carry
+     * `audio`, which shows the per-controller audio rows.
+     *
      * `detail`/`forwarded`/`rumble` come straight from [padInfoOf], the same reader the touch
      * Controllers screen renders from: the support answer a user gets must not depend on which
      * interface asked, and two readers of `InputDevice` would be two answers waiting to drift.
@@ -453,6 +457,7 @@ internal object ConsoleJson {
         extras: List<ExtraPad> = emptyList(),
         body: Vibrator? = null,
         others: List<InputDevice> = emptyList(),
+        padAudio: Boolean = false,
     ): String {
         val arr = JSONArray()
         for (d in pads) {
@@ -477,6 +482,7 @@ internal object ConsoleJson {
                         )
                 } else null
             } else null
+            if (padAudio && hasSpeaker(d)) entry.put("audio", true)
             entry.put("battery", battery ?: JSONObject.NULL)
             arr.put(entry)
         }
@@ -505,6 +511,16 @@ internal object ConsoleJson {
             .put("others", otherRows)
             .toString()
     }
+
+    /** A DualSense or Edge: the Sony pads with a speaker (the DualShock 4 has none). */
+    private fun hasSpeaker(d: InputDevice): Boolean =
+        d.vendorId == DsDevice.VID_SONY && DsDevice.modelFor(d.productId).let {
+            it != null && it != DsDevice.Model.DUALSHOCK4
+        }
+
+    /** `pads[key].speaker_volume` of the saved document [base]; 100 (unscaled) without an entry. */
+    fun padSpeakerVolume(base: JSONObject?, key: String): Int =
+        base?.optJSONObject("pads")?.optJSONObject(key)?.optInt("speaker_volume", 100)?.coerceIn(0, 100) ?: 100
 
     /**
      * Real, plugged-in input devices that are not controllers — a pad Android misreads lands

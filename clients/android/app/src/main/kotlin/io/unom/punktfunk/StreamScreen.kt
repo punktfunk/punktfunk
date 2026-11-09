@@ -46,6 +46,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.movableContentOf
 import androidx.compose.runtime.mutableStateOf
@@ -76,6 +77,8 @@ import io.unom.punktfunk.kit.Gamepad
 import io.unom.punktfunk.kit.GamepadRouter
 import io.unom.punktfunk.kit.NativeBridge
 import io.unom.punktfunk.kit.R
+import io.unom.punktfunk.kit.Shortcuts
+import io.unom.punktfunk.kit.SlotId
 import io.unom.punktfunk.kit.security.IdentityLoad
 import io.unom.punktfunk.kit.security.IdentityStore
 import io.unom.punktfunk.kit.security.KnownHostStore
@@ -137,6 +140,12 @@ fun StreamScreen(
         if (ui.micHint != null) {
             delay(1600)
             ui.micHint = null
+        }
+    }
+    LaunchedEffect(ui.shortcutHint) {
+        if (ui.shortcutHint != null) {
+            delay(2000)
+            ui.shortcutHint = null
         }
     }
     LaunchedEffect(ui.motionHint) {
@@ -339,8 +348,14 @@ fun StreamScreen(
     // The twist and the three-finger tap live in the pointer touch models only — passthrough gives
     // every finger to the host verbatim — and need a screen plus the POINTER grant.
     val gestures = hasTouch && touchMode != TouchMode.TOUCH && pointerOk
+    // The shortcuts the start banner and Back's fallback read: this session's, live bindings.
+    val shortcuts = remember(handle) { initialSettings.shortcutBindings() }
+    val ringOpener = listOfNotNull(
+        shortcuts.hint(Shortcuts.Action.Ring, Shortcuts.Device.PAD).takeIf { ui.padPresent },
+        shortcuts.hint(Shortcuts.Action.Ring, Shortcuts.Device.KEYBOARD).takeIf { keyboard },
+    ).firstOrNull()?.words(context.resources)
     // Settings can turn Back off, but only while another opener exists: the ring holds End stream.
-    val backOpensRing = initialSettings.backOpensRing || !(ui.padPresent || keyboard || gestures)
+    val backOpensRing = initialSettings.backOpensRing || !(ringOpener != null || gestures)
     val openRingCentred = { ring.openAt(Offset(containerSize.width / 2f, containerSize.height / 2f)) }
     // The quick-action ring (design/touch-client-overlay.md §2). Back opens it at the screen
     // centre instead of ending the session; "End stream" is a slot inside, behind a two-press arm.
@@ -539,7 +554,18 @@ fun StreamScreen(
         },
         // This stream only: the next one starts from the Controller type setting.
         cyclePadType = { activity?.gamepadRouter?.let { it.setPadType(nextPadType(it.padType)) } },
+        pointerCapture = { hasPhysicalMouse() },
+        toggleCapture = { activity?.mouseForwarder?.toggleCapture() },
     )
+    // A shortcut fires through this composition's ring actions, whichever is current.
+    val shortcutArm = remember(handle) { ShortcutArm() }
+    SideEffect {
+        peripherals.onShortcut = { action, phase ->
+            fireShortcut(action, phase, handle, ring, overlayCfg, ringActions, context, shortcutArm, openRingCentred) {
+                ui.shortcutHint = it
+            }
+        }
+    }
     // The summon rides a pointer gesture but TYPES, so it also needs the KEYBOARD grant
     // (dismissing is always allowed).
     val showKeyboard: (Boolean) -> Unit = { show ->
@@ -735,12 +761,17 @@ fun StreamScreen(
                     // Bottom-centre, which MotionUnreachableHint also owns at t≈0. The hint YIELDS: the
                     // notice reports something broken about THIS session, the hint repeats every stream.
                     if (initialSettings.exitHint && banner.up && !ui.motionHint && !touchHint) OsdScaled {
+                        // The pad's End stream hold, as the player bound it.
+                        val exitHold = shortcuts.bindings.firstOrNull {
+                            it.action == Shortcuts.Action.Slot(SlotId.EndStream) &&
+                                it.trigger.device == Shortcuts.Device.PAD && it.trigger.hold
+                        }?.trigger?.chord()
                         StreamStartBanner(
                             text = when {
-                                ui.padPresent -> stringResource(R.string.notice_exit_hold, "L1 + R1 + Start + Select")
+                                ui.padPresent && exitHold != null -> stringResource(R.string.notice_exit_hold, exitHold)
                                 backOpensRing -> stringResource(R.string.notice_ring_opens_keys, "Back")
                                 gestures -> stringResource(R.string.notice_ring_twist)
-                                else -> stringResource(R.string.notice_ring_opens_keys, "Ctrl+Alt+Shift+O")
+                                else -> stringResource(R.string.notice_ring_opens_keys, ringOpener.orEmpty())
                             },
                             alpha = banner.alpha,
                             modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 24.dp),
@@ -819,6 +850,10 @@ fun StreamScreen(
                     }
                     ui.micHint?.let {
                         OsdScaled { MicChordHint(stringResource(it), Modifier.align(Alignment.TopCenter).padding(top = 16.dp)) }
+                    }
+                    // A shortcut's dimmed action says why; a danger one asks for its second press.
+                    ui.shortcutHint?.let {
+                        OsdScaled { MicChordHint(it, Modifier.align(Alignment.TopCenter).padding(top = 16.dp)) }
                     }
                     // Bottom, not top: this can coincide with a mic-chord confirmation or the exit cue,
                     // and a notice landing on top of one of those would cost the user both.

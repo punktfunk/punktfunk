@@ -202,6 +202,9 @@ public enum DefaultsKey {
     /// shortcuts, the virtual pad's preset). Empty = the platform default ring. Cross-client
     /// `overlay_actions`, presetable as the whole blob.
     public static let overlayActions = "punktfunk.overlayActions"
+    /// In-stream shortcuts: one JSON blob parsed by `Shortcuts.parse`. Empty = this platform's
+    /// defaults, which read `guideGesture`. Cross-client `shortcuts`, presetable as the whole blob.
+    public static let shortcuts = "punktfunk.shortcuts"
     /// Location-based modifier mapping (a `ModifierLayout` value, default `.mac`): which Windows VK
     /// each PHYSICAL modifier position forwards to the host. `.mac` keeps ⌥ Option → Alt and
     /// ⌘ Command → Super/Win (the Apple positions). `.windows` swaps the Alt/Super ROLE between the
@@ -387,6 +390,7 @@ public enum SettingDefault {
     public static let mouseMode = "capture"
     public static let invertScroll = false
     public static let overlayActions = ""
+    public static let shortcuts = ""
     public static let inhibitShortcuts = true
     public static let gamepadType = 0
     public static let gamepadForwarding = true
@@ -446,6 +450,7 @@ public enum SettingDefault {
         DefaultsKey.allowVRR, DefaultsKey.hdrEnabled, DefaultsKey.enable444,
         DefaultsKey.tenBitSdr, DefaultsKey.hostSort, DefaultsKey.hostGrouping,
         DefaultsKey.mouseMode, DefaultsKey.invertScroll, DefaultsKey.overlayActions,
+        DefaultsKey.shortcuts,
         DefaultsKey.modifierLayout, DefaultsKey.inhibitShortcuts, DefaultsKey.pointerCapture,
         DefaultsKey.touchMode, DefaultsKey.librarySort, DefaultsKey.libraryView,
         DefaultsKey.startIn, DefaultsKey.libraryGroupBy, DefaultsKey.librarySections,
@@ -471,6 +476,10 @@ extension Notification.Name {
     /// menus) — it exists so the menu item is honest whenever it CAN fire, and as the shortcut's
     /// discoverable menu-bar surface.
     public static let punktfunkReleaseCapture = Notification.Name("io.unom.punktfunk.release-capture")
+    /// A quick action only the stream view can run, from the dial or a shortcut: `object` is the
+    /// session's connection, `userInfo["slot"]` the slot id (`release_input`, `mouse_mode`,
+    /// `minimize`).
+    public static let punktfunkStreamSlot = Notification.Name("io.unom.punktfunk.stream-slot")
     /// The quick-action ring's Keyboard slot: show the stream view's soft keyboard, or hide it (iOS).
     public static let punktfunkToggleSoftKeyboard = Notification.Name("io.unom.punktfunk.toggle-soft-keyboard")
     /// Asks a session to advance its stats tier; `object` is its connection, nil for every session.
@@ -484,27 +493,11 @@ extension Notification.Name {
     /// iOS only: a finger reaches the ring either way.
     public static let punktfunkRingOpen = Notification.Name("io.unom.punktfunk.ring-open")
 
-    /// Posted by InputCapture on ⌃⌥⇧O (`object` is the session's connection): on macOS while input
-    /// is CAPTURED, where the Stream menu's key equivalent cannot fire, and on an iPad keyboard in
-    /// both states. The session view toggles the quick-action ring.
-    public static let punktfunkToggleQuickActions = Notification.Name("io.unom.punktfunk.toggle-quick-actions")
-
     /// Posted by the app's Stream menu ("Toggle Fullscreen", ⌃⌘F) and by InputCapture's monitor
     /// when the same combo fires while input is captured with `inhibitShortcuts` off (the menu
     /// key-equivalent never reaches a captured stream view). The key window's `FullscreenController` flips the window's fullscreen
     /// state. macOS only.
     public static let punktfunkToggleFullscreen = Notification.Name("io.unom.punktfunk.toggle-fullscreen")
-
-    /// Posted by InputCapture's chord path (⌃⌥⇧A) when the combo fires while input is CAPTURED —
-    /// the state in which the Stream menu's identical key equivalent never reaches the app. The
-    /// live session's owner (ContentView) flips the session's mic mute. Released, the menu item
-    /// handles the same combo directly; both end at `SessionModel.toggleMicMute`.
-    public static let punktfunkToggleMicMute = Notification.Name("io.unom.punktfunk.toggle-mic-mute")
-
-    /// Posted by InputCapture's chord path (⌃⌥⇧C) while input is CAPTURED (`object` is the
-    /// session's connection). ContentView flips that session's clipboard sharing; released, the
-    /// Stream menu item handles the same combo.
-    public static let punktfunkToggleClipboard = Notification.Name("io.unom.punktfunk.toggle-clipboard")
 
     /// Posted by the Live Activity's / Shortcuts' End-stream intent (`EndStreamIntent.perform`,
     /// which runs in the app's process): the app tears the active session down deliberately

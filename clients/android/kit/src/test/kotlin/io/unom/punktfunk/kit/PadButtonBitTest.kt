@@ -34,10 +34,10 @@ class PadButtonBitTest {
     }
 
     /**
-     * With Select mapped, the three Select chords are reachable on a pad that has only a BACK
-     * keycode — which is the whole point of the mapping, not a side effect of it. Held-state
-     * assembly is [GamepadRouter]'s (see `GamepadChordTest`); what is pinned here is that the
-     * bits a SHIELD can actually produce cover each chord.
+     * With Select mapped, every default pad shortcut is reachable on a pad that has only a BACK
+     * keycode — which is the whole point of the mapping, not a side effect of it. The engine is
+     * [Shortcuts.Engine]'s; what is pinned here is that the bits a SHIELD can produce cover each
+     * default chord.
      */
     @Test
     fun `the Select chords are reachable from a BACK-only pad`() {
@@ -45,11 +45,13 @@ class PadButtonBitTest {
         val start = Gamepad.padButtonBit(KeyEvent.KEYCODE_BUTTON_START, 0)
         val l1 = Gamepad.padButtonBit(KeyEvent.KEYCODE_BUTTON_L1, 0)
         val r1 = Gamepad.padButtonBit(KeyEvent.KEYCODE_BUTTON_R1, 0)
+        val a = Gamepad.padButtonBit(KeyEvent.KEYCODE_BUTTON_A, 0)
         val x = Gamepad.padButtonBit(KeyEvent.KEYCODE_BUTTON_X, 0)
         val y = Gamepad.padButtonBit(KeyEvent.KEYCODE_BUTTON_Y, 0)
-        assertEquals(GamepadRouter.EXIT_CHORD, select or start or l1 or r1)
-        assertEquals(GamepadRouter.STATS_CHORD, select or x)
-        assertEquals(GamepadRouter.MIC_CHORD, select or y)
+        val pad = Shortcuts.defaults(Shortcuts.Client.ANDROID, gameMode = false, legacyGuideGesture = "on")
+            .bindings.mapNotNull { (it.trigger as? Shortcuts.Trigger.Pad)?.ids() }
+        val reachable = listOf(listOf(select, a), listOf(select, x), listOf(select, y), listOf(select), listOf(l1, r1, start, select))
+        assertEquals(reachable.map { it.sorted() }.toSet(), pad.toSet())
     }
 
     /**

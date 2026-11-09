@@ -3,6 +3,10 @@ package io.unom.punktfunk
 import android.content.Context
 import androidx.test.core.app.ApplicationProvider
 import io.unom.punktfunk.kit.Gamepad
+import io.unom.punktfunk.kit.SlotId
+import io.unom.punktfunk.kit.chordChip
+import io.unom.punktfunk.kit.keyLegend
+import io.unom.punktfunk.kit.keyVk
 import java.io.File
 import org.json.JSONArray
 import org.json.JSONObject

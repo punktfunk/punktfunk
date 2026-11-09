@@ -10,6 +10,7 @@ import android.view.WindowManager
 import androidx.annotation.StringRes
 import androidx.core.content.ContextCompat
 import io.unom.punktfunk.kit.R
+import io.unom.punktfunk.kit.Shortcuts
 import kotlin.math.roundToInt
 
 /**
@@ -77,11 +78,9 @@ data class Settings(
      */
     val systemButtons: String = "auto",
     /**
-     * The hold-Select guide gesture — the cross-client `guide_gesture` key: `"auto"` (off
-     * on Android) | `"on"` | `"off"`. On: holding Select alone ≥350 ms sends the HOST's
-     * guide, down until release (long hold = the host's long-press → a Gaming-Mode host's
-     * QAM); a Select tap is delivered on release, slightly delayed. For devices whose
-     * shell intercepts the physical guide button.
+     * The retired Hold Select for guide setting — the cross-client `guide_gesture` key:
+     * `"auto"` | `"on"` | `"off"`. No row any more: `on` adds the Hold Select row to the
+     * default [shortcuts] ([shortcutBindings]), which the player edits from there.
      */
     val guideGesture: String = "auto",
     /** Requested audio channel count: 2 (stereo), 6 (5.1) or 8 (7.1). The host clamps to what it
@@ -334,6 +333,11 @@ data class Settings(
      * shortcuts, the virtual pad's preset). Empty = the platform default ring.
      */
     val overlayActions: String = "",
+    /**
+     * The in-stream shortcuts, one JSON blob parsed by [Shortcuts.parse]. Empty = Android's
+     * defaults ([shortcutBindings]), the chords every build before had.
+     */
+    val shortcuts: String = "",
     /**
      * Back mid-stream opens the ring. Off, Back does nothing while a pad, the twist or a keyboard
      * chord can open it instead; with none of those it still opens, so a session keeps a way out.
@@ -1043,9 +1047,10 @@ fun codecOptionsFor(
  * for it that's the shell's business. */
 fun Settings.systemButtonsForward(): Boolean = systemButtons != "local"
 
-/** Resolved [Settings.guideGesture]: auto = OFF on Android (the raw press already reaches the
- * host); "on" is for devices whose shell intercepts the physical guide button. */
-fun Settings.guideGestureEnabled(): Boolean = guideGesture == "on"
+/** The shortcuts the next stream binds: the blob, or Android's defaults, with the Hold Select
+ *  row when the retired [Settings.guideGesture] was on. */
+fun Settings.shortcutBindings(): Shortcuts =
+    Shortcuts.resolve(shortcuts, Shortcuts.Client.ANDROID, gameMode = false, legacyGuideGesture = guideGesture)
 
 /** The [Settings.codec] string as a `quic::CODEC_*` preference byte (`0` = auto). H264=1, HEVC=2,
  * AV1=4, PyroWave=8 — the shared cross-client contract. */
@@ -1172,9 +1177,3 @@ val SYSTEM_BUTTON_OPTIONS = listOf(
     "local" to R.string.player_system_buttons_local,
 )
 
-/** (stored `guide_gesture` value, label) — the hold-Select guide gesture. */
-val GUIDE_GESTURE_OPTIONS = listOf(
-    "auto" to R.string.player_guide_gesture_auto,
-    "on" to R.string.player_guide_gesture_on,
-    "off" to R.string.player_guide_gesture_off,
-)

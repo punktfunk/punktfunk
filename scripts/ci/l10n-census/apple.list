@@ -101,7 +101,6 @@ clients/apple/Sources/PunktfunkClient/Settings/ControllerTestView.swift	Toggle a
 clients/apple/Sources/PunktfunkClient/Settings/QuickActionCatalog.swift	Shut down
 clients/apple/Sources/PunktfunkClient/Settings/SettingsView+Sections.swift	Test Controller…
 clients/apple/Sources/PunktfunkClient/Settings/SettingsView+Sections.swift	⌘Space, ⌘Tab, Mission Control, …
-clients/apple/Sources/PunktfunkClient/Settings/ShortcutsReference.swift	Siri Remote
 clients/apple/Sources/PunktfunkKit/Connection/ClientTLS.swift	Couldn't build the client identity: {}
 clients/apple/Sources/PunktfunkKit/Connection/ClientTLS.swift	Couldn't load the client certificate
 clients/apple/Sources/PunktfunkKit/Connection/ClientTLS.swift	Couldn't load the client key: {}

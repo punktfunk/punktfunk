@@ -5,7 +5,8 @@
 //!
 //! The editor shows every row a preset can hold, at the preset's value over the global one.
 //! A step pins that row's field ([`SettingsOverlay::pin`]), even at the global value; X clears
-//! it, so the row follows the global value again.
+//! it, so the row follows the global value again. A row that is a page of its own (Shortcuts,
+//! Quick actions) opens that page in the preset's [`Scope`].
 
 use super::settings::rows::{
     adjust, advanced, overrides_row, preset_field, preset_rows, row_spec, Section,
@@ -21,12 +22,70 @@ use pf_client_core::presets::SettingsOverlay;
 use pf_client_core::trust::Settings;
 use pf_l10n::{client, common, console};
 use skia_safe::{Canvas, Rect};
+use std::borrow::Cow;
+use std::sync::{Arc, Mutex, MutexGuard};
 
 fn save(id: &str, name: &str, overlay: &SettingsOverlay) -> ConsoleCmd {
     ConsoleCmd::SavePreset {
         id: id.into(),
         name: name.into(),
         overrides: serde_json::to_value(overlay).unwrap_or_default(),
+    }
+}
+
+/// A preset under edit. Its editor and every page it opens share one, so each save carries
+/// all the changes made under it.
+pub(crate) struct PresetDraft {
+    pub id: String,
+    pub name: String,
+    pub overlay: SettingsOverlay,
+}
+
+/// Where a page reads and writes its settings: the device's, or a preset's over them.
+#[derive(Clone, Default)]
+pub(crate) enum Scope {
+    #[default]
+    Global,
+    Preset(Arc<Mutex<PresetDraft>>),
+}
+
+fn lock(draft: &Mutex<PresetDraft>) -> MutexGuard<'_, PresetDraft> {
+    draft.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+impl Scope {
+    /// The settings the page shows: in preset scope, the preset's over the global ones.
+    pub(crate) fn settings<'a>(&self, ctx: &'a Ctx) -> Cow<'a, Settings> {
+        match self {
+            Scope::Global => Cow::Borrowed(&*ctx.settings),
+            Scope::Preset(d) => Cow::Owned(lock(d).overlay.apply(ctx.settings)),
+        }
+    }
+
+    /// Runs `f` over the scope's settings and keeps what it did to `field`: the device's
+    /// file, or the preset's overlay, sent to the host.
+    pub(crate) fn write(
+        &self,
+        field: &str,
+        ctx: &mut Ctx,
+        fx: &mut Outbox,
+        f: impl FnOnce(&mut Settings),
+    ) {
+        match self {
+            Scope::Global => {
+                ctx.write(|c| {
+                    f(c.settings);
+                    true
+                });
+            }
+            Scope::Preset(d) => {
+                let mut d = lock(d);
+                let mut s = d.overlay.apply(ctx.settings);
+                f(&mut s);
+                d.overlay.pin(field, &s);
+                fx.cmds.push(save(&d.id, &d.name, &d.overlay));
+            }
+        }
     }
 }
 
@@ -441,25 +500,46 @@ impl ScreenView for PresetName {
 // --- the settings ----------------------------------------------------------------------------
 
 pub(crate) struct PresetEdit {
-    id: String,
-    name: String,
-    overlay: SettingsOverlay,
+    draft: Arc<Mutex<PresetDraft>>,
     list: MenuList,
 }
 
 impl PresetEdit {
     pub(crate) fn new(id: String, name: String, overlay: SettingsOverlay) -> PresetEdit {
         PresetEdit {
-            id,
-            name,
-            overlay,
+            draft: Arc::new(Mutex::new(PresetDraft { id, name, overlay })),
             list: MenuList::new(),
         }
     }
 
+    fn overlay(&self) -> SettingsOverlay {
+        lock(&self.draft).overlay.clone()
+    }
+
+    fn save(&self) -> ConsoleCmd {
+        let d = lock(&self.draft);
+        save(&d.id, &d.name, &d.overlay)
+    }
+
+    /// A row that is a page of its own opens that page over this preset.
+    fn open(&self, id: super::settings::rows::RowId, ctx: &Ctx, fx: &mut Outbox) -> bool {
+        use super::settings::rows::RowId;
+        let scope = Scope::Preset(self.draft.clone());
+        match id {
+            RowId::ShortcutsPage => fx.push(Screen::Shortcuts(
+                super::shortcuts::ShortcutsScreen::new(ctx, scope),
+            )),
+            RowId::QuickActions => fx.push(Screen::RingEditor(Box::new(
+                super::ring_editor::RingEditorScreen::new(ctx, scope),
+            ))),
+            _ => return false,
+        }
+        true
+    }
+
     /// `f` sees `ctx.settings` as the preset streams them: the overlay over the global.
     fn in_preset<R>(&self, ctx: &mut Ctx, f: impl FnOnce(&mut Ctx) -> R) -> R {
-        let preset = self.overlay.apply(ctx.settings);
+        let preset = self.overlay().apply(ctx.settings);
         let global = std::mem::replace(ctx.settings, preset);
         let out = f(ctx);
         *ctx.settings = global;
@@ -469,11 +549,11 @@ impl PresetEdit {
     /// The preset's rows. An advanced one shows under Show advanced, or while this preset
     /// overrides it, so no override is ever out of sight.
     fn rows(&self, ctx: &mut Ctx) -> Vec<(Section, super::settings::rows::RowId)> {
-        let overlay = &self.overlay;
+        let overlay = self.overlay();
         self.in_preset(ctx, |ctx| {
             let all = ctx.settings.show_advanced;
             (preset_rows(ctx).into_iter())
-                .filter(|(_, id)| all || !advanced(*id) || overrides_row(*id, overlay))
+                .filter(|(_, id)| all || !advanced(*id) || overrides_row(*id, &overlay))
                 .collect()
         })
     }
@@ -495,7 +575,7 @@ impl PresetEdit {
             o.pin(field, s);
             o
         };
-        let before = self.overlay.apply(ctx.settings);
+        let before = self.overlay().apply(ctx.settings);
         let after = self.in_preset(ctx, |ctx| {
             if !adjust(id, delta, wrap, ctx) {
                 return None;
@@ -511,16 +591,16 @@ impl PresetEdit {
             return Some(MenuPulse::Boundary);
         };
         if held(&before) != held(&after) {
-            self.overlay.pin(field, &after);
+            lock(&self.draft).overlay.pin(field, &after);
         }
-        fx.cmds.push(save(&self.id, &self.name, &self.overlay));
+        fx.cmds.push(self.save());
         Some(MenuPulse::Move)
     }
 }
 
 impl ScreenView for PresetEdit {
     fn title(&self) -> String {
-        console::console_preset_title(&self.name)
+        console::console_preset_title(&lock(&self.draft).name)
     }
 
     fn menu(&mut self, ev: MenuEvent, ctx: &mut Ctx, fx: &mut Outbox) -> Option<MenuPulse> {
@@ -532,10 +612,10 @@ impl ScreenView for PresetEdit {
         let focused = rows.get(self.list.cursor).map(|(_, id)| *id);
         if ev == MenuEvent::Tertiary {
             let field = focused.and_then(preset_field)?;
-            if !self.overlay.clear(field) {
+            if !lock(&self.draft).overlay.clear(field) {
                 return Some(MenuPulse::Boundary);
             }
-            fx.cmds.push(save(&self.id, &self.name, &self.overlay));
+            fx.cmds.push(self.save());
             return Some(MenuPulse::Confirm);
         }
         let (msg, pulse) = self.list.menu(ev, rows.len());
@@ -547,6 +627,9 @@ impl ScreenView for PresetEdit {
         let Some(id) = focused else {
             return pulse;
         };
+        if msg == ListMsg::Activate && self.open(id, ctx, fx) {
+            return Some(MenuPulse::Confirm);
+        }
         self.step(id, delta, wrap, ctx, fx)
     }
 
@@ -557,7 +640,9 @@ impl ScreenView for PresetEdit {
             return false;
         }
         if let (ListMsg::Activate, Some((_, id))) = (msg, rows.get(self.list.cursor)) {
-            self.step(*id, 1, true, ctx, fx);
+            if !self.open(*id, ctx, fx) {
+                self.step(*id, 1, true, ctx, fx);
+            }
         }
         true
     }
@@ -584,7 +669,7 @@ impl ScreenView for PresetEdit {
         // The Tertiary button's name is data, never part of the message.
         let hint = console::console_preset_editor_hint("X");
         let below = blurb(canvas, ui, fonts, &hint, rect, k);
-        let overlay = self.overlay.clone();
+        let overlay = self.overlay();
         let listed = self.rows(ctx);
         let rows: Vec<RowSpec> = self.in_preset(ctx, |ctx| {
             let mut last = None;

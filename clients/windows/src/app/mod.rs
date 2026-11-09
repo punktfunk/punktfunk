@@ -3,9 +3,9 @@
 //! One root component, [`Shell`], holds the shell's state, and everything that changes it
 //! arrives as a [`Msg`]: event handlers and worker threads (discovery, the spawned session's
 //! reader, the probes) post through an [`AsyncSetState`], a typed handle on the root's queue.
-//! Screens are functions of that state; the four with state of their own (hosts, pairing, the
-//! speed test and the ring editor) are child components fed by props. Each screen lives in its
-//! own submodule:
+//! Screens are functions of that state; the five with state of their own (hosts, pairing, the
+//! speed test, the ring editor and the shortcuts editor) are child components fed by props.
+//! Each screen lives in its own submodule:
 //!
 //! * [`hosts`] — saved/discovered/manual host list, plus per-host forget + speed test
 //! * [`connect`] — the trust gate and session lifecycle glue (connect / request-access flows)
@@ -33,6 +33,8 @@ mod quick_actions;
 /// The shell's decisions as plain functions, table-tested without a window.
 mod rules;
 mod settings;
+/// The in-stream shortcuts' editor, a section of the settings page beside Quick actions.
+mod shortcuts;
 mod speed;
 mod stream;
 mod style;
@@ -627,7 +629,9 @@ impl Component for Shell {
             }
             Screen::Settings => settings::settings_page(self),
             Screen::Licenses => licenses::licenses_page(pal, &self.ctx, &svc.set_screen),
-            Screen::Help => help::help_page(pal, &svc.set_screen),
+            Screen::Help => {
+                help::help_page(pal, &self.ctx, &svc.set_screen, &self.set(Msg::SettingsNav))
+            }
             Screen::Pair => component::<pair::PairPage>("pair", svc.clone()).into(),
             Screen::SpeedTest => component::<speed::SpeedPage>(
                 "speed",

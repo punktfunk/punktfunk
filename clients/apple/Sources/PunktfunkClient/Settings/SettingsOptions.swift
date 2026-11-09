@@ -83,12 +83,6 @@ enum SettingsOptions {
 
     /// The hold-Select guide gesture (the cross-client `guide_gesture` key). Auto = on
     /// everywhere but macOS.
-    static let guideGestures: [(label: String, tag: String)] = [
-        (String(localized: L10n.playerGuideGestureAuto), "auto"),
-        (String(localized: L10n.playerGuideGestureOn), "on"),
-        (String(localized: L10n.playerGuideGestureOff), "off"),
-    ]
-
     static let hudPlacements: [(label: String, tag: String)] =
         HUDPlacement.allCases.map { ($0.label, $0.rawValue) }
 

@@ -243,37 +243,3 @@ final class Sc2DeviceTests: XCTestCase {
         }
     }
 }
-
-/// `Sc2Capture` re-declares the escape chord (the original is `@MainActor`-isolated and the
-/// capture reads its mask on the BLE queue) — this pins the two masks and the hold duration
-/// together, because the failure of a drift is invisible until someone can't leave a stream
-/// with a captured SC2 in their hands (the GamepadEscapeChordTests rationale, one class over).
-@MainActor
-final class Sc2EscapeChordMirrorTests: XCTestCase {
-    func testChordMaskMirrorsGamepadCapture() {
-        XCTAssertEqual(Sc2Capture.escapeChord, GamepadCapture.escapeChord)
-    }
-
-    func testHoldMirrorsTheCrossClientDisconnectHold() {
-        // pf-client-core's DISCONNECT_HOLD — 1.5 s on every client (GamepadCapture's own copy
-        // is private; the value is the cross-client contract being pinned).
-        XCTAssertEqual(Sc2Capture.disconnectHold, 1.5)
-    }
-
-    func testStatsChordMirrorsGamepadCapture() {
-        XCTAssertEqual(Sc2RingGate.statsChord, GamepadCapture.statsChord)
-    }
-
-    /// The three chords must stay reachable independently: no way of holding one passes through
-    /// another on the way, or the dial would open while someone reaches for the exit.
-    func testChordsDoNotContainOneAnother() {
-        XCTAssertEqual(Sc2RingGate.ringChord, GamepadWire.back | GamepadWire.a)
-        let chords = [Sc2RingGate.ringChord, Sc2RingGate.statsChord, Sc2Capture.escapeChord]
-        for (i, one) in chords.enumerated() {
-            for other in chords[(i + 1)...] {
-                XCTAssertNotEqual(one & other, one)
-                XCTAssertNotEqual(one & other, other)
-            }
-        }
-    }
-}

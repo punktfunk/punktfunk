@@ -41,6 +41,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
@@ -49,6 +50,10 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import io.unom.punktfunk.kit.R
+import io.unom.punktfunk.kit.SlotId
+import io.unom.punktfunk.kit.chordChip
+import io.unom.punktfunk.kit.keyLegend
+import io.unom.punktfunk.kit.keyVk
 import kotlinx.coroutines.delay
 import kotlin.math.roundToInt
 
@@ -349,17 +354,21 @@ private fun previewActionsIn(ctx: Context) = RingActions(
     audioMute = { 0 }, audioMuteLabel = { null }, toggleStreamMute = {},
     currentMode = { intArrayOf(1920, 1080, 60) }, requestMode = { _, _, _ -> },
     screenLayouts = { ScreenLayout.entries },
+    pointerCapture = { true },
 )
 
-private data class SlotOption(val id: String, val label: String, val note: String? = null)
-private data class SlotGroup(val title: String, val options: List<SlotOption>)
+/** One catalogue entry. [dim]: never on this device, though a preset made elsewhere may pick it. */
+internal data class SlotOption(val id: String, val label: String, val note: String? = null, val dim: Boolean = false)
+internal data class SlotGroup(val title: String, val options: List<SlotOption>)
 
-/** The catalogue by group (§3.3) with each entry's availability note; the preset's own
- *  shortcuts and the empty slot are appended per config. */
-private fun slotGroups(cfg: OverlayConfig, ctx: Context): List<SlotGroup> {
+/** The catalogue by group (§3.3) with each entry's availability note; the preset's own key
+ *  combinations are appended per config. The dial ends on the empty slot; a shortcut
+ *  ([forShortcut]) starts on Quick actions itself instead. */
+internal fun slotGroups(cfg: OverlayConfig, ctx: Context, forShortcut: Boolean = false): List<SlotGroup> {
     fun t(@StringRes id: Int) = ctx.getString(id)
     val g = mutableListOf(
-        SlotGroup(t(R.string.ring_group_session), listOf(
+        SlotGroup(t(R.string.ring_group_session), listOfNotNull(
+            SlotOption("ring", t(R.string.ring_open_ring)).takeIf { forShortcut },
             SlotOption("end_stream", t(R.string.ring_end_stream)),
             SlotOption("end_game", t(R.string.ring_end_game), t(R.string.ring_end_game_note)),
             SlotOption("disconnect_linger", t(R.string.ring_disconnect_linger)),
@@ -373,10 +382,15 @@ private fun slotGroups(cfg: OverlayConfig, ctx: Context): List<SlotGroup> {
             SlotOption("qam", t(R.string.ring_qam), t(R.string.ring_qam_note)),
             SlotOption("pad_mouse", t(R.string.ring_pad_mouse), t(R.string.ring_pad_mouse_note)),
             SlotOption("pad_type", t(R.string.ring_pad_type), t(R.string.ring_pad_type_note)),
+            SlotOption("release_input", t(R.string.ring_release_input)),
+            SlotOption("mouse_mode", t(R.string.ring_mouse_mode)),
+            SlotOption("clipboard", t(R.string.ring_clipboard), t(R.string.ring_clipboard_unavailable), dim = true),
         )),
         SlotGroup(t(R.string.ring_group_view), listOf(
             SlotOption("stats", t(R.string.ring_stats)),
             SlotOption("swap_screens", t(R.string.android_ring_screens), t(R.string.android_ring_screens_note)),
+            SlotOption("fullscreen", t(R.string.ring_fullscreen), t(R.string.ring_no_window), dim = true),
+            SlotOption("minimize", t(R.string.ring_minimize), t(R.string.ring_no_window), dim = true),
         )),
         SlotGroup(t(R.string.ring_group_audio), listOf(
             SlotOption("mic", t(R.string.ring_mic)),
@@ -393,13 +407,13 @@ private fun slotGroups(cfg: OverlayConfig, ctx: Context): List<SlotGroup> {
             SlotOption("shortcut:${it.id}", it.label.ifEmpty { chordChip(it.keys) }, if (it.label.isEmpty()) null else chordChip(it.keys))
         })
     }
-    g += SlotGroup(t(R.string.ring_group_empty), listOf(SlotOption("", t(R.string.ring_empty_slot))))
+    if (!forShortcut) g += SlotGroup(t(R.string.ring_group_empty), listOf(SlotOption("", t(R.string.ring_empty_slot))))
     return g
 }
 
 /** The catalogue by group; the current pick is marked. */
 @Composable
-private fun SlotPicker(groups: List<SlotGroup>, current: String, onPick: (String) -> Unit, onDismiss: () -> Unit) {
+internal fun SlotPicker(groups: List<SlotGroup>, current: String, onPick: (String) -> Unit, onDismiss: () -> Unit) {
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(stringResource(R.string.ring_picker_title)) },
@@ -414,7 +428,8 @@ private fun SlotPicker(groups: List<SlotGroup>, current: String, onPick: (String
                     )
                     g.options.forEach { o ->
                         Row(
-                            Modifier.fillMaxWidth().clickable { onPick(o.id) }.padding(vertical = 8.dp),
+                            Modifier.fillMaxWidth().clickable { onPick(o.id) }.padding(vertical = 8.dp)
+                                .alpha(if (o.dim) 0.45f else 1f),
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
                             Column(Modifier.weight(1f)) {
@@ -440,7 +455,7 @@ private data class ShortcutDraft(val id: String, val label: String, val keys: Li
 private val MODIFIER_KEYS = listOf("ctrl", "alt", "shift", "win")
 
 /** The keys a chord can end on, grouped the way a keyboard groups them — every name [keyVk] knows. */
-private val KEY_GROUPS: List<Pair<Int, List<String>>> = listOf(
+internal val KEY_GROUPS: List<Pair<Int, List<String>>> = listOf(
     R.string.ring_key_group_function to (listOf("escape") + (1..12).map { "f$it" }),
     R.string.ring_key_group_letters to "qwertyuiopasdfghjklzxcvbnm".map { it.toString() },
     R.string.ring_key_group_numbers to ((1..9).map { it.toString() } + "0"),
@@ -450,8 +465,8 @@ private val KEY_GROUPS: List<Pair<Int, List<String>>> = listOf(
 )
 
 /**
- * One shortcut: a name, the modifiers held as chips, the key it ends on picked from a keyboard,
- * and the disc as the ring will draw it.
+ * One key combination: a name, the modifiers held as chips, the key it ends on picked from a
+ * keyboard (or none: a modifier alone is one), and the disc as the ring will draw it.
  */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
@@ -489,14 +504,14 @@ private fun ShortcutEditor(
                 KeycapDisc(keys)
                 Column {
                     Text(
-                        label.ifEmpty { if (key == null) stringResource(R.string.ring_shortcut_no_key) else chordChip(keys) },
+                        label.ifEmpty { if (keys.isEmpty()) stringResource(R.string.ring_shortcut_no_key) else chordChip(keys) },
                         style = MaterialTheme.typography.bodyLarge,
                     )
                     Text(
-                        if (key == null) stringResource(R.string.ring_shortcut_preview) else chordChip(keys),
+                        if (keys.isEmpty()) stringResource(R.string.ring_shortcut_preview) else chordChip(keys),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        fontFamily = if (key == null) null else FontFamily.Monospace,
+                        fontFamily = if (keys.isEmpty()) null else FontFamily.Monospace,
                     )
                 }
             }
@@ -525,7 +540,7 @@ private fun ShortcutEditor(
                     group.forEach { k ->
                         FilterChip(
                             selected = key == k,
-                            onClick = { key = k },
+                            onClick = { key = if (key == k) null else k },
                             // A fixed-width chip lays its label out from the start; centre it.
                             label = {
                                 Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
@@ -539,7 +554,7 @@ private fun ShortcutEditor(
             }
         }
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-            Button(onClick = { onSave(draft.copy(label = label, keys = keys)) }, enabled = key != null) {
+            Button(onClick = { onSave(draft.copy(label = label, keys = keys)) }, enabled = keys.isNotEmpty()) {
                 Text(stringResource(if (draft.isNew) R.string.common_add else R.string.common_save))
             }
             TextButton(onClick = onBack) { Text(stringResource(R.string.common_cancel)) }

@@ -59,6 +59,8 @@ data class SettingsOverlay(
     /** The whole ring blob (design/touch-client-overlay.md D10): a preset inherits the default
      *  ring entirely or owns its own ring and shortcuts. */
     val overlayActions: String? = null,
+    /** The whole shortcuts blob, like the ring's: a preset inherits them or owns its own. */
+    val shortcuts: String? = null,
     val gamepad: Int? = null,
     val gamepadForwarding: Boolean? = null,
     val systemButtons: String? = null,

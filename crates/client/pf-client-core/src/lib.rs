@@ -45,7 +45,6 @@ mod gamepad {
     mod ds5;
     mod feedback;
     mod route;
-    mod select_gesture;
 }
 // Menu-event synthesizer and pad descriptors. Desktop `gamepad` re-exports them; Android feeds the same synthesizer from Kotlin samples (`design/android-skia-console-port.md`).
 #[cfg(portable)]
@@ -123,7 +122,7 @@ pub mod overlay_actions;
 // sRGB mixes and WCAG contrast for every client theme, the console's included.
 pub mod rgb;
 pub mod ring;
-// The in-stream keys, chords and gestures, for each client's reference screen.
+// In-stream shortcuts: the bindings, their engine and the reference rows.
 pub mod shortcuts;
 // DualSense voice-coil + speaker on the pad's 4-ch device (0xD1 plane): correlation, per-session renderer, tier-A registry the gamepad worker feeds.
 #[cfg(desktop)]

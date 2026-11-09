@@ -43,9 +43,16 @@ let builtinGroups: [SlotGroup] = [
               note: String(localized: L10n.ringPadMouseNote)),
         .init(id: "pad_type", label: String(localized: L10n.ringPadType),
               note: String(localized: L10n.ringPadTypeNote)),
+        .init(id: "release_input", label: String(localized: L10n.ringReleaseInput),
+              note: SlotId.releaseInput.runsHere ? nil : String(localized: L10n.ringNoPointerCapture)),
+        .init(id: "mouse_mode", label: String(localized: L10n.ringMouseMode), note: macOnlyNote),
+        .init(id: "clipboard", label: String(localized: L10n.ringClipboard),
+              note: SlotId.clipboard.runsHere ? nil : String(localized: L10n.ringClipboardUnavailable)),
     ]),
     .init(id: "view", title: String(localized: L10n.ringGroupView), options: [
         .init(id: "stats", label: String(localized: L10n.ringStats)),
+        .init(id: "fullscreen", label: String(localized: L10n.ringFullscreen), note: macOnlyNote),
+        .init(id: "minimize", label: String(localized: L10n.ringMinimize), note: macOnlyNote),
     ]),
     .init(id: "audio", title: String(localized: L10n.ringGroupAudio), options: [
         .init(id: "mic", label: String(localized: L10n.ringMic), note: micNote),
@@ -77,6 +84,9 @@ func slotGroups(for cfg: OverlayConfig) -> [SlotGroup] {
 
 // The slots this platform cannot run, said in the catalogue so a dimmed disc is never a surprise
 // found after picking it. The preset still syncs to a device that runs them.
+/// The window and mouse-model actions run only on a Mac.
+private let macOnlyNote: String? = SlotId.fullscreen.runsHere ? nil : String(localized: L10n.appleRingMacOnly)
+
 #if os(macOS)
 private let noTouchNote: String? = String(localized: L10n.appleRingNoteNoTouchMac)
 private let keyboardNote: String? = String(localized: L10n.appleRingNoteKeyboardMac)
@@ -137,7 +147,7 @@ var previewRingActions: RingActions {
         micAvailable: { micAvailable }, micMuted: { false }, toggleMic: {},
         hostActions: { previewHosts }, invokeHost: { _ in },
         sendShortcut: { _ in },
-        padAvailable: { true }, padShown: { false }, togglePad: {}, tapPadButton: { _ in },
+        padAvailable: { true }, padShown: { false }, togglePad: {}, tapPadButton: { _, _ in },
         pointerGranted: { true }, padMouseTarget: { 1 }, padMouseMode: { .off }, cyclePadMouse: {},
         currentMode: { (1920, 1080, 60) }, requestMode: { _, _, _ in },
         padTypeAvailable: { true })

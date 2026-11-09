@@ -83,7 +83,7 @@
         {"name": "Steam Controller", "key": "sc2:1", "pref": 0, "steam_virtual": false, "detail": "28DE:1302 · gamepad", "forwarded": true, "rumble": true, "battery": null}
       ], "others": []},
       {"label": "DualSense", "pref": 2, "pads": [
-        {"name": "DualSense", "key": "054C:0CE6:DualSense", "pref": 2, "steam_virtual": false, "detail": "054C:0CE6 · gamepad", "forwarded": true, "rumble": true, "battery": {"percent": 42, "charging": false}}
+        {"name": "DualSense", "key": "054C:0CE6:DualSense", "pref": 2, "steam_virtual": false, "detail": "054C:0CE6 · gamepad", "forwarded": true, "rumble": true, "audio": true, "battery": {"percent": 42, "charging": false}}
       ], "others": [{"name": "Keyboard", "kind": "keyboard", "detail": "USB"}]}
     ],
     "Settings": [{"bitrate_kbps": 20000, "gamepad_ui_enabled": false, "android.low_latency": false}]

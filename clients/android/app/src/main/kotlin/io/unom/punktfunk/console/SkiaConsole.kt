@@ -5,6 +5,7 @@ import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.res.Resources
+import android.hardware.usb.UsbManager
 import android.os.Handler
 import android.os.Looper
 import android.util.Log
@@ -42,6 +43,7 @@ import io.unom.punktfunk.matches
 import io.unom.punktfunk.pinTitleShortcut
 import io.unom.punktfunk.runSpeedTest
 import io.unom.punktfunk.shortcutId
+import io.unom.punktfunk.kit.DsDevice
 import io.unom.punktfunk.kit.Gamepad
 import io.unom.punktfunk.kit.NativeBridge
 import io.unom.punktfunk.kit.ProfilePick
@@ -548,9 +550,27 @@ object SkiaConsole {
                     extras,
                     app?.let(::deviceBodyVibrator),
                     ConsoleJson.otherInputs(),
+                    padAudio = app != null && padAudioOn(app),
                 ),
             )
         }
+    }
+
+    /** A stream would play pad audio: capture and a lane are on, and a USB DualSense is attached. */
+    private fun padAudioOn(app: Context): Boolean {
+        val s = SettingsStore(app).load()
+        if (!s.dsCapture || !(s.padHaptics || s.padSpeaker)) return false
+        val usb = app.getSystemService(Context.USB_SERVICE) as UsbManager
+        return usb.deviceList.values.any {
+            it.vendorId == DsDevice.VID_SONY &&
+                DsDevice.modelFor(it.productId).let { m -> m != null && m != DsDevice.Model.DUALSHOCK4 }
+        }
+    }
+
+    /** The speaker volume saved for the pad the console keys [key], 0..100 (100 = unscaled). */
+    fun padSpeakerVolume(context: Context, key: String): Int {
+        val saved = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getString("json", null)
+        return ConsoleJson.padSpeakerVolume(saved?.let { runCatching { JSONObject(it) }.getOrNull() }, key)
     }
 
     /** Whether the console's input test (`ConsoleCmd::PadTest`) has the pad, not the menu. */

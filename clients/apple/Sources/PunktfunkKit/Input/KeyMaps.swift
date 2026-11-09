@@ -4,6 +4,15 @@
 import PunktfunkShared
 
 extension InputCapture {
+    /// The Windows VK of a HID usage (a UIKit `UIKey.keyCode` raw value), for the Shortcuts
+    /// page's recorder.
+    public nonisolated static func vk(hidUsage: Int) -> UInt32? { hidToVK[hidUsage] }
+
+    #if os(macOS)
+    /// The Windows VK of an `NSEvent.keyCode`, for the Shortcuts page's recorder.
+    public nonisolated static func vk(keyCode: UInt16) -> UInt32? { keyCodeToVK[keyCode] }
+    #endif
+
     /// Remap one modifier VK for the active location-based [`ModifierLayout`] just before it goes on
     /// the wire. `.mac` (and every non-modifier VK) is the identity. `.windows` swaps the Alt vs
     /// Super/Windows ROLE between the Option and Command keys while KEEPING the side, so a Windows

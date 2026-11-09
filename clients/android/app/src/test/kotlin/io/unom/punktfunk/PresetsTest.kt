@@ -187,7 +187,7 @@ class PresetsTest {
             codec = "av1", hdrEnabled = false, tenBitSdr = true, compositor = 4,
             audioChannels = 6, audioFormat = AUDIO_FORMAT_LOSSLESS_96, micEnabled = true,
             echoCancel = false, keepHostAudio = true, touchMode = TouchMode.POINTER,
-            mouseMode = MouseMode.CAPTURE, invertScroll = true, overlayActions = "ring-blob",
+            mouseMode = MouseMode.CAPTURE, invertScroll = true, overlayActions = "ring-blob", shortcuts = "shortcuts-blob",
             gamepad = 6, gamepadForwarding = false, systemButtons = "local", guideGesture = "on",
             statsVerbosity = StatsVerbosity.DETAILED, lowLatencyMode = false,
             presentPriority = "smooth", smoothBuffer = 2,

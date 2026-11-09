@@ -750,6 +750,26 @@ pub extern "system" fn Java_io_unom_punktfunk_kit_NativeBridge_nativeStartPadAud
     })
 }
 
+/// `NativeBridge.nativeSetPadSpeakerVolume(pad, percent)` — the speaker gain the decode stage
+/// applies to wire pad `pad`. Static per pad, so it needs no session and may precede the renderer.
+#[unsafe(no_mangle)]
+#[cfg(target_os = "android")]
+pub extern "system" fn Java_io_unom_punktfunk_kit_NativeBridge_nativeSetPadSpeakerVolume(
+    _env: EnvUnowned,
+    _this: JObject,
+    pad: jni::sys::jint,
+    percent: jni::sys::jint,
+) {
+    jni_guard((), || {
+        if (0..16).contains(&pad) {
+            punktfunk_core::audio::pad_mix::set_speaker_volume(
+                pad as u8,
+                percent.clamp(0, 100) as u8,
+            );
+        }
+    })
+}
+
 /// `NativeBridge.nativePadAudioSelfTest(fd, seconds, hz): Int` — drive the pad directly with a
 /// tone through the real client render path, with no host and no session involved.
 ///

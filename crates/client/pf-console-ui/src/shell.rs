@@ -745,9 +745,14 @@ impl Shell {
     }
 
     /// Feeds the top screen what the service reported: pad test, other players, licences.
-    /// The host's test mode follows the test screen, whatever took it off the top.
+    /// The host's test mode follows the test screen or a recording shortcut, whatever took
+    /// it off the top.
     fn feed_top(&mut self) {
-        let testing = matches!(self.stack.last(), Some(Screen::InputTest(_))) && !self.in_stream;
+        let testing = match self.stack.last() {
+            Some(Screen::InputTest(_)) => true,
+            Some(Screen::ShortcutRow(r)) => r.recording(),
+            _ => false,
+        } && !self.in_stream;
         if testing != self.pad_testing {
             self.pad_testing = testing;
             self.bus.send(ConsoleCmd::PadTest { on: testing });
@@ -765,9 +770,18 @@ impl Shell {
         if let Some(Screen::Players(p)) = self.stack.last_mut() {
             p.others = self.console.other_devices();
         }
-        if let Some(Screen::Controls(c)) = self.stack.last_mut() {
+        if testing && matches!(self.stack.last(), Some(Screen::ShortcutRow(_))) {
+            if let Some(state) = self.console.take_pad_test() {
+                let mut fx = crate::screens::Outbox::default();
+                if let (mut ctx, Screen::ShortcutRow(r)) = self.ctx_and_top() {
+                    r.pad_test(&state, &mut ctx, &mut fx);
+                }
+                self.apply(fx);
+            }
+        }
+        if let Some(Screen::Shortcuts(p)) = self.stack.last_mut() {
             let devices = self.console.other_devices();
-            c.set_keyboard(devices.iter().any(|d| d.kind == "keyboard"));
+            p.set_keyboard(devices.iter().any(|d| d.kind == "keyboard"));
         }
         if let Some(Screen::Licenses(l)) = self.stack.last_mut() {
             if l.waiting() {
