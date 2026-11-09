@@ -169,13 +169,14 @@ pub(crate) enum Verdict {
 }
 
 /// What `outcome` of `call` means for the picture in hand. A failed rebuild leaves the ring or
-/// swapchain outgrown, so the next picture rebuilds again.
+/// swapchain outgrown, so the next picture rebuilds again; a fence wait that timed out leaves
+/// the fence for the next picture to wait on.
 pub(crate) fn verdict(call: Call, outcome: Outcome) -> Verdict {
     match (call, outcome) {
         (_, Outcome::Done) => Verdict::Go,
         (_, Outcome::DeviceLost) => Verdict::Fatal,
         (Call::Acquire | Call::Present, Outcome::OutOfDate) => Verdict::Rebuild,
-        (Call::Acquire, Outcome::Timeout) | (Call::Rebuild, _) => Verdict::Drop,
+        (Call::Acquire | Call::FenceWait, Outcome::Timeout) | (Call::Rebuild, _) => Verdict::Drop,
         _ => Verdict::Fatal,
     }
 }
@@ -490,10 +491,10 @@ mod tests {
             Verdict::Drop,
         ),
         (
-            "a fence wait that timed out ends the lane",
+            "R4-2: a fence wait that timed out drops the picture",
             FenceWait,
             Timeout,
-            Verdict::Fatal,
+            Verdict::Drop,
         ),
         (
             "R4-1: a failed rebuild drops the picture",

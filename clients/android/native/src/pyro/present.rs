@@ -22,10 +22,11 @@ use std::sync::Arc;
 /// pictures in front of the panel.
 pub(super) const FRAMES: usize = 2;
 
-/// How long to wait for a free swapchain image before giving up on this picture.
+/// How long to wait for the frame's fence or a free swapchain image before giving up on this
+/// picture.
 ///
 /// Not `u64::MAX`: under FIFO with the app backgrounded, nothing drains the queue, and an
-/// unbounded acquire would park this thread inside a call Kotlin's `surfaceDestroyed` is
+/// unbounded wait would park this thread inside a call Kotlin's `surfaceDestroyed` is
 /// waiting to join. A skipped frame is invisible; a blocked join is an ANR.
 const ACQUIRE_TIMEOUT_NS: u64 = 250_000_000;
 
@@ -377,8 +378,9 @@ impl<'d> Present<'d> {
     /// Draw one decoded `size` frame and present it.
     ///
     /// `Ok(false)` means the picture was dropped: the swapchain went out of date and was
-    /// rebuilt, a rebuild failed and the next picture tries again, or every buffer was still
-    /// the compositor's. The caller simply decodes the next one. A device error or
+    /// rebuilt, a rebuild failed and the next picture tries again, the frame's last draw was
+    /// still running after [`ACQUIRE_TIMEOUT_NS`], or every buffer was still the compositor's.
+    /// The caller checks for shutdown, then decodes the next one. A device error or
     /// [`pyro_ring::MAX_FAILED_REBUILDS`] failed rebuilds in a row are an `Err`, which ends the
     /// lane.
     pub(super) fn show(
@@ -393,8 +395,12 @@ impl<'d> Present<'d> {
         let frame = self.frame;
         let fence = self.fences[frame];
         // SAFETY: the fence belongs to this struct; waiting is read-only on the device.
-        let waited = unsafe { self.device.wait_for_fences(&[fence], true, u64::MAX) };
+        let waited = unsafe {
+            self.device
+                .wait_for_fences(&[fence], true, ACQUIRE_TIMEOUT_NS)
+        };
         if let Err(e) = waited {
+            // A timeout drops the picture and leaves the fence for the next one.
             return self.failed(Call::FenceWait, e, "wait_for_fences");
         }
         if self.asc.is_some() {
