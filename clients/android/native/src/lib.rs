@@ -36,6 +36,12 @@ mod audio_track;
 // `decode`'s AU intake rules, `test`-gated like `input_stall` so their table runs off-device.
 #[cfg(any(target_os = "android", test))]
 mod au_intake;
+// `decode`'s codec and picture rules, `test`-gated like `au_intake` so their tables run off-device.
+#[cfg(any(target_os = "android", test))]
+mod codec_format;
+// `decode`'s colour tags, `test`-gated like `au_intake` so their tables run off-device.
+#[cfg(any(target_os = "android", test))]
+mod colour;
 // The Skia console UI host (design/android-skia-console-port.md): the shared `pf-console-ui`
 // shell over EGL/GLES, on every ABI (the armv7 Skia archive is self-hosted — see Cargo.toml).
 #[cfg(target_os = "android")]

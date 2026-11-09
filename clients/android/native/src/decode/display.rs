@@ -10,6 +10,8 @@ use std::sync::{Arc, Mutex};
 
 use super::latency::{now_realtime_ns, take_by_pts};
 use super::RENDERED_CAP;
+use crate::codec_format::picture_dims;
+use crate::colour::{layer_space, negotiated_space, reported_space, Space};
 use crate::sys::now_monotonic_ns;
 
 /// State shared between the decode loop and the `AMediaCodec` `OnFrameRendered` callback (which
@@ -214,18 +216,12 @@ pub(super) fn apply_dataspace(
     }
 }
 
-/// The decoder's picture size: the crop rect when the output format carries one (1080 rows decode
-/// into a 1088-row buffer), else its width × height. `None` before a format is known.
-///
-/// The NDK format holds the crop as one inclusive rect under `crop`. Only Java's `MediaFormat`
-/// splits it into `crop-left`…`crop-bottom`, so those keys never exist here.
+/// The decoder's picture size ([`picture_dims`] over its output format); `None` before a format
+/// is known.
 pub(super) fn picture_size(codec: &MediaCodec) -> Option<(i32, i32)> {
     let fmt = codec.output_format();
     let (w, h) = (fmt.i32("width")?, fmt.i32("height")?);
-    Some(match fmt.rect("crop") {
-        Some((l, t, r, b)) if r >= l && b >= t => (r - l + 1, b - t + 1),
-        _ => (w, h),
-    })
+    Some(picture_dims(w, h, fmt.rect("crop")))
 }
 
 /// The dataspace a format change leaves: the stream's own colour, else the decoder's report.
@@ -238,58 +234,29 @@ pub(super) fn stream_dataspace(
         .or_else(|| reported_dataspace(codec))
 }
 
-/// Map the decoder's reported output colour to a dataspace: BT.2020 PQ or HLG, BT.709 for SDR
-/// (sRGB when full range), `None` without a transfer. Codec2 fills a decoder that reports nothing
-/// with its BT.709 default, so SDR here does not prove the stream is SDR. The integer values are
-/// the Android MediaFormat colour constants the NDK shares: COLOR_TRANSFER SDR_VIDEO = 3,
-/// ST2084 = 6 (PQ/HDR10), HLG = 7; COLOR_RANGE FULL = 1, LIMITED = 2.
+/// The decoder's reported output colour ([`reported_space`]) as a dataspace.
 fn reported_dataspace(codec: &MediaCodec) -> Option<DataSpace> {
     let fmt = codec.output_format();
-    let full_range = fmt.i32("color-range") == Some(1);
-    match fmt.i32("color-transfer") {
-        Some(6) => Some(if full_range {
-            DataSpace::Bt2020Pq
-        } else {
-            DataSpace::Bt2020ItuPq
-        }),
-        Some(7) => Some(if full_range {
-            DataSpace::Bt2020Hlg
-        } else {
-            DataSpace::Bt2020ItuHlg
-        }),
-        Some(3) => Some(if full_range {
-            DataSpace::Srgb
-        } else {
-            DataSpace::Bt709
-        }),
-        _ => None, // unspecified
-    }
+    reported_space(fmt.i32("color-transfer"), fmt.i32("color-range")).map(ndk_space)
 }
 
-/// The `ADataSpace` the presenters tag buffers with, from the *negotiated* colour
-/// ([`ColorInfo`], carried on Welcome): the wire contract's source, not what the decoder echoes
-/// (many omit `color-transfer`). Never `0`: an untagged ASurfaceControl layer defaults to sRGB,
-/// which shows studio-range black (16) as grey.
-///
-/// Full-range SDR is tagged sRGB: a desktop's pixels are sRGB-encoded, and SurfaceFlinger
-/// treats BT.709's transfer the same way. Studio-range SDR (an older host) is BT709.
+/// The dataspace the presenters tag buffers with ([`negotiated_space`]).
 pub(super) fn color_dataspace(color: &punktfunk_core::quic::ColorInfo) -> DataSpace {
-    use punktfunk_core::quic::ColorInfo;
-    let full = color.full_range != 0;
-    match (color.transfer, full) {
-        (ColorInfo::TRC_PQ, true) => DataSpace::Bt2020Pq,
-        (ColorInfo::TRC_PQ, false) => DataSpace::Bt2020ItuPq,
-        (ColorInfo::TRC_HLG, true) => DataSpace::Bt2020Hlg,
-        (ColorInfo::TRC_HLG, false) => DataSpace::Bt2020ItuHlg,
-        (_, true) => DataSpace::Srgb,
-        (_, false) => DataSpace::Bt709,
-    }
+    ndk_space(negotiated_space(color))
 }
 
-/// [`color_dataspace`] as an ASurfaceControl layer on `sdk` takes it. Android 10 aborts the
-/// process and 11 ignores anything but sRGB, scRGB, P3 and full-range PQ, so `None` there sends
-/// a studio-range session to the SurfaceView, whose decoder tags its own buffers.
+/// The `ADataSpace` an ASurfaceControl layer on `sdk` takes ([`layer_space`]).
 pub(super) fn layer_dataspace(color: &punktfunk_core::quic::ColorInfo, sdk: u32) -> Option<i32> {
-    let ds = color_dataspace(color);
-    (sdk >= 31 || matches!(ds, DataSpace::Srgb | DataSpace::Bt2020Pq)).then(|| i32::from(ds))
+    layer_space(color, sdk).map(|space| i32::from(ndk_space(space)))
+}
+
+fn ndk_space(space: Space) -> DataSpace {
+    match space {
+        Space::Srgb => DataSpace::Srgb,
+        Space::Bt709 => DataSpace::Bt709,
+        Space::Bt2020Pq => DataSpace::Bt2020Pq,
+        Space::Bt2020ItuPq => DataSpace::Bt2020ItuPq,
+        Space::Bt2020Hlg => DataSpace::Bt2020Hlg,
+        Space::Bt2020ItuHlg => DataSpace::Bt2020ItuHlg,
+    }
 }
