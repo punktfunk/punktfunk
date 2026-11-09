@@ -2,7 +2,8 @@
 //! surface over it comes up, fails and goes. No EGL, Skia or clock: the loop in
 //! `console/host.rs` reports each [`Event`], does the [`Action`] that comes back and reports
 //! that result in turn. A run of [`FAILURE_LIMIT`] failures ends the thread with `Dead`, and
-//! Kotlin's touch UI takes the screen. The table below pins each rule.
+//! Kotlin's touch UI takes the screen. The table below pins each rule. [`half_rate`] is the
+//! idle rule, which counts from the attach as well as from the last input.
 //!
 //! [`Shared`] carries Kotlin's commands in and the thread's events out, and holds the destroy
 //! handshake: Kotlin's `surfaceDestroyed` returns once the thread has let go of the window.
@@ -101,6 +102,15 @@ impl Lifecycle {
             Event::Tick => Action::Nothing,
         }
     }
+}
+
+/// `pf-console-ui`'s idle threshold (`console::IDLE_AFTER`, private to it).
+const IDLE_AFTER: Duration = Duration::from_secs(60);
+
+/// Draw at half rate: no input for a minute (`console_idle`), and the surface up as long. A
+/// console back from a stream starts at full rate, whenever its last input was.
+pub(crate) fn half_rate(console_idle: bool, attached_for: Duration) -> bool {
+    console_idle && attached_for >= IDLE_AFTER
 }
 
 /// The queues between Kotlin and the render thread, and the destroy handshake. `C` is what
@@ -243,7 +253,7 @@ mod tests {
         self, AttachFailed, Attached, Created, Destroyed, Shown, SwapFailed, Tick, WrapFailed,
         Wrapped,
     };
-    use super::{Lifecycle, Shared};
+    use super::{half_rate, Lifecycle, Shared, IDLE_AFTER};
     use std::sync::Arc;
     use std::time::{Duration, Instant};
 
@@ -388,6 +398,22 @@ mod tests {
             })
             .collect();
         assert!(broken.is_empty(), "{broken:#?}");
+    }
+
+    #[test]
+    fn half_rate_waits_a_minute_from_the_last_input_and_from_the_attach() {
+        let ms = Duration::from_millis;
+        // (console idle, surface up for, half rate)
+        let rows = [
+            (false, IDLE_AFTER, false),
+            (true, IDLE_AFTER, true),
+            // R7-4: back from a stream, with no input since before it.
+            (true, ms(0), false),
+            (true, IDLE_AFTER - ms(1), false),
+        ];
+        for (idle, up, want) in rows {
+            assert_eq!(half_rate(idle, up), want, "idle {idle}, up {up:?}");
+        }
     }
 
     const DESTROY: u8 = 1;

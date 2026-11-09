@@ -11,7 +11,7 @@
 
 use super::egl::{EglContext, EglSurface, GlesVersion};
 use super::gpu::Gpu;
-use crate::console_lifecycle::{Action, Event as SurfaceEvent, Lifecycle};
+use crate::console_lifecycle::{half_rate, Action, Event as SurfaceEvent, Lifecycle};
 use anyhow::{bail, Result};
 use ndk::native_window::NativeWindow;
 use pf_client_core::console::{PointerInput, SessionPhase};
@@ -212,10 +212,10 @@ fn render_loop(mut console: Console, shared: Arc<Shared>, store: Arc<SnapshotSto
             }
         }
 
-        // Half-rate after 60 s without input — one extra frame period between swaps, so an
-        // idle carousel stops redrawing a phone's panel at full rate; the aurora still
-        // breathes, at half tempo. Any input restores full rate on its own frame.
-        if console.idle() {
+        // Half rate a minute after the last input and the attach — one extra frame period
+        // between swaps, so an idle carousel stops redrawing a phone's panel at full rate; the
+        // aurora still breathes, at half tempo. Any input restores full rate on its own frame.
+        if half_rate(console.idle(), glass.attached_at.elapsed()) {
             std::thread::sleep(IDLE_FRAME_STEP);
         }
         glass.draw(&mut console, &ui)?;
@@ -240,6 +240,8 @@ struct Glass {
     /// The Skia resource budget the console asked for.
     cache_bytes: usize,
     life: Lifecycle,
+    /// When the last EGL surface came up.
+    attached_at: Instant,
     /// What a frame is costing, logged once a window. A slow TV's log bundle carries it.
     cost: FrameCost,
 }
@@ -254,6 +256,7 @@ impl Glass {
             skia: None,
             cache_bytes,
             life: Lifecycle::default(),
+            attached_at: Instant::now(),
             cost: FrameCost::default(),
         }
     }
@@ -320,6 +323,7 @@ impl Glass {
                     self.gpu = Some(Gpu::new(&self.egl, self.cache_bytes)?);
                 }
                 self.surface = Some(s);
+                self.attached_at = Instant::now();
                 Ok(SurfaceEvent::Attached)
             }
             Err(e) => {
