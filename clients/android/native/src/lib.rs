@@ -61,6 +61,9 @@ mod discovery;
 // `decode`'s per-piece feed rules, `test`-gated like `au_intake` so their table runs off-device.
 #[cfg(any(target_os = "android", test))]
 mod feed_rules;
+// `decode`'s feed step: the park, the slot pairing and each codec answer.
+#[cfg(test)]
+mod feed_step;
 mod feedback;
 // `decode`'s hung-decoder checks, `test`-gated like `audio_format` so their proof runs off-device.
 #[cfg(any(target_os = "android", test))]
