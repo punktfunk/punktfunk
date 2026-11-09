@@ -951,3 +951,506 @@ pub extern "system" fn Java_io_unom_punktfunk_kit_NativeBridge_nativeHoldsScreen
         punktfunk_core::client::holds_screen_awake(keep_awake, h.client.input_idle())
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Indices into the flat pen array, as `nativeSendPen` documents it.
+    const STATE: usize = 0;
+    const TOOL: usize = 1;
+    const X: usize = 2;
+    const Y: usize = 3;
+    const PRESSURE: usize = 4;
+    const DISTANCE: usize = 5;
+    const TILT: usize = 6;
+    const AZIMUTH: usize = 7;
+    const ROLL: usize = 8;
+    const DT_US: usize = 9;
+
+    /// A pen in range at (0.5, 0.25), half pressure, every optional axis unknown.
+    const BASE: [f32; PEN_JNI_STRIDE] = [3.0, 0.0, 0.5, 0.25, 0.5, -1.0, -1.0, -1.0, -1.0, 0.0];
+    /// What [`BASE`] decodes to; a row changes one field of each.
+    const BASE_WANT: PenSample = PenSample {
+        state: 3,
+        tool: PenTool::Pen,
+        x: 0.5,
+        y: 0.25,
+        pressure: 32767,
+        distance: PEN_DISTANCE_UNKNOWN,
+        tilt_deg: PEN_TILT_UNKNOWN,
+        azimuth_deg: PEN_ANGLE_UNKNOWN,
+        roll_deg: PEN_ANGLE_UNKNOWN,
+        dt_us: 0,
+    };
+
+    fn flat(over: &[(usize, f32)]) -> [f32; PEN_JNI_STRIDE] {
+        let mut s = BASE;
+        for &(i, v) in over {
+            s[i] = v;
+        }
+        s
+    }
+
+    #[test]
+    fn pen_count_reads_nothing_unless_positive_and_stops_at_64() {
+        const CASES: &[(&str, jint, usize)] = &[
+            ("i32::MIN", jint::MIN, 0),
+            ("negative", -1, 0),
+            ("zero", 0, 0),
+            ("one", 1, 1),
+            ("one full batch", 8, 8),
+            ("one past a batch", 9, 9),
+            ("the ceiling", 64, 64),
+            ("one past the ceiling", 65, 64),
+            ("i32::MAX", jint::MAX, 64),
+        ];
+        for &(name, count, want) in CASES {
+            assert_eq!(pen_count(count), want, "{name}");
+        }
+    }
+
+    #[test]
+    fn a_pen_sample_with_a_non_finite_coordinate_or_a_wrong_length_is_refused() {
+        const REJECTS: &[(&str, &[(usize, f32)])] = &[
+            ("NaN x", &[(X, f32::NAN)]),
+            ("NaN y", &[(Y, f32::NAN)]),
+            ("+inf x", &[(X, f32::INFINITY)]),
+            ("-inf x", &[(X, f32::NEG_INFINITY)]),
+            ("+inf y", &[(Y, f32::INFINITY)]),
+            ("-inf y", &[(Y, f32::NEG_INFINITY)]),
+        ];
+        for &(name, over) in REJECTS {
+            assert_eq!(pen_sample(&flat(over)), None, "{name}");
+        }
+        for len in [0, 1, PEN_JNI_STRIDE - 1, PEN_JNI_STRIDE + 1] {
+            let mut sized = flat(&[]).to_vec();
+            sized.resize(len, 0.5);
+            assert_eq!(pen_sample(&sized), None, "a slice of {len} floats");
+        }
+    }
+
+    /// One row: a name, the floats changed from [`BASE`], and what changes in [`BASE_WANT`].
+    type PenRow = (&'static str, &'static [(usize, f32)], fn(&mut PenSample));
+
+    #[test]
+    fn a_pen_sample_clamps_scales_and_marks_unknown_axes() {
+        const CASES: &[PenRow] = &[
+            ("a plain sample", &[], |_| {}),
+            ("state saturates at 255", &[(STATE, 300.0)], |w| {
+                w.state = 255
+            }),
+            ("a negative state is none", &[(STATE, -1.0)], |w| {
+                w.state = 0
+            }),
+            ("tool 1 is the eraser", &[(TOOL, 1.0)], |w| {
+                w.tool = PenTool::Eraser
+            }),
+            ("any other tool is the pen", &[(TOOL, 2.0)], |_| {}),
+            ("x below the frame clamps to 0", &[(X, -0.5)], |w| w.x = 0.0),
+            ("x past the frame clamps to 1", &[(X, 1e30)], |w| w.x = 1.0),
+            ("y past the frame clamps to 1", &[(Y, 7.0)], |w| w.y = 1.0),
+            ("full pressure", &[(PRESSURE, 1.0)], |w| w.pressure = 65535),
+            ("pressure past 1 clamps", &[(PRESSURE, 2.0)], |w| {
+                w.pressure = 65535
+            }),
+            ("negative pressure clamps to 0", &[(PRESSURE, -3.0)], |w| {
+                w.pressure = 0
+            }),
+            ("distance 0 is the hover floor", &[(DISTANCE, 0.0)], |w| {
+                w.distance = 0
+            }),
+            (
+                "negative zero distance is the floor",
+                &[(DISTANCE, -0.0)],
+                |w| w.distance = 0,
+            ),
+            (
+                "distance 1 stops under the sentinel",
+                &[(DISTANCE, 1.0)],
+                |w| w.distance = 65534,
+            ),
+            ("distance past 1 clamps the same", &[(DISTANCE, 9.0)], |w| {
+                w.distance = 65534
+            }),
+            (
+                "-inf distance is unknown",
+                &[(DISTANCE, f32::NEG_INFINITY)],
+                |_| {},
+            ),
+            ("tilt 0", &[(TILT, 0.0)], |w| w.tilt_deg = 0),
+            ("tilt truncates", &[(TILT, 45.7)], |w| w.tilt_deg = 45),
+            ("tilt past 90 clamps", &[(TILT, 200.0)], |w| w.tilt_deg = 90),
+            ("azimuth 0", &[(AZIMUTH, 0.0)], |w| w.azimuth_deg = 0),
+            ("azimuth truncates", &[(AZIMUTH, 359.9)], |w| {
+                w.azimuth_deg = 359
+            }),
+            ("azimuth 360 wraps to 0", &[(AZIMUTH, 360.0)], |w| {
+                w.azimuth_deg = 0
+            }),
+            ("azimuth wraps by turns", &[(AZIMUTH, 725.0)], |w| {
+                w.azimuth_deg = 5
+            }),
+            ("roll 0", &[(ROLL, 0.0)], |w| w.roll_deg = 0),
+            ("roll wraps by turns", &[(ROLL, 725.0)], |w| w.roll_deg = 5),
+            ("dt below 0 clamps to 0", &[(DT_US, -5.0)], |w| w.dt_us = 0),
+            ("dt in range", &[(DT_US, 4166.0)], |w| w.dt_us = 4166),
+            ("dt past 16 bits clamps", &[(DT_US, 70000.0)], |w| {
+                w.dt_us = 65535
+            }),
+        ];
+        for &(name, over, tweak) in CASES {
+            let mut want = BASE_WANT;
+            tweak(&mut want);
+            assert_eq!(pen_sample(&flat(over)), Some(want), "{name}");
+        }
+    }
+
+    /// Only `x`/`y` are checked for NaN. Every other field reads a NaN as 0, which for `distance`
+    /// is the hover floor and not "unknown", and +inf azimuth saturates before it wraps.
+    #[test]
+    fn a_nan_outside_the_coordinates_reads_as_zero() {
+        const CASES: &[PenRow] = &[
+            ("NaN pressure", &[(PRESSURE, f32::NAN)], |w| w.pressure = 0),
+            ("NaN distance", &[(DISTANCE, f32::NAN)], |w| w.distance = 0),
+            ("NaN tilt", &[(TILT, f32::NAN)], |w| w.tilt_deg = 0),
+            ("NaN azimuth", &[(AZIMUTH, f32::NAN)], |w| w.azimuth_deg = 0),
+            ("+inf azimuth", &[(AZIMUTH, f32::INFINITY)], |w| {
+                w.azimuth_deg = 15
+            }),
+            ("NaN dt", &[(DT_US, f32::NAN)], |w| w.dt_us = 0),
+            ("NaN state", &[(STATE, f32::NAN)], |w| w.state = 0),
+        ];
+        for &(name, over, tweak) in CASES {
+            let mut want = BASE_WANT;
+            tweak(&mut want);
+            assert_eq!(pen_sample(&flat(over)), Some(want), "{name}");
+        }
+    }
+
+    /// The lengths of the batches `pen_batches` yields for `n` samples whose `dt_us` is their
+    /// index, with a NaN `x` at `nan_at`. Each batch holds the next indices in order.
+    fn batch_lens(n: usize, nan_at: Option<usize>) -> Vec<usize> {
+        let mut all = Vec::new();
+        for i in 0..n {
+            let mut s = flat(&[(DT_US, i as f32)]);
+            if nan_at == Some(i) {
+                s[X] = f32::NAN;
+            }
+            all.extend(s);
+        }
+        let mut next = 0;
+        pen_batches(&all)
+            .map(|(batch, len)| {
+                for s in &batch[..len] {
+                    assert_eq!(usize::from(s.dt_us), next, "samples stay oldest first");
+                    next += 1;
+                }
+                len
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_refused_sample_ends_the_run_but_earlier_batches_still_go() {
+        const CASES: &[(&str, usize, usize, &[usize])] = &[
+            ("NaN in the first sample", 3, 0, &[]),
+            ("NaN in the last sample of a lone batch", 8, 7, &[]),
+            ("NaN in the middle of a short batch", 5, 2, &[]),
+            ("NaN opening the second batch", 17, 8, &[8]),
+            ("NaN closing the second batch", 17, 15, &[8]),
+            ("NaN in the tail batch", 17, 16, &[8, 8]),
+            ("NaN in the 64th sample", 64, 63, &[8; 7]),
+        ];
+        for &(name, n, nan_at, want) in CASES {
+            assert_eq!(batch_lens(n, Some(nan_at)), want, "{name}");
+        }
+        assert_eq!(pen_batches(&[]).count(), 0, "nothing to send");
+    }
+
+    #[test]
+    fn pen_samples_split_into_batches_of_eight_and_never_truncate() {
+        const CASES: &[(&str, usize, &[usize])] = &[
+            ("one sample", 1, &[1]),
+            ("a short batch", 5, &[5]),
+            ("exactly one batch", 8, &[8]),
+            ("one past a batch", 9, &[8, 1]),
+            ("exactly two batches", 16, &[8, 8]),
+            ("two batches and one", 17, &[8, 8, 1]),
+            ("the ceiling is eight full batches", 64, &[8; 8]),
+        ];
+        for &(name, n, want) in CASES {
+            assert_eq!(batch_lens(n, None), want, "{name}");
+        }
+        // Floats short of a whole sample after the last one are not a sample.
+        let mut ragged = flat(&[]).to_vec();
+        ragged.extend_from_slice(&flat(&[])[..5]);
+        let lens: Vec<usize> = pen_batches(&ragged).map(|(_, len)| len).collect();
+        assert_eq!(lens, [1], "five stray floats after one sample");
+    }
+
+    #[test]
+    fn surface_flags_pack_width_over_height_in_sixteen_bits_each() {
+        const CASES: &[(&str, jint, jint, u32)] = &[
+            ("a 1080p surface", 1920, 1080, (1920 << 16) | 1080),
+            ("no size yet", 0, 0, 0),
+            ("a negative width is 0", -1, 5, 5),
+            ("a negative height is 0", 5, -1, 5 << 16),
+            ("both negative", -100, -100, 0),
+            ("the 16-bit maximum", 0xffff, 0xffff, u32::MAX),
+            ("a width past 16 bits wraps", 0x1_0000, 7, 7),
+            (
+                "both past 16 bits wrap",
+                70_000,
+                70_000,
+                (4464 << 16) | 4464,
+            ),
+            (
+                "i32::MIN width, i32::MAX height",
+                jint::MIN,
+                jint::MAX,
+                0xffff,
+            ),
+            (
+                "i32::MAX width, i32::MIN height",
+                jint::MAX,
+                jint::MIN,
+                0xffff << 16,
+            ),
+        ];
+        for &(name, w, h, want) in CASES {
+            assert_eq!(surface_flags(w, h), want, "{name}");
+        }
+    }
+
+    #[test]
+    fn a_touch_kind_other_than_down_or_move_is_an_up() {
+        const CASES: &[(&str, jint, InputKind)] = &[
+            ("down", 0, InputKind::TouchDown),
+            ("move", 1, InputKind::TouchMove),
+            ("up", 2, InputKind::TouchUp),
+            ("negative", -1, InputKind::TouchUp),
+            ("an unknown kind", 3, InputKind::TouchUp),
+            ("i32::MIN", jint::MIN, InputKind::TouchUp),
+            ("i32::MAX", jint::MAX, InputKind::TouchUp),
+        ];
+        for &(name, kind, want) in CASES {
+            assert_eq!(touch_kind(kind), want, "{name}");
+        }
+    }
+
+    /// Source 0 unknown, 1 wheel, 2 finger, 3 continuous, 4 touch, 5 controller. Phase 0 none,
+    /// 1 begin, 2 update, 3 end, 4 cancel, 5 momentum begin, 6 momentum, 7 momentum end.
+    #[test]
+    fn a_scroll_outside_the_wire_is_dropped_before_anything_is_sent() {
+        // (name, axis, delta, source, phase)
+        const REJECTS: &[(&str, jint, jint, jint, jint)] = &[
+            ("axis below 0", -1, 256, 1, 0),
+            ("axis past 1", 2, 256, 1, 0),
+            ("i32::MIN axis", jint::MIN, 256, 1, 0),
+            ("i32::MAX axis", jint::MAX, 256, 1, 0),
+            ("source below 0", 0, 256, -1, 0),
+            ("source past 5", 0, 256, 6, 0),
+            ("i32::MAX source", 0, 256, jint::MAX, 0),
+            ("phase below 0", 0, 256, 2, -1),
+            ("phase past 7", 0, 256, 2, 8),
+            ("i32::MIN phase", 0, 256, 2, jint::MIN),
+            ("an end carrying distance", 0, 256, 2, 3),
+            ("a cancel carrying distance", 0, -256, 2, 4),
+            ("a momentum end carrying distance", 0, 1, 3, 7),
+            ("a phased wheel", 0, 120, 1, 2),
+            ("a phased unknown source", 0, 120, 0, 1),
+            ("momentum from a controller", 0, 256, 5, 6),
+            ("momentum begin from a wheel", 0, 256, 1, 5),
+        ];
+        for &(name, axis, delta, source, phase) in REJECTS {
+            assert_eq!(scroll_event(axis, delta, source, phase), None, "{name}");
+        }
+    }
+
+    #[test]
+    fn a_scroll_inside_the_wire_packs_source_and_phase_into_flags() {
+        // (name, axis, delta, source, phase, flags)
+        const CASES: &[(&str, jint, jint, jint, jint, u32)] = &[
+            ("a wheel detent", 0, 30_720, 1, 0, 1),
+            ("a horizontal wheel", 1, -30_720, 1, 0, 1),
+            ("an unknown source, no phase", 0, 256, 0, 0, 0),
+            ("a finger update", 0, 640, 2, 2, 2 | (2 << 8)),
+            ("a finger end with no distance", 0, 0, 2, 3, 2 | (3 << 8)),
+            ("a cancel with no distance", 1, 0, 2, 4, 2 | (4 << 8)),
+            ("a continuous begin", 0, 0, 3, 1, 3 | (1 << 8)),
+            ("a touch momentum", 0, 256, 4, 6, 4 | (6 << 8)),
+            ("a momentum end with no distance", 0, 0, 3, 7, 3 | (7 << 8)),
+            ("a controller delta", 1, -512, 5, 0, 5),
+        ];
+        for &(name, axis, delta, source, phase, flags) in CASES {
+            let want = InputEvent {
+                kind: InputKind::Scroll,
+                _pad: [0; 3],
+                code: axis as u32,
+                x: delta,
+                y: 0,
+                flags,
+            };
+            assert_eq!(
+                scroll_event(axis, delta, source, phase),
+                Some(want),
+                "{name}"
+            );
+        }
+    }
+
+    #[test]
+    fn text_skips_control_characters_and_keeps_every_other_scalar() {
+        const CASES: &[(&str, &str, &[u32])] = &[
+            ("empty", "", &[]),
+            ("a newline", "\n", &[]),
+            ("a carriage return and a tab", "\r\t", &[]),
+            ("a backspace", "\u{8}", &[]),
+            ("NUL", "\0", &[]),
+            ("DEL", "\u{7f}", &[]),
+            ("a C1 control", "\u{85}", &[]),
+            ("the last C1 control", "\u{9f}", &[]),
+            ("controls only", "\n\t\r\0", &[]),
+            ("controls between letters", "a\nb\tc", &[0x61, 0x62, 0x63]),
+            ("plain ASCII", "Hi!", &[0x48, 0x69, 0x21]),
+            ("a space", " ", &[0x20]),
+            ("a no-break space", "\u{a0}", &[0xa0]),
+            ("a line separator is not a control", "\u{2028}", &[0x2028]),
+            ("a zero-width space", "\u{200b}", &[0x200b]),
+            ("one accented letter", "é", &[0xe9]),
+            (
+                "a combining mark is its own scalar",
+                "e\u{301}",
+                &[0x65, 0x301],
+            ),
+            ("an emoji is one scalar", "😀", &[0x1f600]),
+            ("an emoji between letters", "a😀b", &[0x61, 0x1f600, 0x62]),
+        ];
+        for &(name, text, want) in CASES {
+            assert_eq!(text_scalars(text).collect::<Vec<_>>(), want, "{name}");
+        }
+    }
+
+    #[test]
+    fn a_wire_pad_is_the_low_four_bits() {
+        const CASES: &[(jint, u8)] = &[
+            (0, 0),
+            (1, 1),
+            (15, 15),
+            (16, 0),
+            (17, 1),
+            (255, 15),
+            (-1, 15),
+            (jint::MIN, 0),
+            (jint::MAX, 15),
+        ];
+        for &(pad, want) in CASES {
+            assert_eq!(wire_pad(pad), want, "pad {pad}");
+        }
+    }
+
+    #[test]
+    fn a_pad_touch_masks_the_slot_and_clamps_the_coordinates() {
+        // (name, Kotlin's [pad, finger, x, y], active, the wire's [pad, finger, x, y])
+        const CASES: &[(&str, [jint; 4], bool, [u16; 4])] = &[
+            ("a contact", [0, 0, 100, 200], true, [0, 0, 100, 200]),
+            ("the second finger", [1, 1, 5, 6], true, [1, 1, 5, 6]),
+            ("a lift", [0, 0, 100, 200], false, [0, 0, 100, 200]),
+            ("finger 2 is slot 0", [0, 2, 0, 0], true, [0, 0, 0, 0]),
+            ("finger 3 is slot 1", [0, 3, 0, 0], true, [0, 1, 0, 0]),
+            (
+                "a negative finger is slot 1",
+                [0, -1, 0, 0],
+                true,
+                [0, 1, 0, 0],
+            ),
+            ("a pad past 15 wraps", [17, 0, 0, 0], true, [1, 0, 0, 0]),
+            (
+                "x and y at the maximum",
+                [0, 0, 65535, 65535],
+                true,
+                [0, 0, 65535, 65535],
+            ),
+            (
+                "x past the maximum",
+                [0, 0, 65536, 0],
+                true,
+                [0, 0, 65535, 0],
+            ),
+            (
+                "y at i32::MAX",
+                [0, 0, 0, jint::MAX],
+                true,
+                [0, 0, 0, 65535],
+            ),
+            ("x below 0", [0, 0, -1, 0], true, [0, 0, 0, 0]),
+            ("y at i32::MIN", [0, 0, 5, jint::MIN], true, [0, 0, 5, 0]),
+        ];
+        for &(name, [pad, finger, x, y], active, [wp, wf, wx, wy]) in CASES {
+            let want = RichInput::Touchpad {
+                pad: wp as u8,
+                finger: wf as u8,
+                active,
+                x: wx,
+                y: wy,
+            };
+            assert_eq!(pad_touch(pad, finger, active, x, y), want, "{name}");
+        }
+    }
+
+    #[test]
+    fn a_pad_motion_clamps_each_axis_to_signed_sixteen_bits_in_slot_order() {
+        // (name, Kotlin's [gyro pitch, yaw, roll, accel x, y, z], the wire's)
+        const CASES: &[(&str, [jint; 6], [i16; 6])] = &[
+            ("in range", [1, -2, 3, -4, 5, -6], [1, -2, 3, -4, 5, -6]),
+            (
+                "the 16-bit limits",
+                [32767, -32768, 0, 0, 32767, -32768],
+                [32767, -32768, 0, 0, 32767, -32768],
+            ),
+            (
+                "one past each limit",
+                [32768, -32769, 0, -32769, 32768, 0],
+                [32767, -32768, 0, -32768, 32767, 0],
+            ),
+            (
+                "the i32 extremes",
+                [jint::MAX, jint::MIN, 0, jint::MIN, 0, jint::MAX],
+                [32767, -32768, 0, -32768, 0, 32767],
+            ),
+        ];
+        for &(name, [gp, gy, gr, ax, ay, az], [wgp, wgy, wgr, wax, way, waz]) in CASES {
+            let want = RichInput::Motion {
+                pad: 0,
+                gyro: [wgp, wgy, wgr],
+                accel: [wax, way, waz],
+            };
+            assert_eq!(pad_motion(0, [gp, gy, gr], [ax, ay, az]), want, "{name}");
+        }
+        let RichInput::Motion { pad, .. } = pad_motion(18, [0; 3], [0; 3]) else {
+            panic!("not a motion sample");
+        };
+        assert_eq!(pad, 2, "a pad past 15 wraps");
+    }
+
+    #[test]
+    fn a_hid_report_is_bounded_by_the_buffer_and_the_wire_body() {
+        // (name, len, capacity, bytes)
+        const CASES: &[(&str, jint, usize, usize)] = &[
+            ("i32::MIN length", jint::MIN, 100, 0),
+            ("negative length", -1, 100, 0),
+            ("zero length", 0, 100, 0),
+            ("one byte", 1, 100, 1),
+            ("a Steam Controller 2 report", 64, 100, 64),
+            ("past the wire body", 65, 100, 64),
+            ("far past the wire body", 4096, 8192, 64),
+            ("a buffer shorter than len", 50, 10, 10),
+            ("an empty buffer", 50, 0, 0),
+            ("i32::MAX over a huge buffer", jint::MAX, usize::MAX, 64),
+        ];
+        for &(name, len, capacity, want) in CASES {
+            assert_eq!(hid_report_len(len, capacity), want, "{name}");
+        }
+    }
+}
