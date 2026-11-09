@@ -92,3 +92,260 @@ pub(crate) fn smoothed_period(
         }
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn tl(expected_present_ns: i64, deadline_ns: i64) -> FrameTimeline {
+        FrameTimeline {
+            expected_present_ns,
+            deadline_ns,
+        }
+    }
+
+    /// Three timelines a 16 ns app period apart, the deadline 10 before each present.
+    fn set() -> [FrameTimeline; 3] {
+        [tl(100, 90), tl(116, 106), tl(132, 122)]
+    }
+
+    #[test]
+    fn the_pick_is_the_earliest_timeline_past_the_floor() {
+        // (name, floor, period, pick)
+        let rows = [
+            (
+                "the first when the floor is before it",
+                99,
+                16,
+                Some(tl(100, 90)),
+            ),
+            (
+                "a present on the floor does not count",
+                100,
+                16,
+                Some(tl(116, 106)),
+            ),
+            ("between two", 110, 16, Some(tl(116, 106))),
+            (
+                "the last, one before its present",
+                131,
+                16,
+                Some(tl(132, 122)),
+            ),
+            (
+                "the period is not read while a timeline clears",
+                99,
+                0,
+                Some(tl(100, 90)),
+            ),
+            (
+                "aged out on the last present steps one period",
+                132,
+                16,
+                Some(tl(148, 138)),
+            ),
+            ("aged out inside a period", 140, 16, Some(tl(148, 138))),
+            (
+                "aged out on a stepped present steps again",
+                148,
+                16,
+                Some(tl(164, 154)),
+            ),
+            ("aged out by many periods", 1000, 16, Some(tl(1012, 1002))),
+            ("aged out with no period measured", 140, 0, None),
+            ("aged out with a negative period", 140, -16, None),
+        ];
+        for (name, floor, period, want) in rows {
+            assert_eq!(pick_timeline(&set(), period, floor), want, "{name}");
+        }
+    }
+
+    #[test]
+    fn an_empty_set_has_no_pick() {
+        assert_eq!(pick_timeline(&[], 16, 100), None, "the 31/32 fallback");
+        assert_eq!(pick_timeline(&[], 0, 100), None);
+    }
+
+    #[test]
+    fn a_pick_is_pulled_onto_the_panel_grid() {
+        // (name, timeline, panel period, floor, result)
+        let rows = [
+            (
+                "one panel period earlier",
+                tl(116, 106),
+                8,
+                100,
+                tl(108, 98),
+            ),
+            (
+                "down to the last present clear of the floor",
+                tl(116, 106),
+                8,
+                80,
+                tl(84, 74),
+            ),
+            (
+                "callbacks at the panel rate stay",
+                tl(116, 106),
+                16,
+                100,
+                tl(116, 106),
+            ),
+            (
+                "a panel period longer than the app's stays",
+                tl(116, 106),
+                32,
+                100,
+                tl(116, 106),
+            ),
+            (
+                "a present just past the floor stays",
+                tl(101, 91),
+                8,
+                100,
+                tl(101, 91),
+            ),
+            (
+                "an unknown panel period stays",
+                tl(116, 106),
+                0,
+                100,
+                tl(116, 106),
+            ),
+            (
+                "a negative panel period stays",
+                tl(116, 106),
+                -8,
+                100,
+                tl(116, 106),
+            ),
+        ];
+        for (name, t, panel, floor, want) in rows {
+            assert_eq!(onto_panel_grid(t, panel, floor), want, "{name}");
+        }
+    }
+
+    #[test]
+    fn the_period_takes_an_eighth_of_each_observation() {
+        const MS: i64 = 1_000_000;
+        let spaced = |gap: i64| [tl(100 * MS, 90 * MS), tl(100 * MS + gap, 90 * MS + gap)];
+        // (name, old, timelines, frame time, previous frame time, result)
+        let rows = [
+            (
+                "the first spacing is taken whole",
+                0,
+                &spaced(8_333_333)[..],
+                0,
+                0,
+                Some(8_333_333),
+            ),
+            (
+                "a spacing moves the old by an eighth",
+                8 * MS,
+                &spaced(16 * MS)[..],
+                0,
+                0,
+                Some(9 * MS),
+            ),
+            (
+                "a spacing outranks the callback delta",
+                8 * MS,
+                &spaced(8 * MS)[..],
+                1000 * MS,
+                984 * MS,
+                Some(8 * MS),
+            ),
+            (
+                "the first callback delta is taken whole",
+                0,
+                &[][..],
+                1016 * MS,
+                1000 * MS,
+                Some(16 * MS),
+            ),
+            (
+                "a delta moves the old by an eighth",
+                8 * MS,
+                &[][..],
+                1016 * MS,
+                1000 * MS,
+                Some(9 * MS),
+            ),
+            (
+                "one timeline is no spacing",
+                0,
+                &[tl(100, 90)][..],
+                1016 * MS,
+                1000 * MS,
+                Some(16 * MS),
+            ),
+            (
+                "no timelines and no previous callback",
+                8 * MS,
+                &[][..],
+                1000 * MS,
+                0,
+                None,
+            ),
+            (
+                "500 Hz is the fastest",
+                0,
+                &spaced(2 * MS)[..],
+                0,
+                0,
+                Some(2 * MS),
+            ),
+            (
+                "faster than 500 Hz is dropped",
+                8 * MS,
+                &spaced(2 * MS - 1)[..],
+                0,
+                0,
+                None,
+            ),
+            (
+                "24 Hz is the slowest",
+                0,
+                &spaced(42 * MS)[..],
+                0,
+                0,
+                Some(42 * MS),
+            ),
+            (
+                "slower than 24 Hz is dropped",
+                8 * MS,
+                &spaced(42 * MS + 1)[..],
+                0,
+                0,
+                None,
+            ),
+            (
+                "a clock that went back is dropped",
+                8 * MS,
+                &[][..],
+                1000 * MS,
+                1016 * MS,
+                None,
+            ),
+            (
+                "an out-of-range spacing does not fall back to the delta",
+                8 * MS,
+                &spaced(0)[..],
+                1016 * MS,
+                1000 * MS,
+                None,
+            ),
+            (
+                "the average truncates",
+                8_000_001,
+                &spaced(8 * MS)[..],
+                0,
+                0,
+                Some(8 * MS),
+            ),
+        ];
+        for (name, old, timelines, frame, prev, want) in rows {
+            assert_eq!(smoothed_period(old, timelines, frame, prev), want, "{name}");
+        }
+    }
+}
