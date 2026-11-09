@@ -1357,3 +1357,281 @@ mod request_vectors {
         }
     }
 }
+
+/// The decoders `connect` and `note_error` run over Kotlin's request: what reaches the `Hello`
+/// and what Kotlin reads back as the failure token.
+#[cfg(test)]
+mod decoder_tests {
+    use super::*;
+    use punktfunk_core::error::PunktfunkError;
+    use punktfunk_core::quic::{
+        CLIENT_CAP_CURSOR, CLIENT_CAP_KEEP_HOST_AUDIO, CLIENT_CAP_PAD_AUDIO, CODEC_AV1, CODEC_H264,
+        CODEC_HEVC, CODEC_PYROWAVE,
+    };
+    use punktfunk_core::reject::RejectReason;
+
+    /// Tokens Kotlin reads for a transport failure; no typed rejection may take one.
+    const TRANSPORT_TOKENS: [&str; 4] = ["crypto", "timeout", "io", "error"];
+
+    fn rejected(reason: RejectReason, said: &str) -> PunktfunkError {
+        PunktfunkError::Rejected(reason, said.to_string())
+    }
+
+    #[test]
+    fn a_failure_maps_to_the_token_kotlin_matches_and_the_hosts_sentence() {
+        // (name, error, token, said)
+        let rows: Vec<(&str, PunktfunkError, &str, &str)> = vec![
+            (
+                "a rejection with no sentence",
+                rejected(RejectReason::PairingNotArmed, ""),
+                "not-armed",
+                "",
+            ),
+            (
+                "a rejection carries what the host said",
+                rejected(RejectReason::Busy, "someone is streaming right now"),
+                "busy",
+                "someone is streaming right now",
+            ),
+            (
+                "a locked profile",
+                rejected(RejectReason::ProfileLocked, ""),
+                "profile-locked",
+                "",
+            ),
+            (
+                "a wrong PIN or a changed host",
+                PunktfunkError::Crypto,
+                "crypto",
+                "",
+            ),
+            (
+                "a handshake timeout",
+                PunktfunkError::Timeout,
+                "timeout",
+                "",
+            ),
+            (
+                "a socket failure",
+                PunktfunkError::Io(std::io::Error::other("unreachable")),
+                "io",
+                "",
+            ),
+            (
+                "an invalid argument",
+                PunktfunkError::InvalidArg("x"),
+                "error",
+                "",
+            ),
+            ("a malformed packet", PunktfunkError::BadPacket, "error", ""),
+            ("no frame", PunktfunkError::NoFrame, "error", ""),
+            (
+                "an unsupported request",
+                PunktfunkError::Unsupported("x"),
+                "error",
+                "",
+            ),
+            ("a closed session", PunktfunkError::Closed, "error", ""),
+        ];
+        for (name, err, token, said) in rows {
+            assert_eq!(error_token(&err), (token, said), "{name}");
+        }
+    }
+
+    #[test]
+    fn every_typed_rejection_keeps_its_own_token_and_never_a_transport_one() {
+        for &reason in RejectReason::ALL {
+            let err = rejected(reason, "said");
+            let (token, said) = error_token(&err);
+            assert_eq!(token, reason.as_str(), "{reason:?}");
+            assert_eq!(said, "said", "{reason:?}");
+            assert!(
+                !TRANSPORT_TOKENS.contains(&token),
+                "{reason:?} reads as a transport failure"
+            );
+        }
+    }
+
+    /// The one test that writes `LAST_ERROR` and `LAST_SAID`, so it cannot race another.
+    #[test]
+    fn a_later_failure_without_a_sentence_clears_the_earlier_sentence() {
+        let kept = || {
+            (
+                lock_recover(&LAST_ERROR).clone(),
+                lock_recover(&LAST_SAID).clone(),
+            )
+        };
+        note_error(&rejected(RejectReason::Busy, "one session at a time"));
+        assert_eq!(kept(), ("busy".into(), "one session at a time".into()));
+        note_error(&PunktfunkError::Timeout);
+        assert_eq!(kept(), ("timeout".into(), String::new()));
+    }
+
+    #[test]
+    fn the_caps_mask_is_the_union_of_the_asks_made() {
+        // (name, pad audio, keep host audio, host cursor, bits)
+        const CASES: &[(&str, bool, bool, bool, u8)] = &[
+            ("no asks", false, false, false, 0),
+            ("pad audio", true, false, false, CLIENT_CAP_PAD_AUDIO),
+            (
+                "keep host audio",
+                false,
+                true,
+                false,
+                CLIENT_CAP_KEEP_HOST_AUDIO,
+            ),
+            ("host cursor", false, false, true, CLIENT_CAP_CURSOR),
+            (
+                "pad audio and keep host audio",
+                true,
+                true,
+                false,
+                CLIENT_CAP_PAD_AUDIO | CLIENT_CAP_KEEP_HOST_AUDIO,
+            ),
+            (
+                "pad audio and host cursor",
+                true,
+                false,
+                true,
+                CLIENT_CAP_PAD_AUDIO | CLIENT_CAP_CURSOR,
+            ),
+            (
+                "keep host audio and host cursor",
+                false,
+                true,
+                true,
+                CLIENT_CAP_KEEP_HOST_AUDIO | CLIENT_CAP_CURSOR,
+            ),
+            (
+                "all three",
+                true,
+                true,
+                true,
+                CLIENT_CAP_PAD_AUDIO | CLIENT_CAP_KEEP_HOST_AUDIO | CLIENT_CAP_CURSOR,
+            ),
+        ];
+        for &(name, pad, keep, cursor, want) in CASES {
+            assert_eq!(client_caps(pad, keep, cursor), want, "{name}");
+        }
+        let bits = [
+            CLIENT_CAP_PAD_AUDIO,
+            CLIENT_CAP_KEEP_HOST_AUDIO,
+            CLIENT_CAP_CURSOR,
+        ];
+        assert_eq!(
+            bits.iter().fold(0u8, |all, &b| all | b).count_ones(),
+            3,
+            "each ask has a bit of its own"
+        );
+    }
+
+    #[test]
+    fn a_codec_mask_is_cut_to_the_known_codecs_and_falls_back_to_h264_and_hevc() {
+        const FALLBACK: u8 = CODEC_H264 | CODEC_HEVC;
+        // (name, Kotlin's mask, advertised)
+        const CASES: &[(&str, u8, u8)] = &[
+            ("an empty mask", 0, FALLBACK),
+            ("unknown bits only", 0xF0, FALLBACK),
+            ("the top bit only", 0x80, FALLBACK),
+            ("H.264 alone is not widened", CODEC_H264, CODEC_H264),
+            ("HEVC alone is not widened", CODEC_HEVC, CODEC_HEVC),
+            ("AV1 alone", CODEC_AV1, CODEC_AV1),
+            ("PyroWave alone", CODEC_PYROWAVE, CODEC_PYROWAVE),
+            (
+                "every known codec",
+                CODEC_H264 | CODEC_HEVC | CODEC_AV1 | CODEC_PYROWAVE,
+                CODEC_H264 | CODEC_HEVC | CODEC_AV1 | CODEC_PYROWAVE,
+            ),
+            (
+                "every bit set",
+                0xFF,
+                CODEC_H264 | CODEC_HEVC | CODEC_AV1 | CODEC_PYROWAVE,
+            ),
+            (
+                "unknown bits beside known ones",
+                0xF0 | CODEC_AV1 | CODEC_PYROWAVE,
+                CODEC_AV1 | CODEC_PYROWAVE,
+            ),
+            ("an unknown bit beside H.264", 0x10 | CODEC_H264, CODEC_H264),
+        ];
+        for &(name, bits, want) in CASES {
+            assert_eq!(advertised_codecs(bits), want, "{name}");
+        }
+    }
+
+    #[test]
+    fn an_empty_launch_or_profile_is_none_and_is_not_trimmed() {
+        let some = |s: &str| Some(s.to_string());
+        let rows = [
+            ("absent", None, None),
+            ("empty", some(""), None),
+            (
+                "a store-qualified id",
+                some("steam:1245620"),
+                some("steam:1245620"),
+            ),
+            ("blank is kept", some(" "), some(" ")),
+            ("padding is kept", some(" steam:1 "), some(" steam:1 ")),
+        ];
+        for (name, input, want) in rows {
+            assert_eq!(non_empty(input), want, "{name}");
+        }
+    }
+
+    #[test]
+    fn a_device_name_is_trimmed_and_blank_is_none() {
+        let some = |s: &str| Some(s.to_string());
+        let rows = [
+            ("absent", None, None),
+            ("empty", some(""), None),
+            ("spaces only", some("   "), None),
+            ("tab and newline only", some("\t\n"), None),
+            ("a no-break space only", some("\u{a0}"), None),
+            ("a model name", some("Pixel 9"), some("Pixel 9")),
+            ("padding is trimmed", some("  Pixel 9\n"), some("Pixel 9")),
+            ("inner spaces are kept", some("Pixel  9"), some("Pixel  9")),
+        ];
+        for (name, input, want) in rows {
+            assert_eq!(device_label(input), want, "{name}");
+        }
+    }
+
+    #[test]
+    fn an_identity_needs_both_halves() {
+        let pair = |c: &str, k: &str| identity_of(c.to_string(), k.to_string());
+        assert_eq!(pair("", ""), None, "both empty");
+        assert_eq!(pair("cert", ""), None, "no key");
+        assert_eq!(pair("", "key"), None, "no cert");
+        assert_eq!(
+            pair("cert", "key"),
+            Some(("cert".to_string(), "key".to_string())),
+            "both present"
+        );
+        assert!(
+            pair(" ", " ").is_some(),
+            "blank is not empty, and is not trimmed"
+        );
+    }
+
+    #[test]
+    fn a_negative_since_first_is_no_refusal_yet() {
+        const CASES: &[(&str, jlong, Option<Duration>)] = &[
+            ("i64::MIN", jlong::MIN, None),
+            ("the first refusal", -1, None),
+            ("no time since", 0, Some(Duration::ZERO)),
+            (
+                "a second and a half",
+                1_500,
+                Some(Duration::from_millis(1_500)),
+            ),
+            (
+                "i64::MAX",
+                jlong::MAX,
+                Some(Duration::from_millis(jlong::MAX as u64)),
+            ),
+        ];
+        for &(name, ms, want) in CASES {
+            assert_eq!(since_first(ms), want, "{name}");
+        }
+    }
+}
