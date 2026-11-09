@@ -64,3 +64,168 @@ pub(crate) fn layer_space(color: &ColorInfo, sdk: u32) -> Option<Space> {
     let space = negotiated_space(color);
     (sdk >= 31 || matches!(space, Space::Srgb | Space::Bt2020Pq)).then_some(space)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const PQ: u8 = ColorInfo::TRC_PQ;
+    const HLG: u8 = ColorInfo::TRC_HLG;
+    const SDR: u8 = ColorInfo::TRC_BT709;
+
+    fn color(transfer: u8, full_range: u8) -> ColorInfo {
+        ColorInfo {
+            primaries: ColorInfo::CP_BT709,
+            transfer,
+            matrix: ColorInfo::MC_BT709,
+            full_range,
+        }
+    }
+
+    #[test]
+    fn the_negotiated_tag_follows_transfer_and_range() {
+        // (name, colour, tag)
+        let rows = [
+            ("full-range PQ", color(PQ, 1), Space::Bt2020Pq),
+            ("studio-range PQ", color(PQ, 0), Space::Bt2020ItuPq),
+            ("full-range HLG", color(HLG, 1), Space::Bt2020Hlg),
+            ("studio-range HLG", color(HLG, 0), Space::Bt2020ItuHlg),
+            ("full-range SDR is sRGB", color(SDR, 1), Space::Srgb),
+            ("studio-range SDR is BT.709", color(SDR, 0), Space::Bt709),
+            ("an unknown transfer reads as SDR", color(0, 1), Space::Srgb),
+            ("an unknown studio transfer", color(99, 0), Space::Bt709),
+            (
+                "any non-zero range byte is full",
+                color(PQ, 2),
+                Space::Bt2020Pq,
+            ),
+            (
+                "primaries and matrix do not change the tag",
+                ColorInfo {
+                    primaries: ColorInfo::CP_BT2020,
+                    matrix: ColorInfo::MC_BT2020_NCL,
+                    ..color(SDR, 1)
+                },
+                Space::Srgb,
+            ),
+            ("the host's SDR constant", ColorInfo::SDR_BT709, Space::Srgb),
+            (
+                "an older host's default",
+                ColorInfo::SDR_BT709_STUDIO,
+                Space::Bt709,
+            ),
+            (
+                "the host's HDR10 constant",
+                ColorInfo::HDR10_BT2020_PQ,
+                Space::Bt2020Pq,
+            ),
+        ];
+        for (name, c, want) in rows {
+            assert_eq!(negotiated_space(&c), want, "{name}");
+        }
+    }
+
+    #[test]
+    fn a_decoders_report_maps_its_transfer_and_range() {
+        // (name, color-transfer, color-range, tag)
+        let rows = [
+            ("PQ full", Some(6), Some(1), Some(Space::Bt2020Pq)),
+            ("PQ limited", Some(6), Some(2), Some(Space::Bt2020ItuPq)),
+            (
+                "PQ without a range",
+                Some(6),
+                None,
+                Some(Space::Bt2020ItuPq),
+            ),
+            ("HLG full", Some(7), Some(1), Some(Space::Bt2020Hlg)),
+            ("HLG limited", Some(7), Some(2), Some(Space::Bt2020ItuHlg)),
+            (
+                "a range other than 1",
+                Some(7),
+                Some(0),
+                Some(Space::Bt2020ItuHlg),
+            ),
+            ("no transfer is no tag", None, Some(1), None),
+            ("no transfer, no range", None, None, None),
+            ("linear is not named", Some(1), Some(1), None),
+            (
+                "a CICP PQ number is not a MediaFormat one",
+                Some(16),
+                Some(1),
+                None,
+            ),
+            (
+                "a CICP HLG number is not a MediaFormat one",
+                Some(18),
+                Some(2),
+                None,
+            ),
+        ];
+        for (name, transfer, range, want) in rows {
+            assert_eq!(reported_space(transfer, range), want, "{name}");
+        }
+    }
+
+    /// R1-3, an open item (design D4): the sinks apply a decoder's report over the negotiated
+    /// tag, and a decoder that reports SDR (Codec2's default for one that reports nothing)
+    /// yields BT.709 or sRGB. An HDR session can lose its PQ or HLG tag to it. Pinned as is.
+    #[test]
+    fn r1_3_open_a_reported_sdr_transfer_yields_an_sdr_tag() {
+        assert_eq!(reported_space(Some(3), Some(2)), Some(Space::Bt709));
+        assert_eq!(reported_space(Some(3), Some(1)), Some(Space::Srgb));
+        assert_eq!(reported_space(Some(3), None), Some(Space::Bt709));
+        let negotiated = negotiated_space(&ColorInfo::HDR10_BT2020_PQ);
+        assert_ne!(reported_space(Some(3), Some(1)), Some(negotiated));
+    }
+
+    #[test]
+    fn a_layer_takes_a_tag_by_android_release() {
+        let sdr = color(SDR, 1);
+        let studio = color(SDR, 0);
+        // (name, colour, sdk, tag)
+        let rows = [
+            ("full-range SDR on 10", sdr, 29, Some(Space::Srgb)),
+            ("full-range SDR on 11", sdr, 30, Some(Space::Srgb)),
+            ("full-range SDR on 12", sdr, 31, Some(Space::Srgb)),
+            ("studio SDR on 10 has no layer tag", studio, 29, None),
+            ("studio SDR on 11 has no layer tag", studio, 30, None),
+            ("studio SDR on 12", studio, 31, Some(Space::Bt709)),
+            ("studio SDR on 15", studio, 35, Some(Space::Bt709)),
+            (
+                "full-range PQ on 10",
+                color(PQ, 1),
+                29,
+                Some(Space::Bt2020Pq),
+            ),
+            ("studio PQ on 11 has no layer tag", color(PQ, 0), 30, None),
+            (
+                "studio PQ on 12",
+                color(PQ, 0),
+                31,
+                Some(Space::Bt2020ItuPq),
+            ),
+            (
+                "full-range HLG on 11 has no layer tag",
+                color(HLG, 1),
+                30,
+                None,
+            ),
+            (
+                "full-range HLG on 12",
+                color(HLG, 1),
+                31,
+                Some(Space::Bt2020Hlg),
+            ),
+            ("an unreadable sdk takes the old gate", studio, 0, None),
+            (
+                "an unreadable sdk still takes sRGB",
+                sdr,
+                0,
+                Some(Space::Srgb),
+            ),
+        ];
+        for (name, c, sdk, want) in rows {
+            assert_eq!(layer_space(&c, sdk), want, "{name}");
+        }
+    }
+}
