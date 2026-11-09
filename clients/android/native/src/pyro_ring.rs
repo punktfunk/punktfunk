@@ -168,13 +168,32 @@ pub(crate) enum Verdict {
     Fatal,
 }
 
-/// What `outcome` of `call` means for the picture in hand.
+/// What `outcome` of `call` means for the picture in hand. A failed rebuild leaves the ring or
+/// swapchain outgrown, so the next picture rebuilds again.
 pub(crate) fn verdict(call: Call, outcome: Outcome) -> Verdict {
     match (call, outcome) {
         (_, Outcome::Done) => Verdict::Go,
+        (_, Outcome::DeviceLost) => Verdict::Fatal,
         (Call::Acquire | Call::Present, Outcome::OutOfDate) => Verdict::Rebuild,
-        (Call::Acquire, Outcome::Timeout) => Verdict::Drop,
+        (Call::Acquire, Outcome::Timeout) | (Call::Rebuild, _) => Verdict::Drop,
         _ => Verdict::Fatal,
+    }
+}
+
+/// Failed rebuilds in a row that end the lane: half a second of pictures at 60 Hz.
+pub(crate) const MAX_FAILED_REBUILDS: u32 = 30;
+
+/// The [`verdict`] on one rebuild, with `failed` counting the failures in a row.
+pub(crate) fn after_rebuild(failed: &mut u32, outcome: Outcome) -> Verdict {
+    let v = verdict(Call::Rebuild, outcome);
+    *failed = match v {
+        Verdict::Drop => *failed + 1,
+        _ => 0,
+    };
+    if *failed >= MAX_FAILED_REBUILDS {
+        Verdict::Fatal
+    } else {
+        v
     }
 }
 
@@ -477,10 +496,10 @@ mod tests {
             Verdict::Fatal,
         ),
         (
-            "a failed rebuild ends the lane",
+            "R4-1: a failed rebuild drops the picture",
             Call::Rebuild,
             Failed,
-            Verdict::Fatal,
+            Verdict::Drop,
         ),
         (
             "a lost device ends the lane at the fence",
@@ -531,5 +550,39 @@ mod tests {
         for &(name, call, outcome, want) in VERDICTS {
             assert_eq!(verdict(call, outcome), want, "{name}");
         }
+    }
+
+    /// Rebuild outcomes through one count, as `Present` reports them.
+    fn rebuilds(outcomes: &[Outcome]) -> Vec<Verdict> {
+        let mut failed = 0;
+        outcomes
+            .iter()
+            .map(|&o| after_rebuild(&mut failed, o))
+            .collect()
+    }
+
+    #[test]
+    fn r4_1_thirty_failed_rebuilds_in_a_row_end_the_lane() {
+        let failures = [Failed; MAX_FAILED_REBUILDS as usize];
+        let mut want = vec![Verdict::Drop; failures.len() - 1];
+        want.push(Verdict::Fatal);
+        assert_eq!(rebuilds(&failures), want);
+    }
+
+    #[test]
+    fn a_rebuild_that_works_restarts_the_count() {
+        let short = MAX_FAILED_REBUILDS as usize - 1;
+        let mut outcomes = vec![Failed; short];
+        outcomes.push(Done);
+        outcomes.extend(vec![Failed; short]);
+        assert!(!rebuilds(&outcomes).contains(&Verdict::Fatal));
+    }
+
+    #[test]
+    fn a_lost_device_ends_the_lane_at_once() {
+        assert_eq!(
+            rebuilds(&[Failed, DeviceLost]),
+            [Verdict::Drop, Verdict::Fatal]
+        );
     }
 }

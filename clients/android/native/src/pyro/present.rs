@@ -77,6 +77,8 @@ pub(super) struct Present<'d> {
     followed: u64,
     /// Present through `ASurfaceControl` instead of the swapchain ([`super::asc`]).
     asc: Option<super::asc::AscTarget>,
+    /// Rebuilds that failed in a row ([`pyro_ring::after_rebuild`]).
+    failed_rebuilds: u32,
     _dev: PhantomData<&'d super::device::PyroDevice>,
 }
 
@@ -226,6 +228,7 @@ impl<'d> Present<'d> {
             frame: 0,
             followed: 0,
             asc,
+            failed_rebuilds: 0,
             _dev: PhantomData,
         };
         if p.asc.is_none() {
@@ -263,8 +266,10 @@ impl<'d> Present<'d> {
 
     /// (Re)create the swapchain and everything sized by it, keeping the old one as the
     /// `oldSwapchain` handover so the compositor never sees a gap. On an error, `swap` names
-    /// only live objects, which `Drop` destroys.
+    /// only live objects, which the next rebuild or `Drop` destroys, and its extent stays zero.
     fn rebuild_swapchain(&mut self, color_space: vk::ColorSpaceKHR) -> Result<()> {
+        // Zero until every object below exists; `show` rebuilds a swapchain without one.
+        self.swap.extent = vk::Extent2D::default();
         // SAFETY: physical device and surface are live.
         let caps = unsafe {
             self.surface_i
@@ -307,12 +312,13 @@ impl<'d> Present<'d> {
             .clipped(true)
             .old_swapchain(old);
         // SAFETY: `ci` outlives the call; the new swapchain is owned here.
-        let swapchain = unsafe { self.swap_d.create_swapchain(&ci, None) }?;
-        // SAFETY: destroys only what this struct built; the queue is idle at every call
-        // site (see `present`) and the retired swapchain was handed over above.
+        let created = unsafe { self.swap_d.create_swapchain(&ci, None) };
+        self.swap.swapchain = vk::SwapchainKHR::null();
+        // SAFETY: destroys only what this struct built; the device is idle at every call site
+        // (`new`, `recreate`), and the create above retired `old` whether or not it succeeded.
         unsafe { self.destroy_swap_res(old) };
+        let swapchain = created?;
         self.swap.swapchain = swapchain;
-        self.swap.extent = extent;
         log::info!(
             "pyro: swapchain {}x{} {:?} {:?} (window {}x{})",
             extent.width,
@@ -364,14 +370,17 @@ impl<'d> Present<'d> {
             }?;
             self.swap.done.push(sem);
         }
+        self.swap.extent = extent;
         Ok(())
     }
 
     /// Draw one decoded `size` frame and present it.
     ///
     /// `Ok(false)` means the picture was dropped: the swapchain went out of date and was
-    /// rebuilt, or every buffer was still the compositor's. The caller simply decodes the next
-    /// one. Only a real device error is an `Err`, and that ends the lane.
+    /// rebuilt, a rebuild failed and the next picture tries again, or every buffer was still
+    /// the compositor's. The caller simply decodes the next one. A device error or
+    /// [`pyro_ring::MAX_FAILED_REBUILDS`] failed rebuilds in a row are an `Err`, which ends the
+    /// lane.
     pub(super) fn show(
         &mut self,
         views: [u64; 3],
@@ -390,6 +399,9 @@ impl<'d> Present<'d> {
         }
         if self.asc.is_some() {
             return self.show_asc(views, color, depth, msb_packed, size);
+        }
+        if self.swap.extent == vk::Extent2D::default() && !self.recreate()? {
+            return Ok(false);
         }
         // SAFETY: the semaphore is unsignalled — its previous acquire was consumed by the
         // submit whose fence we just waited on.
@@ -742,17 +754,24 @@ impl<'d> Present<'d> {
         self.after_rebuild(rebuilt)
     }
 
-    /// What a swapchain or ring rebuild's result does to the picture ([`verdict`]): `Ok(true)`
-    /// carries on; `Err` ends the lane.
-    fn after_rebuild(&self, rebuilt: Result<()>) -> Result<bool> {
+    /// What a swapchain or ring rebuild's result does to the picture
+    /// ([`pyro_ring::after_rebuild`]): `Ok(true)` carries on, `Ok(false)` drops it and leaves
+    /// the next picture to rebuild again, `Err` ends the lane.
+    fn after_rebuild(&mut self, rebuilt: Result<()>) -> Result<bool> {
         let got = match &rebuilt {
             Ok(()) => Outcome::Done,
             Err(e) => e
                 .downcast_ref::<vk::Result>()
                 .map_or(Outcome::Failed, |&e| outcome(e)),
         };
-        match verdict(Call::Rebuild, got) {
+        match pyro_ring::after_rebuild(&mut self.failed_rebuilds, got) {
             Verdict::Go => Ok(true),
+            Verdict::Drop => {
+                if let Err(e) = rebuilt {
+                    log::warn!("pyro: rebuild failed, picture dropped ({e:#})");
+                }
+                Ok(false)
+            }
             _ => rebuilt.map(|()| false),
         }
     }

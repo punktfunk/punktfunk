@@ -115,7 +115,8 @@ impl AscTarget {
         self.ring.outgrown(width, height)
     }
 
-    /// Rebuild the ring at `width`×`height`.
+    /// Rebuild the ring at `width`×`height`. On an error the ring holds no slot and is still
+    /// outgrown, so the next picture rebuilds it again.
     ///
     /// # Safety
     /// The device is idle, and `render_pass` draws [`FORMAT`].
@@ -128,12 +129,12 @@ impl AscTarget {
         // SAFETY: fn contract: nothing in flight uses the old slots.
         unsafe { self.destroy_slots() };
         self.ring.clear();
-        self.ring.fill(BUFFERS, width, height);
         for _ in 0..BUFFERS {
             // SAFETY: fn contract.
             let slot = unsafe { self.make_slot(render_pass, width, height) }?;
             self.slots.push(slot);
         }
+        self.ring.fill(BUFFERS, width, height);
         log::info!(
             "pyro: presenting {BUFFERS} buffers of {width}x{height} through ASurfaceControl"
         );
