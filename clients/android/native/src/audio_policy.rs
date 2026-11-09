@@ -20,7 +20,7 @@ pub(crate) enum Perf {
 /// at. Its `Debug` form is what the audio log lines print.
 ///
 /// `rate` is `Some(hz)` for an explicit request, which AAudio honours or fails the open, and
-/// `None` for AAUDIO_UNSPECIFIED, which lets the HAL name its own. The grant check holds an
+/// `None` for AAUDIO_UNSPECIFIED, which lets the HAL name its own. [`grant_matches`] holds an
 /// unspecified rung to the session's rate: it rescues a device that refuses an explicit rate it
 /// already runs at, and rejects one that grants another.
 ///
@@ -94,6 +94,26 @@ pub(crate) fn ladder_for(
         }
     }
     rungs
+}
+
+/// Whether a device's grant, `(rate, channels, f32)`, plays the session: the rung's rate (the
+/// session's on an unspecified rung), the session's channel count, float samples. The callback
+/// writes `frames × channels` f32, so another layout or format overruns AAudio's buffer, and
+/// another rate is the wrong audio. `Err` names both sides for the log.
+pub(crate) fn grant_matches(
+    granted: (i32, i32, bool),
+    rung_rate: Option<i32>,
+    rate_hz: u32,
+    channels: u8,
+) -> Result<(), String> {
+    let (rate, ch, float) = granted;
+    let want_rate = rung_rate.unwrap_or(rate_hz as i32);
+    if ch != i32::from(channels) || rate != want_rate || !float {
+        return Err(format!(
+            "granted rate={rate} ch={ch} f32={float}, needed {want_rate}/{channels}/PCM_Float",
+        ));
+    }
+    Ok(())
 }
 
 /// When the newest frame written plays, ns on the timestamp's clock: the timestamp's time plus
@@ -272,6 +292,74 @@ mod tests {
         assert_eq!(
             format!("{rung:?}"),
             "OpenRung { sharing: Exclusive, perf: LowLatency, rate: Some(48000), track: false }"
+        );
+    }
+
+    #[test]
+    fn a_grant_plays_only_at_the_rate_layout_and_format_asked_for() {
+        // (row, granted, rung rate, session rate, session channels, plays)
+        let rows = [
+            (
+                "an exact grant plays",
+                (48_000, 2, true),
+                R,
+                48_000,
+                2,
+                true,
+            ),
+            (
+                "an unspecified rung back at the session rate plays",
+                (96_000, 6, true),
+                None,
+                96_000,
+                6,
+                true,
+            ),
+            (
+                "an unspecified rung at another rate is refused, never resampled",
+                (48_000, 2, true),
+                None,
+                96_000,
+                2,
+                false,
+            ),
+            (
+                "an explicit rung is held to its own rate",
+                (44_100, 2, true),
+                Some(44_100),
+                48_000,
+                2,
+                true,
+            ),
+            (
+                "a stereo grant for a 5.1 session is refused",
+                (48_000, 2, true),
+                R,
+                48_000,
+                6,
+                false,
+            ),
+            (
+                "integer samples are refused",
+                (48_000, 2, false),
+                R,
+                48_000,
+                2,
+                false,
+            ),
+        ];
+        for (row, granted, rung_rate, rate, channels, plays) in rows {
+            let got = grant_matches(granted, rung_rate, rate, channels);
+            assert_eq!(got.is_ok(), plays, "{row}: {got:?}");
+        }
+    }
+
+    /// The refusal is a log line field bundles grep.
+    #[test]
+    fn a_refused_grant_names_both_sides() {
+        assert_eq!(
+            grant_matches((44_100, 2, true), None, 48_000, 2),
+            Err("granted rate=44100 ch=2 f32=true, needed 48000/2/PCM_Float".into())
         );
     }
 

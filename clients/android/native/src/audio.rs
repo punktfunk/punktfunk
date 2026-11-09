@@ -12,7 +12,7 @@
 //! the video reference for A/V sync. See `design/hi-res-audio.md` and
 //! `design/audio-latency-overhaul.md` for the full policy.
 
-use crate::audio_policy::{heard_at, ladder_for, OpenRung, Perf, Sharing};
+use crate::audio_policy::{grant_matches, heard_at, ladder_for, OpenRung, Perf, Sharing};
 use crate::sys::sysprop;
 use ndk::audio::{
     AudioCallbackResult, AudioContentType, AudioDirection, AudioFormat, AudioPerformanceMode,
@@ -490,31 +490,27 @@ fn open_any(ladder: &[OpenRung], ctx: &OpenCtx) -> Option<LiveStream> {
 /// Bring one opened stream up and prove the device is really pulling from it. Three failures
 /// after a successful `open_stream` each end in silence behind a healthy-looking log:
 ///
-/// 1. **The grant differs from the request.** The callback writes `num_frames * channels` f32
-///    into AAudio's buffer, so another layout or format is an out-of-bounds write on a realtime
-///    thread. The NDK honours an explicit request or fails the open; this check does not trust
-///    the HAL with a buffer length.
+/// 1. **The grant differs from the request.** [`grant_matches`] refuses it: another layout or
+///    format is an out-of-bounds write on a realtime thread, another rate the wrong audio. The
+///    NDK honours an explicit request or fails the open; this check does not trust the HAL with
+///    a buffer length.
 /// 2. **`request_start` fails.** The caller tries the next rung. A track plays from its open.
 /// 3. **The stream starts and never calls back.** `prove_pulling` catches it, giving up once
 ///    that flag is set (a closing session); the last-resort reopen in [`open_any`] passes
 ///    `None`, since an unproven stream beats no stream. A track's writes count as callbacks.
-///
-/// The rate is held to the rung, or to the session's rate on an unspecified rung: a device that
-/// grants another rate is rejected, never resampled quietly.
 fn arm(
     live: &LiveStream,
     fmt: PlaneFormat,
     counters: &Counters,
     prove_pulling: Option<&AtomicBool>,
 ) -> Result<(), ArmError> {
-    let (rate, ch, float) = live.output.granted();
-    let channels = fmt.channels;
-    let want_rate = live.rung.rate.unwrap_or(fmt.rate_hz as i32);
-    if ch != i32::from(channels) || rate != want_rate || !float {
-        return Err(ArmError::Unusable(format!(
-            "granted rate={rate} ch={ch} f32={float}, needed {want_rate}/{channels}/PCM_Float",
-        )));
-    }
+    grant_matches(
+        live.output.granted(),
+        live.rung.rate,
+        fmt.rate_hz,
+        fmt.channels,
+    )
+    .map_err(ArmError::Unusable)?;
     if let Output::AAudio(s) = &live.output {
         s.request_start()
             .map_err(|e| ArmError::Unusable(format!("request_start: {e}")))?;
