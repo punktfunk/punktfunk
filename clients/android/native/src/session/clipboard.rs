@@ -9,7 +9,7 @@
 //!
 //! Events cross to Kotlin as compact strings from the blocking `nativeNextClip` poll (drained on
 //! a dedicated thread, same pattern as `nativeNextRumble`):
-//! `state:<0|1>` · `offer:<seq>:<has_text 0|1>` · `fetch:<req_id>` · `data:<xfer_id>:<text>` ·
+//! `state:<0|1>` · `offer:<seq>:<has_text 0|1>` · `fetch:<req_id as i32>` · `data:<xfer_id>:<text>` ·
 //! `cancel:<id>` · `error:<id>:<code>` · `closed` — null on a poll timeout. Non-text fetch
 //! requests are cancelled natively (only text is ever offered, so they shouldn't occur).
 
@@ -195,7 +195,9 @@ fn clip_poll(pulled: Result<ClipEventCore, PunktfunkError>) -> ClipPoll {
         }
         Ok(ClipEventCore::FetchRequest { req_id, mime, .. }) => {
             if is_text(&mime) {
-                Line(format!("fetch:{req_id}"))
+                // As Kotlin's `Int`: core sets the id's high bit, and Kotlin parses a decimal
+                // above `Int.MAX_VALUE` as nothing. It hands the same bits back to serve.
+                Line(format!("fetch:{}", req_id as i32))
             } else {
                 CancelFetch(req_id)
             }
@@ -376,12 +378,12 @@ mod tests {
                 fetch(5, "text/plain;charset=utf-8"),
                 line("fetch:5"),
             ),
-            // Core numbers a host paste with its high bit set, and Kotlin reads this id with
-            // `toIntOrNull`, which refuses anything above `Int.MAX_VALUE`.
+            // Core numbers a host paste with its high bit set; Kotlin reads the id as an `Int`
+            // and `nativeClipServeText` casts the same bits back.
             (
-                "a host paste's request id carries core's high bit",
+                "a host paste's request id reaches Kotlin as an Int it can parse",
                 fetch(INBOUND_REQ_FLAG | 1, "text/plain"),
-                line("fetch:2147483649"),
+                line("fetch:-2147483647"),
             ),
             (
                 "a cancelled transfer",
