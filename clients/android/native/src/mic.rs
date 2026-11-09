@@ -45,9 +45,7 @@ type OpenedCapture = ndk::audio::Result<(AudioStream, Receiver<Vec<f32>>, SyncSe
 #[cfg(target_os = "android")]
 type StartedCapture = (AudioStream, Receiver<Vec<f32>>, SyncSender<Vec<f32>>, i32);
 
-#[cfg(target_os = "android")]
 const CHANNELS: usize = 1;
-#[cfg(target_os = "android")]
 const SAMPLE_RATE: i32 = 48_000;
 /// Captured-chunk hand-off depth (each ~ one burst); drops on overflow (best-effort uplink).
 /// Bursts are sized in frames, so the wall-time depth is unchanged by the stereo→mono move.
@@ -97,6 +95,22 @@ enum Sharing {
 /// One rung: a sharing mode, and whether the voice preset asks for echo cancellation.
 type Rung = (Sharing, bool);
 
+/// What AAudio granted on an open: the rate, the channel count, and whether samples are f32.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Grant {
+    rate: i32,
+    channels: i32,
+    float: bool,
+}
+
+/// The one grant the capture callback reads: it slices `num_frames × CHANNELS` f32, and the
+/// encoder takes 48 kHz.
+const WANTED: Grant = Grant {
+    rate: SAMPLE_RATE,
+    channels: CHANNELS as i32,
+    float: true,
+};
+
 /// The open ladder: Exclusive first — MMAP-exclusive is AAudio's lowest-latency path — falling
 /// back to Shared when the device refuses (no MMAP, mic claimed, …); and each sharing mode with
 /// the voice preset before without it, because some HALs reject VoiceCommunication (or a session
@@ -118,24 +132,35 @@ fn capture_rungs(echo_cancel: bool) -> &'static [Rung] {
     }
 }
 
-/// Walks `rungs` best first to the first stream that opens and starts. A refused open is the
-/// next rung, and so is a stream that does not start: it is dropped, which closes it, first.
+/// Walks `rungs` best first to the first stream that opens, is granted [`WANTED`] and starts. A
+/// refused open is the next rung, and so is a stream that fails either check: it is dropped,
+/// which closes it, first. A wrong grant is never started.
 fn walk<S, E: std::fmt::Display>(
     rungs: &[Rung],
     mut open: impl FnMut(Rung) -> Result<S, E>,
+    grant: impl Fn(&S) -> Grant,
     mut start: impl FnMut(&S) -> Result<(), E>,
 ) -> Option<S> {
     for &(sharing, voice) in rungs {
+        let preset = if voice { "+VoiceCommunication" } else { "" };
         let stream = match open((sharing, voice)) {
             Ok(stream) => stream,
             Err(e) => {
-                log::info!(
-                    "mic: open {sharing:?}{} failed ({e}) — trying the next fallback",
-                    if voice { "+VoiceCommunication" } else { "" },
-                );
+                log::info!("mic: open {sharing:?}{preset} failed ({e}) — trying the next fallback");
                 continue;
             }
         };
+        let granted = grant(&stream);
+        if granted != WANTED {
+            log::warn!(
+                "mic: open {sharing:?}{preset} granted rate={} ch={} f32={}, needed \
+                 {SAMPLE_RATE}/{CHANNELS}/PCM_Float — trying the next fallback",
+                granted.rate,
+                granted.channels,
+                granted.float,
+            );
+            continue;
+        }
         match start(&stream) {
             Ok(()) => return Some(stream),
             Err(e) => log::error!("mic: request_start: {e}"),
@@ -176,8 +201,9 @@ fn open_capture(
         if data.is_null() {
             return AudioCallbackResult::Stop;
         }
-        // SAFETY: AAudio supplies `n` captured f32 samples at non-null `data`; the shared
-        // length validator rejected nonpositive or unrepresentable callback counts.
+        // SAFETY: AAudio supplies `n` captured f32 samples at non-null `data`: `walk` starts
+        // only a stream granted mono PCM_Float, and the shared length validator rejected
+        // nonpositive or unrepresentable callback counts.
         let inp = unsafe { std::slice::from_raw_parts(data.cast::<f32>(), n) };
         cb_captured.fetch_add(num_frames as u64, Ordering::Relaxed);
         match free_rx.try_recv() {
@@ -246,6 +272,11 @@ fn open_started(
     let (stream, rx, free_tx) = walk(
         capture_rungs(echo_cancel),
         |(sharing, voice)| open_capture(sharing, voice, captured, dropped, disconnected),
+        |(stream, ..)| Grant {
+            rate: stream.sample_rate(),
+            channels: stream.channel_count(),
+            float: stream.format() == AudioFormat::PCM_Float,
+        },
         |(stream, ..)| stream.request_start(),
     )?;
     // `> 0` is the handle Kotlin hangs the Java AcousticEchoCanceler/NoiseSuppressor off as the
@@ -471,15 +502,17 @@ fn run(
 
 #[cfg(test)]
 mod tests {
-    use super::{capture_rungs, walk, Sharing};
+    use super::{capture_rungs, walk, Grant, Sharing, WANTED};
     use std::cell::RefCell;
 
     /// What a rung's stream does in a scripted walk.
     #[derive(Clone, Copy)]
     enum At {
         Refuses,
-        /// Opens; starts when `true`.
+        /// Opens with [`WANTED`]; starts when `true`.
         Opens(bool),
+        /// Opens with this grant, and would start.
+        Grants(Grant),
     }
 
     /// A stream that logs its close.
@@ -502,14 +535,18 @@ mod tests {
                 next += 1;
                 match script[next - 1] {
                     At::Refuses => Err("refused"),
-                    At::Opens(_) => Ok(Stream(next - 1, &log)),
+                    _ => Ok(Stream(next - 1, &log)),
                 }
+            },
+            |s| match script[s.0] {
+                At::Grants(g) => g,
+                _ => WANTED,
             },
             |s| {
                 log.borrow_mut().push(format!("start {}", s.0));
                 match script[s.0] {
-                    At::Opens(true) => Ok(()),
-                    _ => Err("start failed"),
+                    At::Opens(false) => Err("start failed"),
+                    _ => Ok(()),
                 }
             },
         );
@@ -524,6 +561,38 @@ mod tests {
         Option<usize>,
         &'static [&'static str],
     );
+
+    /// R5-4: the callback slices mono f32 at 48 kHz, so any other grant is closed unstarted.
+    #[test]
+    fn a_grant_the_callback_cannot_read_is_the_next_rung() {
+        let grants = [
+            (
+                "stereo",
+                Grant {
+                    channels: 2,
+                    ..WANTED
+                },
+            ),
+            (
+                "44.1 kHz",
+                Grant {
+                    rate: 44_100,
+                    ..WANTED
+                },
+            ),
+            (
+                "i16",
+                Grant {
+                    float: false,
+                    ..WANTED
+                },
+            ),
+        ];
+        for (name, g) in grants {
+            let want = (Some(1), vec!["close 0".to_string(), "start 1".to_string()]);
+            assert_eq!(walked(&[At::Grants(g), At::Opens(true)]), want, "{name}");
+        }
+    }
 
     #[test]
     fn the_ladder_starts_the_first_stream_that_opens() {
