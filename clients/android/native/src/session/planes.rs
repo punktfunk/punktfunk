@@ -646,6 +646,10 @@ pub extern "system" fn Java_io_unom_punktfunk_kit_NativeBridge_nativeStopAudio(
 /// open, a `0` handle, or the mic failed entirely). Already running (a surface recreate) returns
 /// the running capture's id. Caller MUST hold RECORD_AUDIO; a failure (e.g. no permission) leaves
 /// the rest of the session streaming.
+///
+/// The open blocks for hundreds of ms and runs outside the slot lock, so `nativeStopMic` and
+/// `nativeMicActive` never wait on it. A stop during the open wins: this call drops the late
+/// capture and returns `0`.
 #[cfg(target_os = "android")]
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_io_unom_punktfunk_kit_NativeBridge_nativeStartMic(
@@ -670,7 +674,7 @@ pub extern "system" fn Java_io_unom_punktfunk_kit_NativeBridge_nativeStartMic(
         };
         // A running capture answers with its own id: same stream, same session.
         h.mic
-            .start(open, crate::mic::MicCapture::session_id)
+            .start_unlocked(open, crate::mic::MicCapture::session_id)
             .unwrap_or(0)
     })
 }

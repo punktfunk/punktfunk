@@ -81,6 +81,28 @@ impl<T> PlaneSlot<T> {
         running.map(read)
     }
 
+    /// [`PlaneSlot::start`] with `open` outside the lock, for an open slow enough to stall a stop.
+    /// A stop during the open wins: the late plane is dropped here, on the starting thread. Of
+    /// two racing opens the first to finish runs; both read it.
+    #[cfg_attr(not(target_os = "android"), allow(dead_code))]
+    pub(crate) fn start_unlocked<R>(
+        &self,
+        open: impl FnOnce() -> Option<T>,
+        read: impl FnOnce(&T) -> R,
+    ) -> Option<R> {
+        let generation = match lock_recover(&self.0).begin() {
+            Ok(plane) => return Some(read(plane)),
+            Err(generation) => generation,
+        };
+        let opened = open();
+        let mut s = lock_recover(&self.0);
+        let (running, spare) = s.finish(generation, opened);
+        let read = running.map(read);
+        drop(s);
+        drop(spare);
+        read
+    }
+
     /// Stops any plane, then opens the next outside the lock. A plane a racing start put in
     /// meanwhile is stopped. Whether `open` gave a plane.
     pub(crate) fn replace(&self, open: impl FnOnce() -> Option<T>) -> bool {
@@ -106,14 +128,17 @@ impl<T> PlaneSlot<T> {
 #[cfg(test)]
 mod tests {
     use super::{PlaneSlot, Slot};
-    use std::sync::mpsc::{channel, sync_channel, Receiver, SyncSender};
-    use std::sync::{Arc, Mutex};
+    use std::sync::mpsc::{channel, sync_channel, Receiver, Sender, SyncSender};
+    use std::sync::{Arc, Mutex, PoisonError};
+    use std::thread;
     use std::time::Duration;
 
     type Log = Arc<Mutex<Vec<String>>>;
 
     fn note(log: &Log, line: String) {
-        log.lock().unwrap().push(line);
+        log.lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push(line);
     }
 
     /// A plane that logs its stop.
@@ -250,13 +275,13 @@ mod tests {
         let (release, held) = channel();
         let slot = Arc::new(PlaneSlot::default());
         slot.start(|| Some(Joining(entered, held)), |_| ());
-        let first = std::thread::spawn({
+        let first = thread::spawn({
             let slot = slot.clone();
             move || slot.stop()
         });
         joining.recv().unwrap();
         let (done, second_done) = channel();
-        let second = std::thread::spawn({
+        let second = thread::spawn({
             let slot = slot.clone();
             move || {
                 slot.stop();
@@ -272,5 +297,106 @@ mod tests {
         first.join().unwrap();
         second.join().unwrap();
         assert!(!slot.running());
+    }
+
+    /// An open that signals it began, then waits for its release before it gives plane `id`.
+    fn held_open(
+        id: u8,
+        log: &Log,
+    ) -> (
+        impl FnOnce() -> Option<Fake> + Send + 'static,
+        Receiver<()>,
+        Sender<()>,
+    ) {
+        let (began, begun) = channel();
+        let (release, held) = channel();
+        let log = log.clone();
+        let open = move || {
+            began.send(()).unwrap();
+            held.recv().unwrap();
+            Some(Fake(id, log))
+        };
+        (open, begun, release)
+    }
+
+    /// `f` on another thread; fails when it has not returned within a second.
+    fn within<R: Send + 'static>(f: impl FnOnce() -> R + Send + 'static) -> R {
+        let (done, result) = channel();
+        thread::spawn(move || done.send(f()).unwrap());
+        result
+            .recv_timeout(Duration::from_secs(1))
+            .expect("blocked behind an open in flight")
+    }
+
+    /// Starts an unlocked open of plane `id` on its own thread and returns once it is opening.
+    fn opening(
+        slot: &Arc<PlaneSlot<Fake>>,
+        id: u8,
+        log: &Log,
+    ) -> (thread::JoinHandle<Option<u8>>, Sender<()>) {
+        let (open, begun, release) = held_open(id, log);
+        let slot = slot.clone();
+        let start = thread::spawn(move || slot.start_unlocked(open, |p| p.0));
+        begun
+            .recv_timeout(Duration::from_secs(1))
+            .expect("blocked behind an open in flight");
+        (start, release)
+    }
+
+    /// R6-1: a stop during a slow open returns at once, and so does the running query. The
+    /// late plane is dropped on the starting thread and the slot stays empty.
+    #[test]
+    fn a_stop_during_an_open_wins_without_waiting_for_it() {
+        let log = Log::default();
+        let slot = Arc::new(PlaneSlot::default());
+        let (start, release) = opening(&slot, 1, &log);
+        within({
+            let slot = slot.clone();
+            move || slot.stop()
+        });
+        assert!(!within({
+            let slot = slot.clone();
+            move || slot.running()
+        }));
+        release.send(()).unwrap();
+        assert_eq!(start.join().unwrap(), None);
+        assert!(!slot.running());
+        assert_eq!(*log.lock().unwrap(), ["stop 1"]);
+    }
+
+    /// Two starts racing leave one plane: the first open to finish runs, and both read it.
+    #[test]
+    fn racing_starts_leave_one_plane() {
+        let log = Log::default();
+        let slot = Arc::new(PlaneSlot::default());
+        let (first, release_first) = opening(&slot, 1, &log);
+        let (second, release_second) = opening(&slot, 2, &log);
+        release_second.send(()).unwrap();
+        assert_eq!(second.join().unwrap(), Some(2));
+        release_first.send(()).unwrap();
+        assert_eq!(first.join().unwrap(), Some(2));
+        assert_eq!(*log.lock().unwrap(), ["stop 1"]);
+        assert!(slot.running());
+    }
+
+    /// A start after the stop runs; the open the stop cut off ends late and is dropped.
+    #[test]
+    fn a_start_after_a_stop_beats_the_open_it_cut_off() {
+        let log = Log::default();
+        let slot = Arc::new(PlaneSlot::default());
+        let (first, release) = opening(&slot, 1, &log);
+        within({
+            let slot = slot.clone();
+            move || slot.stop()
+        });
+        let second = within({
+            let (slot, log) = (slot.clone(), log.clone());
+            move || slot.start_unlocked(|| Some(Fake(2, log)), |p| p.0)
+        });
+        assert_eq!(second, Some(2));
+        release.send(()).unwrap();
+        assert_eq!(first.join().unwrap(), None);
+        assert_eq!(*log.lock().unwrap(), ["stop 1"]);
+        assert!(slot.running());
     }
 }
