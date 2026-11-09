@@ -33,7 +33,7 @@ final class ShortcutVectorsTests: XCTestCase {
     private func client(_ name: String) throws -> S.Client {
         let all: [String: S.Client] = [
             "desktop": .desktop, "android": .android, "apple": .apple, "mac": .mac,
-            "webos": .webOS, "web": .web, "tizen": .tizen, "ps5": .ps5,
+            "webos": .webOS, "web": .web, "tizen": .tizen, "ps5": .ps5, "switch": .switch,
         ]
         return try XCTUnwrap(all[name], name)
     }
@@ -161,7 +161,7 @@ final class ShortcutVectorsTests: XCTestCase {
     }
 
     func testABlobRoundTripsThroughTheEditor() {
-        for who in [S.Client.desktop, .android, .apple, .mac, .webOS, .web, .tizen, .ps5] {
+        for who in [S.Client.desktop, .android, .apple, .mac, .webOS, .web, .tizen, .ps5, .switch] {
             let d = S.defaults(client: who, gameMode: true, legacyGuideGesture: "on")
             XCTAssertEqual(S.parse(d.toJSON()), d, "\(who)")
         }
@@ -217,7 +217,7 @@ final class ShortcutVectorsTests: XCTestCase {
 
     /// The editor checks a changed row against the others; every default row passes its own check.
     func testEveryDefaultRowCanBeEditedInPlace() {
-        for who in [S.Client.desktop, .android, .apple, .mac, .webOS, .web, .tizen, .ps5] {
+        for who in [S.Client.desktop, .android, .apple, .mac, .webOS, .web, .tizen, .ps5, .switch] {
             let d = S.defaults(client: who, gameMode: true, legacyGuideGesture: "on")
             for (i, b) in d.bindings.enumerated() {
                 var others = d

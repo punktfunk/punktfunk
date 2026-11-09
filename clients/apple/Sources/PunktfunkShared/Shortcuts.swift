@@ -24,6 +24,8 @@ public struct Shortcuts: Equatable, Sendable {
         /// A Mac: the iPad's chords, plus the mouse mode.
         case mac
         case webOS, web, tizen, ps5
+        /// The Switch title: Nintendo's A sits east, so its wire bit is `b`.
+        case `switch`
     }
 
     /// Where a trigger is pressed; one `Engine` runs per pad and one for the keyboard.
@@ -285,10 +287,11 @@ public struct Shortcuts: Equatable, Sendable {
         }
         // The clients with their own pad path; the others' dial is their only pad chord.
         let native = [.desktop, .android, .apple, .mac].contains(client)
-        let open = client == .ps5 ? "touchpad" : "select"
+        // The dial opener is Select + the confirm button: Minus + A (east) on a Switch.
+        let open = client == .ps5 ? ["touchpad", "a"] : client == .switch ? ["select", "b"] : ["select", "a"]
         let exit = ["lb", "rb", "start", client == .ps5 ? "touchpad" : "select"]
         var b: [Binding] = []
-        b.append(pad([open, "a"], hold: false, .ring))
+        b.append(pad(open, hold: false, .ring))
         if native { b.append(pad(["select", "x"], hold: false, .slot(.stats))) }
         if client == .android { b.append(pad(["select", "y"], hold: false, .slot(.mic))) }
         if native && guide { b.append(pad(["select"], hold: true, .slot(.guide))) }
@@ -316,7 +319,7 @@ public struct Shortcuts: Equatable, Sendable {
             ]
             if client == .mac { b.append(chord("m", .slot(.mouseMode))) }
             b += [chord("c", .slot(.clipboard)), chord("a", .slot(.mic))]
-        case .webOS, .ps5:
+        case .webOS, .ps5, .switch:
             break
         }
         return Shortcuts(bindings: b)
