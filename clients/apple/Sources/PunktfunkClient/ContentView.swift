@@ -902,7 +902,16 @@ struct ContentView: View {
             requestAccess: flow.consoleRequestAccess,
             requestAccessDiscovered: flow.requestAccessDiscovered,
             launchTitle: { launch($0, $1, profile: $2) }, connectShelf: connectFromShelf,
-            wakeOnly: { flow.wakeOnly($0) }, awaitingApproval: awaitingApproval != nil)
+            wakeOnly: { flow.wakeOnly($0) }, onQuit: quitApp,
+            awaitingApproval: awaitingApproval != nil)
+    }
+
+    /// The console's exit question was answered yes. Only a Mac asks it: no other Apple app
+    /// may close itself.
+    private func quitApp() {
+        #if os(macOS)
+        NSApplication.shared.terminate(nil)
+        #endif
     }
 
     #if !os(macOS)

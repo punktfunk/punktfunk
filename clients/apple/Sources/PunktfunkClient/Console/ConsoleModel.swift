@@ -32,7 +32,7 @@ final class ConsoleModel: ObservableObject, ConsoleViewDelegate {
         /// The console's launch hold went up (`true`) or let go.
         var holding: (Bool) -> Void
         var paired: (StoredHost, Data) -> Void
-        /// A Back the shell did not take: on a TV that press belongs to the system.
+        /// The shell asked to quit, or took no Back (a TV's, which belongs to the system).
         var quit: () -> Void
     }
 

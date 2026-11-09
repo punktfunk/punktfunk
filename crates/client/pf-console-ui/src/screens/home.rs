@@ -666,7 +666,7 @@ impl ScreenView for HomeScreen {
             HintKey::Tertiary,
             pf_l10n::client::hosts_open_settings(),
         ));
-        if ctx.device.platform.can_quit() {
+        if ctx.device.can_quit() {
             hints.push(Hint::new(
                 HintKey::Back,
                 pf_l10n::console::console_hint_quit(),
@@ -1560,12 +1560,14 @@ mod tests {
     fn quit_is_hinted_only_where_the_app_can_quit() {
         let mut settings = ctx_settings();
         let library = crate::library::LibraryShared::default();
-        for (platform, quits) in [
-            (crate::platform::Platform::Android, true),
-            (crate::platform::Platform::Apple, false),
+        for (platform, tv, quits) in [
+            (crate::platform::Platform::Android, false, true),
+            (crate::platform::Platform::Apple, false, true),
+            (crate::platform::Platform::Apple, true, false),
         ] {
             let device = crate::screens::Device {
                 platform,
+                tv,
                 ..crate::screens::Device::test()
             };
             let ctx = Ctx {
@@ -1576,7 +1578,7 @@ mod tests {
             assert_eq!(
                 hints.iter().any(|h| h.key == HintKey::Back),
                 quits,
-                "{platform:?}"
+                "{platform:?} tv={tv}"
             );
         }
     }
