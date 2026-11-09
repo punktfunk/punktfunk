@@ -15,7 +15,6 @@ mod cursor;
 mod input;
 mod planes;
 mod probe;
-#[cfg(test)]
 mod slot;
 
 use punktfunk_core::client::NativeClient;
@@ -25,6 +24,8 @@ use std::panic::AssertUnwindSafe;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicU8, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::thread::JoinHandle;
+
+use slot::PlaneSlot;
 
 /// Run a JNI body, catching any panic at the FFI boundary and returning `default` instead.
 ///
@@ -58,7 +59,7 @@ pub(crate) struct SessionHandle {
     /// `nativeVideoStatsLines`. Session-lifetime (not per `VideoThread`) so the decoder label
     /// survives surface teardown and recreate.
     pub stats: Arc<crate::stats::VideoStats>,
-    video: Mutex<Option<VideoThread>>,
+    video: PlaneSlot<VideoThread>,
     /// Set by the first `nativeStartVideo`. A later one (a recreated surface) builds a decoder
     /// mid-stream, which must wait for a keyframe and ask for one.
     #[cfg_attr(not(target_os = "android"), allow(dead_code))]
@@ -67,16 +68,16 @@ pub(crate) struct SessionHandle {
     /// something must still pop the frame queue, or the standing-queue detector jumps to live and
     /// asks the host for a keyframe every `FLUSH_COOLDOWN` for the whole background stay. Reuses
     /// [`VideoThread`] because it is the same contract — a flag and a join.
-    drain: Mutex<Option<VideoThread>>,
+    drain: PlaneSlot<VideoThread>,
     #[cfg(target_os = "android")]
-    audio: Mutex<Option<crate::audio::AudioPlayback>>,
+    audio: PlaneSlot<crate::audio::AudioPlayback>,
     #[cfg(target_os = "android")]
-    mic: Mutex<Option<crate::mic::MicCapture>>,
+    mic: PlaneSlot<crate::mic::MicCapture>,
     /// Tier-A DualSense pad audio (the 0xD1 plane), started by `nativeStartPadAudio` once Kotlin
     /// has claimed the pad's audio interface and handed its descriptor over. Session-lifetime and
     /// `Option` because a session may have no wired DualSense at all, which is the common case.
     #[cfg(target_os = "android")]
-    pub(crate) pad_audio: Mutex<Option<crate::pad_audio::PadAudio>>,
+    pub(crate) pad_audio: PlaneSlot<crate::pad_audio::PadAudio>,
     /// In-stream mic mute, set via `nativeSetMicMuted` and read per 10 ms frame by the mic's
     /// encode loop ([`crate::mic`]). Session-lifetime rather than per-[`crate::mic::MicCapture`]
     /// for the same reason the stats gate is: the mic stops and restarts across a surface
@@ -241,91 +242,71 @@ pub(crate) fn unpack_src_crop(packed: u64) -> [f32; 4] {
     [f(48), f(32), f(16), f(0)]
 }
 
+/// A video worker thread. Dropping it raises `shutdown` and joins the thread.
 struct VideoThread {
     shutdown: Arc<AtomicBool>,
     join: Option<JoinHandle<()>>,
 }
 
-impl SessionHandle {
-    /// Stop and join the decode thread once, recovering a poisoned slot during teardown.
-    fn stop_video(&self) {
-        if let Some(mut vt) = lock_recover(&self.video).take() {
-            vt.shutdown.store(true, Ordering::SeqCst);
-            if let Some(j) = vt.join.take() {
-                let _ = j.join();
-            }
+impl Drop for VideoThread {
+    fn drop(&mut self) {
+        self.shutdown.store(true, Ordering::SeqCst);
+        if let Some(j) = self.join.take() {
+            let _ = j.join();
         }
     }
+}
 
+impl SessionHandle {
     /// Run the keep-alive AU drain, replacing any already running. Pops video AUs and discards
     /// them so the queue never stands: no jump-to-live, no keyframe cadence, and the host keeps
     /// pacing against a client that is still reading.
     pub(crate) fn start_drain(&self) {
-        self.stop_drain();
         let client = self.client.clone();
-        let shutdown = Arc::new(AtomicBool::new(false));
-        let sd = shutdown.clone();
-        let spawned = std::thread::Builder::new()
-            .name("pf-video-drain".into())
-            .spawn(move || {
-                while !sd.load(Ordering::Relaxed) {
-                    // `NoFrame` is the 5 ms timeout — re-check the flag and poll again. Anything
-                    // else is a closed session, and there is nothing left to drain.
-                    match client.next_frame(std::time::Duration::from_millis(5)) {
-                        Ok(_) => {}
-                        Err(punktfunk_core::PunktfunkError::NoFrame) => {}
-                        Err(_) => break,
+        self.drain.replace(|| {
+            let shutdown = Arc::new(AtomicBool::new(false));
+            let sd = shutdown.clone();
+            let spawned = std::thread::Builder::new()
+                .name("pf-video-drain".into())
+                .spawn(move || {
+                    while !sd.load(Ordering::Relaxed) {
+                        // `NoFrame` is the 5 ms timeout — re-check the flag and poll again.
+                        // Anything else is a closed session, and there is nothing left to drain.
+                        match client.next_frame(std::time::Duration::from_millis(5)) {
+                            Ok(_) => {}
+                            Err(punktfunk_core::PunktfunkError::NoFrame) => {}
+                            Err(_) => break,
+                        }
                     }
-                }
-            });
-        match spawned {
-            Ok(join) => {
-                *lock_recover(&self.drain) = Some(VideoThread {
+                });
+            match spawned {
+                Ok(join) => Some(VideoThread {
                     shutdown,
                     join: Some(join),
-                });
+                }),
+                Err(e) => {
+                    log::error!("video drain thread spawn failed: {e}");
+                    None
+                }
             }
-            Err(e) => log::error!("video drain thread spawn failed: {e}"),
-        }
-    }
-
-    /// Stop and join the keep-alive drain once. No-op when none runs.
-    pub(crate) fn stop_drain(&self) {
-        if let Some(mut dt) = lock_recover(&self.drain).take() {
-            dt.shutdown.store(true, Ordering::SeqCst);
-            if let Some(j) = dt.join.take() {
-                let _ = j.join();
-            }
-        }
-    }
-
-    /// Drop audio playback once; its destructor joins decode and closes AAudio.
-    #[cfg(target_os = "android")]
-    fn stop_audio(&self) {
-        let _ = lock_recover(&self.audio).take();
-    }
-
-    /// Drop mic capture once; its destructor joins encode and closes AAudio.
-    #[cfg(target_os = "android")]
-    fn stop_mic(&self) {
-        let _ = lock_recover(&self.mic).take();
+        });
     }
 
     /// Drop pad audio once and join its renderer before Kotlin closes the USB connection.
     #[cfg(target_os = "android")]
     pub(crate) fn stop_pad_audio(&self) {
-        let _ = lock_recover(&self.pad_audio).take();
+        self.pad_audio.stop();
     }
 }
 
 impl Drop for SessionHandle {
     fn drop(&mut self) {
-        self.stop_video();
-        self.stop_drain();
+        self.video.stop();
+        self.drain.stop();
         #[cfg(target_os = "android")]
-        self.stop_audio();
+        self.audio.stop();
         #[cfg(target_os = "android")]
-        self.stop_mic();
+        self.mic.stop();
         #[cfg(target_os = "android")]
         self.stop_pad_audio();
     }

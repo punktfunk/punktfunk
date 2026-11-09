@@ -765,15 +765,15 @@ fn connect(req: ConnectRequest, prompts_unlock: bool, unlock: Option<ProfileUnlo
             let handle = SessionHandle {
                 stats: Arc::new(crate::stats::VideoStats::new(client.hud_shared())),
                 client,
-                video: Mutex::new(None),
+                video: Default::default(),
                 video_started: std::sync::atomic::AtomicBool::new(false),
-                drain: Mutex::new(None),
+                drain: Default::default(),
                 #[cfg(target_os = "android")]
-                audio: Mutex::new(None),
+                audio: Default::default(),
                 #[cfg(target_os = "android")]
-                mic: Mutex::new(None),
+                mic: Default::default(),
                 #[cfg(target_os = "android")]
-                pad_audio: Mutex::new(None),
+                pad_audio: Default::default(),
                 // A fresh session is never muted (mute is per-session UI state, not a setting).
                 mic_muted: Arc::new(std::sync::atomic::AtomicBool::new(false)),
                 access_seq: std::sync::atomic::AtomicU32::new(0),

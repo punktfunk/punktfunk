@@ -65,6 +65,7 @@ impl<T> Default for PlaneSlot<T> {
 
 impl<T> PlaneSlot<T> {
     /// Starts a plane if none runs, `open` running under the lock, and reads the plane that runs.
+    #[cfg_attr(not(target_os = "android"), allow(dead_code))]
     pub(crate) fn start<R>(
         &self,
         open: impl FnOnce() -> Option<T>,
