@@ -31,7 +31,7 @@ pub(crate) use async_loop::start_hint;
 #[cfg(target_pointer_width = "64")]
 pub(crate) use async_loop::DecodeEvent;
 #[cfg(target_pointer_width = "64")]
-pub(crate) use latency::now_realtime_ns;
+pub(crate) use latency::{note_received_frame, now_realtime_ns};
 #[cfg(target_pointer_width = "64")]
 pub(crate) use setup::boost_thread_priority;
 #[cfg(target_pointer_width = "64")]

@@ -83,7 +83,7 @@ pub(super) fn p50_max_ms(mut v: Vec<u64>) -> (f64, f64) {
 /// The `received` point for one arriving AU: the core's reassembly stamp, which keys the
 /// in-flight map the decode stage pairs against. The connector already noted receipt for the
 /// overlay; draining the timings here matches each 0xCF to its frame.
-pub(super) fn note_received_frame(client: &NativeClient, frame: &Frame) -> i128 {
+pub(crate) fn note_received_frame(client: &NativeClient, frame: &Frame) -> i128 {
     // Reassembly completion, NOT the pull instant: stamping at the pull would fold the hand-off
     // queue wait into the network figure. 0 = older core.
     let received_ns = if frame.received_ns > 0 {
