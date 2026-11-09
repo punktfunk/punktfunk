@@ -25,18 +25,24 @@ static LAST_SAID: Mutex<String> = Mutex::new(String::new());
 /// The dial `nativeConnect` is blocked on was parked by the host for its operator.
 static DIAL_PENDING: AtomicBool = AtomicBool::new(false);
 
-/// Stable token for a failed pair/connect cause, matched by Kotlin (`ConnectErrors.kt`):
-/// a typed host rejection yields its `RejectReason::as_str()` token ("not-armed", "denied",
-/// "approval-timeout", …); transport-level causes map to "crypto" / "timeout" / "io" / "error".
-fn note_error(e: &punktfunk_core::error::PunktfunkError) {
+/// The stable token and the host's sentence for a failed pair or connect, matched by Kotlin
+/// (`ConnectErrors.kt`). A typed host rejection gives its `RejectReason::as_str()` token
+/// ("not-armed", "denied", "approval-timeout", …) and what the host said; transport causes give
+/// "crypto", "timeout" or "io", anything else "error", each with no sentence.
+fn error_token(e: &punktfunk_core::error::PunktfunkError) -> (&str, &str) {
     use punktfunk_core::error::PunktfunkError as E;
-    let (token, said) = match e {
+    match e {
         E::Rejected(r, said) => (r.as_str(), said.as_str()),
         E::Crypto => ("crypto", ""),
         E::Timeout => ("timeout", ""),
         E::Io(_) => ("io", ""),
         _ => ("error", ""),
-    };
+    }
+}
+
+/// Keep `e`'s token and sentence for `nativeTakeLastError` and `nativeTakeLastSaid`.
+fn note_error(e: &punktfunk_core::error::PunktfunkError) {
+    let (token, said) = error_token(e);
     *lock_recover(&LAST_ERROR) = token.to_string();
     *lock_recover(&LAST_SAID) = said.to_string();
 }
@@ -276,6 +282,66 @@ fn video_caps(hdr: bool, ten_bit_sdr: bool, multi_slice: bool) -> u8 {
         caps |= VIDEO_CAP_MULTI_SLICE;
     }
     caps
+}
+
+/// The `Hello`'s `CLIENT_CAP_*` bits for the session-level asks.
+///
+/// `pad_audio_ok` is the session negotiation, separate from the per-pad arrival bits: without it
+/// the host never emits the pad-audio plane. It follows the setting, so a user with pad audio
+/// off does not make the host provision endpoints.
+///
+/// `keep_host_audio` has the host tap its default playback device rather than park the desktop
+/// mix on a silent endpoint. It is a request with no host echo; an older host ignores it.
+///
+/// `client_cursor` is Desktop mouse mode with a mouse: Kotlin's `HostCursor` wears the host's
+/// pointer and says when the host composites it instead.
+fn client_caps(pad_audio_ok: bool, keep_host_audio: bool, client_cursor: bool) -> u8 {
+    use punktfunk_core::quic::{
+        CLIENT_CAP_CURSOR, CLIENT_CAP_KEEP_HOST_AUDIO, CLIENT_CAP_PAD_AUDIO,
+    };
+    let mut caps = 0;
+    if pad_audio_ok {
+        caps |= CLIENT_CAP_PAD_AUDIO;
+    }
+    if keep_host_audio {
+        caps |= CLIENT_CAP_KEEP_HOST_AUDIO;
+    }
+    if client_cursor {
+        caps |= CLIENT_CAP_CURSOR;
+    }
+    caps
+}
+
+/// The `CODEC_*` bits the `Hello` advertises: Kotlin's mask cut to the known codecs, and
+/// H.264|HEVC when none is left, so a bogus mask cannot advertise nothing and kill the
+/// handshake. PyroWave is the one bit naming no MediaCodec; it decodes as Vulkan compute.
+fn advertised_codecs(bits: u8) -> u8 {
+    use punktfunk_core::quic::{CODEC_AV1, CODEC_H264, CODEC_HEVC, CODEC_PYROWAVE};
+    let known = bits & (CODEC_H264 | CODEC_HEVC | CODEC_AV1 | CODEC_PYROWAVE);
+    if known == 0 {
+        CODEC_H264 | CODEC_HEVC
+    } else {
+        known
+    }
+}
+
+/// `s` unless it is empty: an empty launch id or profile asks for nothing, as `null` does.
+fn non_empty(s: Option<String>) -> Option<String> {
+    s.filter(|s| !s.is_empty())
+}
+
+/// The label the host files this device under: trimmed, and none when blank.
+fn device_label(name: Option<String>) -> Option<String> {
+    non_empty(name.map(|s| s.trim().to_string()))
+}
+
+/// The persistent identity as `(cert, key)` PEMs; anonymous unless both are present.
+fn identity_of(cert: String, key: String) -> Option<(String, String)> {
+    if cert.is_empty() || key.is_empty() {
+        None
+    } else {
+        Some((cert, key))
+    }
 }
 
 #[cfg(test)]
@@ -602,16 +668,10 @@ fn connect(req: ConnectRequest, prompts_unlock: bool, unlock: Option<ProfileUnlo
     let preset = preset_id.as_deref().and_then(|id| {
         punktfunk_core::quic::SessionPreset::new(id, preset_name.as_deref().unwrap_or(""))
     });
-    let launch = launch.filter(|s| !s.is_empty());
-    let profile = profile.filter(|s| !s.is_empty());
-    let device_name = device_name
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty());
-    let identity: Option<(String, String)> = if cert.is_empty() || key.is_empty() {
-        None
-    } else {
-        Some((cert, key))
-    };
+    let launch = non_empty(launch);
+    let profile = non_empty(profile);
+    let device_name = device_label(device_name);
+    let identity = identity_of(cert, key);
     // Slice-progressive parts, by decoder truth (Kotlin's FEATURE_PartialFrame probe) — with a
     // sysprop escape hatch for the on-glass science question the probe can't answer: does the
     // decoder ACTUALLY choke on BUFFER_FLAG_PARTIAL_FRAME input, or does it merely not declare
@@ -679,53 +739,14 @@ fn connect(req: ConnectRequest, prompts_unlock: bool, unlock: Option<ProfileUnlo
         // Legacy coupling: libopus here decodes either, and nothing on Android needs the other.
         audio_layout: punktfunk_core::audio::AudioLayout::Legacy,
         video_fit: punktfunk_core::video_fit::VideoFit::from_name(&video_fit),
-        // Codecs this device decodes (`VideoDecoders.decodableCodecBits`): H.264 + HEVC always,
-        // AV1 on a real `video/av01` decoder, PyroWave on a GPU that passes the probe — the one
-        // bit here naming no MediaCodec, since it decodes as Vulkan compute in `crate::pyro`.
-        // Masked to the known bits, falling back to H.264|HEVC on 0 so a bogus value cannot
-        // advertise nothing and kill the handshake. The host echoes its pick in `connector.codec`.
-        video_codecs: {
-            let bits = video_codecs
-                & (punktfunk_core::quic::CODEC_H264
-                    | punktfunk_core::quic::CODEC_HEVC
-                    | punktfunk_core::quic::CODEC_AV1
-                    | punktfunk_core::quic::CODEC_PYROWAVE);
-            if bits == 0 {
-                punktfunk_core::quic::CODEC_H264 | punktfunk_core::quic::CODEC_HEVC
-            } else {
-                bits
-            }
-        },
+        // Codecs this device decodes (`VideoDecoders.decodableCodecBits`). The host echoes its
+        // pick in `connector.codec`.
+        video_codecs: advertised_codecs(video_codecs),
         preferred_codec,
         // No display-volume forwarding from Android yet (the panel tone-maps PQ itself via the
         // Surface dataspace + static metadata) — the host keeps its virtual-display EDID defaults.
         display_hdr: None,
-        // CLIENT_CAP_PAD_AUDIO is the SESSION-level negotiation, separate from the per-pad
-        // arrival bits: without it the host never sets HOST_CAP_PAD_AUDIO and never emits 0xD1,
-        // so declaring a pad's render caps later would have nothing to gate. Gated on the
-        // settings so a user with pad audio off does not make the host provision endpoints.
-        client_caps: if pad_audio_ok {
-                punktfunk_core::quic::CLIENT_CAP_PAD_AUDIO
-            } else {
-                0
-            }
-            // The user's "Keep host audio playing" setting: the host taps whatever its default
-            // playback device already is instead of parking the desktop mix on a silent
-            // endpoint, so the speakers on the host PC stay live. REQUEST-only — there is no
-            // host-cap echo — so an older host ignores the bit and re-routes exactly as it
-            // always did ("the host went quiet"), never a broken session.
-            | if keep_host_audio {
-                punktfunk_core::quic::CLIENT_CAP_KEEP_HOST_AUDIO
-            } else {
-                0
-            }
-            // Desktop mouse mode with a mouse: Kotlin's HostCursor wears the host's pointer and
-            // tells the host when to composite it instead.
-            | if client_cursor {
-                punktfunk_core::quic::CLIENT_CAP_CURSOR
-            } else {
-                0
-            },
+        client_caps: client_caps(pad_audio_ok, keep_host_audio, client_cursor),
         // Slice-progressive delivery, by decoder truth (Kotlin probes FEATURE_PartialFrame on
         // every decoder this device would use; `debug.punktfunk.force_parts` overrides for the
         // on-glass experiment): AU prefixes then arrive as `Frame::part` pieces and the decode
