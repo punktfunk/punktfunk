@@ -217,11 +217,16 @@ pub(crate) fn unpack_surface_size(packed: u64) -> Option<(i32, i32)> {
 /// the full frame.
 pub(crate) fn pack_src_crop(left: f32, top: f32, right: f32, bottom: f32) -> u64 {
     let ok = |v: f32| (0.0..=1.0).contains(&v);
-    if !(ok(left) && ok(top) && ok(right) && ok(bottom)) || right <= left || bottom <= top {
+    if !(ok(left) && ok(top) && ok(right) && ok(bottom)) {
         return 0;
     }
     let q = |v: f32| u64::from((v * 65535.0).round() as u16);
-    (q(left) << 48) | (q(top) << 32) | (q(right) << 16) | q(bottom)
+    let (l, t, r, b) = (q(left), q(top), q(right), q(bottom));
+    // Judged as packed: a sliver narrower than one step would unpack as an empty rect.
+    if r <= l || b <= t {
+        return 0;
+    }
+    (l << 48) | (t << 32) | (r << 16) | b
 }
 
 /// The inverse of [`pack_src_crop`]: `[left, top, right, bottom]`, the full frame for `0`.
@@ -377,6 +382,7 @@ mod tests {
         assert!((t - 0.102).abs() < 1e-4 && (b - 0.898).abs() < 1e-4);
         assert_eq!(unpack_src_crop(0), [0.0, 0.0, 1.0, 1.0]);
         assert_eq!(pack_src_crop(0.5, 0.0, 0.5, 1.0), 0);
+        assert_eq!(pack_src_crop(0.5, 0.0, 0.500_001, 1.0), 0);
         assert_eq!(pack_src_crop(-0.1, 0.0, 1.0, 1.0), 0);
         assert_eq!(pack_src_crop(0.0, 0.0, 1.0, f32::NAN), 0);
     }
