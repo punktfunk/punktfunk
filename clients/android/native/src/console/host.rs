@@ -25,9 +25,7 @@ use pf_console_ui::{
     Viewport,
 };
 use punktfunk_core::config::GamepadPref;
-use std::collections::VecDeque;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Condvar, Mutex};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 /// What Kotlin asks the render thread to do.
@@ -97,112 +95,7 @@ impl HostEvent {
     }
 }
 
-pub(super) struct Shared {
-    inbox: Mutex<VecDeque<Cmd>>,
-    inbox_cv: Condvar,
-    events: Mutex<VecDeque<HostEvent>>,
-    events_cv: Condvar,
-    /// Bumped by the render thread each time it has torn a surface down; `SurfaceDestroyed`
-    /// waits for the bump.
-    surface_gen: Mutex<u64>,
-    surface_cv: Condvar,
-    /// The shell's launch hold, as of the last frame. Written before the frame's events leave,
-    /// so a `Launch` the shell raised is never read as unheld.
-    holds_launch: AtomicBool,
-    /// The render thread runs. Cleared as it ends: nothing then tears a surface down.
-    alive: AtomicBool,
-}
-
-impl Shared {
-    fn new() -> Shared {
-        Shared {
-            inbox: Mutex::new(VecDeque::new()),
-            inbox_cv: Condvar::new(),
-            events: Mutex::new(VecDeque::new()),
-            events_cv: Condvar::new(),
-            surface_gen: Mutex::new(0),
-            surface_cv: Condvar::new(),
-            holds_launch: AtomicBool::new(false),
-            alive: AtomicBool::new(true),
-        }
-    }
-
-    /// Whether the shell's launch hold is up: its session waits for `ShowStream`.
-    pub(super) fn holds_launch(&self) -> bool {
-        self.holds_launch.load(Ordering::Acquire)
-    }
-
-    pub(super) fn send(&self, cmd: Cmd) {
-        self.inbox
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .push_back(cmd);
-        self.inbox_cv.notify_one();
-    }
-
-    fn emit(&self, ev: HostEvent) {
-        self.events
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .push_back(ev);
-        self.events_cv.notify_one();
-    }
-
-    /// Kotlin's poll: the next event, waiting up to `timeout` for one.
-    pub(super) fn next_event(&self, timeout: Duration) -> Option<HostEvent> {
-        let mut q = self
-            .events
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if q.is_empty() {
-            let (guard, _) = self
-                .events_cv
-                .wait_timeout(q, timeout)
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            q = guard;
-        }
-        q.pop_front()
-    }
-
-    /// Ask for the surface to go and wait (bounded) until it has. A render thread that has
-    /// ended took its surface with it: nothing to wait for.
-    pub(super) fn destroy_surface_blocking(&self) {
-        if !self.alive.load(Ordering::Acquire) {
-            return;
-        }
-        let before = *self
-            .surface_gen
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        self.send(Cmd::SurfaceDestroyed);
-        let g = self
-            .surface_gen
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        // Bounded: a render thread that died mid-frame must not hang the UI thread forever —
-        // by then the EGL surface is gone with it anyway.
-        let _ = self
-            .surface_cv
-            .wait_timeout_while(g, Duration::from_secs(2), |g| {
-                *g == before && self.alive.load(Ordering::Acquire)
-            })
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-    }
-
-    /// The render thread is ending: release a destroy that is waiting on it.
-    fn retire(&self) {
-        self.alive.store(false, Ordering::Release);
-        self.ack_surface_gone();
-    }
-
-    fn ack_surface_gone(&self) {
-        *self
-            .surface_gen
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) += 1;
-        self.surface_cv.notify_all();
-    }
-}
+pub(super) type Shared = crate::console_lifecycle::Shared<Cmd, HostEvent>;
 
 /// The host as the JNI layer holds it.
 pub(super) struct ConsoleHost {
@@ -297,21 +190,8 @@ fn render_loop(mut console: Console, shared: Arc<Shared>, store: Arc<SnapshotSto
     let mut menu_out: Vec<MenuEvent> = Vec::new();
 
     loop {
-        // Take everything queued. With no surface up, block until something arrives.
-        let cmds: Vec<Cmd> = {
-            let mut q = shared
-                .inbox
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            if glass.surface.is_none() && q.is_empty() {
-                let (guard, _) = shared
-                    .inbox_cv
-                    .wait_timeout(q, Duration::from_millis(500))
-                    .unwrap_or_else(std::sync::PoisonError::into_inner);
-                q = guard;
-            }
-            q.drain(..).collect()
-        };
+        // With no surface up, wait for something to arrive.
+        let cmds = shared.take(glass.surface.is_none());
         let mut poll_now = false;
         for cmd in cmds {
             if !ui.apply(cmd, &mut console, &mut glass, &shared, &mut poll_now)? {
@@ -340,9 +220,7 @@ fn render_loop(mut console: Console, shared: Arc<Shared>, store: Arc<SnapshotSto
         }
         glass.draw(&mut console, &ui)?;
         glass.report(SurfaceEvent::Tick)?;
-        shared
-            .holds_launch
-            .store(console.holds_launch(), Ordering::Release);
+        shared.set_holds_launch(console.holds_launch());
         published.publish(&mut console, &store, |e| shared.emit(HostEvent::Console(e)));
     }
 }

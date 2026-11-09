@@ -169,7 +169,7 @@ pub extern "system" fn Java_io_unom_punktfunk_kit_NativeBridge_nativeConsoleSurf
 ) {
     jni_guard((), || {
         if let Some(h) = CONSOLES.get(handle) {
-            h.shared.destroy_surface_blocking();
+            h.shared.destroy_surface_blocking(Cmd::SurfaceDestroyed);
         }
     })
 }
