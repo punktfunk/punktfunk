@@ -722,7 +722,7 @@ mod plat {
         capture::open_driver_encoder(
             &plan,
             capturer,
-            size,
+            punktfunk_core::video_fit::Reframe::full(size),
             opts.fps,
             opts.bitrate_bps,
             bit_depth,

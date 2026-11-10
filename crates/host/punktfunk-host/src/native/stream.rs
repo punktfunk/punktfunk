@@ -74,7 +74,7 @@ pub(super) fn synthetic_stream(
         if stop.load(Ordering::SeqCst) {
             break;
         }
-        let asked_mode = ends.reconfig.try_iter().last();
+        let asked_mode = ends.reconfig.try_iter().last().map(|(mode, _)| mode);
         let asked_codec = ends.format_rx.try_iter().last();
         if asked_mode.is_some() || asked_codec.is_some() {
             epoch = epoch.wrapping_add(1);
@@ -85,6 +85,7 @@ pub(super) fn synthetic_stream(
             }
             let _ = ends.reconfig_result_tx.send(super::wiring::Delivered {
                 mode,
+                encoded: (mode.width, mode.height),
                 format,
                 epoch,
                 corrects: false,
@@ -610,7 +611,8 @@ pub(super) struct SessionContext {
     pub(super) join_live: bool,
     /// The handshake's screen is a host monitor ([`SessionPlan::mirrored`](crate::session_plan::SessionPlan::mirrored)).
     pub(super) mirrored: bool,
-    /// A joiner's view and fit ([`SessionPlan::reframe_to`](crate::session_plan::SessionPlan::reframe_to)).
+    /// The view and fit the encoder frames for: a joiner's, or this client's own view
+    /// ([`SessionPlan::reframe_to`](crate::session_plan::SessionPlan::reframe_to)).
     pub(super) reframe_to: Option<(punktfunk_core::video_fit::VideoFit, (u32, u32))>,
     /// The encoder's framing, published for the input thread.
     pub(super) frame_map: super::input::FrameMap,

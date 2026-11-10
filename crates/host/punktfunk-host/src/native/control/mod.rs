@@ -218,6 +218,8 @@ pub(super) struct Task {
     /// control stream lands in the same order-preserving line as the pointer.
     pub(super) input_tx: std::sync::mpsc::SyncSender<super::input::ClientInput>,
     pub(super) initial_mode: punktfunk_core::Mode,
+    /// `initial_mode` at the size its first epoch is encoded at: PyroWave's first bounds.
+    pub(super) initial_picture: punktfunk_core::Mode,
     /// Epoch 0's `StreamConfig` with this host's link facts, sent as the task starts.
     pub(super) stream_config: v2msg::StreamConfig,
     /// The client moves its mode on configs (`FEATURE_STREAM_CONFIG`). Otherwise a switch is
@@ -512,7 +514,7 @@ impl ControlTask {
         let pyrowave_pin = rate::PyroWavePin {
             kbps: task.session_bitrate_kbps,
             floor: if task.codec == crate::encode::Codec::PyroWave {
-                task.pyrowave_bounds(&task.initial_mode)
+                task.pyrowave_bounds(&task.initial_picture)
                     .0
                     .min(task.session_bitrate_kbps)
             } else {
@@ -922,14 +924,20 @@ impl ControlTask {
     }
 
     /// What an epoch delivers. Keeps `active` truthful for later refusal echoes, an
-    /// Automatic PyroWave session's bounds on the mode it encodes, and the codec a mode is
+    /// Automatic PyroWave session's bounds on the size it encodes, and the codec a mode is
     /// checked for; then tells the client what it does not hold.
     async fn on_delivered(&mut self, delivered: Option<super::wiring::Delivered>) -> Step {
         let d = delivered.ok_or(Ended)?;
         self.active = d.mode;
         self.task.codec = crate::encode::codec_from_wire(d.format.codec);
         if self.pyrowave_pin.automatic {
-            (self.pyrowave_pin.floor, self.pyrowave_pin.kbps) = self.task.pyrowave_bounds(&d.mode);
+            let (width, height) = d.encoded;
+            let encoded = punktfunk_core::Mode {
+                width,
+                height,
+                ..d.mode
+            };
+            (self.pyrowave_pin.floor, self.pyrowave_pin.kbps) = self.task.pyrowave_bounds(&encoded);
         }
         match tell(&mut self.held_config, &d) {
             Some(Tell::Config(cfg)) => self.send(&cfg).await,
@@ -1210,7 +1218,7 @@ mod tests {
     }
 
     /// A client that takes configs hears each new epoch once; one that does not hears only
-    /// the corrections.
+    /// the corrections. Both name the display's mode, never the smaller size it is encoded at.
     #[test]
     fn a_delivered_mode_is_a_config_or_a_correction() {
         use super::super::wiring::Delivered;
@@ -1219,8 +1227,9 @@ mod tests {
             height: 720,
             refresh_hz: 60,
         };
-        let d = |epoch, width, corrects| Delivered {
+        let d = |epoch, width: u32, corrects| Delivered {
             mode: mode(width),
+            encoded: (width / 2, 360),
             format: Default::default(),
             epoch,
             corrects,
@@ -1257,6 +1266,7 @@ mod tests {
         use punktfunk_core::quic::{VideoFormat, CODEC_H264, CODEC_HEVC};
         let d = |codec| Delivered {
             mode: Default::default(),
+            encoded: (0, 0),
             format: VideoFormat {
                 codec,
                 ..VideoFormat::default()

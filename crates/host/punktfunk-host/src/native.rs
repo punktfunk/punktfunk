@@ -1748,6 +1748,7 @@ fn spawn_control(
         clock: conn.v2_session().clock.clone(),
         input_tx,
         initial_mode: hello.mode,
+        initial_picture: n.picture(),
         stream_config: v2msg::StreamConfig {
             stream: 0,
             epoch: 0,
@@ -2015,6 +2016,7 @@ fn display_half(
         pyrowave_bpp,
         slices,
         joined,
+        view,
         features,
         mirrored,
         ..
@@ -2027,12 +2029,7 @@ fn display_half(
         gamescope_route.as_ref(),
         &knobs,
     );
-    let reframe_to = joined.as_ref().map(|(_, view)| {
-        (
-            punktfunk_core::video_fit::VideoFit::from_wire(hello.video_fit),
-            *view,
-        )
-    });
+    let reframe_to = handshake::reframe_to(hello.video_fit, handshake::joined_view(&joined), view);
     // Read back from Welcome, not recomputed (would re-probe and could drift).
     let cursor_forward = welcome.host_caps & punktfunk_core::quic::HOST_CAP_CURSOR != 0;
     // Mid-stream resize counterpart; latest accepted Reconfigure wins.

@@ -128,8 +128,9 @@ pub struct SessionPlan {
     /// wedge on multi-slice frames). Applied to every encoder this plan opens so slicing cannot
     /// change shape across a rebuild.
     pub slices: u32,
-    /// A joiner's own view and fit: the encoder frames the owner's picture for it. `None`
-    /// streams the source as captured, or a mirrored head fitted to the negotiated size.
+    /// The view and fit the encoder frames the picture for: a joiner's own, or the view a client
+    /// shows its larger mode at. `None` streams the source as captured, or a mirrored head
+    /// fitted to the negotiated size. Says nothing about whose display it is.
     pub reframe_to: Option<(punktfunk_core::video_fit::VideoFit, (u32, u32))>,
     /// The session streams a host monitor, not a display of its own: the device's screen as the
     /// handshake resolved it. Set only through [`Self::mirroring`], which picks the capture.
@@ -268,6 +269,11 @@ impl SessionPlan {
         self
     }
 
+    /// `mode` at the size this plan encodes it ([`picture`]).
+    pub fn picture(&self, mode: punktfunk_core::Mode) -> punktfunk_core::Mode {
+        picture(mode, self.reframe_to.map(|(_, view)| view))
+    }
+
     /// The range this plan encodes and advertises at the live `hdr` and `bit_depth` ([`full_range`]).
     pub fn full_range(&self, hdr: bool, bit_depth: u8) -> bool {
         full_range(
@@ -351,6 +357,20 @@ impl SessionPlan {
             // Capture's pods and converts take the plan's range at its own colour.
             full_range: self.full_range(self.hdr, self.bit_depth),
         }
+    }
+}
+
+/// `mode` at the size the encoder means to take it to: `view`, else the mode's own. Every
+/// bitrate that depends on pixels is priced here.
+pub(crate) fn picture(
+    mode: punktfunk_core::Mode,
+    view: Option<(u32, u32)>,
+) -> punktfunk_core::Mode {
+    let (width, height) = view.unwrap_or((mode.width, mode.height));
+    punktfunk_core::Mode {
+        width,
+        height,
+        ..mode
     }
 }
 
@@ -544,32 +564,33 @@ impl SessionPlan {
     }
 }
 
-/// Open the encoder for `frame` through `open(width, height)` and return it with the framing
-/// it encodes. A joiner's `reframe_to` frames the owner's picture for its view; a `mirrored`
-/// head larger than the client's `negotiated` picture fits inside it. Either crops and scales
-/// on ingest; a backend that cannot is reopened at the source's own size.
+/// Open the encoder for a `captured` picture through `open(framing)`, which opens at
+/// `framing.out`, and return it with the framing it encodes. `reframe_to` frames the picture
+/// for its view; a `mirrored` head larger than the client's `negotiated` picture fits inside
+/// it. Either crops and scales on ingest; a backend whose caps cannot is reopened unframed.
 pub(crate) fn open_encoder_fitted(
-    frame: &crate::capture::CapturedFrame,
+    captured: (u32, u32),
     negotiated: (u32, u32),
     reframe_to: Option<(punktfunk_core::video_fit::VideoFit, (u32, u32))>,
     mirrored: bool,
-    mut open: impl FnMut(u32, u32) -> anyhow::Result<Box<dyn crate::encode::Encoder>>,
+    mut open: impl FnMut(
+        punktfunk_core::video_fit::Reframe,
+    ) -> anyhow::Result<Box<dyn crate::encode::Encoder>>,
 ) -> anyhow::Result<(
     Box<dyn crate::encode::Encoder>,
     punktfunk_core::video_fit::Reframe,
 )> {
     use punktfunk_core::video_fit::{Reframe, VideoFit};
-    let captured = (frame.width, frame.height);
     let full = Reframe::full(captured);
     let Some((fit, view)) = reframe_to.or_else(|| mirrored.then_some((VideoFit::Fit, negotiated)))
     else {
-        return Ok((open(captured.0, captured.1)?, full));
+        return Ok((open(full)?, full));
     };
     let framed = Reframe::plan(fit, captured, view);
     if framed.is_full() {
-        return Ok((open(captured.0, captured.1)?, full));
+        return Ok((open(full)?, full));
     }
-    let mut enc = open(framed.out.0, framed.out.1)?;
+    let mut enc = open(framed)?;
     let caps = enc.caps();
     let scaled = framed.out != (framed.crop[2], framed.crop[3]);
     let armed = if (scaled && !caps.downscales_input) || (framed.is_cropped() && !caps.crops_input)
@@ -587,8 +608,9 @@ pub(crate) fn open_encoder_fitted(
             ?captured,
             crop = ?framed.crop,
             wanted = ?framed.out,
+            ?view,
             error = %format!("{e:#}"),
-            "this encode backend cannot frame the picture for this client — encoding the source at its own size"
+            "picture not framed on ingest — encoding the captured size for the client to scale"
         );
     } else {
         tracing::info!(
@@ -602,7 +624,7 @@ pub(crate) fn open_encoder_fitted(
         return Ok((enc, framed));
     }
     drop(enc);
-    Ok((open(captured.0, captured.1)?, full))
+    Ok((open(full)?, full))
 }
 
 #[cfg(test)]
@@ -631,6 +653,90 @@ mod tests {
         assert_eq!(live_depth(true, false, 10), (false, 8));
         assert_eq!(live_depth(false, false, 10), (false, 10));
         assert_eq!(live_depth(false, true, 8), (false, 8));
+    }
+
+    /// An encoder that frames on ingest when `0` says so, and records the crop it was armed with.
+    struct Frames(bool, std::sync::Arc<std::sync::Mutex<Option<[u32; 4]>>>);
+
+    impl crate::encode::Encoder for Frames {
+        fn submit(&mut self, _frame: &crate::capture::CapturedFrame) -> anyhow::Result<()> {
+            Ok(())
+        }
+        fn poll(&mut self) -> anyhow::Result<Option<crate::encode::EncodedFrame>> {
+            Ok(None)
+        }
+        fn flush(&mut self) -> anyhow::Result<()> {
+            Ok(())
+        }
+        fn caps(&self) -> crate::encode::EncoderCaps {
+            crate::encode::EncoderCaps {
+                crops_input: self.0,
+                downscales_input: self.0,
+                ..Default::default()
+            }
+        }
+        fn set_input_crop(&mut self, rect: [u32; 4]) -> anyhow::Result<()> {
+            *self.1.lock().unwrap() = Some(rect);
+            Ok(())
+        }
+    }
+
+    /// A view smaller than the capture opens the encoder at the view and arms the whole source
+    /// as the crop; a backend without the caps is reopened at the captured size.
+    #[test]
+    fn a_view_frames_on_ingest_or_falls_back_to_the_capture() {
+        use punktfunk_core::video_fit::VideoFit;
+        let view = Some((VideoFit::Fit, (1366, 768)));
+        for capable in [true, false] {
+            let (mut opens, crop) = (Vec::new(), std::sync::Arc::default());
+            let (_, framed) = open_encoder_fitted((2048, 1152), (2048, 1152), view, false, |r| {
+                assert_eq!(r.source, (2048, 1152), "the opener sees the whole framing");
+                opens.push(r.out);
+                Ok(Box::new(Frames(capable, std::sync::Arc::clone(&crop))))
+            })
+            .expect("an encoder");
+            if capable {
+                assert_eq!(opens, [(1366, 768)]);
+                assert_eq!(framed.out, (1366, 768));
+                assert_eq!(*crop.lock().unwrap(), Some([0, 0, 2048, 1152]));
+            } else {
+                assert_eq!(opens, [(1366, 768), (2048, 1152)]);
+                assert!(framed.is_full() && framed.out == (2048, 1152));
+            }
+        }
+        // No view and no mirror: the capture as it is, opened once.
+        let mut opens = Vec::new();
+        let (_, framed) = open_encoder_fitted((2048, 1152), (1366, 768), None, false, |r| {
+            opens.push(r.out);
+            Ok(Box::new(Frames(true, Default::default())))
+        })
+        .expect("an encoder");
+        assert_eq!((opens, framed.out), (vec![(2048, 1152)], (2048, 1152)));
+    }
+
+    /// A plan prices pixels at its view; without one, at the mode.
+    #[test]
+    fn a_plan_prices_the_picture_it_encodes() {
+        use punktfunk_core::video_fit::VideoFit;
+        let mode = punktfunk_core::Mode {
+            width: 2048,
+            height: 1152,
+            refresh_hz: 120,
+        };
+        let mut plan = SessionPlan::resolve(
+            &crate::encode::resolve(),
+            8,
+            false,
+            ChromaFormat::Yuv420,
+            Codec::H264,
+            false,
+            false,
+            1,
+        );
+        assert_eq!(plan.picture(mode), mode);
+        plan.reframe_to = Some((VideoFit::Fit, (1366, 768)));
+        let p = plan.picture(mode);
+        assert_eq!((p.width, p.height, p.refresh_hz), (1366, 768, 120));
     }
 
     /// The plan keeps the client's count: a GameStream ask above the native default survives.

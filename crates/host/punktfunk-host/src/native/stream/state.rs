@@ -521,9 +521,16 @@ impl StreamState {
         self.tell_delivered(actual, actual != asked);
     }
 
-    /// Tell the control task what the current epoch delivers, and `/status` what it encodes.
+    /// Tell the control task what the current epoch delivers and the size its encoder takes it
+    /// to, and `/status` what it encodes.
     pub(super) fn tell_delivered(&self, mode: punktfunk_core::Mode, corrects: bool) {
         let format = format_of(&self.plan, &*self.live.capturer, self.bit_depth);
+        let encoded = self
+            .shared
+            .frame_map
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .out;
         crate::session_status::set_format(
             self.live_session.id,
             self.plan.codec,
@@ -536,6 +543,7 @@ impl StreamState {
             .reconfig_result_tx
             .send(crate::native::wiring::Delivered {
                 mode,
+                encoded,
                 format,
                 epoch: self.live.epoch,
                 corrects,
@@ -549,10 +557,10 @@ impl StreamState {
     /// phase's result is a local until the struct is assembled, so one that fails drops what the
     /// phases before it started: the lease, the pipeline, the display, the ramp.
     pub(super) fn new(ctx: SessionContext, prepared: Option<PreparedDisplay>) -> Result<Self> {
-        let plan = session_plan(&ctx);
+        let mut plan = session_plan(&ctx);
         let (cursor, vd_params) = display_request(&ctx, &plan);
         let (streamed_wire, slice_wire) = wire_request(&ctx);
-        let (mode, bitrate_kbps, adopted) = settle_mode(&ctx, &plan, prepared.is_some());
+        let (mode, bitrate_kbps, adopted) = settle_mode(&ctx, &mut plan, prepared.is_some());
         let mut facts = session_facts(&ctx, &plan, mode, streamed_wire);
         let (shared, fec) = shared_handles(&ctx);
         let c = ctx.common;
@@ -583,7 +591,13 @@ impl StreamState {
             &c.ends.retarget_tx,
         );
         if adopted {
-            tell_adopted(&c.ends.reconfig_result_tx, &live, &plan, c.bit_depth);
+            tell_adopted(
+                &c.ends.reconfig_result_tx,
+                &live,
+                &shared,
+                &plan,
+                c.bit_depth,
+            );
         }
         let (game_shared, game_life) = spawn_launch_and_lease(
             &display,
@@ -939,13 +953,14 @@ fn wire_request(ctx: &SessionContext) -> (bool, bool) {
     )
 }
 
-/// The mode and total wire budget (kbps) bring-up builds at, and whether it adopted a mode the
-/// control task accepted meanwhile. Adopting builds once: two RecordVirtual monitors ~400 ms
-/// apart segfault mutter inside `meta_monitor_manager_rebuild`. A prepared pipeline stays as
-/// built. PyroWave's pin follows an adopted mode.
+/// The mode and total wire budget (kbps) bring-up builds at, and whether it adopted a mode ask
+/// the control task accepted meanwhile; an adopted view moves into `plan`. Adopting builds once:
+/// two RecordVirtual monitors ~400 ms apart segfault mutter inside
+/// `meta_monitor_manager_rebuild`. A prepared pipeline stays as built. PyroWave's pin follows
+/// an adopted ask's picture.
 fn settle_mode(
     ctx: &SessionContext,
-    plan: &crate::session_plan::SessionPlan,
+    plan: &mut crate::session_plan::SessionPlan,
     prepared: bool,
 ) -> (punktfunk_core::Mode, u32, bool) {
     let c = &ctx.common;
@@ -955,18 +970,22 @@ fn settle_mode(
     } else {
         c.ends.reconfig.try_iter().last()
     };
-    let adopted = queued.filter(|m| *m != mode);
-    if let Some(m) = adopted {
+    let view = plan.reframe_to.map(|(_, v)| v);
+    let adopted = queued.filter(|ask| *ask != (mode, view));
+    if let Some((m, v)) = adopted {
         tracing::info!(
             stale = ?mode,
             adopted = ?m,
+            view = ?v,
             "a mode switch was accepted before bring-up finished — building at the new mode \
              instead of building twice"
         );
         mode = m;
+        plan.reframe_to = v.map(|v| (punktfunk_core::video_fit::VideoFit::Fit, v));
         if plan.codec == crate::encode::Codec::PyroWave {
             let running = ctx.bitrate_auto.then_some(bitrate_kbps);
-            bitrate_kbps = pyrowave_mode_kbps(running, &mode, plan, ctx.knobs.pyrowave_max_kbps);
+            let picture = plan.picture(mode);
+            bitrate_kbps = pyrowave_mode_kbps(running, &picture, plan, ctx.knobs.pyrowave_max_kbps);
         }
     }
     tracing::info!(
@@ -1196,18 +1215,24 @@ fn first_live(
     }
 }
 
-/// An adopted mode is not the one the control task's first config names: tell it what epoch 0
-/// delivers. It sends only what the client does not hold, and corrects a client acked with
-/// another mode.
+/// An adopted ask is not the one the control task's first config names: tell it what epoch 0
+/// delivers and encodes. It sends only what the client does not hold, and corrects a client
+/// acked with another mode.
 fn tell_adopted(
     tell: &tokio::sync::mpsc::UnboundedSender<crate::native::wiring::Delivered>,
     live: &Live,
+    shared: &Shared,
     plan: &crate::session_plan::SessionPlan,
     bit_depth: u8,
 ) {
     let actual = delivered_mode(live.frame.width, live.frame.height, live.interval);
     let _ = tell.send(crate::native::wiring::Delivered {
         mode: actual,
+        encoded: shared
+            .frame_map
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .out,
         format: format_of(plan, &*live.capturer, bit_depth),
         epoch: 0,
         corrects: actual != live.cur_mode,

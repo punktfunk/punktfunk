@@ -11,7 +11,10 @@ use crate::native::bitrate::EncoderCeiling;
 /// is not what the client was last told, so a client without `StreamConfig` gets a second
 /// `Reconfigured`.
 pub(crate) struct Delivered {
+    /// The display's mode, as captured: what the client asked for, not what is encoded.
     pub(crate) mode: punktfunk_core::Mode,
+    /// The size the encoder takes the picture to: a view, a mirror's fit, or `mode`'s own.
+    pub(crate) encoded: (u32, u32),
     pub(crate) format: punktfunk_core::quic::VideoFormat,
     pub(crate) epoch: u8,
     pub(crate) corrects: bool,
@@ -20,6 +23,9 @@ pub(crate) struct Delivered {
 /// The stream thread's answer to a codec ask: the codec it now encodes, or `None` when the
 /// rebuild failed and the old pipeline streams on.
 pub(crate) type FormatOutcome = Option<crate::encode::Codec>;
+
+/// An accepted mode ask: the display's mode and the view it is encoded at (`None` = the mode).
+pub(crate) type ModeAsk = (punktfunk_core::Mode, Option<(u32, u32)>);
 
 /// What the screens past the first tell the client, on the control stream.
 pub(crate) enum ScreenTell {
@@ -135,7 +141,7 @@ pub(crate) type ArrivalPoke = Arc<std::sync::Mutex<Option<Arc<dyn Fn() + Send + 
 
 /// The control task's halves.
 pub(crate) struct ControlEnds {
-    pub(crate) reconfig_tx: std::sync::mpsc::Sender<punktfunk_core::Mode>,
+    pub(crate) reconfig_tx: std::sync::mpsc::Sender<ModeAsk>,
     /// A codec ask the control task vetted; [`FormatOutcome`] comes back on `format_result_rx`.
     pub(crate) format_tx: std::sync::mpsc::Sender<crate::encode::Codec>,
     pub(crate) format_result_rx: tokio::sync::mpsc::UnboundedReceiver<FormatOutcome>,
@@ -161,7 +167,7 @@ pub(crate) struct ControlEnds {
 
 /// The stream thread's halves.
 pub(crate) struct StreamEnds {
-    pub(crate) reconfig: std::sync::mpsc::Receiver<punktfunk_core::Mode>,
+    pub(crate) reconfig: std::sync::mpsc::Receiver<ModeAsk>,
     pub(crate) format_rx: std::sync::mpsc::Receiver<crate::encode::Codec>,
     pub(crate) format_result_tx: tokio::sync::mpsc::UnboundedSender<FormatOutcome>,
     pub(crate) keyframe: std::sync::mpsc::Receiver<()>,

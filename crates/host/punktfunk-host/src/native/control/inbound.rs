@@ -12,7 +12,7 @@ impl ControlTask {
             self.on_input_edge(ev).await
         } else if let Ok(req) = decode::<Reconfigure>(ty, &body) {
             match req.exclude_codecs {
-                0 => self.on_reconfigure(req.mode).await,
+                0 => self.on_reconfigure(req.mode, req.view).await,
                 exclude => self.on_codec_ask(exclude).await,
             }
         } else if let Ok(id) = decode::<punktfunk_core::quic::PadIdentity>(ty, &body) {
@@ -86,13 +86,19 @@ impl ControlTask {
     }
 
     /// A mode switch, acked at once with the mode the client now holds, then handed to the
-    /// stream thread. Refused when the backend cannot live-reconfigure, the mode cannot land,
-    /// or the last switch was under [`MIN_SWITCH_INTERVAL`] ago.
-    async fn on_reconfigure(&mut self, mode: punktfunk_core::Mode) -> Step {
+    /// stream thread with the view it is encoded at, kept by the handshake's rule. Refused when
+    /// the backend cannot live-reconfigure, the mode cannot land, or the last switch was under
+    /// [`MIN_SWITCH_INTERVAL`] ago. The same mode with another view is a switch too.
+    async fn on_reconfigure(
+        &mut self,
+        mode: punktfunk_core::Mode,
+        view: Option<(u32, u32)>,
+    ) -> Step {
         let now = std::time::Instant::now();
         // Same bound as the handshake: `> 0` alone acked a mode that cannot land.
         let valid = crate::encode::validate_refresh(mode.refresh_hz).is_ok()
             && crate::encode::validate_dimensions(self.task.codec, mode.width, mode.height).is_ok();
+        let view = crate::native::handshake::kept_view(view, &mode, self.task.codec);
         let too_soon = self
             .last_accepted_switch
             .is_some_and(|t| now.duration_since(t) < MIN_SWITCH_INTERVAL);
@@ -115,7 +121,7 @@ impl ControlTask {
         if ok {
             self.active = mode;
             self.last_accepted_switch = Some(now);
-            tracing::info!(?mode, "mode switch accepted");
+            tracing::info!(?mode, ?view, "mode switch accepted");
         }
         let ack = Reconfigured {
             accepted: ok,
@@ -124,7 +130,7 @@ impl ControlTask {
         };
         self.send(&ack).await?;
         if ok {
-            self.task.ends.reconfig_tx.send(mode)?;
+            self.task.ends.reconfig_tx.send((mode, view))?;
         }
         Ok(())
     }
