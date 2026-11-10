@@ -1,7 +1,7 @@
 use super::*;
 use crate::max_forced_split_mode;
 use crate::nvenc_core::{cached_split_verdict, slice_offsets_len, BitstreamLock};
-use crate::test_frames::{
+use crate::test_dmabuf::{
     assert_edge_is_straight, decode_first, edge_frame, LinearDmabuf, ODD_H, ODD_W,
 };
 use pf_frame::{CapturedFrame, FramePayload, PixelFormat};
