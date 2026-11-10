@@ -28,7 +28,7 @@ cbuffer C : register(b0) {
     int2 extent;   // crop size in source texels
     float stepv;   // source texels per output pixel on the filtered axis
     int axis;      // 0 = filter x, 1 = filter y
-    int linear;
+    int scrgb;     // `linear` is an HLSL keyword
     int pad;
 };
 // Footprint cap: a 10x downscale still fits the tap loop.
@@ -70,9 +70,9 @@ float4 main(float4 pos : SV_POSITION) : SV_TARGET {
             mx = max(mx, c);
         }
         acc /= total;
-        if (linear != 0) acc = clamp(acc, mn, mx);
+        if (scrgb != 0) acc = clamp(acc, mn, mx);
     }
-    return float4(linear != 0 ? acc : saturate(acc), 1.0);
+    return float4(scrgb != 0 ? acc : saturate(acc), 1.0);
 }
 ";
 
