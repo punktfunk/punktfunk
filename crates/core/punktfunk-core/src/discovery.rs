@@ -18,21 +18,47 @@ fn prefix_bits(a: Ipv4Addr, b: Ipv4Addr) -> u32 {
     (u32::from(a) ^ u32::from(b)).leading_zeros()
 }
 
+/// The Steam Frame's own address on the network it hosts for its wireless adapter. The PC joins
+/// that network through the adapter; the headset's soft-AP manager fixes the subnet at /24.
+pub const FRAME_ADAPTER_HEADSET: Ipv4Addr = Ipv4Addr::new(10, 35, 78, 1);
+
+/// `ip` is on a Steam Frame adapter network.
+pub fn on_frame_adapter_net(ip: Ipv4Addr) -> bool {
+    ip.octets()[..3] == FRAME_ADAPTER_HEADSET.octets()[..3]
+}
+
+/// This device is a Steam Frame hosting its adapter network.
+pub fn hosts_frame_adapter() -> bool {
+    local_ipv4s().contains(&FRAME_ADAPTER_HEADSET)
+}
+
+/// This machine's addresses on a Steam Frame adapter network: a PC the adapter joined.
+pub fn frame_adapter_ips() -> Vec<Ipv4Addr> {
+    local_ipv4s()
+        .into_iter()
+        .filter(|&ip| on_frame_adapter_net(ip) && ip != FRAME_ADAPTER_HEADSET)
+        .collect()
+}
+
 /// Address to dial, chosen deterministically. Best score wins:
 ///
-/// 1. longest common prefix with any of this machine's unicast addresses
+/// 1. on a Steam Frame, the adapter network: a radio of its own to the PC, which Steam streams
+///    over too;
+/// 2. longest common prefix with any of this machine's unicast addresses
 ///    (on-link beats routed; overlay wins only when we have no LAN match);
-/// 2. the address the host declared (mDNS TXT `addr`);
-/// 3. longest common prefix with our default-route source;
-/// 4. numerically lowest — so a re-announce cannot flap the pick.
+/// 3. the address the host declared (mDNS TXT `addr`);
+/// 4. longest common prefix with our default-route source;
+/// 5. numerically lowest — so a re-announce cannot flap the pick.
 pub fn rank_host_addr(
     candidates: &[Ipv4Addr],
     host_declared: Option<Ipv4Addr>,
     local_ips: &[Ipv4Addr],
     routed_local: Option<Ipv4Addr>,
 ) -> Option<Ipv4Addr> {
+    let frame = local_ips.contains(&FRAME_ADAPTER_HEADSET);
     candidates.iter().copied().max_by_key(|&c| {
         (
+            frame && on_frame_adapter_net(c),
             local_ips
                 .iter()
                 .map(|&l| prefix_bits(c, l))
@@ -264,6 +290,28 @@ mod tests {
             rank_host_addr(&candidates, None, &locals, Some(ip("192.168.1.150"))),
             Some(ip("192.168.1.170")),
             "no declaration: lowest address, never a hash-order roll"
+        );
+    }
+
+    /// A Frame's own adapter network beats a home LAN the headset shares more bits with. A PC
+    /// on that network is not the headset, so it ranks by prefix as before.
+    #[test]
+    fn the_frame_prefers_its_adapter_network() {
+        let candidates = [ip("192.168.0.130"), ip("10.35.78.24")];
+        let frame = [ip("192.168.0.131"), ip("10.35.78.1")];
+        assert_eq!(
+            rank_host_addr(
+                &candidates,
+                Some(ip("192.168.0.130")),
+                &frame,
+                Some(frame[0])
+            ),
+            Some(ip("10.35.78.24"))
+        );
+        let pc = [ip("192.168.0.131"), ip("10.35.78.25")];
+        assert_eq!(
+            rank_host_addr(&candidates, None, &pc, Some(pc[0])),
+            Some(ip("192.168.0.130"))
         );
     }
 

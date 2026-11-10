@@ -498,6 +498,24 @@ in
         "uhid"
         "vhci-hcd"
       ];
+      # A connected Steam Frame wireless adapter stays out of power save, which drops the headset
+      # link. The dispatcher gives its scripts no PATH, so the hook gets the tools it names.
+      networking.networkmanager.dispatcherScripts = mkIf config.networking.networkmanager.enable [
+        {
+          source = pkgs.writeShellScript "90-punktfunk-frame-adapter" ''
+            export PATH=${
+              lib.makeBinPath [
+                pkgs.coreutils
+                pkgs.gawk
+                pkgs.iw
+                pkgs.networkmanager
+                pkgs.util-linux
+              ]
+            }
+            exec ${pkgs.runtimeShell} ${cfg.host.package}/lib/NetworkManager/dispatcher.d/90-punktfunk-frame-adapter "$@"
+          '';
+        }
+      ];
 
       # `input` group membership for the virtual-gamepad nodes (mirrors the RPM's usermod hint).
       #

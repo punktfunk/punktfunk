@@ -393,6 +393,8 @@ install -Dm0644 scripts/punktfunk-modules.conf %{buildroot}%{_prefix}/lib/module
 # UDP socket-buffer tuning (32 MB) — without it the kernel clamps the host's SO_SNDBUF to ~416 KB
 # and high-bitrate frames overflow it (send-side loss). systemd-sysctl applies it at boot.
 install -Dm0644 scripts/99-punktfunk-net.conf %{buildroot}%{_prefix}/lib/sysctl.d/99-punktfunk-net.conf
+# Keeps a connected Steam Frame wireless adapter out of power save, which drops the headset link.
+install -Dm0755 packaging/linux/90-punktfunk-frame-adapter %{buildroot}%{_prefix}/lib/NetworkManager/dispatcher.d/90-punktfunk-frame-adapter
 
 # Web-console-triggered updates (host-update-from-web-console.md §7): the dep-free root
 # helper + its oneshot system unit + the polkit rule scoping it to the (shipped-empty)
@@ -690,6 +692,7 @@ install -Dm0755 "$(command -v bun)" %{buildroot}%{_libexecdir}/punktfunk-bun/bun
 %{_datadir}/polkit-1/actions/io.unom.punktfunk.dm-helper.policy
 %{_prefix}/lib/modules-load.d/punktfunk.conf
 %{_prefix}/lib/sysctl.d/99-punktfunk-net.conf
+%{_prefix}/lib/NetworkManager/dispatcher.d/90-punktfunk-frame-adapter
 %{_prefix}/lib/firewalld/services/punktfunk-gamestream.xml
 %{_prefix}/lib/firewalld/services/punktfunk-native.xml
 %{_prefix}/lib/firewalld/services/punktfunk-web.xml

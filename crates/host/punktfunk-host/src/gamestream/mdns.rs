@@ -23,10 +23,10 @@ pub fn advertise(host: &Host) -> Result<Advert> {
     );
     // Address is per-registration so the record follows the host onto a network that
     // came up after boot — see [`crate::discovery::advertise_live`].
-    crate::discovery::advertise_live(SERVICE, move |ip| {
+    crate::discovery::advertise_live(SERVICE, move |addrs| {
         // Moonlight needs no TXT; it resolves the A record then GETs /serverinfo.
         let props: HashMap<String, String> = HashMap::new();
-        ServiceInfo::new(SERVICE, &instance, &host_name, ip, port, props)
+        ServiceInfo::new(SERVICE, &instance, &host_name, addrs, port, props)
             .context("build mDNS ServiceInfo")
     })
 }

@@ -1,0 +1,53 @@
+#!/bin/sh
+# NetworkManager dispatcher hook for the Steam Frame wireless adapter (USB 28de:2432).
+#
+# The headset's access point drops a station that misses its 10 s inactivity poll, and the
+# adapter misses it while it dozes: an idle link then carries traffic for a moment every ~14 s.
+# While the adapter is connected, both of its power saves stay off, the two that Steam's
+# low-latency mode turns off.
+#
+# Installed to /usr/lib/NetworkManager/dispatcher.d/. NM runs it as root with the interface and
+# the action; PF_SYSFS only redirects /sys for scripts/ci/check-frame-adapter-hook.sh.
+iface=$1
+case ${2:-} in
+    up | reapply) ;;
+    *) exit 0 ;;
+esac
+sys=${PF_SYSFS:-/sys}
+usb=$sys/class/net/$iface/device/..
+id="$(cat "$usb/idVendor" 2>/dev/null):$(cat "$usb/idProduct" 2>/dev/null)"
+[ "$id" = 28de:2432 ] || exit 0
+
+log() { logger -t punktfunk-frame-adapter "$iface: $*" 2>/dev/null || :; }
+
+if command -v iw >/dev/null 2>&1; then
+    if iw dev "$iface" set power_save off; then
+        log "power save off"
+    else
+        log "power save stays on: iw refused"
+    fi
+elif [ -n "${CONNECTION_UUID:-}" ]; then
+    # Without iw the profile carries it, and the next connect starts with power save off.
+    if nmcli connection modify "$CONNECTION_UUID" 802-11-wireless.powersave 2; then
+        log "power save off from the next connect (no iw)"
+    fi
+fi
+
+# The firmware's inactive power save: rtw89 turns a feature off when its bit is set in
+# disable_dm, which lists each one as "[bit] NAME: O|X" (X = off).
+phy=$(basename "$(readlink -f "$sys/class/net/$iface/phy80211")")
+dm=$sys/kernel/debug/ieee80211/$phy/rtw89/disable_dm
+[ -r "$dm" ] || exit 0
+mask=$(awk '
+    /^\[[0-9]+\][ \t]+[A-Z0-9_]+:[ \t]+[OX]$/ {
+        bit = substr($1, 2, length($1) - 2)
+        name = $2
+        sub(/:$/, "", name)
+        if ($3 == "X" || name == "INACTIVE_PS") mask += 2 ^ bit
+        if (name == "INACTIVE_PS") found = 1
+    }
+    END { if (found) printf "0x%x\n", mask }' "$dm")
+if [ -n "$mask" ] && echo "$mask" >"$dm" 2>/dev/null; then
+    log "firmware power save off"
+fi
+exit 0

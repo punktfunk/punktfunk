@@ -99,6 +99,7 @@ on:
       - 'packaging/linux/*.tmpfiles'
       - 'packaging/linux/*.sysusers'
       - 'packaging/linux/payload.txt'
+      - 'packaging/linux/90-punktfunk-frame-adapter'
       - 'packaging/linux/seat-*'
       - 'packaging/linux/door-*'
       - 'packaging/linux/*.ufw'

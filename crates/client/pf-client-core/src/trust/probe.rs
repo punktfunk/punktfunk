@@ -54,13 +54,15 @@ fn answered_as_self(want: &str, answered: Option<[u8; 32]>) -> bool {
 /// Probe every saved host where it could be, in parallel: its address, then — only when
 /// that is silent — the addresses it left (`prev_addrs`), all at once. A pinned host that
 /// answers at one of those moves back there, so Tailscale takes over again once the LAN is
-/// gone. A host saved by address alone is asked there only. Result index matches `hosts`:
-/// `true` = online.
+/// gone. On a Steam Frame a pinned host's adapter address is asked beside its address and
+/// wins when it answers. A host saved by address alone is asked there only. Result index
+/// matches `hosts`: `true` = online.
 pub fn probe_known(hosts: &[KnownHost], timeout: std::time::Duration) -> Vec<bool> {
+    let on_frame = punktfunk_core::discovery::hosts_frame_adapter();
     let found: Vec<Option<String>> = std::thread::scope(|s| {
         let handles: Vec<_> = hosts
             .iter()
-            .map(|h| s.spawn(move || where_answers(h, timeout)))
+            .map(|h| s.spawn(move || where_answers(h, on_frame, timeout)))
             .collect();
         handles
             .into_iter()
@@ -75,21 +77,31 @@ pub fn probe_known(hosts: &[KnownHost], timeout: std::time::Duration) -> Vec<boo
     found.iter().map(Option::is_some).collect()
 }
 
-/// Where `h` answers as itself: its address, else the first of the addresses it left.
-fn where_answers(h: &KnownHost, timeout: std::time::Duration) -> Option<String> {
+/// Where `h` answers as itself: its adapter address on a Frame ([`frame_link_addr`]), else its
+/// address, else the first of the addresses it left. The first two are asked at once.
+fn where_answers(h: &KnownHost, on_frame: bool, timeout: std::time::Duration) -> Option<String> {
     let asks = |addr: &str| {
         answered_as_self(
             &h.fp_hex,
             NativeClient::probe_identity(addr, h.port, timeout),
         )
     };
-    if asks(&h.addr) {
+    let asks = &asks;
+    let adapter = frame_link_addr(h, on_frame);
+    let (on_adapter, at_addr) = std::thread::scope(|s| {
+        let probe = adapter.map(|a| s.spawn(move || asks(a)));
+        let at_addr = asks(&h.addr);
+        (probe.is_some_and(|j| j.join().unwrap_or(false)), at_addr)
+    });
+    if on_adapter {
+        return adapter.map(str::to_string);
+    }
+    if at_addr {
         return Some(h.addr.clone());
     }
     if h.fp_hex.is_empty() {
         return None;
     }
-    let asks = &asks;
     let hits: Vec<bool> = std::thread::scope(|s| {
         let handles: Vec<_> = h
             .prev_addrs
@@ -105,6 +117,17 @@ fn where_answers(h: &KnownHost, timeout: std::time::Duration) -> Option<String> 
         .iter()
         .zip(hits)
         .find_map(|(a, hit)| hit.then(|| a.clone()))
+}
+
+/// The address a pinned host has on this Frame's adapter network, kept from its adverts, while
+/// its saved address is elsewhere. `None` off a Frame.
+fn frame_link_addr(h: &KnownHost, on_frame: bool) -> Option<&str> {
+    use punktfunk_core::discovery::on_frame_adapter_net;
+    let adapter = |a: &str| a.parse().is_ok_and(on_frame_adapter_net);
+    if !on_frame || h.fp_hex.is_empty() || adapter(&h.addr) {
+        return None;
+    }
+    h.prev_addrs.iter().map(String::as_str).find(|a| adapter(a))
 }
 
 #[cfg(test)]
@@ -129,5 +152,34 @@ mod tests {
         // Saved by address, never paired: there is no pin to compare against.
         assert!(answered_as_self("", Some(theirs)));
         assert!(!answered_as_self("", None));
+    }
+
+    /// Only a Frame asks the adapter address, only for a pinned host, and only while the saved
+    /// address is elsewhere: a host already on the adapter is asked there alone.
+    #[test]
+    fn a_frame_asks_its_adapter_address_first() {
+        let h = KnownHost {
+            addr: "192.168.0.130".into(),
+            fp_hex: "a".repeat(64),
+            prev_addrs: vec!["100.64.0.7".into(), "10.35.78.24".into()],
+            ..Default::default()
+        };
+        assert_eq!(frame_link_addr(&h, true), Some("10.35.78.24"));
+        assert_eq!(frame_link_addr(&h, false), None, "not a Frame");
+        let bare = KnownHost {
+            fp_hex: String::new(),
+            ..h.clone()
+        };
+        assert_eq!(frame_link_addr(&bare, true), None, "saved by address alone");
+        let there = KnownHost {
+            addr: "10.35.78.24".into(),
+            prev_addrs: vec!["10.35.78.23".into(), "192.168.0.130".into()],
+            ..h
+        };
+        assert_eq!(
+            frame_link_addr(&there, true),
+            None,
+            "already on the adapter"
+        );
     }
 }

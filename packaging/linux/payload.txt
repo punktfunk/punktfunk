@@ -16,6 +16,7 @@ host usr/lib/sysusers.d/punktfunk.conf
 host usr/lib/udev/rules.d/60-punktfunk.rules
 host usr/lib/modules-load.d/punktfunk.conf
 host usr/lib/sysctl.d/99-punktfunk-net.conf
+host usr/lib/NetworkManager/dispatcher.d/90-punktfunk-frame-adapter
 host usr/lib/systemd/system/punktfunk-update.service
 host usr/lib/systemd/system/user@.service.d/50-punktfunk-nice.conf
 host usr/lib/systemd/user/punktfunk-host.service
