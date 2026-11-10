@@ -6,13 +6,14 @@ use jni::objects::{JFloatArray, JIntArray, JObject, JString};
 use jni::sys::{jboolean, jfloat, jint, jlong};
 use jni::EnvUnowned;
 
-use super::{jni_guard, lock_recover, SESSIONS};
+use super::{jni_guard, SESSIONS};
 
 /// Start the retained session's decoder on a `SurfaceView` window.
 ///
 /// Kotlin supplies its ranked codec (`""` selects the platform default), latency/presenter policy,
-/// panel rate, and live surface size. A missing key, existing worker, invalid window, or failed
-/// thread spawn leaves the session stopped and safely retryable.
+/// panel rate, and live surface size. A missing key or an existing worker changes nothing. An
+/// invalid window or a failed thread spawn starts the keep-alive drain, so the frame queue never
+/// stands; the session stays retryable.
 #[cfg(target_os = "android")]
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_io_unom_punktfunk_kit_NativeBridge_nativeStartVideo(
@@ -47,61 +48,63 @@ pub extern "system" fn Java_io_unom_punktfunk_kit_NativeBridge_nativeStartVideo(
         let Some(h) = SESSIONS.get(handle) else {
             return Ok(());
         };
-        let mut guard = lock_recover(&h.video);
-        if guard.is_some() {
-            return Ok(()); // already streaming
-        }
-        // SAFETY: Kotlin declares `surface` a non-null `Surface`.
-        let window = match unsafe { crate::window_from_surface(env, &surface) } {
-            Some(w) => w,
-            None => {
-                log::error!("nativeStartVideo: no ANativeWindow from Surface");
-                return Ok(());
-            }
-        };
-        let shutdown = Arc::new(AtomicBool::new(false));
-        let client = h.client.clone();
-        let sd = shutdown.clone();
-        let st = h.stats.clone(); // session-lifetime stats (gate survives surface recreate)
+        // A running decoder keeps streaming; the open runs only into an empty slot.
+        let open = || {
+            // SAFETY: Kotlin declares `surface` a non-null `Surface`.
+            let window = match unsafe { crate::window_from_surface(env, &surface) } {
+                Some(w) => w,
+                None => {
+                    log::error!("nativeStartVideo: no ANativeWindow from Surface");
+                    h.start_drain(); // nothing else pops the frame queue
+                    return None;
+                }
+            };
+            let shutdown = Arc::new(AtomicBool::new(false));
+            let client = h.client.clone();
+            let sd = shutdown.clone();
+            let st = h.stats.clone(); // session-lifetime stats (gate survives surface recreate)
 
-        // Seed the live view size with what the view measures right now; `surfaceChanged` keeps it
-        // current from here on (the bars hide and the cutout mode changes AFTER this call).
-        h.surface_size.store(
-            super::pack_surface_size(surface_w, surface_h),
-            std::sync::atomic::Ordering::Relaxed,
-        );
-        let opts = crate::decode::DecodeOptions {
-            decoder_name: decoder,
-            decoder_mime: crate::decode::codec_mime(client.video_format().codec),
-            ll_feature,
-            low_latency_mode,
-            is_tv,
-            chromeos,
-            present_priority,
-            smooth_buffer,
-            panel_hz: panel_fps,
-            surface_size: h.surface_size.clone(),
-            src_crop: h.src_crop.clone(),
-            decoded_size: h.decoded_size.clone(),
-            layers: h.layers.clone(),
-            restart: h
-                .video_started
-                .swap(true, std::sync::atomic::Ordering::Relaxed),
-        };
-        let join = match std::thread::Builder::new()
-            .name("pf-decode".into())
-            .spawn(move || crate::decode::run(client, window, sd, st, opts))
-        {
-            Ok(join) => join,
-            Err(e) => {
-                log::error!("nativeStartVideo: decode thread spawn failed: {e}");
-                return Ok(());
+            // Seed the live view size with what the view measures right now; `surfaceChanged`
+            // keeps it current from here on (the bars hide and the cutout mode changes AFTER this
+            // call).
+            h.surface_size.store(
+                super::pack_surface_size(surface_w, surface_h),
+                std::sync::atomic::Ordering::Relaxed,
+            );
+            let opts = crate::decode::DecodeOptions {
+                decoder_name: decoder,
+                decoder_mime: crate::decode::codec_mime(client.video_format().codec),
+                ll_feature,
+                low_latency_mode,
+                is_tv,
+                chromeos,
+                present_priority,
+                smooth_buffer,
+                panel_hz: panel_fps,
+                surface_size: h.surface_size.clone(),
+                src_crop: h.src_crop.clone(),
+                decoded_size: h.decoded_size.clone(),
+                layers: h.layers.clone(),
+                restart: h
+                    .video_started
+                    .swap(true, std::sync::atomic::Ordering::Relaxed),
+            };
+            match std::thread::Builder::new()
+                .name("pf-decode".into())
+                .spawn(move || crate::decode::run(client, window, sd, st, opts))
+            {
+                Ok(join) => Some(VideoThread {
+                    shutdown,
+                    join: Some(join),
+                }),
+                Err(e) => {
+                    log::error!("nativeStartVideo: decode thread spawn failed: {e}");
+                    h.start_drain(); // nothing else pops the frame queue
+                    None
+                }
             }
         };
-        *guard = Some(VideoThread {
-            shutdown,
-            join: Some(join),
-        });
+        h.video.start(open, |_| ());
         Ok(())
     })
     .resolve::<LogErrorAndDefault>()
@@ -192,7 +195,7 @@ pub extern "system" fn Java_io_unom_punktfunk_kit_NativeBridge_nativePictureWind
             super::pack_surface_size(width, height),
             std::sync::atomic::Ordering::Relaxed,
         );
-        *lock_recover(&h.layers.second_window) = window;
+        *super::lock_recover(&h.layers.second_window) = window;
         h.layers
             .generation
             .fetch_add(1, std::sync::atomic::Ordering::Release);
@@ -340,7 +343,7 @@ pub extern "system" fn Java_io_unom_punktfunk_kit_NativeBridge_nativeStopVideo(
 ) {
     jni_guard((), || {
         if let Some(h) = SESSIONS.get(handle) {
-            h.stop_video();
+            h.video.stop();
         }
     })
 }
@@ -364,7 +367,7 @@ pub extern "system" fn Java_io_unom_punktfunk_kit_NativeBridge_nativeVideoDrain(
             if on {
                 h.start_drain();
             } else {
-                h.stop_drain();
+                h.drain.stop();
             }
         }
     })
@@ -392,7 +395,7 @@ pub extern "system" fn Java_io_unom_punktfunk_kit_NativeBridge_nativeVideoStatsL
         let Some(h) = SESSIONS.get(handle) else {
             return Ok(JString::default());
         };
-        if lock_recover(&h.video).is_none() {
+        if !h.video.running() {
             return Ok(JString::default()); // not streaming → no stats
         }
         let preset = preset.try_to_string(env).unwrap_or_default();
@@ -608,14 +611,14 @@ pub extern "system" fn Java_io_unom_punktfunk_kit_NativeBridge_nativeStartAudio(
         let Some(h) = SESSIONS.get(handle) else {
             return;
         };
-        let mut guard = lock_recover(&h.audio);
-        if guard.is_some() {
-            return; // already playing
-        }
-        match crate::audio::AudioPlayback::start(h.client.clone(), low_latency_mode, is_tv) {
-            Some(p) => *guard = Some(p),
-            None => log::error!("nativeStartAudio: playback init failed (video unaffected)"),
-        }
+        let open = || {
+            let p = crate::audio::AudioPlayback::start(h.client.clone(), low_latency_mode, is_tv);
+            if p.is_none() {
+                log::error!("nativeStartAudio: playback init failed (video unaffected)");
+            }
+            p
+        };
+        h.audio.start(open, |_| ());
     })
 }
 
@@ -630,7 +633,7 @@ pub extern "system" fn Java_io_unom_punktfunk_kit_NativeBridge_nativeStopAudio(
 ) {
     jni_guard((), || {
         if let Some(h) = SESSIONS.get(handle) {
-            h.stop_audio();
+            h.audio.stop();
         }
     })
 }
@@ -643,6 +646,10 @@ pub extern "system" fn Java_io_unom_punktfunk_kit_NativeBridge_nativeStopAudio(
 /// open, a `0` handle, or the mic failed entirely). Already running (a surface recreate) returns
 /// the running capture's id. Caller MUST hold RECORD_AUDIO; a failure (e.g. no permission) leaves
 /// the rest of the session streaming.
+///
+/// The open blocks for hundreds of ms and runs outside the slot lock, so `nativeStopMic` and
+/// `nativeMicActive` never wait on it. A stop during the open wins: this call drops the late
+/// capture and returns `0`.
 #[cfg(target_os = "android")]
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_io_unom_punktfunk_kit_NativeBridge_nativeStartMic(
@@ -655,23 +662,20 @@ pub extern "system" fn Java_io_unom_punktfunk_kit_NativeBridge_nativeStartMic(
         let Some(h) = SESSIONS.get(handle) else {
             return 0;
         };
-        let mut guard = lock_recover(&h.mic);
-        if let Some(m) = guard.as_ref() {
-            return m.session_id(); // already capturing — same stream, same session
-        }
         // The capture SHARES the session's mute flag, so one started while muted stays muted (and
         // sends nothing) from its very first frame — see `SessionHandle::mic_muted`.
-        match crate::mic::MicCapture::start(h.client.clone(), echo_cancel, h.mic_muted.clone()) {
-            Some(m) => {
-                let session_id = m.session_id();
-                *guard = Some(m);
-                session_id
-            }
-            None => {
+        let open = || {
+            let m =
+                crate::mic::MicCapture::start(h.client.clone(), echo_cancel, h.mic_muted.clone());
+            if m.is_none() {
                 log::error!("nativeStartMic: mic init failed (RECORD_AUDIO? — session unaffected)");
-                0
             }
-        }
+            m
+        };
+        // A running capture answers with its own id: same stream, same session.
+        h.mic
+            .start_unlocked(open, crate::mic::MicCapture::session_id)
+            .unwrap_or(0)
     })
 }
 
@@ -687,7 +691,7 @@ pub extern "system" fn Java_io_unom_punktfunk_kit_NativeBridge_nativeStopMic(
 ) {
     jni_guard((), || {
         if let Some(h) = SESSIONS.get(handle) {
-            h.stop_mic();
+            h.mic.stop();
         }
     })
 }
@@ -722,31 +726,26 @@ pub extern "system" fn Java_io_unom_punktfunk_kit_NativeBridge_nativeStartPadAud
         let Some(h) = SESSIONS.get(handle) else {
             return false;
         };
-        // Replace any previous renderer first: dropping it joins the old thread, so two of them
-        // can never hold the same descriptor at once.
-        h.stop_pad_audio();
-        // SAFETY: Kotlin keeps the connection that owns `fd` open until `nativeStopPadAudio`
-        // returns, and that call (or `nativeClose`) drops, and so joins, this renderer first.
-        let started = unsafe {
-            crate::pad_audio::start(
-                std::sync::Arc::clone(&h.client),
-                pad as u8,
-                fd,
-                haptics,
-                speaker,
-            )
+        // The previous renderer is joined before the new one starts, so two of them can never
+        // hold the same descriptor at once.
+        let open = || {
+            // SAFETY: Kotlin keeps the connection that owns `fd` open until `nativeStopPadAudio`
+            // returns, and that call (or `nativeClose`) drops, and so joins, this renderer first.
+            unsafe {
+                crate::pad_audio::start(
+                    std::sync::Arc::clone(&h.client),
+                    pad as u8,
+                    fd,
+                    haptics,
+                    speaker,
+                )
+            }
         };
         // The capability declaration and the rumble suppression are NOT done here: the renderer
         // makes both only once its USB stream actually opens (see `pad_audio::render`). Doing them
         // at spawn time would, on a kernel that refuses the interface claim, take the pad off wire
         // rumble and give it nothing in return — no haptics of any kind.
-        match started {
-            Some(p) => {
-                *lock_recover(&h.pad_audio) = Some(p);
-                true
-            }
-            None => false,
-        }
+        h.pad_audio.replace(open)
     })
 }
 
@@ -866,9 +865,7 @@ pub extern "system" fn Java_io_unom_punktfunk_kit_NativeBridge_nativeMicActive(
     handle: jlong,
 ) -> jboolean {
     jni_guard(false, || {
-        SESSIONS
-            .get(handle)
-            .is_some_and(|h| lock_recover(&h.mic).is_some())
+        SESSIONS.get(handle).is_some_and(|h| h.mic.running())
     })
 }
 

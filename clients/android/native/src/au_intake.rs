@@ -76,14 +76,15 @@ impl Intake {
     }
 
     /// One delivery with the index gap ahead of it. The rule sees every AU, the ones the
-    /// keyframe wait then drops too, and only a keyframe ends that wait.
+    /// keyframe wait then drops too, and only a keyframe's head ends that wait: its later
+    /// parts carry the flag too, and without the head they decode nothing.
     pub(crate) fn note(&mut self, d: Delivery, gap: u32) -> Verdict {
         let mut v = self.judge(d, gap);
         if v.feed && self.await_keyframe {
-            if d.flags & u32::from(FLAG_SOF) == 0 {
-                v.feed = false;
-            } else {
+            if d.first && d.flags & u32::from(FLAG_SOF) != 0 {
                 self.await_keyframe = false;
+            } else {
+                v.feed = false;
             }
         }
         v
@@ -163,8 +164,8 @@ mod tests {
     enum Op {
         /// A whole AU or a first part: index, flags, gap ahead.
         Au(u32, u32, u32),
-        /// A later part of a sliced AU.
-        Part(u32),
+        /// A later part of a sliced AU: index, flags.
+        Part(u32, u32),
         /// The loop dropped an admitted AU; the bool is whether a rule is on.
         LocalLoss(bool),
         /// A parked AU judged again behind that drop.
@@ -207,8 +208,20 @@ mod tests {
                 (Au(7, 0, 0), DROP),
                 (Au(8, ANCHOR, 0), DROP),
                 (Au(9, SOF, 0), FEED),
-                (Part(9), FEED),
+                (Part(9, SOF), FEED),
                 (Au(10, 0, 0), FEED),
+            ],
+            0,
+        ),
+        (
+            "a keyframe whose head was lost does not end the wait",
+            None,
+            true,
+            &[
+                (Part(9, SOF), DROP),
+                (Au(10, 0, 0), DROP),
+                (Au(11, SOF, 0), FEED),
+                (Part(11, SOF), FEED),
             ],
             0,
         ),
@@ -219,10 +232,10 @@ mod tests {
             &[
                 (Au(1, SOF, 0), FEED),
                 (Au(3, 0, 1), DROP),
-                (Part(3), DROP),
+                (Part(3, 0), DROP),
                 (Au(4, 0, 0), DROP),
                 (Au(5, ANCHOR, 0), FEED),
-                (Part(5), FEED),
+                (Part(5, ANCHOR), FEED),
                 (Au(6, 0, 0), FEED),
             ],
             2,
@@ -307,11 +320,11 @@ mod tests {
                         },
                         gap,
                     )),
-                    Part(index) => Some(intake.note(
+                    Part(index, flags) => Some(intake.note(
                         Delivery {
                             index,
                             first: false,
-                            flags: 0,
+                            flags,
                         },
                         0,
                     )),

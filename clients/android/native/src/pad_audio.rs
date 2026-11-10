@@ -627,7 +627,7 @@ impl Tally {
     /// routing) from "signal that does not reach the actuators" (here).
     fn decoded(&mut self, stereo: &[i16]) {
         self.samples_in += (stereo.len() / 2) as u64;
-        let peak = stereo.iter().map(|s| i32::from(s.abs())).max();
+        let peak = stereo.iter().map(|s| i32::from(s.unsigned_abs())).max();
         self.peak = self.peak.max(peak.unwrap_or(0));
     }
 

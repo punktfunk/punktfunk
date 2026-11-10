@@ -29,12 +29,16 @@ pub(crate) fn sdk_int() -> u32 {
         .unwrap_or(0)
 }
 
-/// A raw property value as [`sysprop`] returns it.
+/// What `__system_property_get` writes in place of a read-only property longer than its
+/// buffer, as a build fingerprint can be.
+const TOO_LONG: &str = "Must use __system_property_read_callback() to read";
+
+/// A raw property value as [`sysprop`] returns it. The too-long notice is no value.
 #[cfg_attr(not(target_os = "android"), allow(dead_code))]
 fn prop_value(raw: &[u8]) -> Option<String> {
     let value = String::from_utf8_lossy(raw);
     let value = value.trim();
-    (!value.is_empty()).then(|| value.to_owned())
+    (!value.is_empty() && value != TOO_LONG).then(|| value.to_owned())
 }
 
 /// The calling thread's kernel tid.
@@ -88,5 +92,9 @@ mod tests {
         assert_eq!(prop_value(b" 1\n").as_deref(), Some("1"));
         assert_eq!(prop_value(b" \t"), None);
         assert_eq!(prop_value(b""), None);
+        assert_eq!(
+            prop_value(b"Must use __system_property_read_callback() to read"),
+            None
+        );
     }
 }

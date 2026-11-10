@@ -120,10 +120,10 @@ unsafe impl Send for EglContext {}
 
 impl EglContext {
     /// Initialise the default display and create an ES 3 context, falling back to ES 2 on
-    /// the boxes that have nothing newer. 10/10/10/2 first under ES 3 (the backdrop's
-    /// gradients band in 8), else RGBA8888; an 8-bit stencil (Skia's path rendering wants
-    /// one), no depth, no MSAA (the shell anti-aliases in Skia).
-    pub(super) fn new() -> Result<EglContext> {
+    /// the boxes that have nothing newer. 10/10/10/2 first under ES 3 when `try_ten_bit` (the
+    /// backdrop's gradients band in 8), else RGBA8888; an 8-bit stencil (Skia's path rendering
+    /// wants one), no depth, no MSAA (the shell anti-aliases in Skia).
+    pub(super) fn new(try_ten_bit: bool) -> Result<EglContext> {
         // SAFETY: plain EGL calls with valid arguments; every handle is checked before use.
         unsafe {
             let display = eglGetDisplay(EGL_DEFAULT_DISPLAY);
@@ -134,11 +134,15 @@ impl EglContext {
             if eglInitialize(display, &mut major, &mut minor) != EGL_TRUE {
                 bail!("eglInitialize: 0x{:x}", eglGetError());
             }
-            for (version, renderable, (rgb, alpha)) in [
+            // The 10-bit config leads.
+            let configs = [
                 (GlesVersion::Es3, EGL_OPENGL_ES3_BIT, (10, 2)),
                 (GlesVersion::Es3, EGL_OPENGL_ES3_BIT, (8, 8)),
                 (GlesVersion::Es2, EGL_OPENGL_ES2_BIT, (8, 8)),
-            ] {
+            ];
+            for (version, renderable, (rgb, alpha)) in
+                configs.into_iter().skip(usize::from(!try_ten_bit))
+            {
                 let attribs = [
                     EGL_SURFACE_TYPE,
                     EGL_WINDOW_BIT,

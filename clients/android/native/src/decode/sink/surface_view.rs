@@ -23,10 +23,11 @@ use std::time::{Duration, Instant};
 
 use super::super::async_loop::{Ctx, OutputReady};
 use super::super::display::{apply_dataspace, color_dataspace, stream_dataspace, DisplayTracker};
-use super::super::latency::{now_realtime_ns, p50_max_ms};
+use super::super::latency::now_realtime_ns;
 use super::super::surface_control::{Layer, PresentComplete};
 use super::super::vsync::VsyncShared;
 use super::{Downrate, Routed, Sink};
+use crate::codec_format::p50_max_ms;
 use crate::present::budget::{Confirms, TimelineBudget};
 use crate::present::store::{Held, Store};
 use crate::present::verdict::{Second, Verdict, Verdicts};

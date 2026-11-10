@@ -11,6 +11,7 @@
 
 use super::egl::{EglContext, EglSurface, GlesVersion};
 use super::gpu::Gpu;
+use crate::console_lifecycle::{half_rate, Action, Event as SurfaceEvent, Lifecycle};
 use anyhow::{bail, Result};
 use ndk::native_window::NativeWindow;
 use pf_client_core::console::{PointerInput, SessionPhase};
@@ -24,9 +25,7 @@ use pf_console_ui::{
     Viewport,
 };
 use punktfunk_core::config::GamepadPref;
-use std::collections::VecDeque;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Condvar, Mutex};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 /// What Kotlin asks the render thread to do.
@@ -72,7 +71,7 @@ pub(super) enum HostEvent {
     Console(Event),
     /// The GLES generation the context came up with — Kotlin logs it, nothing more.
     Gles(GlesVersion),
-    /// The render thread died (EGL/Skia init failed). Kotlin falls back to its own console.
+    /// The render thread ended on an error or a panic. Kotlin falls back to its own console.
     Dead(String),
 }
 
@@ -96,97 +95,7 @@ impl HostEvent {
     }
 }
 
-pub(super) struct Shared {
-    inbox: Mutex<VecDeque<Cmd>>,
-    inbox_cv: Condvar,
-    events: Mutex<VecDeque<HostEvent>>,
-    events_cv: Condvar,
-    /// Bumped by the render thread each time it has torn a surface down; `SurfaceDestroyed`
-    /// waits for the bump.
-    surface_gen: Mutex<u64>,
-    surface_cv: Condvar,
-    /// The shell's launch hold, as of the last frame. Written before the frame's events leave,
-    /// so a `Launch` the shell raised is never read as unheld.
-    holds_launch: AtomicBool,
-}
-
-impl Shared {
-    fn new() -> Shared {
-        Shared {
-            inbox: Mutex::new(VecDeque::new()),
-            inbox_cv: Condvar::new(),
-            events: Mutex::new(VecDeque::new()),
-            events_cv: Condvar::new(),
-            surface_gen: Mutex::new(0),
-            surface_cv: Condvar::new(),
-            holds_launch: AtomicBool::new(false),
-        }
-    }
-
-    /// Whether the shell's launch hold is up: its session waits for `ShowStream`.
-    pub(super) fn holds_launch(&self) -> bool {
-        self.holds_launch.load(Ordering::Acquire)
-    }
-
-    pub(super) fn send(&self, cmd: Cmd) {
-        self.inbox
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .push_back(cmd);
-        self.inbox_cv.notify_one();
-    }
-
-    fn emit(&self, ev: HostEvent) {
-        self.events
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .push_back(ev);
-        self.events_cv.notify_one();
-    }
-
-    /// Kotlin's poll: the next event, waiting up to `timeout` for one.
-    pub(super) fn next_event(&self, timeout: Duration) -> Option<HostEvent> {
-        let mut q = self
-            .events
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if q.is_empty() {
-            let (guard, _) = self
-                .events_cv
-                .wait_timeout(q, timeout)
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            q = guard;
-        }
-        q.pop_front()
-    }
-
-    /// Ask for the surface to go and wait (bounded) until it has.
-    pub(super) fn destroy_surface_blocking(&self) {
-        let before = *self
-            .surface_gen
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        self.send(Cmd::SurfaceDestroyed);
-        let g = self
-            .surface_gen
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        // Bounded: a render thread that died mid-frame must not hang the UI thread forever —
-        // by then the EGL surface is gone with it anyway.
-        let _ = self
-            .surface_cv
-            .wait_timeout_while(g, Duration::from_secs(2), |g| *g == before)
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-    }
-
-    fn ack_surface_gone(&self) {
-        *self
-            .surface_gen
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) += 1;
-        self.surface_cv.notify_all();
-    }
-}
+pub(super) type Shared = crate::console_lifecycle::Shared<Cmd, HostEvent>;
 
 /// The host as the JNI layer holds it.
 pub(super) struct ConsoleHost {
@@ -213,14 +122,23 @@ impl ConsoleHost {
             .name("pf-console".into())
             .spawn(move || {
                 boost_thread_priority();
-                let run = || -> Result<()> {
+                let loop_shared = thread_shared.clone();
+                let run = move || -> Result<()> {
                     let console = Console::new(opts, entry, &thread_handles)?;
-                    render_loop(console, thread_shared.clone(), thread_store)
+                    render_loop(console, loop_shared, thread_store)
                 };
-                if let Err(e) = run() {
-                    log::error!("console: render thread ended: {e:#}");
-                    thread_shared.emit(HostEvent::Dead(format!("{e:#}")));
+                // A panic ends the thread as an error does: Kotlin must hear of both, or it
+                // keeps a frozen console up. The hook has logged the panic itself.
+                let dead = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(run)) {
+                    Ok(Ok(())) => None,
+                    Ok(Err(e)) => Some(format!("{e:#}")),
+                    Err(_) => Some("the render thread panicked".to_owned()),
+                };
+                if let Some(msg) = dead {
+                    log::error!("console: render thread ended: {msg}");
+                    thread_shared.emit(HostEvent::Dead(msg));
                 }
+                thread_shared.retire();
             })?;
         Ok(ConsoleHost {
             shared,
@@ -265,28 +183,15 @@ const IDLE_FRAME_STEP: Duration = Duration::from_millis(16);
 
 /// The render thread. Owns EGL + Skia + the console; runs until `Cmd::Quit`.
 fn render_loop(mut console: Console, shared: Arc<Shared>, store: Arc<SnapshotStore>) -> Result<()> {
-    let mut glass = Glass::new(EglContext::new()?);
+    let mut glass = Glass::new(EglContext::new(true)?, console.gpu_cache_bytes());
     shared.emit(HostEvent::Gles(glass.egl.version));
     let mut ui = Ui::new();
     let mut published = Published::new(&console, &store);
     let mut menu_out: Vec<MenuEvent> = Vec::new();
 
     loop {
-        // Take everything queued. With no surface up, block until something arrives.
-        let cmds: Vec<Cmd> = {
-            let mut q = shared
-                .inbox
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            if glass.surface.is_none() && q.is_empty() {
-                let (guard, _) = shared
-                    .inbox_cv
-                    .wait_timeout(q, Duration::from_millis(500))
-                    .unwrap_or_else(std::sync::PoisonError::into_inner);
-                q = guard;
-            }
-            q.drain(..).collect()
-        };
+        // With no surface up, wait for something to arrive.
+        let cmds = shared.take(glass.surface.is_none());
         let mut poll_now = false;
         for cmd in cmds {
             if !ui.apply(cmd, &mut console, &mut glass, &shared, &mut poll_now)? {
@@ -307,102 +212,149 @@ fn render_loop(mut console: Console, shared: Arc<Shared>, store: Arc<SnapshotSto
             }
         }
 
-        // Half-rate after 60 s without input — one extra frame period between swaps, so an
-        // idle carousel stops redrawing a phone's panel at full rate; the aurora still
-        // breathes, at half tempo. Any input restores full rate on its own frame.
-        if console.idle() {
+        // Half rate a minute after the last input and the attach — one extra frame period
+        // between swaps, so an idle carousel stops redrawing a phone's panel at full rate; the
+        // aurora still breathes, at half tempo. Any input restores full rate on its own frame.
+        if half_rate(console.idle(), glass.attached_at.elapsed()) {
             std::thread::sleep(IDLE_FRAME_STEP);
         }
-        glass.draw(&mut console, &ui);
-        if glass.gl_failures >= GL_FAILURE_LIMIT {
-            glass.detach();
-            bail!(
-                "GL surface failed {} times in a row — giving the screen back",
-                glass.gl_failures
-            );
-        }
-        shared
-            .holds_launch
-            .store(console.holds_launch(), Ordering::Release);
+        glass.draw(&mut console, &ui)?;
+        glass.report(SurfaceEvent::Tick)?;
+        shared.set_holds_launch(console.holds_launch());
         published.publish(&mut console, &store, |e| shared.emit(HostEvent::Console(e)));
     }
 }
 
-/// Consecutive GL setup failures (window surface / Skia wrap) the loop tolerates. One is a
-/// transient (a window torn down mid-create); a run of them is a context that is not coming
-/// back — most likely reclaimed by Android while the app was backgrounded. Dying raises `Dead`,
-/// and Kotlin answers with the touch UI; retrying forever leaves a gray never-painted SurfaceView.
-const GL_FAILURE_LIMIT: u32 = 3;
-
-/// The EGL surface the console draws into, the Skia surface wrapped over it, and the two ledgers
-/// that live and die with them: the GL-failure run and the frame-cost window.
+/// The EGL surface the console draws into, the Skia surface wrapped over it, the window under
+/// both, and the lifecycle that decides what a failure among them does.
 struct Glass {
     // Declaration order is drop order: the Skia surface, the EGL surface, the window under it,
     // then the two contexts.
     skia: Option<(skia_safe::Surface, u32, u32)>,
     surface: Option<EglSurface>,
-    /// Held only so the ANativeWindow outlives the EGL surface over it.
+    /// Kotlin's window: outlives the EGL surface over it, and stays for the next attach when
+    /// that surface fails.
     window: Option<NativeWindow>,
     gpu: Option<Gpu>,
     egl: EglContext,
-    gl_failures: u32,
+    /// The Skia resource budget the console asked for.
+    cache_bytes: usize,
+    life: Lifecycle,
+    /// When the last EGL surface came up.
+    attached_at: Instant,
     /// What a frame is costing, logged once a window. A slow TV's log bundle carries it.
     cost: FrameCost,
 }
 
 impl Glass {
-    fn new(egl: EglContext) -> Glass {
+    fn new(egl: EglContext, cache_bytes: usize) -> Glass {
         Glass {
+            life: Lifecycle::new(egl.ten_bit),
             egl,
             gpu: None,
             window: None,
             surface: None,
             skia: None,
-            gl_failures: 0,
+            cache_bytes,
+            attached_at: Instant::now(),
             cost: FrameCost::default(),
         }
+    }
+
+    /// Tell the lifecycle what happened and do what it answers, until it answers nothing.
+    /// `Err` ends the thread.
+    fn report(&mut self, mut ev: SurfaceEvent) -> Result<()> {
+        loop {
+            match self.life.step(ev) {
+                Action::Nothing => return Ok(()),
+                Action::Attach => ev = self.attach()?,
+                Action::DropSurface => {
+                    self.drop_surface();
+                    return Ok(());
+                }
+                Action::Detach => {
+                    self.detach();
+                    return Ok(());
+                }
+                Action::FallBack => {
+                    self.fall_back()?;
+                    return Ok(());
+                }
+                Action::Die => {
+                    self.detach();
+                    bail!(
+                        "GL surface failed {} times in a row — giving the screen back",
+                        self.life.failures()
+                    );
+                }
+            }
+        }
+    }
+
+    /// Take Kotlin's new window in place of what is held: a surface still up (Kotlin re-created
+    /// the view without a destroy in between), or a window kept for a retry.
+    fn created(&mut self, w: NativeWindow) -> Result<()> {
+        self.detach();
+        self.window = Some(w);
+        self.report(SurfaceEvent::Created)
     }
 
     /// Release in order: the Skia surface, then the current binding, then the EGL surface and
     /// the window under it. The context itself goes with `self`.
     fn detach(&mut self) {
+        self.drop_surface();
+        self.window = None;
+    }
+
+    /// `detach` short of the window.
+    fn drop_surface(&mut self) {
         self.skia = None;
         if self.surface.is_some() {
             self.egl.release_current();
         }
         self.surface = None;
-        self.window = None;
     }
 
-    /// Put an EGL surface over `w`, replacing any that is up (Kotlin re-created the view without
-    /// a destroy in between). `false` = the surface failed and the failure run grew.
-    fn attach(&mut self, w: NativeWindow, cache_bytes: usize) -> Result<bool> {
-        if self.surface.is_some() {
-            self.detach();
+    /// Trade the 10-bit context for an 8-bit one, in drop order: the surfaces, then Skia's
+    /// context, then the EGL context. The window stays for the next attach.
+    fn fall_back(&mut self) -> Result<()> {
+        self.drop_surface();
+        if let Some(mut g) = self.gpu.take() {
+            // Nothing is current: its GL objects go with the EGL context below.
+            g.context.abandon();
         }
-        match self.egl.window_surface(&w) {
+        log::warn!("console: no 10-bit surface — falling back to 8 bit");
+        self.egl = EglContext::new(false)?;
+        Ok(())
+    }
+
+    /// Put an EGL surface over the window held: `Attached` or `AttachFailed`. `Err` = no Skia
+    /// context over the first surface.
+    fn attach(&mut self) -> Result<SurfaceEvent> {
+        let Some(w) = self.window.as_ref() else {
+            return Ok(SurfaceEvent::AttachFailed);
+        };
+        match self.egl.window_surface(w) {
             Ok(s) => {
                 if self.gpu.is_none() {
-                    self.gpu = Some(Gpu::new(&self.egl, cache_bytes)?);
+                    self.gpu = Some(Gpu::new(&self.egl, self.cache_bytes)?);
                 }
                 self.surface = Some(s);
-                self.window = Some(w);
-                self.gl_failures = 0;
-                Ok(true)
+                self.attached_at = Instant::now();
+                Ok(SurfaceEvent::Attached)
             }
             Err(e) => {
                 log::error!("console: window surface: {e:#}");
-                self.gl_failures += 1;
-                Ok(false)
+                Ok(SurfaceEvent::AttachFailed)
             }
         }
     }
 
-    /// One frame, if there is somewhere to draw: re-wrap Skia when the surface size moved, draw,
-    /// swap. A failed swap drops the surface and waits for the next one.
-    fn draw(&mut self, console: &mut Console, ui: &Ui) {
+    /// Wrap Skia over the EGL surface when it has no wrap or its size moved: `Wrapped` or
+    /// `WrapFailed`, `None` when the wrap stands or nothing is up.
+    fn wrap(&mut self) -> Option<SurfaceEvent> {
         let (Some(s), Some(g)) = (self.surface.as_mut(), self.gpu.as_mut()) else {
-            return;
+            return None;
         };
         // Every frame, not only when `Cmd::SurfaceChanged` lands: that command crosses a channel,
         // and a frame built between the window's resize and its arrival carries the old size into
@@ -410,38 +362,45 @@ impl Glass {
         // with whatever the allocator returned showing through the rows nobody covered.
         s.refresh_size();
         let (w, h) = (s.width, s.height);
-        let need_wrap = match &self.skia {
-            Some((_, sw, sh)) => *sw != w || *sh != h,
-            None => true,
-        };
-        if need_wrap {
-            self.skia = None;
-            match g.wrap_window(&self.egl, w, h) {
-                Ok(mut surf) => {
-                    // A buffer at a new size comes back from the allocator holding whatever was
-                    // last in it. The shell covers the frame, so this only matters for the pixels
-                    // a partial first frame leaves — and a wrap happens on rotation, not per frame.
-                    surf.canvas().clear(skia_safe::Color::BLACK);
-                    // The console's real render resolution — the one number a bug report
-                    // from a TV never carried. A 4K panel is 4× the fragment work of 1080p
-                    // for every pass the shell draws.
-                    log::info!("console: drawing at {w}×{h}");
-                    self.skia = Some((surf, w, h));
-                    self.gl_failures = 0;
-                    // Start the frame window here, not at loop entry: the console parks
-                    // with no surface while a stream is up, and a window that had been
-                    // open across that would report its first frame as "1 frame in 20 min".
-                    self.cost = FrameCost::default();
-                }
-                Err(e) => {
-                    log::error!("console: {e:#}");
-                    self.gl_failures += 1;
-                }
-            }
+        if matches!(&self.skia, Some((_, sw, sh)) if (*sw, *sh) == (w, h)) {
+            return None;
         }
-        let Some((surf, _, _)) = self.skia.as_mut() else {
-            return;
+        self.skia = None;
+        Some(match g.wrap_window(&self.egl, w, h) {
+            Ok(mut surf) => {
+                // A buffer at a new size comes back from the allocator holding whatever was
+                // last in it. The shell covers the frame, so this only matters for the pixels
+                // a partial first frame leaves — and a wrap happens on rotation, not per frame.
+                surf.canvas().clear(skia_safe::Color::BLACK);
+                // The console's real render resolution — the one number a bug report
+                // from a TV never carried. A 4K panel is 4× the fragment work of 1080p
+                // for every pass the shell draws.
+                log::info!("console: drawing at {w}×{h}");
+                self.skia = Some((surf, w, h));
+                // Start the frame window here, not at loop entry: the console parks
+                // with no surface while a stream is up, and a window that had been
+                // open across that would report its first frame as "1 frame in 20 min".
+                self.cost = FrameCost::default();
+                SurfaceEvent::Wrapped
+            }
+            Err(e) => {
+                log::error!("console: {e:#}");
+                SurfaceEvent::WrapFailed
+            }
+        })
+    }
+
+    /// One frame, if there is somewhere to draw: wrap, draw, swap, each result reported.
+    fn draw(&mut self, console: &mut Console, ui: &Ui) -> Result<()> {
+        if let Some(ev) = self.wrap() {
+            self.report(ev)?;
+        }
+        let (Some(s), Some(g), Some((surf, w, h))) =
+            (self.surface.as_ref(), self.gpu.as_mut(), self.skia.as_mut())
+        else {
+            return Ok(());
         };
+        let (w, h) = (*w, *h);
         let viewport = Viewport {
             width: w,
             height: h,
@@ -471,10 +430,12 @@ impl Glass {
                 r.peak_ms,
             );
         }
-        if let Err(e) = s.swap() {
-            // The window went away under us; wait for the next surface.
-            log::warn!("console: {e:#} — dropping the surface");
-            self.detach();
+        match s.swap() {
+            Ok(()) => self.report(SurfaceEvent::Shown),
+            Err(e) => {
+                log::warn!("console: {e:#} — dropping the surface");
+                self.report(SurfaceEvent::SwapFailed)
+            }
         }
     }
 }
@@ -561,17 +522,17 @@ impl Ui {
             }
             Cmd::Navigate(entry) => console.navigate(entry),
             Cmd::SurfaceCreated(w) => {
-                // A fresh surface is a fresh entry: snapshot the pad so a button
-                // still held from before does not fire into the first frame.
-                if glass.attach(w, console.gpu_cache_bytes())? {
-                    self.nav.reset();
-                }
+                // A fresh surface is a fresh entry: the next poll snapshots the pad, so a button
+                // still held from before does not fire into the first frame, a retried one too.
+                self.nav.reset();
+                glass.created(w)?;
             }
             // Only a wake-up: `Glass::draw` re-reads the size every frame, so the resize does not
             // wait on this and cannot be missed if it arrives late.
             Cmd::SurfaceChanged => {}
+            // Acked whatever the lifecycle answers: Kotlin's destroy waits on it.
             Cmd::SurfaceDestroyed => {
-                glass.detach();
+                glass.report(SurfaceEvent::Destroyed)?;
                 shared.ack_surface_gone();
             }
             Cmd::Viewport {

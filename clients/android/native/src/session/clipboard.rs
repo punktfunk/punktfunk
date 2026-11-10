@@ -9,7 +9,7 @@
 //!
 //! Events cross to Kotlin as compact strings from the blocking `nativeNextClip` poll (drained on
 //! a dedicated thread, same pattern as `nativeNextRumble`):
-//! `state:<0|1>` · `offer:<seq>:<has_text 0|1>` · `fetch:<req_id>` · `data:<xfer_id>:<text>` ·
+//! `state:<0|1>` · `offer:<seq>:<has_text 0|1>` · `fetch:<req_id as i32>` · `data:<xfer_id>:<text>` ·
 //! `cancel:<id>` · `error:<id>:<code>` · `closed` — null on a poll timeout. Non-text fetch
 //! requests are cancelled natively (only text is ever offered, so they shouldn't occur).
 
@@ -163,49 +163,282 @@ pub extern "system" fn Java_io_unom_punktfunk_kit_NativeBridge_nativeClipCancel(
     })
 }
 
-/// `NativeBridge.nativeNextClip(handle)` — block ≤250 ms for the next clipboard event, encoded
-/// as a compact string (module docs); null on timeout, `"closed"` once the session is gone.
-/// Call from a dedicated poll thread.
+/// What one poll of the clipboard plane hands Kotlin.
+#[derive(Debug, PartialEq, Eq)]
+enum ClipPoll {
+    /// The event as its protocol line (module docs).
+    Line(String),
+    /// A fetch for something other than text: the shim cancels it and returns null. Only text is
+    /// ever offered, and an unanswered fetch stalls the host.
+    CancelFetch(u32),
+    /// The poll window passed with no event.
+    Nothing,
+}
+
+/// Whether `mime` names text: the wire MIME and any other charset of it.
+fn is_text(mime: &str) -> bool {
+    mime.starts_with("text/plain")
+}
+
+/// The protocol line for one pulled clipboard event, or the one thing to do instead.
 ///
-/// Text payloads ride `data:<xfer_id>:<text>` decoded lossily — safe because the phase-0
-/// clipboard task delivers a whole payload in ONE event (`last = true`), so a chunk boundary
-/// can never split a UTF-8 sequence.
+/// `data:<xfer_id>:<text>` decodes the bytes lossily. That is safe because the clipboard task
+/// delivers a whole payload in ONE event (`last = true`), so a chunk boundary can never split a
+/// UTF-8 sequence. Any pull error but a timeout means the plane is gone: `closed`.
+fn clip_poll(pulled: Result<ClipEventCore, PunktfunkError>) -> ClipPoll {
+    use ClipPoll::{CancelFetch, Line, Nothing};
+    match pulled {
+        Ok(ClipEventCore::State { enabled, .. }) => Line(format!("state:{}", u8::from(enabled))),
+        Ok(ClipEventCore::RemoteOffer { seq, kinds }) => {
+            let has_text = kinds.iter().any(|k| is_text(&k.mime));
+            Line(format!("offer:{seq}:{}", u8::from(has_text)))
+        }
+        Ok(ClipEventCore::FetchRequest { req_id, mime, .. }) => {
+            if is_text(&mime) {
+                // As Kotlin's `Int`: core sets the id's high bit, and Kotlin parses a decimal
+                // above `Int.MAX_VALUE` as nothing. It hands the same bits back to serve.
+                Line(format!("fetch:{}", req_id as i32))
+            } else {
+                CancelFetch(req_id)
+            }
+        }
+        Ok(ClipEventCore::Data { xfer_id, bytes, .. }) => Line(format!(
+            "data:{xfer_id}:{}",
+            String::from_utf8_lossy(&bytes)
+        )),
+        Ok(ClipEventCore::Cancelled { id }) => Line(format!("cancel:{id}")),
+        Ok(ClipEventCore::Error { id, code }) => Line(format!("error:{id}:{code}")),
+        Err(PunktfunkError::NoFrame) => Nothing,
+        Err(_) => Line("closed".into()),
+    }
+}
+
+/// `NativeBridge.nativeNextClip(handle)` — block ≤250 ms for the next clipboard event, encoded
+/// as a compact string ([`clip_poll`]); null on timeout, `"closed"` once the session is gone.
+/// Call from a dedicated poll thread.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_io_unom_punktfunk_kit_NativeBridge_nativeNextClip<'local>(
     mut env: EnvUnowned<'local>,
     _this: JObject<'local>,
     handle: jlong,
 ) -> JString<'local> {
-    // `JString::default()` is the null reference the old `std::ptr::null_mut()` returned, so the
-    // "null on timeout" contract in the doc comment above is unchanged.
+    // `JString::default()` is the null reference of the "null on timeout" contract.
     env.with_env(|env| -> jni::errors::Result<JString<'local>> {
         let Some(h) = client(handle) else {
             return env.new_string("closed");
         };
-        let msg = match h.client.next_clip(Duration::from_millis(250)) {
-            Ok(ClipEventCore::State { enabled, .. }) => format!("state:{}", u8::from(enabled)),
-            Ok(ClipEventCore::RemoteOffer { seq, kinds }) => {
-                let has_text = kinds.iter().any(|k| k.mime.starts_with("text/plain"));
-                format!("offer:{seq}:{}", u8::from(has_text))
+        match clip_poll(h.client.next_clip(Duration::from_millis(250))) {
+            ClipPoll::Line(msg) => env.new_string(msg),
+            ClipPoll::CancelFetch(req_id) => {
+                let _ = h.client.clip_cancel(req_id);
+                Ok(JString::default())
             }
-            Ok(ClipEventCore::FetchRequest { req_id, mime, .. }) => {
-                if mime.starts_with("text/plain") {
-                    format!("fetch:{req_id}")
-                } else {
-                    // We only ever offer text; cancel anything else rather than stall the host.
-                    let _ = h.client.clip_cancel(req_id);
-                    return Ok(JString::default());
-                }
-            }
-            Ok(ClipEventCore::Data { xfer_id, bytes, .. }) => {
-                format!("data:{xfer_id}:{}", String::from_utf8_lossy(&bytes))
-            }
-            Ok(ClipEventCore::Cancelled { id }) => format!("cancel:{id}"),
-            Ok(ClipEventCore::Error { id, code }) => format!("error:{id}:{code}"),
-            Err(PunktfunkError::NoFrame) => return Ok(JString::default()),
-            Err(_) => "closed".into(),
-        };
-        env.new_string(msg)
+            ClipPoll::Nothing => Ok(JString::default()),
+        }
     })
     .resolve::<LogErrorAndDefault>()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use punktfunk_core::clipboard::INBOUND_REQ_FLAG;
+    use ClipPoll::{CancelFetch, Line, Nothing};
+
+    type Pulled = Result<ClipEventCore, PunktfunkError>;
+
+    fn line(s: &str) -> ClipPoll {
+        Line(s.to_string())
+    }
+
+    fn fetch(req_id: u32, mime: &str) -> Pulled {
+        Ok(ClipEventCore::FetchRequest {
+            req_id,
+            seq: 1,
+            file_index: CLIP_FILE_INDEX_NONE,
+            mime: mime.to_string(),
+        })
+    }
+
+    fn offer(seq: u32, mimes: &[&str]) -> Pulled {
+        let kinds = mimes
+            .iter()
+            .map(|m| ClipKind {
+                mime: m.to_string(),
+                size_hint: 0,
+            })
+            .collect();
+        Ok(ClipEventCore::RemoteOffer { seq, kinds })
+    }
+
+    fn data(xfer_id: u32, bytes: &[u8]) -> Pulled {
+        Ok(ClipEventCore::Data {
+            xfer_id,
+            bytes: bytes.to_vec(),
+            last: true,
+        })
+    }
+
+    #[test]
+    fn a_poll_that_ends_the_stream_or_needs_a_cancel_says_so_first() {
+        let rows: Vec<(&str, Pulled, ClipPoll)> = vec![
+            ("a poll timeout", Err(PunktfunkError::NoFrame), Nothing),
+            (
+                "a dropped plane",
+                Err(PunktfunkError::Closed),
+                line("closed"),
+            ),
+            (
+                "a timeout error is the plane gone",
+                Err(PunktfunkError::Timeout),
+                line("closed"),
+            ),
+            (
+                "a socket error is the plane gone",
+                Err(PunktfunkError::Io(std::io::Error::other("reset"))),
+                line("closed"),
+            ),
+            (
+                "a fetch for an image",
+                fetch(INBOUND_REQ_FLAG | 4, "image/png"),
+                CancelFetch(INBOUND_REQ_FLAG | 4),
+            ),
+            ("a fetch with no MIME", fetch(7, ""), CancelFetch(7)),
+            ("a fetch for html", fetch(7, "text/html"), CancelFetch(7)),
+            (
+                "the MIME match is case-sensitive",
+                fetch(7, "TEXT/PLAIN"),
+                CancelFetch(7),
+            ),
+            (
+                "text/plain must open the MIME",
+                fetch(7, "application/x-text/plain"),
+                CancelFetch(7),
+            ),
+        ];
+        for (name, pulled, want) in rows {
+            assert_eq!(clip_poll(pulled), want, "{name}");
+        }
+    }
+
+    #[test]
+    fn a_host_event_becomes_the_line_kotlin_parses() {
+        let rows: Vec<(&str, Pulled, ClipPoll)> = vec![
+            (
+                "sharing on",
+                Ok(ClipEventCore::State {
+                    enabled: true,
+                    policy: 3,
+                    reason: 9,
+                }),
+                line("state:1"),
+            ),
+            (
+                "sharing off",
+                Ok(ClipEventCore::State {
+                    enabled: false,
+                    policy: 0,
+                    reason: 0,
+                }),
+                line("state:0"),
+            ),
+            ("an offer with no kinds", offer(3, &[]), line("offer:3:0")),
+            (
+                "an offer of an image",
+                offer(3, &["image/png"]),
+                line("offer:3:0"),
+            ),
+            (
+                "an offer of text",
+                offer(3, &["text/plain;charset=utf-8"]),
+                line("offer:3:1"),
+            ),
+            (
+                "an offer of bare text/plain",
+                offer(3, &["text/plain"]),
+                line("offer:3:1"),
+            ),
+            (
+                "text among other kinds",
+                offer(3, &["image/png", "text/html", "text/plain;charset=utf-8"]),
+                line("offer:3:1"),
+            ),
+            (
+                "an offer matches on the text/plain prefix",
+                offer(3, &["text/plainish"]),
+                line("offer:3:1"),
+            ),
+            (
+                "the largest offer sequence",
+                offer(u32::MAX, &["text/plain"]),
+                line("offer:4294967295:1"),
+            ),
+            (
+                "a text fetch",
+                fetch(5, "text/plain;charset=utf-8"),
+                line("fetch:5"),
+            ),
+            // Core numbers a host paste with its high bit set; Kotlin reads the id as an `Int`
+            // and `nativeClipServeText` casts the same bits back.
+            (
+                "a host paste's request id reaches Kotlin as an Int it can parse",
+                fetch(INBOUND_REQ_FLAG | 1, "text/plain"),
+                line("fetch:-2147483647"),
+            ),
+            (
+                "a cancelled transfer",
+                Ok(ClipEventCore::Cancelled { id: 9 }),
+                line("cancel:9"),
+            ),
+            (
+                "a failed transfer carries its negative code",
+                Ok(ClipEventCore::Error { id: 9, code: -3 }),
+                line("error:9:-3"),
+            ),
+        ];
+        for (name, pulled, want) in rows {
+            assert_eq!(clip_poll(pulled), want, "{name}");
+        }
+    }
+
+    #[test]
+    fn clip_text_rides_the_line_decoded_lossily_and_whole() {
+        let rows: Vec<(&str, Pulled, ClipPoll)> = vec![
+            ("empty text", data(5, b""), line("data:5:")),
+            ("plain text", data(5, b"hello"), line("data:5:hello")),
+            (
+                "colons stay in the text",
+                data(5, b"a:b:c"),
+                line("data:5:a:b:c"),
+            ),
+            (
+                "newlines stay in the text",
+                data(5, b"one\ntwo"),
+                line("data:5:one\ntwo"),
+            ),
+            (
+                "multi-byte text is intact",
+                data(5, "naïve 😀".as_bytes()),
+                line("data:5:naïve 😀"),
+            ),
+            (
+                "an invalid byte becomes U+FFFD",
+                data(5, &[b'a', 0xff, b'b']),
+                line("data:5:a\u{fffd}b"),
+            ),
+            (
+                "a cut UTF-8 sequence becomes U+FFFD",
+                data(5, &"é".as_bytes()[..1]),
+                line("data:5:\u{fffd}"),
+            ),
+            (
+                "the transfer id leads",
+                data(u32::MAX, b"x"),
+                line("data:4294967295:x"),
+            ),
+        ];
+        for (name, pulled, want) in rows {
+            assert_eq!(clip_poll(pulled), want, "{name}");
+        }
+    }
 }

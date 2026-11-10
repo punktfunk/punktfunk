@@ -41,6 +41,9 @@ const GLASS_MIN_PERIODS: i64 = 300;
 const GLASS_WINDOW_PERIODS: i64 = 7200;
 /// A wider gap between fences is a stream pause: its whole periods are a guess.
 const GLASS_MAX_GAP_PERIODS: i64 = 8;
+/// A stated period that moves by more than one part in this is another panel mode. The
+/// choreographer's own reading wobbles by far less.
+const PERIOD_SWITCH_RATIO: i64 = 20;
 
 /// The slot clock, the pacer's memory of the slots it assigned and observed, and the apply margin
 /// the observed slots adapt.
@@ -123,10 +126,16 @@ impl Slots {
 
     /// The choreographer's panel period (0 = none yet): the compositor's own statement of the
     /// grid, which a source below the panel rate cannot bias the way present spacings can.
+    /// A rate switch starts the fence average over: its periods counted the old grid.
     pub(crate) fn set_period(&mut self, panel_period_ns: i64) {
-        if panel_period_ns > 0 {
-            self.clock.set_period(panel_period_ns);
+        if panel_period_ns <= 0 {
+            return;
         }
+        let old = self.clock.period_ns();
+        if old > 0 && (panel_period_ns - old).abs() * PERIOD_SWITCH_RATIO > old {
+            (self.glass_span_ns, self.glass_periods) = (0, 0);
+        }
+        self.clock.set_period(panel_period_ns);
     }
 
     /// Pacing off for the rest of the run: the `Skipping` verdict.
@@ -241,7 +250,7 @@ impl Slots {
     /// it: the compositor's own wake jitter, read before the clock takes the sample. `None`
     /// without a latch or a phased clock.
     pub(crate) fn latch_deviation_ns(&self, latch_ns: i64) -> Option<i64> {
-        if latch_ns == 0 || !self.clock.phased() {
+        if latch_ns <= 0 || !self.clock.phased() {
             return None;
         }
         let anchor = latch_ns + self.clock.lead_ns();
@@ -287,11 +296,12 @@ impl Slots {
         }
     }
 
-    /// One completion's latch (0 = none: `unlatched`). Two transactions latched in one commit
+    /// One completion's latch (0 or below = none: `unlatched`; the platform states -1 for a
+    /// transaction it never latched). Two transactions latched in one commit
     /// share the instant and SurfaceFlinger showed only the newer; the interval histogram sees
     /// the same pair as a 0-slot spacing.
     pub(crate) fn note_latch(&mut self, latch_ns: i64, c: &mut Counters) {
-        if latch_ns == 0 {
+        if latch_ns <= 0 {
             c.unlatched += 1;
             return;
         }
@@ -685,6 +695,12 @@ mod tests {
             s.on_present(present, present - LEAD, None, true, 0, &mut c);
         }
         assert_eq!(s.glass_period_ns(), Some(P5994));
+        // A switch to another mode starts the average over; the stated period's wobble does not.
+        let mut s = glassed(60, P5994, 1000);
+        s.set_period(1_000_000_000 / 60 + 1_000);
+        assert_eq!(s.glass_period_ns(), Some(P5994));
+        s.set_period(1_000_000_000 / 120);
+        assert_eq!(s.glass_period_ns(), None);
         // A latch standing in for a fence measures nothing.
         let mut s = Slots::new(60, exact, PresentPriority::Latency, true, false, None);
         for k in 0..2000 {
@@ -834,7 +850,9 @@ mod tests {
         let mut c = Counters::default();
         let mut s = Slots::new(120, P, PresentPriority::Latency, true, false, None);
         s.note_latch(0, &mut c);
-        assert_eq!(c.unlatched, 1);
+        s.note_latch(-1, &mut c);
+        s.note_latch(-1, &mut c);
+        assert_eq!((c.unlatched, c.coalesced), (3, 0));
         for k in [0, 1, 3, 3] {
             s.on_present(T0 + k * P, T0 + k * P - LEAD, None, false, 0, &mut c);
         }

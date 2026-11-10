@@ -40,7 +40,7 @@ mod imp {
     use std::sync::{mpsc, Arc};
     use std::time::{Duration, Instant};
 
-    use crate::decode::{now_realtime_ns, DecodeOptions, NO_VIDEO_PATIENCE};
+    use crate::decode::{note_received_frame, now_realtime_ns, DecodeOptions, NO_VIDEO_PATIENCE};
 
     /// The HUD's decoder label. Not an `AMediaCodec` name because there is no codec object
     /// here — naming the device keeps the line useful (it is the GPU that decodes).
@@ -388,14 +388,13 @@ mod imp {
             let work_started = (Instant::now(), crate::sys::now_monotonic_ns());
 
             // Receipt stamp: core's reassembly-completion time, not the pull instant — a
-            // pull stamp folds this loop's own poll wait into "network".
+            // pull stamp folds this loop's own poll wait into "network". Noting it drains the
+            // host timings, which the overlay's host and network figures are built from.
             let want_stamps = stats.enabled() || measure_decode;
-            let received_ns = if !want_stamps {
-                0
-            } else if frame.received_ns > 0 {
-                frame.received_ns as i128
+            let received_ns = if want_stamps {
+                note_received_frame(client, &frame)
             } else {
-                now_realtime_ns()
+                0
             };
             let pulled_ns = if want_stamps { now_realtime_ns() } else { 0 };
 

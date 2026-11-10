@@ -22,8 +22,9 @@ mod sink;
 pub(crate) mod surface_control;
 mod vsync;
 
+pub(crate) use crate::codec_format::codec_mime;
 use async_loop::run_async;
-pub(crate) use setup::{codec_label, codec_mime};
+pub(crate) use setup::codec_label;
 // Shared with the PyroWave lane, which exists only where the codec is built (see `crate::pyro`).
 #[cfg(target_pointer_width = "64")]
 pub(crate) use async_loop::start_hint;
@@ -31,23 +32,19 @@ pub(crate) use async_loop::start_hint;
 #[cfg(target_pointer_width = "64")]
 pub(crate) use async_loop::DecodeEvent;
 #[cfg(target_pointer_width = "64")]
-pub(crate) use latency::now_realtime_ns;
+pub(crate) use latency::{note_received_frame, now_realtime_ns};
 #[cfg(target_pointer_width = "64")]
 pub(crate) use setup::boost_thread_priority;
 #[cfg(target_pointer_width = "64")]
 pub(crate) use sink::asc_backend_selected;
 
+use crate::bring_up::ranked_for;
 use crate::input_stall::NoOutput;
 use ndk::native_window::NativeWindow;
 use punktfunk_core::client::NativeClient;
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use std::time::Instant;
-
-/// Cap on AUs parked in the async loop awaiting a free codec input slot. Matches the connector's
-/// own frame-channel depth; on sustained overflow the oldest is dropped and a keyframe requested
-/// (same recovery as a reassembler drop). In steady state this stays near-empty.
-const FRAME_PARK_CAP: usize = 16;
 
 /// Cap on the pts→received-timestamp map below: MediaCodec holds only a handful of frames in
 /// flight, so anything beyond this is stale (codec flushed / HUD toggled) and gets evicted.
@@ -212,12 +209,6 @@ impl DecodeOptions {
     }
 }
 
-/// Kotlin's pick `name`, ranked for `ranked`, when `mime` is that MIME; else the platform's
-/// default, which low-latency mode off always takes.
-fn ranked_for<'a>(name: Option<&'a str>, ranked: &str, mime: &str) -> Option<&'a str> {
-    name.filter(|_| mime == ranked)
-}
-
 /// The decode entry point on the `pf-decode` thread: dispatches to the codec's loop. All of
 /// them run until `shutdown` is set or the session closes.
 ///
@@ -236,18 +227,4 @@ pub fn run(
         return;
     }
     run_async(client, window, shutdown, stats, opts);
-}
-
-#[cfg(test)]
-mod ranked_tests {
-    use super::ranked_for;
-
-    /// A codec the host moved to after the pick never gets a decoder ranked for another MIME.
-    #[test]
-    fn a_pick_names_only_the_mime_it_was_ranked_for() {
-        let pick = Some("c2.qti.hevc.decoder.low_latency");
-        assert_eq!(ranked_for(pick, "video/hevc", "video/hevc"), pick);
-        assert_eq!(ranked_for(pick, "video/hevc", "video/avc"), None);
-        assert_eq!(ranked_for(None, "video/hevc", "video/hevc"), None);
-    }
 }
