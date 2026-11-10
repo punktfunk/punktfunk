@@ -292,6 +292,91 @@ fn pyrowave_refuses_a_frame_that_is_not_the_mode() {
     );
 }
 
+/// A reframe halves a 512×288 crop of a 768×432 capture into 256×144. The decode is the crop's
+/// red and white halves, with none of the blue beside it or the green above and below, and the
+/// pointer, blended at source size, lands moved and shrunk with the crop.
+#[test]
+#[ignore = "needs a real Vulkan 1.3 compute device (run on a GPU host, not the build box)"]
+fn pyrowave_reframe_crops_and_scales() {
+    let (w, h) = (256u32, 144u32);
+    let (sw, sh) = (768u32, 432u32);
+    let mut enc = PyroWaveEncoder::open(
+        w,
+        h,
+        60,
+        40_000_000,
+        crate::ChromaFormat::Yuv420,
+        8,
+        false,
+        &Knobs::from_env(),
+    )
+    .expect("open");
+    assert!(enc.caps().crops_input && enc.caps().downscales_input);
+    enc.set_input_crop([128, 72, 512, 288]).expect("reframe");
+    let (red, white) = ([40u8, 40, 200, 255], [235, 235, 235, 255]);
+    let (green, blue) = ([40u8, 200, 40, 255], [200, 40, 40, 255]);
+    // BGRX: green rows outside the crop, blue columns beside it, red then white inside.
+    let mut px = vec![0u8; (sw * sh * 4) as usize];
+    for y in 0..sh {
+        for x in 0..sw {
+            let c = if !(72..360).contains(&y) {
+                green
+            } else if !(128..640).contains(&x) {
+                blue
+            } else if x < 384 {
+                red
+            } else {
+                white
+            };
+            let i = ((y * sw + x) * 4) as usize;
+            px[i..i + 4].copy_from_slice(&c);
+        }
+    }
+    // A 64² green pointer at source (160, 200): the crop puts it at (16, 64), 32² in size.
+    let cursor = pf_frame::CursorOverlay {
+        x: 160,
+        y: 200,
+        w: 64,
+        h: 64,
+        rgba: std::sync::Arc::new([40u8, 200, 40, 255].repeat(64 * 64)),
+        serial: 1,
+        hot_x: 0,
+        hot_y: 0,
+        visible: true,
+    };
+    let frame = CapturedFrame {
+        provenance: Default::default(),
+        width: sw,
+        height: sh,
+        pts_ns: 0,
+        format: PixelFormat::Bgrx,
+        payload: FramePayload::Cpu(px),
+        cursor: Some(cursor),
+    };
+    enc.submit(&frame).expect("submit");
+    let au = enc.poll().expect("poll").expect("one AU");
+    // SAFETY: test-only FFI into the vendored decoder with locally-owned buffers.
+    let (luma, cb, cr) = unsafe { decode_planes(w, h, &au.data) };
+    let near = |(x, y): (u32, u32), want: [u8; 4], what: &str| {
+        let c = ((y / 2) * (w / 2) + x / 2) as usize;
+        let got = [luma[(y * w + x) as usize], cb[c], cr[c]].map(f64::from);
+        let (ye, cbe, cre) = bt709(want);
+        assert!(
+            got.iter()
+                .zip([ye, cbe, cre])
+                .all(|(g, e)| (g - e).abs() < 24.0),
+            "{what} at ({x}, {y}): YCbCr {got:?}, want ({ye:.0}, {cbe:.0}, {cre:.0})"
+        );
+    };
+    near((3, h / 2), red, "left edge is the crop's red");
+    near((w - 4, h / 2), white, "right edge is the crop's white");
+    near((w / 4, 2), red, "top edge has no green");
+    near((w * 3 / 4, h - 3), white, "bottom edge has no green");
+    near((32, 80), green, "the pointer, moved and halved");
+    near((32, 110), red, "below the halved pointer");
+    near((96, 116), red, "where an unmoved pointer would land");
+}
+
 /// A failed dmabuf import must leak neither the dup'd fd nor the VkImage. Drives
 /// `import_rgb_dmabuf` directly so deliberate failures cannot trip the raw-dmabuf latch.
 /// A garbage modifier is refused before `create_image`; LINEAR memfd fails at `allocate_memory`.

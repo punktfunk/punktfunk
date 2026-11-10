@@ -53,6 +53,9 @@ struct Params {
     hdr: bool,
     /// The knobs the session opened with; a respawn and the fallback reuse them.
     knobs: Knobs,
+    /// The host's crop ([`Encoder::set_input_crop`]) once taken; a respawn and the fallback
+    /// replay it.
+    crop: Option<[u32; 4]>,
 }
 
 enum Fail {
@@ -350,6 +353,9 @@ fn handshake(mut link: Link, p: &Params, bitrate_bps: u64) -> Result<Handshake> 
                     // 4:4:4 open and fires a spurious "chroma disagrees with Welcome" warn.
                     blends_cursor,
                     chroma_444: chroma444,
+                    // A worker of this protocol takes `SetInputCrop`; the fallback replays it.
+                    downscales_input: true,
+                    crops_input: true,
                     ..EncoderCaps::default()
                 },
                 priority,
@@ -386,6 +392,7 @@ pub(crate) fn open_preferring_worker(
         bit_depth,
         hdr,
         knobs: knobs.clone(),
+        crop: None,
     };
     let inline = || -> Result<Box<dyn Encoder>> {
         super::pyrowave::PyroWaveEncoder::open(
@@ -524,6 +531,10 @@ impl RemotePyroWave {
             // parameter above.)
             if let Some(shard) = self.stream.wire_chunk {
                 e.set_wire_chunking(shard);
+            }
+            // The crop decides which picture a capture-sized frame becomes.
+            if let Some(rect) = self.params.crop {
+                e.set_input_crop(rect)?;
             }
             self.inline = Some(e);
         }
@@ -696,12 +707,20 @@ impl Encoder for RemotePyroWave {
                         // Same replay the in-process fallback does: the boundary changes AU bytes.
                         self.set_wire_chunking(shard);
                     }
-                    tracing::info!(
-                        worker = %self.worker_path.display(),
-                        priority = ?hs.priority,
-                        "pyrowave: respawned the encode worker after a mid-session death"
-                    );
-                    return true;
+                    // A worker without the crop would refuse every capture-sized frame.
+                    match self.params.crop.map(|r| self.set_input_crop(r)) {
+                        Some(Err(e)) => self.pin_inline(&format!(
+                            "the respawned worker did not take the crop: {e:#}"
+                        )),
+                        _ => {
+                            tracing::info!(
+                                worker = %self.worker_path.display(),
+                                priority = ?hs.priority,
+                                "pyrowave: respawned the encode worker after a mid-session death"
+                            );
+                            return true;
+                        }
+                    }
                 }
                 Err(e) => tracing::warn!(
                     worker = %self.worker_path.display(),
@@ -819,8 +838,28 @@ impl Encoder for RemotePyroWave {
         // capturer's ring depth constrains nothing here.
     }
 
-    fn set_input_crop(&mut self, _rect: [u32; 4]) -> Result<()> {
-        // `crops_input` is false: the host never asks a worker to crop.
+    fn set_input_crop(&mut self, rect: [u32; 4]) -> Result<()> {
+        if let Some(link) = self.link.as_mut() {
+            match link.request(&ToWorker::SetInputCrop { rect }, &[]) {
+                Ok(FromWorker::Ack { ok: true }) => {}
+                Ok(FromWorker::EncodeErr { message, .. }) => {
+                    bail!("pyrowave encode worker: {message}")
+                }
+                // One request, one reply: a link out of step would answer the next frame.
+                Ok(other) => {
+                    self.link = None;
+                    bail!("unexpected encode worker reply to the crop: {other:?}")
+                }
+                Err(e) => {
+                    self.link = None;
+                    return Err(e.context("pyrowave encode worker"));
+                }
+            }
+        }
+        if let Some(e) = self.inline.as_mut() {
+            e.set_input_crop(rect)?;
+        }
+        self.params.crop = Some(rect);
         Ok(())
     }
 
@@ -859,6 +898,7 @@ mod tests {
             bit_depth: 8,
             hdr: false,
             knobs: Knobs::from_env(),
+            crop: None,
         }
     }
 
@@ -1039,6 +1079,7 @@ mod tests {
                 bit_depth: 8,
                 hdr: false,
                 knobs: Knobs::from_env(),
+                crop: None,
             },
             bitrate_bps: 5_000_000,
             worker_path: PathBuf::from("/usr/bin/punktfunk-encode-worker"),
@@ -1292,6 +1333,57 @@ mod tests {
         }
         assert!(rebuild.load(std::sync::atomic::Ordering::Relaxed));
         server.join().unwrap();
+    }
+
+    /// The crop crosses to the worker and is kept for a respawn and the fallback. A worker that
+    /// declines one fails the call, so the host reopens at the source's size.
+    #[test]
+    fn the_crop_crosses_to_the_worker_and_a_refusal_fails_the_call() {
+        let (host, peer) = ipc::socketpair_seqpacket().unwrap();
+        let server = std::thread::spawn(move || {
+            let mut buf = Vec::new();
+            let mut asked = Vec::new();
+            for reply in [
+                FromWorker::Ack { ok: true },
+                FromWorker::EncodeErr {
+                    message: "a 64x64 crop would upscale".into(),
+                    capture_rebuild: false,
+                },
+            ] {
+                let (msg, _) =
+                    worker::recv_eintr::<ToWorker>(peer.as_fd(), &mut buf, None).unwrap();
+                asked.push(msg);
+                worker::send_eintr(peer.as_fd(), &reply, &[]).unwrap();
+            }
+            asked
+        });
+        let mut proxy = RemotePyroWave {
+            link: Some(mock_link(host, File::from(memfd()))),
+            inline: None,
+            params: params(),
+            bitrate_bps: 40_000_000,
+            worker_path: PathBuf::from("/usr/bin/punktfunk-encode-worker"),
+            caps: EncoderCaps::default(),
+            stream: AuStream::default(),
+            pending: VecDeque::new(),
+            respawn_used: false,
+        };
+        let (taken, refused) = ([0, 0, 3840, 2160], [0, 0, 64, 64]);
+        proxy
+            .set_input_crop(taken)
+            .expect("the worker took the crop");
+        let err = proxy.set_input_crop(refused).unwrap_err();
+        assert!(format!("{err:#}").contains("upscale"), "{err:#}");
+        assert_eq!(
+            proxy.params.crop,
+            Some(taken),
+            "only a taken crop is replayed"
+        );
+        assert!(proxy.link.is_some(), "a refusal is an answer, not a death");
+        assert_eq!(
+            server.join().unwrap(),
+            [taken, refused].map(|rect| ToWorker::SetInputCrop { rect })
+        );
     }
 
     /// Every `Encoder` trait method must be written here. The proxy has two backends, so an

@@ -183,6 +183,13 @@ mod vk_import;
 ))]
 #[path = "enc/linux/vk_csc.rs"]
 mod vk_csc;
+// The crop and scale ahead of the CSC, which PyroWave and Vulkan Video share.
+#[cfg(all(
+    target_os = "linux",
+    any(feature = "vulkan-encode", feature = "pyrowave")
+))]
+#[path = "enc/linux/vk_reframe.rs"]
+mod vk_reframe;
 // PyroWave: Vulkan-compute intra wavelet. Explicit `PUNKTFUNK_ENCODER=pyrowave`.
 // See `design/pyrowave-codec-plan.md`.
 #[cfg(all(target_os = "linux", feature = "pyrowave"))]
