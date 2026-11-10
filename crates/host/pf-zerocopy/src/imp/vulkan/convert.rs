@@ -1,10 +1,14 @@
-//! The fused convert on the bridge's device: the compositor's dmabuf sampled as an image
-//! (any modifier), the cursor blended, the NVENC input slot written — one dispatch per
-//! frame, no staging. The slot is the host's OPAQUE_FD memory NVENC registered
-//! (`vkslot.rs`), imported here once per slot; the dmabuf image is cached per fd.
+//! The fused convert on the bridge's device: the compositor's dmabuf read once, the cursor
+//! blended, the NVENC input slot written — one dispatch per frame, no staging. The slot is
+//! the host's OPAQUE_FD memory NVENC registered (`vkslot.rs`), imported here once per slot;
+//! the dmabuf image is cached per fd.
+//!
+//! A tiled dmabuf is sampled as an image. A LINEAR one is read as words at its own offset and
+//! stride ([`linear_words`]): NVIDIA reads a LINEAR image at a row pitch rounded up to 32
+//! bytes, so a 1690-wide frame at 6760 bytes shears as an image.
 //!
 //! ```text
-//!   dmabuf fd ──DRM-modifier image──▶ texelFetch ─┐
+//!   dmabuf fd ──DRM-modifier image──▶ texelFetch ─┐   (LINEAR: imported buffer ──▶ words)
 //!   cursor RGBA8 (host-visible SSBO) ─────────────┼─▶ convert_img.comp ─▶ slot SSBO ─▶ NVENC
 //!   host slot OPAQUE_FD ──imported VkBuffer ──────┘
 //! ```
@@ -24,13 +28,29 @@ use std::collections::HashMap;
 use std::os::fd::{AsRawFd, BorrowedFd, IntoRawFd, OwnedFd};
 
 const CONVERT_SPV: &[u8] = include_bytes!("../convert_img.spv");
-/// Push constants of `convert_img.comp`: nine 32-bit words.
-const PUSH_BYTES: u32 = 36;
+/// Push constants of `convert_img.comp`: twelve 32-bit words.
+const PUSH_BYTES: u32 = 48;
 /// Cursor bitmaps larger than this (in bytes) are refused; 256² RGBA8 is the capture cap.
 const CURSOR_MAX_BYTES: u64 = 256 * 256 * 4;
 /// Passes in flight before a command buffer's reuse waits. The host holds at most two
 /// frames ahead of the encoder.
 const FRAMES: usize = 4;
+
+/// How `convert_img.comp` reads a LINEAR packed-RGB dmabuf as words: its `lin_fmt`, the first
+/// pixel's word, and the row stride in words. `None` samples the image: a tiled buffer, a
+/// fourcc the shader does not unpack, or a layout that is not word-aligned.
+fn linear_words(s: &ConvertSrc) -> Option<(u32, u32, u32)> {
+    let fmt = match s.fourcc {
+        drm::XR24 | drm::AR24 => 1,
+        drm::XB24 | drm::AB24 => 2,
+        drm::XR30 | drm::AR30 => 3,
+        drm::XB30 | drm::AB30 => 4,
+        _ => return None,
+    };
+    let aligned = s.offset % 4 == 0 && s.stride % 4 == 0;
+    let fits = u64::from(s.stride) >= u64::from(s.width) * 4;
+    (s.modifier == 0 && aligned && fits).then_some((fmt, s.offset / 4, s.stride / 4))
+}
 
 struct SrcImage {
     alloc: VkImageAlloc,
@@ -193,6 +213,11 @@ impl VkBridge {
                     .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
                     .descriptor_count(1)
                     .stage_flags(vk::ShaderStageFlags::COMPUTE),
+                vk::DescriptorSetLayoutBinding::default()
+                    .binding(3)
+                    .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+                    .descriptor_count(1)
+                    .stage_flags(vk::ShaderStageFlags::COMPUTE),
             ];
             st.dset_layout = d
                 .create_descriptor_set_layout(
@@ -239,7 +264,7 @@ impl VkBridge {
                     .descriptor_count(n),
                 vk::DescriptorPoolSize::default()
                     .ty(vk::DescriptorType::STORAGE_BUFFER)
-                    .descriptor_count(2 * n),
+                    .descriptor_count(3 * n),
             ];
             st.dpool = d
                 .create_descriptor_pool(
@@ -647,6 +672,25 @@ impl VkBridge {
             if self.conv.as_ref().expect("state").cursor.is_none() {
                 self.ensure_cursor_capacity(16)?;
             }
+            // A LINEAR source is read through its buffer import, checked against this frame's
+            // span: the cached import is not proof of it.
+            let lin = linear_words(src);
+            let lin_buffer = match lin {
+                Some(_) => {
+                    if !self.src_cache.contains_key(&src.fd) {
+                        let size = libc::lseek(src.fd, 0, libc::SEEK_END);
+                        ensure!(size > 0, "lseek(dmabuf)");
+                        self.import_src(src.fd, size as u64)?;
+                    }
+                    let s = &self.src_cache[&src.fd];
+                    let span = u64::from(src.offset)
+                        + u64::from(src.stride) * u64::from(src.height - 1)
+                        + u64::from(src.width) * 4;
+                    ensure!(s.size >= span, "dmabuf smaller than its {span}-byte frame");
+                    Some(s.buf.buffer)
+                }
+                None => None,
+            };
             let qf = self.qf;
             let (idx, cmd, dset, value) = self.next_pass()?;
             let d = &self.device;
@@ -672,6 +716,10 @@ impl VkBridge {
             let cur_info = [vk::DescriptorBufferInfo::default()
                 .buffer(cur.buf.buffer)
                 .range(vk::WHOLE_SIZE)];
+            // A sampled source leaves `lin` unread: any live buffer satisfies the binding.
+            let lin_info = [vk::DescriptorBufferInfo::default()
+                .buffer(lin_buffer.unwrap_or(cur.buf.buffer))
+                .range(vk::WHOLE_SIZE)];
             d.update_descriptor_sets(
                 &[
                     vk::WriteDescriptorSet::default()
@@ -689,6 +737,11 @@ impl VkBridge {
                         .dst_binding(2)
                         .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
                         .buffer_info(&cur_info),
+                    vk::WriteDescriptorSet::default()
+                        .dst_set(dset)
+                        .dst_binding(3)
+                        .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+                        .buffer_info(&lin_info),
                 ],
                 &[],
             );
@@ -740,7 +793,8 @@ impl VkBridge {
                 Some(c) => (c.w, c.h, c.x, c.y),
                 None => (0, 0, 0, 0),
             };
-            let push: [u32; 9] = [
+            let (lin_fmt, lin_off_w, lin_pitch_w) = lin.unwrap_or((0, 0, 0));
+            let push: [u32; 12] = [
                 out.mode,
                 out.width,
                 out.height,
@@ -750,6 +804,9 @@ impl VkBridge {
                 ch,
                 cx as u32,
                 cy as u32,
+                lin_fmt,
+                lin_off_w,
+                lin_pitch_w,
             ];
             let bytes: Vec<u8> = push.iter().flat_map(|w| w.to_ne_bytes()).collect();
             d.cmd_push_constants(cmd, st.playout, vk::ShaderStageFlags::COMPUTE, 0, &bytes);
@@ -1026,6 +1083,32 @@ mod tests {
         assert_eq!(slot_bytes(&out(2)), 64 * 4 * 150);
         assert_eq!(slot_bytes(&out(3)), 64 * 4 * 50);
         assert_eq!(slot_bytes(&out(5)), 64 * 4 * 75);
+    }
+
+    /// A LINEAR packed frame is read as words at its own stride, whatever the stride; a tiled
+    /// one, or a layout off a word, is sampled.
+    #[test]
+    fn a_linear_source_is_read_as_words() {
+        let src = |modifier, offset, stride| ConvertSrc {
+            fd: -1,
+            fourcc: drm::XR24,
+            modifier,
+            offset,
+            stride,
+            width: 1690,
+            height: 1056,
+            plane1: None,
+        };
+        assert_eq!(linear_words(&src(0, 0, 6760)), Some((1, 0, 1690)));
+        assert_eq!(linear_words(&src(0, 64, 6912)), Some((1, 16, 1728)));
+        assert_eq!(linear_words(&src(0x0300_0000_0060_6010, 0, 6784)), None);
+        assert_eq!(linear_words(&src(0, 2, 6760)), None);
+        assert_eq!(linear_words(&src(0, 0, 6756)), None);
+        let ten_bit = ConvertSrc {
+            fourcc: drm::XB30,
+            ..src(0, 0, 6760)
+        };
+        assert_eq!(linear_words(&ten_bit), Some((4, 0, 1690)));
     }
 
     /// A producer NV12 lands at the slot's layout: one region per plane when the strides match

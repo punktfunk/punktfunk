@@ -3260,3 +3260,88 @@ fn nvenc_cuda_in_place_repeats_in_flight() {
     );
     println!("in-place repeats: {aus} AUs over {regs} registrations of one buffer");
 }
+
+/// A `w`-wide BGRx frame at `stride`: dark left half, bright right half.
+fn edge_frame(w: u32, h: u32, stride: u32) -> Vec<u8> {
+    let mut bytes = vec![0u8; (stride * h) as usize];
+    for y in 0..h {
+        for x in 0..w {
+            let v = if x < w / 2 { 40 } else { 235 };
+            let i = (y * stride + x * 4) as usize;
+            bytes[i..i + 4].copy_from_slice(&[v, v, v, 255]);
+        }
+    }
+    bytes
+}
+
+/// The edge of [`edge_frame`] sits in one column on every row of the decoded picture: a row
+/// pitch misread anywhere on the way walks it sideways.
+fn assert_edge_is_straight(stream: &[u8], name: &str, w: u32, h: u32) {
+    let out = decode_first(stream, name, "gray");
+    for y in [8, h - 8] {
+        let edge = (0..w).find(|&x| out[(y * w + x) as usize] > 128);
+        assert_eq!(edge, Some(w / 2), "row {y}");
+    }
+}
+
+/// 1690 pixels: 6760-byte rows, off every 32-byte boundary.
+const ODD_W: u32 = 1690;
+const ODD_H: u32 = 128;
+
+/// Hardware: a packed-RGB row off any driver's pitch alignment encodes in place unsheared.
+#[test]
+#[ignore = "requires an NVIDIA GPU + driver and ffmpeg"]
+fn nvenc_cuda_in_place_unaligned_pitch() {
+    let buf = LinearDmabuf::new(&edge_frame(ODD_W, ODD_H, ODD_W * 4));
+    let frame = |i| buf.frame(PixelFormat::Bgrx, b"XR24", ODD_W, ODD_H, ODD_W * 4, i);
+    let (_enc, stream) = encode_in_place(&buf, frame, 8, false, ChromaFormat::Yuv420, 3);
+    assert_edge_is_straight(&stream, "in-place-unaligned.h265", ODD_W, ODD_H);
+}
+
+/// Hardware: the same row through the worker's convert, the lane a frame takes once the host
+/// draws the cursor. NVIDIA reads a LINEAR image at a pitch rounded up to 32 bytes; the convert
+/// reads the buffer's bytes instead. Run alone: it sets process env.
+#[test]
+#[ignore = "requires an NVIDIA GPU + driver and ffmpeg"]
+fn nvenc_cuda_convert_lane_unaligned_pitch() {
+    // In-process, so the convert under test is this build's and not an installed worker's.
+    set_env("PUNKTFUNK_ZEROCOPY_INPROC", "1");
+    set_env("PUNKTFUNK_NVENC_DIRECT", "0");
+    let bytes = edge_frame(ODD_W, ODD_H, ODD_W * 4);
+    let buf = LinearDmabuf::new(&bytes);
+    pf_zerocopy::cuda::make_current().expect("shared CUDA context current");
+    let mut enc = NvencCudaEncoder::open(
+        Codec::H265,
+        PixelFormat::Bgrx,
+        ODD_W,
+        ODD_H,
+        60,
+        80_000_000,
+        false,
+        8,
+        false,
+        ChromaFormat::Yuv420,
+        false,
+        1,
+        true,
+        &Knobs::from_env(),
+    )
+    .expect("open NVENC CUDA session");
+    let mut stream = Vec::new();
+    for i in 0..3 {
+        let frame = buf.frame(PixelFormat::Bgrx, b"XR24", ODD_W, ODD_H, ODD_W * 4, i);
+        enc.submit_indexed(&frame, i).expect("submit");
+        while let Some(au) = enc.poll().expect("poll") {
+            stream.extend_from_slice(&au.data);
+        }
+    }
+    enc.flush().expect("flush");
+    while let Some(au) = enc.poll().expect("poll") {
+        stream.extend_from_slice(&au.data);
+    }
+    remove_env("PUNKTFUNK_ZEROCOPY_INPROC");
+    remove_env("PUNKTFUNK_NVENC_DIRECT");
+    assert!(enc.direct.is_none(), "a frame was encoded in place");
+    assert!(enc.worker.is_some(), "no frame went through the worker");
+    assert_edge_is_straight(&stream, "convert-lane-unaligned.h265", ODD_W, ODD_H);
+}
