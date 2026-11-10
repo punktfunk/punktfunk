@@ -87,9 +87,8 @@ struct PunktfunkClientApp: App {
             .font(.geist(17, relativeTo: .body))
             #endif
         }
-        // The Stream menu (Release Mouse ⌃⌥⇧Q, Disconnect ⌃⌥⇧D, Show/Hide Statistics ⌃⌥⇧S —
-        // the cross-client Ctrl+Alt+Shift set) — a real menu bar on macOS, hardware-keyboard
-        // shortcuts on iPad. tvOS has neither.
+        // The Stream menu: the menu bar on macOS, the app menu on iPad and Vision Pro. tvOS has
+        // neither.
         #if os(macOS)
         .commands {
             StreamCommands()

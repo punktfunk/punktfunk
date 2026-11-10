@@ -129,8 +129,8 @@ public final class InputCapture {
     #endif
 
     /// A keyboard shortcut fired (by default the ⌃⌥⇧ letters, Ctrl+Alt+Shift elsewhere), in
-    /// either capture state; the key is swallowed. Taken before the Stream menu's identical key
-    /// equivalents, so one press fires once. Main queue.
+    /// either capture state; the key is swallowed. The only dispatch of a bound press: the macOS
+    /// monitor runs before the Stream menu, which carries no key equivalents elsewhere. Main queue.
     public var onShortcut: ((Shortcuts.Action, Shortcuts.Phase) -> Void)?
 
     /// Fired on ⌃⌘F (macOS) — toggle the streaming window in/out of fullscreen. Detected in the
