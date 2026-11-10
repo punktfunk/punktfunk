@@ -15,7 +15,7 @@
 #![allow(unsafe_op_in_unsafe_fn)]
 #![allow(clippy::too_many_arguments)]
 
-use super::vk_csc::{bind_rgb, csc_layout, CursorPlane};
+use super::vk_csc::{bind_rgb, csc_layout, csc_push, CursorPlane, LinearSrc, WordsCache};
 use super::vk_ring::{Action, Observation, Ring};
 use super::vk_util::{
     color_range, find_mem_preferring, import_failure_feeds_latch, imported_acquire_barrier,
@@ -1133,6 +1133,8 @@ pub struct VulkanVideoEncoder {
     csc_pool: vk::DescriptorPool,
     sampler: vk::Sampler,
     import_cache: ImportCache,
+    /// LINEAR sources this device reads as words, beside `import_cache`'s images.
+    words: WordsCache,
 
     frames: Vec<Frame>,
     /// Which slot records next and which slots the GPU still owes.
@@ -1789,6 +1791,10 @@ impl VulkanVideoEncoder {
             vk::DescriptorPoolSize::default()
                 .ty(vk::DescriptorType::STORAGE_IMAGE)
                 .descriptor_count(2 * nframes as u32),
+            // Binding 4: a LINEAR source's words.
+            vk::DescriptorPoolSize::default()
+                .ty(vk::DescriptorType::STORAGE_BUFFER)
+                .descriptor_count(nframes as u32),
         ];
         let csc_pool = device.create_descriptor_pool(
             &vk::DescriptorPoolCreateInfo::default()
@@ -1797,6 +1803,11 @@ impl VulkanVideoEncoder {
             None,
         )?;
         guard.csc_pool = csc_pool;
+        guard.words = WordsCache::new(
+            &device,
+            &mem_props,
+            instance.get_physical_device_properties(pd).vendor_id,
+        )?;
 
         let bs_size = align_up(3 * w as u64 * h as u64 + (1 << 16), min_bs_align);
         let limits = instance.get_physical_device_properties(pd).limits;
@@ -1864,6 +1875,7 @@ impl VulkanVideoEncoder {
         let session_mem = std::mem::take(&mut guard.session_mem);
         let dpb_views = std::mem::take(&mut guard.dpb_views);
         let frames = std::mem::take(&mut guard.frames);
+        let words = std::mem::take(&mut guard.words);
         std::mem::forget(guard);
 
         Ok(Self {
@@ -1899,6 +1911,7 @@ impl VulkanVideoEncoder {
             csc_pool,
             sampler,
             import_cache: ImportCache::default(),
+            words,
             ring: Ring::new(frames.len()),
             frames,
             bs_size,
@@ -2669,6 +2682,8 @@ impl Encoder for VulkanVideoEncoder {
         // Only safe point outside teardown to drop the import cache (device idle).
         // SAFETY: device idle (waits above); each entry is owned by the cache, destroyed once.
         unsafe { self.import_cache.clear(&self.device) };
+        // SAFETY: as above: the device is idle and the cache owns each import.
+        unsafe { self.words.clear(&self.device) };
         self.ring.step(Observation::Idle);
         self.pending.clear();
         for f in &mut self.frames {
@@ -2782,6 +2797,7 @@ struct VkTeardown {
     device: Option<ash::Device>,
     vq_dev: Option<ash::khr::video_queue::Device>,
     import_cache: ImportCache,
+    words: WordsCache,
     frames: Vec<Frame>,
     compute_pool: vk::CommandPool,
     cmd_pool: vk::CommandPool,
@@ -2807,6 +2823,7 @@ impl VkTeardown {
             device: None,
             vq_dev: None,
             import_cache: ImportCache::default(),
+            words: WordsCache::default(),
             frames: Vec::new(),
             compute_pool: vk::CommandPool::null(),
             cmd_pool: vk::CommandPool::null(),
@@ -2834,6 +2851,7 @@ impl Drop for VkTeardown {
             if let Some(device) = self.device.take() {
                 let _ = device.device_wait_idle();
                 self.import_cache.clear(&device);
+                self.words.destroy(&device);
                 for f in std::mem::take(&mut self.frames) {
                     device.destroy_semaphore(f.csc_sem, None);
                     device.destroy_fence(f.fence, None);
@@ -2904,6 +2922,7 @@ impl Drop for VulkanVideoEncoder {
             device: Some(self.device.clone()),
             vq_dev: Some(self.vq_dev.clone()),
             import_cache: std::mem::take(&mut self.import_cache),
+            words: std::mem::take(&mut self.words),
             frames: std::mem::take(&mut self.frames),
             compute_pool: self.compute_pool,
             cmd_pool: self.cmd_pool,

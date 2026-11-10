@@ -3,7 +3,9 @@ use super::{
     PHASE_REPORT_EVERY, PHASE_SPIKE, PHASE_SPIKE_EVERY, PHASE_WAIT,
 };
 use crate::env_knobs::Knobs;
-use crate::test_frames::{cpu_frame, cpu_frame_24};
+use crate::test_frames::{
+    assert_edge_is_straight, cpu_frame, cpu_frame_24, edge_frame, LinearDmabuf, ODD_H, ODD_W,
+};
 use crate::{Codec, Encoder};
 use pf_frame::{CapturedFrame, FramePayload, PixelFormat};
 
@@ -1159,4 +1161,28 @@ fn phase_stats_warn_once_a_second_then_report_the_window() {
         (100_000, 400_000)
     );
     assert_eq!(p.max_us, [0; 4], "the next window starts empty");
+}
+
+/// Hardware: a LINEAR packed-RGB dmabuf whose row is off any driver's pitch alignment goes
+/// through the compute CSC unsheared. NVIDIA reads it as an image at a pitch rounded up to 32
+/// bytes; there the CSC reads the buffer's words.
+#[test]
+#[ignore = "needs a real VK_KHR_video_encode_h265 device, a dma-buf exporting driver and ffmpeg"]
+fn vulkan_csc_reads_a_linear_source_at_its_stride() {
+    let buf = LinearDmabuf::new(&edge_frame(ODD_W, ODD_H, ODD_W * 4));
+    let mut enc = VulkanVideoEncoder::open_opts(Codec::H265, ODD_W, ODD_H, 60, 40_000_000, false)
+        .expect("open");
+    let mut stream = Vec::new();
+    for i in 0..3 {
+        let frame = buf.frame(PixelFormat::Bgrx, b"XR24", ODD_W, ODD_H, ODD_W * 4, i);
+        enc.submit_indexed(&frame, i).expect("submit");
+        while let Some(au) = enc.poll().expect("poll") {
+            stream.extend_from_slice(&au.data);
+        }
+    }
+    enc.flush().expect("flush");
+    while let Some(au) = enc.poll().expect("poll") {
+        stream.extend_from_slice(&au.data);
+    }
+    assert_edge_is_straight(&stream, "vulkan-csc-linear.h265", ODD_W, ODD_H);
 }

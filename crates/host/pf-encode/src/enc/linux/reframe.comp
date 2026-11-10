@@ -13,6 +13,7 @@ layout(local_size_x = 16, local_size_y = 16) in;
 layout(binding = 0) uniform sampler2D src;
 layout(binding = 1, rgba16f) uniform writeonly image2D dst;
 layout(binding = 2) uniform sampler2D cursorTex;
+layout(std430, binding = 3) readonly buffer Lin { uint linWords[]; }; // a LINEAR source's bytes
 
 layout(push_constant) uniform Push {
     ivec2 origin;    // source texel at the crop's top-left
@@ -21,7 +22,21 @@ layout(push_constant) uniform Push {
     int axis;        // 0 = filter x, 1 = filter y
     ivec2 curOrigin; // cursor top-left in source pixels
     ivec2 curSize;   // x <= 0 disables the blend
+    uvec3 lin;       // x != 0: read the source from `linWords`
 } pc;
+
+// A LINEAR dmabuf read as words at the producer's own stride (`lin.x` != 0), in place of the
+// sampled image: a driver may read a LINEAR image at a row pitch it rounds. `lin` is the
+// layout (1 = B,G,R,x bytes, 2 = R,G,B,x bytes, 3 = x:R:G:B 2:10:10:10, 4 = x:B:G:R), the
+// first pixel's word and the row stride in words.
+vec3 srcTexel(ivec2 p) {
+    if (pc.lin.x == 0u) return texelFetch(src, p, 0).rgb;
+    uint w = linWords[pc.lin.y + uint(p.y) * pc.lin.z + uint(p.x)];
+    if (pc.lin.x == 1u) return vec3(float((w >> 16) & 0xFFu), float((w >> 8) & 0xFFu), float(w & 0xFFu)) / 255.0;
+    if (pc.lin.x == 2u) return vec3(float(w & 0xFFu), float((w >> 8) & 0xFFu), float((w >> 16) & 0xFFu)) / 255.0;
+    if (pc.lin.x == 3u) return vec3(float((w >> 20) & 0x3FFu), float((w >> 10) & 0x3FFu), float(w & 0x3FFu)) / 1023.0;
+    return vec3(float(w & 0x3FFu), float((w >> 10) & 0x3FFu), float((w >> 20) & 0x3FFu)) / 1023.0;
+}
 
 // Footprint cap: a 10x downscale still fits the tap loop.
 const float MAX_STRETCH = 10.0;
@@ -36,7 +51,7 @@ float lanczos3(float x) {
 }
 
 vec3 tap(ivec2 p) {
-    vec3 c = texelFetch(src, p, 0).rgb;
+    vec3 c = srcTexel(p);
     if (pc.curSize.x <= 0) return c;
     ivec2 cp = p - pc.curOrigin;
     if (cp.x < 0 || cp.y < 0 || cp.x >= pc.curSize.x || cp.y >= pc.curSize.y) return c;
