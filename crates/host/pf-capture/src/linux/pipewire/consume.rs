@@ -206,12 +206,18 @@ pub(in crate::linux) fn realtime_minus_monotonic_ns() -> i64 {
     rt - (ts.tv_sec * 1_000_000_000 + ts.tv_nsec)
 }
 
-/// Whether the selected GPU's driver rounds a linear import pitch: iHD does; an unknown
-/// selection is treated as one, a CPU copy being the cheaper mistake.
+/// Whether the VA encoder's driver rounds a linear import pitch: iHD does. The device is the
+/// one [`pf_gpu::linux_render_node`] names, which the encoder opens; `selected_gpu` is the
+/// console's view and names the NVIDIA card on a hybrid. An unknown node is treated as Intel,
+/// a CPU copy being the cheaper mistake.
 fn linear_pitch_rounds() -> bool {
     static RULE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *RULE.get_or_init(|| {
-        pf_gpu::selected_gpu().is_none_or(|g| g.info.vendor_id == pf_gpu::VENDOR_INTEL)
+        let node = pf_gpu::linux_render_node();
+        pf_gpu::enumerate()
+            .iter()
+            .find(|g| g.handle.render_node.as_deref() == Some(node.as_path()))
+            .is_none_or(|g| g.vendor_id == pf_gpu::VENDOR_INTEL)
     })
 }
 
@@ -376,14 +382,15 @@ impl Path for Portal<'_, '_> {
 
     /// iHD reads a linear import at a pitch rounded to 64 bytes, so an odd pitch shears
     /// the picture. Mutter's RENDERING-only GBM buffers pad only for SCANOUT. The CPU de-pad
-    /// uploads through a driver-allocated surface instead.
+    /// uploads through a driver-allocated surface instead. Only a producer the tiled offer
+    /// did not reach hands the VA lane such a buffer: one on another GPU, or after a refusal.
     fn refuses_passthrough(
         &self,
         buf: &Buffer,
         plane1: Option<(u32, u32)>,
     ) -> Option<PassthroughFallback> {
         let odd = buf.stride % 64 != 0 || plane1.is_some_and(|(_, s)| s % 64 != 0);
-        (buf.modifier == 0 && linear_pitch_rounds() && odd)
+        (buf.modifier == 0 && self.ud.va_import && odd && linear_pitch_rounds())
             .then_some(PassthroughFallback::UnalignedPitch)
     }
 

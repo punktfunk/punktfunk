@@ -251,9 +251,11 @@ pub fn capture_virtual_output(
         && (!gamescope
             || encoder.zero_copy_is_vaapi()
             || pf_vdisplay::gamescope_planar_capture(None));
+    // A compositor on the encoder's GPU allocates what the encoder proved it imports. Left
+    // on LINEAR it packs rows a VA driver reads at a rounded pitch.
     let modifier_codec = if gamescope {
         gamescope_tiled.then_some(codec).flatten()
-    } else if want.pyrowave {
+    } else if want.pyrowave || encoder.zero_copy_is_vaapi() {
         codec
     } else {
         None

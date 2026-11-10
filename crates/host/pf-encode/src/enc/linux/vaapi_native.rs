@@ -240,6 +240,32 @@ fn probe_capture_modifier(node: &std::path::Path, fourcc: u32, modifier: u64) ->
     enc.submit(&frame).is_ok()
 }
 
+/// Intel's single-plane layouts, newest first: 4-tiled, Y-tiled, X-tiled.
+const INTEL_TILED: [u64; 3] = [
+    0x0100_0000_0000_0009,
+    0x0100_0000_0000_0002,
+    0x0100_0000_0000_0001,
+];
+
+/// The layouts [`vaapi_capture_modifiers`] tries on the host's render node: what the Vulkan
+/// device owning that node samples. A host can run VA with no Vulkan driver for the GPU; an
+/// Intel node then tries its known layouts. The proof decides either way.
+pub(crate) fn capture_candidates(fourcc: u32) -> Vec<u64> {
+    let node = pf_gpu::linux_render_node();
+    if let Some(list) = super::vk_util::node_capture_modifiers(fourcc, &node) {
+        return list;
+    }
+    let intel = pf_gpu::enumerate()
+        .iter()
+        .find(|g| g.handle.render_node.as_deref() == Some(node.as_path()))
+        .is_some_and(|g| g.vendor_id == pf_gpu::VENDOR_INTEL);
+    if intel {
+        INTEL_TILED.to_vec()
+    } else {
+        Vec::new()
+    }
+}
+
 /// The `candidates` subset libva actually imports for `fourcc` on this render
 /// node, proved by a real GBM alloc + encoder submit per candidate. Verdicts are
 /// cached per (node rdev, fourcc, modifier) so each is proved once per device.

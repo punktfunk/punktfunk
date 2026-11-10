@@ -135,24 +135,53 @@ pub(crate) unsafe fn select_physical_device(instance: &ash::Instance) -> Result<
 /// `fourcc`. The upper bound every capture offer narrows from; driver order,
 /// deduplicated, one memory plane. Unknown fourcc, or no loader/instance/device,
 /// is an empty list, not an error.
+#[cfg(feature = "pyrowave")]
 pub(crate) fn sampled_capture_modifiers(fourcc: u32) -> Vec<u64> {
+    sampled_modifiers(fourcc, None).unwrap_or_default()
+}
+
+/// [`sampled_capture_modifiers`] of the device that owns `node`: the VA lane's candidates. A
+/// VA driver imports its own device's layouts, and on a hybrid the first Vulkan device is the
+/// other GPU. `None` when no Vulkan device owns the node: VA runs without a Vulkan driver.
+pub(crate) fn node_capture_modifiers(fourcc: u32, node: &std::path::Path) -> Option<Vec<u64>> {
+    sampled_modifiers(fourcc, Some(node))
+}
+
+/// The list of `node`'s owner, or of the first usable device without a `node`. `None` is a
+/// `node` no device owns; every other failure is an empty list.
+fn sampled_modifiers(fourcc: u32, node: Option<&std::path::Path>) -> Option<Vec<u64>> {
     let Some(fmt) = pf_zerocopy::drm::vk_format(fourcc) else {
-        return Vec::new();
+        return Some(Vec::new());
     };
     // SAFETY: fresh instance, plain physical-device property queries, destroyed before
     // returning; nothing borrows across the call.
     unsafe {
         let Ok(entry) = ash::Entry::load() else {
-            return Vec::new();
+            return node.is_none().then(Vec::new);
         };
         let app = vk::ApplicationInfo::default().api_version(vk::API_VERSION_1_3);
         let Ok(instance) = entry.create_instance(
             &vk::InstanceCreateInfo::default().application_info(&app),
             None,
         ) else {
-            return Vec::new();
+            return node.is_none().then(Vec::new);
         };
-        let pd = select_physical_device(&instance).ok().map(|p| p.pd);
+        let pd = match node {
+            Some(n) => {
+                let (rdev, pci) = (node_rdev(n), node_pci_address(n));
+                let owner = instance
+                    .enumerate_physical_devices()
+                    .unwrap_or_default()
+                    .into_iter()
+                    .find(|&pd| device_owns_node(&instance, pd, rdev, pci));
+                if owner.is_none() {
+                    instance.destroy_instance(None);
+                    return None;
+                }
+                owner
+            }
+            None => select_physical_device(&instance).ok().map(|p| p.pd),
+        };
         let mods = pd
             .map(|pd| {
                 let mut out: Vec<u64> = Vec::new();
@@ -173,8 +202,73 @@ pub(crate) fn sampled_capture_modifiers(fourcc: u32) -> Vec<u64> {
             })
             .unwrap_or_default();
         instance.destroy_instance(None);
-        mods
+        Some(mods)
     }
+}
+
+/// `(major, minor)` of a device node in the encoding `VkPhysicalDeviceDrmPropertiesEXT`
+/// uses (glibc `gnu_dev_major`/`gnu_dev_minor`).
+pub(crate) fn node_rdev(path: &std::path::Path) -> Option<(i64, i64)> {
+    use std::os::unix::fs::MetadataExt;
+    let rdev = std::fs::metadata(path).ok()?.rdev();
+    let major = ((rdev >> 8) & 0xfff) | ((rdev >> 32) & !0xfffu64);
+    let minor = (rdev & 0xff) | ((rdev >> 12) & !0xffu64);
+    Some((major as i64, minor as i64))
+}
+
+/// Node PCI `(domain, bus, device, function)` from sysfs — fallback when the
+/// driver lacks `VK_EXT_physical_device_drm`.
+pub(crate) fn node_pci_address(path: &std::path::Path) -> Option<(u32, u32, u32, u32)> {
+    let node = path.file_name()?.to_str()?;
+    let dev = std::fs::canonicalize(format!("/sys/class/drm/{node}/device")).ok()?;
+    let addr = dev.file_name()?.to_str()?;
+    let (rest, func) = addr.rsplit_once('.')?;
+    let mut parts = rest.split(':');
+    let domain = u32::from_str_radix(parts.next()?, 16).ok()?;
+    let bus = u32::from_str_radix(parts.next()?, 16).ok()?;
+    let device = u32::from_str_radix(parts.next()?, 16).ok()?;
+    Some((domain, bus, device, u32::from_str_radix(func, 16).ok()?))
+}
+
+/// Whether `pd` owns the render node `rdev`/`pci` describe. DRM render major/minor is primary
+/// (disambiguates twin-model GPUs); PCI bus info is the fallback. Neither
+/// extension advertised → never matches.
+///
+/// # Safety
+/// `instance` must be live; issues only physical-device property queries.
+pub(crate) unsafe fn device_owns_node(
+    instance: &ash::Instance,
+    pd: vk::PhysicalDevice,
+    rdev: Option<(i64, i64)>,
+    pci: Option<(u32, u32, u32, u32)>,
+) -> bool {
+    let exts = instance
+        .enumerate_device_extension_properties(pd)
+        .unwrap_or_default();
+    let has_ext =
+        |name: &std::ffi::CStr| exts.iter().any(|e| e.extension_name_as_c_str() == Ok(name));
+    if let Some((major, minor)) = rdev {
+        if has_ext(ash::ext::physical_device_drm::NAME) {
+            let mut drm = vk::PhysicalDeviceDrmPropertiesEXT::default();
+            let mut p2 = vk::PhysicalDeviceProperties2::default().push_next(&mut drm);
+            instance.get_physical_device_properties2(pd, &mut p2);
+            return drm.has_render == vk::TRUE
+                && drm.render_major == major
+                && drm.render_minor == minor;
+        }
+    }
+    if let Some((domain, bus, device, function)) = pci {
+        if has_ext(ash::ext::pci_bus_info::NAME) {
+            let mut pcip = vk::PhysicalDevicePCIBusInfoPropertiesEXT::default();
+            let mut p2 = vk::PhysicalDeviceProperties2::default().push_next(&mut pcip);
+            instance.get_physical_device_properties2(pd, &mut p2);
+            return pcip.pci_domain == domain
+                && pcip.pci_bus == bus
+                && pcip.pci_device == device
+                && pcip.pci_function == function;
+        }
+    }
+    false
 }
 
 pub(crate) fn color_range(layer: u32) -> vk::ImageSubresourceRange {

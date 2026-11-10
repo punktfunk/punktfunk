@@ -120,6 +120,8 @@ struct UserData {
     importer: super::ImporterCell,
     /// Raw dmabuf to the encoder instead of a CUDA import (VAAPI).
     vaapi_passthrough: bool,
+    /// The session's encoder is the VA lane on the host's render node, not PyroWave.
+    va_import: bool,
     /// Tiled 10-bit was offered because the encoder's raw convert reads it; hold it, never import.
     hdr_tiled_raw: bool,
     /// CUDA import choices; the consumer imports held frames with the same policy.
