@@ -301,8 +301,8 @@ fn pen_count(count: jint) -> usize {
 }
 
 /// One sample from [`PEN_JNI_STRIDE`] floats. `None` for a non-finite `x`/`y`, which is never
-/// forwarded, or a slice of another length. A negative `distance`, `tilt_deg`, `azimuth_deg` or
-/// `roll_deg` is the wire's "unknown".
+/// forwarded, or a slice of another length. A negative or NaN `distance`, `tilt_deg`,
+/// `azimuth_deg` or `roll_deg` is the wire's "unknown", as is an angle that is not finite.
 fn pen_sample(s: &[f32]) -> Option<PenSample> {
     let Ok(&[state, tool, x, y, pressure, distance, tilt, azimuth, roll, dt_us]) =
         <&[f32; PEN_JNI_STRIDE]>::try_from(s)
@@ -322,22 +322,22 @@ fn pen_sample(s: &[f32]) -> Option<PenSample> {
         x: x.clamp(0.0, 1.0),
         y: y.clamp(0.0, 1.0),
         pressure: (pressure.clamp(0.0, 1.0) * 65535.0) as u16,
-        distance: if distance < 0.0 {
+        distance: if distance.is_nan() || distance < 0.0 {
             PEN_DISTANCE_UNKNOWN
         } else {
             (distance.clamp(0.0, 1.0) * 65534.0) as u16
         },
-        tilt_deg: if tilt < 0.0 {
+        tilt_deg: if tilt.is_nan() || tilt < 0.0 {
             PEN_TILT_UNKNOWN
         } else {
             (tilt.clamp(0.0, 90.0)) as u8
         },
-        azimuth_deg: if azimuth < 0.0 {
+        azimuth_deg: if !azimuth.is_finite() || azimuth < 0.0 {
             PEN_ANGLE_UNKNOWN
         } else {
             (azimuth as u16) % 360
         },
-        roll_deg: if roll < 0.0 {
+        roll_deg: if !roll.is_finite() || roll < 0.0 {
             PEN_ANGLE_UNKNOWN
         } else {
             (roll as u16) % 360
@@ -1106,17 +1106,26 @@ mod tests {
         }
     }
 
-    /// Only `x`/`y` are checked for NaN. Every other field reads a NaN as 0, which for `distance`
-    /// is the hover floor and not "unknown", and +inf azimuth saturates before it wraps.
+    /// Only a NaN `x`/`y` drops the sample. A NaN in a field with an "unknown" reads as that,
+    /// and so does an angle that is not finite; the rest read it as 0.
     #[test]
-    fn a_nan_outside_the_coordinates_reads_as_zero() {
+    fn a_nan_outside_the_coordinates_reads_as_unknown_or_zero() {
         const CASES: &[PenRow] = &[
             ("NaN pressure", &[(PRESSURE, f32::NAN)], |w| w.pressure = 0),
-            ("NaN distance", &[(DISTANCE, f32::NAN)], |w| w.distance = 0),
-            ("NaN tilt", &[(TILT, f32::NAN)], |w| w.tilt_deg = 0),
-            ("NaN azimuth", &[(AZIMUTH, f32::NAN)], |w| w.azimuth_deg = 0),
+            ("NaN distance", &[(DISTANCE, f32::NAN)], |w| {
+                w.distance = PEN_DISTANCE_UNKNOWN
+            }),
+            ("NaN tilt", &[(TILT, f32::NAN)], |w| {
+                w.tilt_deg = PEN_TILT_UNKNOWN
+            }),
+            ("NaN azimuth", &[(AZIMUTH, f32::NAN)], |w| {
+                w.azimuth_deg = PEN_ANGLE_UNKNOWN
+            }),
             ("+inf azimuth", &[(AZIMUTH, f32::INFINITY)], |w| {
-                w.azimuth_deg = 15
+                w.azimuth_deg = PEN_ANGLE_UNKNOWN
+            }),
+            ("NaN roll", &[(ROLL, f32::NAN)], |w| {
+                w.roll_deg = PEN_ANGLE_UNKNOWN
             }),
             ("NaN dt", &[(DT_US, f32::NAN)], |w| w.dt_us = 0),
             ("NaN state", &[(STATE, f32::NAN)], |w| w.state = 0),
