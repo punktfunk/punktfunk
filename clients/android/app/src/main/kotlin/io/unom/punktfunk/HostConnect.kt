@@ -155,28 +155,36 @@ fun Settings.underHost(o: GameOverrides?): Settings =
     if (o == null) this else copy(hdrEnabled = o.hdr ?: hdrEnabled, gamepad = o.gamepadPref ?: gamepad)
 
 /**
- * The one place [NativeBridge.nativeConnect] is assembled, for [JniHostNative]. Derives the mode,
- * HDR and gamepad settings the host needs from [spec]'s settings under its game overrides, keeps
- * the codecs and 10-bit a hardware decoder takes at that mode ([VideoDecoders.probe]), waits for
- * the last session's close, and dials off the main thread. The dial cannot be interrupted, so it
- * runs `NonCancellable`. [unlock] crosses as byte arrays and is wiped when the native call
- * returns. Returns the session handle, or `0` on failure.
+ * The mode a connect asks for and the view beside it: [base] × render scale, then the host's game
+ * overrides [o] within [panel] and the codec. Above 1x the view is [base]'s size; an override that
+ * brings the mode down to it drops it.
+ */
+internal fun Settings.streamAsk(
+    base: Triple<Int, Int, Int>,
+    o: GameOverrides?,
+    panel: () -> Triple<Int, Int, Int>,
+): Pair<Triple<Int, Int, Int>, Pair<Int, Int>?> {
+    val max = RenderScale.maxDimension(codec)
+    val (w, h) = RenderScale.apply(base.first, base.second, renderScale, max)
+    val mode = o?.fit(Triple(w, h, base.third), panel(), max) ?: Triple(w, h, base.third)
+    val view = RenderScale.view(base.first, base.second, renderScale, max)
+    return mode to RenderScale.viewUnder(mode.first, mode.second, view)
+}
+
+/**
+ * The one place [NativeBridge.nativeConnect] is assembled, for [JniHostNative]. Derives the mode
+ * and view ([streamAsk]), HDR and gamepad settings the host needs from [spec]'s settings under its
+ * game overrides, keeps the codecs and 10-bit a hardware decoder takes at that mode
+ * ([VideoDecoders.probe]), waits for the last session's close, and dials off the main thread. The
+ * dial cannot be interrupted, so it runs `NonCancellable`. [unlock] crosses as byte arrays and is
+ * wiped when the native call returns. Returns the session handle, or `0` on failure.
  */
 suspend fun connectToHost(context: Context, spec: DialSpec, unlock: Unlock? = null): Long {
     val settings = spec.settings.underHost(spec.overrides)
-    val (baseW, baseH, baseHz) = settings.effectiveMode(context)
-    // Render scale: ask the host for `chosen mode × scale` (even + codec-clamped) — > 1 supersamples
-    // (the compositor downscales the larger decoded frame to the SurfaceView), < 1 renders under
-    // native. 1.0 leaves the resolved mode untouched.
-    val (scaledW, scaledH) = RenderScale.apply(
-        baseW, baseH, settings.renderScale, RenderScale.maxDimension(settings.codec)
-    )
-    // A size or rate the host sets for this game wins, within this panel and this codec.
-    val (w, h, hz) = spec.overrides?.fit(
-        Triple(scaledW, scaledH, baseHz),
-        nativeDisplayMode(context, secondScreen = settings.secondScreen),
-        RenderScale.maxDimension(settings.codec),
-    ) ?: Triple(scaledW, scaledH, baseHz)
+    val (mode, view) = settings.streamAsk(settings.effectiveMode(context), spec.overrides) {
+        nativeDisplayMode(context, secondScreen = settings.secondScreen)
+    }
+    val (w, h, hz) = mode
     // Advertise HDR only when it is on AND this device's display can present it (else the host
     // sends a proper SDR stream rather than PQ the panel would mis-tone-map).
     val hdrEnabled = settings.hdrEnabled && displaySupportsHdr(context)
@@ -229,6 +237,7 @@ suspend fun connectToHost(context: Context, spec: DialSpec, unlock: Unlock? = nu
         )
         val request = ConnectRequest(
             host = spec.host, port = spec.port, width = w, height = h, refreshHz = hz,
+            viewWidth = view?.first ?: 0, viewHeight = view?.second ?: 0,
             certPem = spec.identity.certPem, keyPem = spec.identity.privateKeyPem, pinHex = spec.pinHex,
             // Zero is Automatic. Under PyroWave any other value is Fixed: the host ignores the
             // number and pins the player's quality.

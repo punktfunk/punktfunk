@@ -4,7 +4,7 @@
 //! forwards stamps in the shapes the decode paths hold them. Pure `std` plus the core, so it
 //! builds on the host workspace too.
 
-use punktfunk_core::hud::Stats;
+use punktfunk_core::hud::{HudLine, Stats, StatsSnapshot};
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -25,6 +25,21 @@ pub struct VideoStats {
 #[cfg_attr(not(target_os = "android"), allow(dead_code))]
 fn ns(v: i128) -> u64 {
     v.clamp(0, i128::from(u64::MAX)) as u64
+}
+
+/// Lead the mode line with the size the picture decodes at when that is not the host's mode, and
+/// name the mode after it: `1920×1080@60 · host renders 3840×2160`. A tier with no size is left.
+pub fn name_host_size(lines: &mut [HudLine], s: &StatsSnapshot, picture: Option<(u32, u32)>) {
+    let Some((w, h)) = picture.filter(|&p| p != (s.width, s.height)) else {
+        return;
+    };
+    let mode = format!("{}×{}@{}", s.width, s.height, s.refresh_hz);
+    if let Some(l) = lines.iter_mut().find(|l| l.fields.first() == Some(&mode)) {
+        l.fields[0] = format!("{w}×{h}@{}", s.refresh_hz);
+        let host = pf_l10n::client::overlay_host_renders(s.width, s.height);
+        l.fields.insert(1, host);
+        l.text = l.fields.join(" · ");
+    }
 }
 
 /// The ceiling on any latency sample. A vendor's first render callbacks can carry a garbage
@@ -169,5 +184,33 @@ mod tests {
         assert_eq!(publish_e2e(&e2e, 1_000, 0, 2_000), None);
         assert_eq!(publish_e2e(&e2e, SANE_NS, 0, 0), None);
         assert_eq!(e2e.load(Ordering::Relaxed), 4_000_000);
+    }
+
+    /// A picture at the host's mode reads as the mode alone; one the host scaled down leads with
+    /// its own size and names the mode after it.
+    #[test]
+    fn the_mode_line_names_the_host_size_beside_a_smaller_picture() {
+        use punktfunk_core::hud::{format, StatsVerbosity};
+        let s = StatsSnapshot {
+            width: 3840,
+            height: 2160,
+            refresh_hz: 60,
+            ..Default::default()
+        };
+        let first = |picture, tier| {
+            let mut lines = format(&s, tier, false);
+            name_host_size(&mut lines, &s, picture);
+            lines[0].text.clone()
+        };
+        let normal = StatsVerbosity::Normal;
+        assert!(first(None, normal).starts_with("3840×2160@60"));
+        assert_eq!(first(Some((3840, 2160)), normal), first(None, normal));
+        let scaled = first(Some((1920, 1080)), normal);
+        assert!(
+            scaled.starts_with("1920×1080@60 · host renders 3840×2160"),
+            "{scaled}"
+        );
+        let compact = StatsVerbosity::Compact;
+        assert_eq!(first(Some((1920, 1080)), compact), first(None, compact));
     }
 }

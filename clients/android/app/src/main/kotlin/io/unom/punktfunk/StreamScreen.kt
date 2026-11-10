@@ -417,9 +417,10 @@ fun StreamScreen(
     // measure against it, so none of them knows a fold happened.
     var padSize by remember { mutableStateOf(IntSize.Zero) }
     val split = fold?.takeIf { hingeCompanion || (padShown && !companionUp) }
-    // A live mode switch: the asked-for mode shows at once, the host's answer half a second later.
-    fun switchMode(w: Int, h: Int, hz: Int) {
-        if (NativeBridge.nativeRequestMode(handle, w, h, hz)) {
+    // A live mode switch, shown at [view] when the mode is larger: the asked-for mode shows at
+    // once, the host's answer half a second later. No view clears the one asked before.
+    fun switchMode(w: Int, h: Int, hz: Int, view: Pair<Int, Int>? = null) {
+        if (NativeBridge.nativeRequestMode(handle, w, h, hz, view?.first ?: 0, view?.second ?: 0)) {
             requestedMode = intArrayOf(w, h, hz)
             scope.launch {
                 delay(500)
@@ -431,20 +432,20 @@ fun StreamScreen(
     var modePicked by remember(handle) { mutableStateOf(false) }
 
     /**
-     * What Automatic resolves for layout [l] on this pair, asked when it differs from the live
-     * mode: live where the host takes the switch, else from the next connect, which resolves
-     * against the same screen ([pictureDisplay]) and the kept layout ([pictureSpanned]).
+     * What Automatic resolves for layout [l] on this pair, and its view, asked when the mode
+     * differs from the live one: live where the host takes the switch, else from the next connect,
+     * which resolves against the same screen ([pictureDisplay]) and the kept layout
+     * ([pictureSpanned]).
      */
     fun askModeFor(l: ScreenLayout) {
         val automatic = initialSettings.width <= 0 || initialSettings.height <= 0 || initialSettings.hz <= 0
         if (companionDisplay == null || modePicked || !automatic) return
         // ponytail: the picture screen follows the KEPT layout, so a launch that spans over a
         // kept swap asks at the second screen's width; the next cycle sets it right.
-        val (baseW, baseH, hz) = initialSettings.effectiveMode(context, spanned = l == ScreenLayout.SPANNED)
-        val (w, h) = RenderScale.apply(
-            baseW, baseH, initialSettings.renderScale, RenderScale.maxDimension(initialSettings.codec),
-        )
-        if (!intArrayOf(w, h, hz).contentEquals(requestedMode)) switchMode(w, h, hz)
+        val base = initialSettings.effectiveMode(context, spanned = l == ScreenLayout.SPANNED)
+        val (mode, view) = initialSettings.streamAsk(base, null) { base }
+        val (w, h, hz) = mode
+        if (!intArrayOf(w, h, hz).contentEquals(requestedMode)) switchMode(w, h, hz, view)
     }
 
     /** The pair's next layout, remembered, and the mode that goes with it. */
@@ -541,6 +542,7 @@ fun StreamScreen(
             }
         },
         currentMode = { requestedMode },
+        // The ring picks the host's mode itself, so the picture is shown at it: no view.
         requestMode = { w, h, hz ->
             modePicked = true
             switchMode(w, h, hz)

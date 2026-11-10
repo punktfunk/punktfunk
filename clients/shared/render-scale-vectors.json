@@ -1,5 +1,5 @@
 {
-  "$comment": "Render scale → host Mode, pinned by punktfunk-core render_scale, the Swift RenderScale and the Kotlin RenderScale tests; pf-encode-core checks max_dimension against its Codec walls. A null scale is NaN. `apply` rows take their ceiling from max_dimension(codec). `percent` rows are a typed percent, the scale it stores and the percent that scale reads back as. `preset` rows name the picker stop a stored scale is, null for a typed one; stops are 0.5, 0.67, 0.75, 1, 1.25, 1.5, 2, 3, 4. `view` rows are the size the host encodes instead of the mode above 1x, null for none; only punktfunk-core reads them so far, with the ceiling as `max`.",
+  "$comment": "Render scale → host Mode, pinned by punktfunk-core render_scale, the Swift RenderScale and the Kotlin RenderScale tests; pf-encode-core checks max_dimension against its Codec walls. A null scale is NaN. `apply` rows take their ceiling from max_dimension(codec). `percent` rows are a typed percent, the scale it stores and the percent that scale reads back as. `preset` rows name the picker stop a stored scale is, null for a typed one; stops are 0.5, 0.67, 0.75, 1, 1.25, 1.5, 2, 3, 4. `view` rows are the size the host encodes instead of the mode above 1x, null for none, with the ceiling as `max`.",
   "max_dimension": [
     {"codec": "h264", "max": 4096},
     {"codec": "hevc", "max": 8192},
