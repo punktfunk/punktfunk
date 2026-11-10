@@ -471,7 +471,7 @@ fn bitrate_row(b: &Build) -> (Field, Rc<dyn Fn(bool)>) {
 }
 
 /// PyroWave quality: a slider from 0.5 to 2 bits per pixel by tenths that never shows them.
-/// Its caption is the rate the quality needs at the mode a connect would ask, re-read as any
+/// Its caption is the rate the quality needs at the picture the host encodes, re-read as any
 /// row moves; a warning row follows while this device's link is short of it. The returned
 /// closure shows both under PyroWave.
 fn pyrowave_quality_row(b: &Build) -> (Field, Rc<dyn Fn(bool)>) {

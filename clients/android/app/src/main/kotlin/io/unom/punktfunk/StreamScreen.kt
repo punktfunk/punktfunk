@@ -392,7 +392,7 @@ fun StreamScreen(
         onSessionEnded(reason)
     }
 
-    KeepAliveEffects(session, hostRecord, keepAliveSpan, { endAway(it) }, onSessionEnded)
+    KeepAliveEffects(session, hostRecord, keepAliveSpan, decodedSize, { endAway(it) }, onSessionEnded)
 
     // "Keep screen awake": asked every few seconds, since with the setting off the answer
     // follows the player's input. With it on the answer never changes.
@@ -582,8 +582,9 @@ fun StreamScreen(
             header = PanelHeader(
                 title = listOfNotNull(hostRecord?.name, streamedGame?.title ?: session.launchHold?.game?.title)
                     .joinToString(" · ").ifEmpty { "Punktfunk" },
+                // The size that arrives: a host that scales sends less than its mode.
                 detail = requestedMode.takeIf { it.size >= 3 && it[0] > 0 }
-                    ?.let { "${it[0]}×${it[1]} · ${it[2]} Hz" }.orEmpty(),
+                    ?.let { m -> (decodedSize ?: m).let { "${it[0]}×${it[1]} · ${m[2]} Hz" } }.orEmpty(),
             ),
             history = statsHistory,
             stats = statsLines,

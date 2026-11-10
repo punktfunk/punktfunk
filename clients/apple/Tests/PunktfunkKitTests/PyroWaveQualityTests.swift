@@ -9,7 +9,7 @@ final class PyroWaveQualityTests: XCTestCase {
     private let wire = (kind: UInt8(PUNKTFUNK_IFACE_KIND_ETHERNET), mbps: UInt32(2500))
 
     /// Core prices the caption and words the warning; a fixed mode and render scale price what
-    /// the host would build.
+    /// the host would encode, the view above 1x.
     func testRowReadsAsTheRateItNeeds() {
         var s = EffectiveSettings()
         s.hdrEnabled = false
@@ -25,8 +25,13 @@ final class PyroWaveQualityTests: XCTestCase {
         s.refreshHz = 60
         s.renderScale = 0.5
         XCTAssertEqual(
-            PyroWaveQuality.lines(s, mode: s.streamMode(native: native), link: wire).caption,
+            PyroWaveQuality.lines(s, mode: s.streamPicture(native: native), link: wire).caption,
             "960×540 at 60 Hz: 50 Mbit/s")
+        s.renderScale = 2
+        XCTAssertEqual(s.streamMode(native: native).width, 3840)
+        XCTAssertEqual(
+            PyroWaveQuality.lines(s, mode: s.streamPicture(native: native), link: wire).caption,
+            "1920×1080 at 60 Hz: 199 Mbit/s")
     }
 
     /// The dial carries hundredths inside the bounds; the slider lands on tenths.

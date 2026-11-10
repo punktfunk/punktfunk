@@ -50,14 +50,16 @@ object PyroWaveQuality {
     }
 
     /**
-     * What the quality costs at a mode: the mode, core's [rate] text (`1.6 Gbit/s`), and the
-     * [warning] when the link is short of it. The row words them with `player_pyrowave_bpp_rate`.
+     * What the quality costs at a picture: its size and rate, core's [rate] text (`1.6 Gbit/s`),
+     * and the [warning] when the link is short of it. The row words them with
+     * `player_pyrowave_bpp_rate`.
      */
     data class Cost(val width: Int, val height: Int, val hz: Int, val rate: String, val warning: String?)
 
     /**
-     * The [Cost] of the mode a connect would ask. [base] is [effectiveMode]'s answer; render scale
-     * applies as the connect applies it. [price] is [NativeBridge.nativePyrowaveQuality].
+     * The [Cost] of the picture a connect would have the host encode: the view [Settings.streamAsk]
+     * names, else its mode. [base] is [effectiveMode]'s answer. [price] is
+     * [NativeBridge.nativePyrowaveQuality].
      */
     fun lines(
         s: Settings,
@@ -65,8 +67,9 @@ object PyroWaveQuality {
         link: Pair<Int, Int>,
         price: (Int, Int, Int, Boolean, Int, Int, Int, Int) -> String = NativeBridge::nativePyrowaveQuality,
     ): Cost {
-        val (w, h) = RenderScale.apply(base.first, base.second, s.renderScale, RenderScale.maxDimension(s.codec))
-        val hz = base.third
+        val (mode, view) = s.streamAsk(base, null) { base }
+        val (w, h) = view ?: (mode.first to mode.second)
+        val hz = mode.third
         // No 4:4:4 on Android; 10 bits follow the switches that ask for them.
         val depth = if (s.hdrEnabled || s.tenBitSdr) 10 else 8
         val out = price(w, h, hz, false, depth, s.pyrowaveBppX100(), link.first, link.second)

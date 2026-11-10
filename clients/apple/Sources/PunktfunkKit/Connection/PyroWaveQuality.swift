@@ -1,4 +1,4 @@
-// PyroWave quality as the player reads it: the rate it needs at the mode a connect would ask,
+// PyroWave quality as the player reads it: the rate it needs at the picture the host encodes,
 // and the warning when this device's link is short of it. Core prices both, so every client
 // words them the same way.
 

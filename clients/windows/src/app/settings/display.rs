@@ -357,7 +357,7 @@ pub(super) fn display_section(cx: &Cx) -> Vec<View> {
             })
     };
     // PyroWave sets its own rate: its quality stands where Bitrate stood, as the rate it needs
-    // at the mode a connect would ask, never as bits per pixel. The stored bitrate stays for the
+    // at the picture the host encodes, never as bits per pixel. The stored bitrate stays for the
     // other codecs.
     let pyrowave = s.codec == "pyrowave";
     let (quality_caption, quality_warning) = {

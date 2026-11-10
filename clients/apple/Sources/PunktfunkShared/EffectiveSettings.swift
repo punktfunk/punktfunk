@@ -405,6 +405,16 @@ extension EffectiveSettings {
         return view
     }
 
+    /// The picture a host that scales encodes for `streamMode(native:)`: its view at the mode's
+    /// refresh, else the mode.
+    public func streamPicture(
+        native: (width: Int, height: Int, hz: Int)
+    ) -> (width: UInt32, height: UInt32, hz: UInt32) {
+        let mode = streamMode(native: native)
+        let view = streamView(native: native, mode: mode)
+        return (view?.width ?? mode.width, view?.height ?? mode.height, mode.hz)
+    }
+
     /// `pyrowaveBpp` in the hundredths the dial carries, held inside 0.5…2.
     public var pyrowaveBppX100: UInt16 {
         UInt16((min(max(pyrowaveBpp, 0.5), 2.0) * 100).rounded())

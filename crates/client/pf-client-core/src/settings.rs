@@ -545,7 +545,8 @@ impl Settings {
     }
 
     /// The PyroWave quality row's caption, `3840×2160 at 120 Hz: 1.3 Gbit/s`, and the warning
-    /// when `link` is short of that rate. The mode is [`Self::stream_mode`] over `native`; 4:4:4
+    /// when `link` is short of that rate. It prices the picture the host encodes: the
+    /// [`Self::stream_view`] a connect names, else [`Self::stream_mode`], over `native`. 4:4:4
     /// and 10 bits follow the switches that ask for them.
     pub fn pyrowave_quality_lines(
         &self,
@@ -553,17 +554,25 @@ impl Settings {
         link: punktfunk_core::transport::LinkFacts,
     ) -> (String, Option<String>) {
         let mode = self.stream_mode(native);
+        let (width, height) = self
+            .stream_view(native)
+            .unwrap_or((mode.width, mode.height));
+        let picture = punktfunk_core::Mode {
+            width,
+            height,
+            ..mode
+        };
         let ten_bit = self.hdr_enabled || self.ten_bit_sdr;
         let kbps = punktfunk_core::pyrowave::kbps_for(
-            &mode,
+            &picture,
             self.enable_444,
             if ten_bit { 10 } else { 8 },
             f64::from(self.pyrowave_bpp_x100()) / 100.0,
         );
         let caption = pf_l10n::client::player_pyrowave_bpp_rate(
-            mode.width,
-            mode.height,
-            mode.refresh_hz,
+            width,
+            height,
+            picture.refresh_hz,
             rate_label(kbps),
         );
         (caption, link_warning(kbps, link))
@@ -1299,10 +1308,8 @@ mod tests {
         assert!(serde_json::to_string(&s).unwrap().contains("\"detailed\""));
     }
 
-    /// One-off beats binding; `""` forces defaults; unknown one-off falls back to
-    /// defaults, not the host's preset.
     /// An older store reads the default quality, the dial carries it in hundredths held inside
-    /// the bounds, and the caption prices the mode a connect would ask at it.
+    /// the bounds, and the caption prices the picture a connect would have the host encode.
     #[test]
     fn pyrowave_quality_reads_as_the_rate_it_needs() {
         use punktfunk_core::transport::{LinkFacts, IFACE_KIND_ETHERNET};
@@ -1343,6 +1350,15 @@ mod tests {
             half.pyrowave_quality_lines(native, wire).0,
             "960\u{d7}540 at 60 Hz: 50 Mbit/s"
         );
+        // Above 1x a host that scales encodes the view, not the 3840×2160 mode.
+        let double = Settings {
+            render_scale: 2.0,
+            ..half.clone()
+        };
+        assert_eq!(
+            double.pyrowave_quality_lines(native, wire).0,
+            "1920\u{d7}1080 at 60 Hz: 199 Mbit/s"
+        );
         let (_, warning) = sdr.pyrowave_quality_lines(native, LinkFacts::default());
         assert_eq!(
             warning.as_deref(),
@@ -1350,6 +1366,8 @@ mod tests {
         );
     }
 
+    /// One-off beats binding; `""` forces defaults; unknown one-off falls back to
+    /// defaults, not the host's preset.
     #[test]
     fn preset_resolution_precedence() {
         use crate::presets::{PresetsFile, StreamPreset};
