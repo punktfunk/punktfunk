@@ -15,9 +15,9 @@ use super::nvenc_core::{
     apply_low_latency_config, build_init_params, cached_ceiling, cached_split_verdict, encode_cap,
     force_frame_mode, open_split_mode, plan_range_recovery, prefix_diverged, preset_guid,
     resolve_slices, resolve_split_subframe, resolve_subframe, seed_config, seed_pic_params,
-    seed_preset_config, session_wave_cycle, slice_offsets_len, store_ceiling, store_split_verdict,
-    subframe_env_forced, ArbAction, BitstreamLock, CeilingKey, EncodeApi, LowLatencyConfig,
-    NvStatusExt, RangePlan, SplitArbiter, SplitKey,
+    seed_preset_config, session_wave_cycle, slice_offsets_len, slice_ready, store_ceiling,
+    store_split_verdict, subframe_env_forced, ArbAction, BitstreamLock, CeilingKey, EncodeApi,
+    LowLatencyConfig, NvStatusExt, RangePlan, SplitArbiter, SplitKey,
 };
 use super::nvenc_status;
 use super::{max_forced_split_mode, resolve_split_mode, AuChunk, Codec, EncodedFrame};
@@ -1490,8 +1490,10 @@ impl NvSession {
     }
 
     /// Slice-boundary chunks of the oldest AU: sample it with doNotWait locks for ~2 frame
-    /// intervals, then finish through one blocking lock, the completion authority. A session
-    /// that cannot chunk hands out one whole-AU chunk.
+    /// intervals, then finish through one blocking lock. A driver that hands a complete AU out
+    /// once (R620) finishes on the sample that saw it complete. A finish that disowns the
+    /// sampled bytes latches sub-frame off. A session that cannot chunk hands out one whole-AU
+    /// chunk.
     pub fn poll_chunk(&mut self) -> Result<Option<AuChunk>> {
         if !self.supports_chunked_poll() && self.chunk.is_none() {
             return Ok(self.poll()?.map(AuChunk::whole));
@@ -1509,6 +1511,11 @@ impl NvSession {
         // A driver that never publishes intermediate slices costs this budget, then the lock.
         let budget = Duration::from_micros(2_000_000 / self.fps.max(1) as u64);
         let t0 = Instant::now();
+        // The most bytes this call's samples showed. An earlier call's ended in a chunk, which
+        // `emitted` covers.
+        let mut seen = 0;
+        // The sample that showed every slice. R620 hands a complete AU out once, to that sample.
+        let mut complete: Option<Vec<u8>> = None;
         loop {
             let emitted = self.chunk.as_ref().map_or(0, |c| c.emitted);
             let slices_out = self.chunk.as_ref().map_or(0, |c| c.slices_out);
@@ -1527,13 +1534,15 @@ impl NvSession {
             if let Ok(lock) = lock {
                 let n = lock.info().numSlices;
                 let bytes = lock.bytes().len();
+                seen = seen.max(bytes);
                 if n >= self.slices {
                     // Every slice readable: finish through the blocking lock (`numSlices`
-                    // alone is not trusted across driver branches).
+                    // alone is not trusted across driver branches), with this read in hand.
+                    complete = Some(lock.bytes().to_vec());
                     drop(lock);
                     break;
                 }
-                if n > slices_out && bytes > emitted {
+                if bytes > emitted && slice_ready(n, slices_out, &lock.bytes()[emitted..]) {
                     // New slice(s): cut `[emitted..bytes)`, contiguous Annex-B on a NAL boundary.
                     let data = lock.bytes()[emitted..].to_vec();
                     lock.unlock()
@@ -1577,18 +1586,23 @@ impl NvSession {
                 return Err(nvenc_status::call_err("lock_bitstream (chunk finish)", e));
             }
         };
-        let full = lock.bytes();
+        // An empty finish after a sample saw the AU complete: that sample took it.
+        let full = match (lock.bytes(), complete.as_deref()) {
+            ([], Some(sampled)) => sampled,
+            (full, _) => full,
+        };
         let total = full.len();
-        // The doNotWait bytes must be a byte-exact prefix of the finished AU, or the wire already
-        // carries undetectable corruption. Latch sub-frame off and bail into stall recovery
-        // (rebuild without sub-frame, IDR).
-        if prefix_diverged(&cs.shadow, cs.emitted, full) {
+        // The finished AU must start with the emitted bytes and must not be empty after a sample
+        // saw bytes, or the wire carries undetectable corruption. Latch sub-frame off and bail
+        // into stall recovery (rebuild without sub-frame, IDR).
+        if prefix_diverged(&cs.shadow, cs.emitted, seen, full) {
             drop(lock);
             // SAFETY: the mapping for this retired encode, unmapped once.
             unsafe { self.unmap(p.map) };
             self.subframe_broken = true;
             tracing::warn!(
                 emitted = cs.emitted,
+                seen,
                 total,
                 "NVENC sub-frame readback diverged from the finished AU — this driver's early \
                  slice publishes cannot be trusted; disarming sub-frame for every later session \
