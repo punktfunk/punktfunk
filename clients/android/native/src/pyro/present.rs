@@ -844,7 +844,8 @@ fn outcome(e: vk::Result) -> Outcome {
     match e {
         vk::Result::ERROR_OUT_OF_DATE_KHR => Outcome::OutOfDate,
         vk::Result::TIMEOUT | vk::Result::NOT_READY => Outcome::Timeout,
-        vk::Result::ERROR_DEVICE_LOST => Outcome::DeviceLost,
+        // A lost surface never comes back either: only a new window's lane presents again.
+        vk::Result::ERROR_DEVICE_LOST | vk::Result::ERROR_SURFACE_LOST_KHR => Outcome::DeviceLost,
         _ => Outcome::Failed,
     }
 }
