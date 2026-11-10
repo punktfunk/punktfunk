@@ -342,10 +342,19 @@ impl Drop for BitstreamLock {
     }
 }
 
-/// Whether the chunked sampler's `emitted` bytes (`shadow`) are not a byte-exact prefix of the
-/// finished AU. `emitted > full.len()` is checked first: the prefix slice would be ill-formed.
-pub fn prefix_diverged(shadow: &[u8], emitted: usize, full: &[u8]) -> bool {
-    emitted > full.len() || shadow != &full[..emitted]
+/// Whether the finished AU disowns what the chunked sampler saw: the `emitted` bytes (`shadow`)
+/// are not its byte-exact prefix, or it is empty after a doNotWait lock reported `seen` bytes.
+/// A sample's size alone may run past the finish, so only an empty finish counts.
+/// `emitted > full.len()` is checked first: the prefix slice would be ill-formed.
+pub fn prefix_diverged(shadow: &[u8], emitted: usize, seen: usize, full: &[u8]) -> bool {
+    emitted > full.len() || (full.is_empty() && seen > 0) || shadow != &full[..emitted]
+}
+
+/// Whether a doNotWait sample holds a new slice in `tail`, its bytes past the emitted ones.
+/// A driver counts the slices as it writes them, or reports none until the AU completes
+/// (R620) while the bytes still grow a whole slice at a time: `tail` then opens a NAL.
+pub fn slice_ready(n: u32, slices_out: u32, tail: &[u8]) -> bool {
+    n > slices_out || (n == 0 && (tail.starts_with(&[0, 0, 1]) || tail.starts_with(&[0, 0, 0, 1])))
 }
 
 /// NVENC codec GUID. PyroWave never opens this backend.
@@ -970,13 +979,32 @@ mod tests {
         assert_eq!(slice_offsets_len(1, 1), 1);
     }
 
+    /// A counted slice is ready. With no count, the bytes past the cursor must open a NAL.
     #[test]
-    fn prefix_check_catches_overrun_and_mismatch() {
+    fn a_slice_is_ready_by_count_or_by_its_start_code() {
+        assert!(slice_ready(2, 1, &[9]));
+        assert!(!slice_ready(1, 1, &[0, 0, 1]));
+        assert!(slice_ready(0, 0, &[0, 0, 0, 1, 2]));
+        assert!(slice_ready(0, 0, &[0, 0, 1]));
+        assert!(!slice_ready(0, 0, &[7, 0, 0, 1]));
+    }
+
+    /// An empty finish after a sample saw bytes diverges. A sample may run past the finish.
+    #[test]
+    fn prefix_check_catches_overrun_mismatch_and_an_empty_finish() {
         let full = [1u8, 2, 3, 4];
-        assert!(!prefix_diverged(&[1, 2], 2, &full));
-        assert!(!prefix_diverged(&[], 0, &full));
-        assert!(prefix_diverged(&[1, 9], 2, &full));
-        assert!(prefix_diverged(&[1, 2, 3, 4, 5], 5, &full));
+        assert!(!prefix_diverged(&[1, 2], 2, 3, &full));
+        assert!(!prefix_diverged(&[], 0, 4, &full));
+        assert!(
+            !prefix_diverged(&[], 0, 5, &full),
+            "a sample may run past the finish"
+        );
+        assert!(prefix_diverged(&[1, 9], 2, 2, &full));
+        assert!(prefix_diverged(&[1, 2, 3, 4, 5], 5, 5, &full));
+        assert!(
+            prefix_diverged(&[], 0, 4, &[]),
+            "a sampled AU finished empty"
+        );
     }
 
     #[test]
