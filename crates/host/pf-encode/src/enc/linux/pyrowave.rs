@@ -77,30 +77,6 @@ fn capture_anchor_node() -> std::path::PathBuf {
     pf_gpu::render_node_env().unwrap_or_else(|| std::path::PathBuf::from("/dev/dri/renderD128"))
 }
 
-/// `(major, minor)` of a device node in the encoding `VkPhysicalDeviceDrmPropertiesEXT`
-/// uses (glibc `gnu_dev_major`/`gnu_dev_minor`).
-fn node_rdev(path: &std::path::Path) -> Option<(i64, i64)> {
-    use std::os::unix::fs::MetadataExt;
-    let rdev = std::fs::metadata(path).ok()?.rdev();
-    let major = ((rdev >> 8) & 0xfff) | ((rdev >> 32) & !0xfffu64);
-    let minor = (rdev & 0xff) | ((rdev >> 12) & !0xffu64);
-    Some((major as i64, minor as i64))
-}
-
-/// Node PCI `(domain, bus, device, function)` from sysfs — fallback when the
-/// driver lacks `VK_EXT_physical_device_drm`.
-fn node_pci_address(path: &std::path::Path) -> Option<(u32, u32, u32, u32)> {
-    let node = path.file_name()?.to_str()?;
-    let dev = std::fs::canonicalize(format!("/sys/class/drm/{node}/device")).ok()?;
-    let addr = dev.file_name()?.to_str()?;
-    let (rest, func) = addr.rsplit_once('.')?;
-    let mut parts = rest.split(':');
-    let domain = u32::from_str_radix(parts.next()?, 16).ok()?;
-    let bus = u32::from_str_radix(parts.next()?, 16).ok()?;
-    let device = u32::from_str_radix(parts.next()?, 16).ok()?;
-    Some((domain, bus, device, u32::from_str_radix(func, 16).ok()?))
-}
-
 /// The features of `pd` the open plan reads.
 ///
 /// # Safety
@@ -137,8 +113,8 @@ unsafe fn read_features(instance: &ash::Instance, pd: vk::PhysicalDevice) -> Fea
 unsafe fn log_pick(instance: &ash::Instance, picked: &PickedDevice) {
     let anchor = capture_anchor_node();
     let anchor_owner = {
-        let rdev = node_rdev(&anchor);
-        let pci = node_pci_address(&anchor);
+        let rdev = super::vk_util::node_rdev(&anchor);
+        let pci = super::vk_util::node_pci_address(&anchor);
         if rdev.is_none() && pci.is_none() {
             "unresolved".to_string()
         } else {
@@ -146,7 +122,7 @@ unsafe fn log_pick(instance: &ash::Instance, picked: &PickedDevice) {
                 .enumerate_physical_devices()
                 .unwrap_or_default()
                 .into_iter()
-                .find(|&o| device_owns_node(instance, o, rdev, pci))
+                .find(|&o| super::vk_util::device_owns_node(instance, o, rdev, pci))
                 .map(|o| {
                     let p = instance.get_physical_device_properties(o);
                     format!("{:04x}:{:04x}", p.vendor_id, p.device_id)
@@ -166,47 +142,6 @@ unsafe fn log_pick(instance: &ash::Instance, picked: &PickedDevice) {
         "pyrowave: encoding on the first usable Vulkan GPU (a wrong-device report on a \
          multi-GPU host needs these fields)"
     );
-}
-
-/// Whether `pd` owns the anchor render node. DRM render major/minor is primary
-/// (disambiguates twin-model GPUs); PCI bus info is the fallback. Neither
-/// extension advertised → never matches.
-///
-/// # Safety
-/// `instance` must be live; issues only physical-device property queries.
-unsafe fn device_owns_node(
-    instance: &ash::Instance,
-    pd: vk::PhysicalDevice,
-    rdev: Option<(i64, i64)>,
-    pci: Option<(u32, u32, u32, u32)>,
-) -> bool {
-    let exts = instance
-        .enumerate_device_extension_properties(pd)
-        .unwrap_or_default();
-    let has_ext =
-        |name: &std::ffi::CStr| exts.iter().any(|e| e.extension_name_as_c_str() == Ok(name));
-    if let Some((major, minor)) = rdev {
-        if has_ext(ash::ext::physical_device_drm::NAME) {
-            let mut drm = vk::PhysicalDeviceDrmPropertiesEXT::default();
-            let mut p2 = vk::PhysicalDeviceProperties2::default().push_next(&mut drm);
-            instance.get_physical_device_properties2(pd, &mut p2);
-            return drm.has_render == vk::TRUE
-                && drm.render_major == major
-                && drm.render_minor == minor;
-        }
-    }
-    if let Some((domain, bus, device, function)) = pci {
-        if has_ext(ash::ext::pci_bus_info::NAME) {
-            let mut pcip = vk::PhysicalDevicePCIBusInfoPropertiesEXT::default();
-            let mut p2 = vk::PhysicalDeviceProperties2::default().push_next(&mut pcip);
-            instance.get_physical_device_properties2(pd, &mut p2);
-            return pcip.pci_domain == domain
-                && pcip.pci_bus == bus
-                && pcip.pci_device == device
-                && pcip.pci_function == function;
-        }
-    }
-    false
 }
 
 /// Create-infos `pyrowave_create_device` requires to outlive the `pyrowave_device`.

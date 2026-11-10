@@ -248,8 +248,7 @@ pub(super) fn packed_modifier_offers(
     // refused tiled offer leaves LINEAR, or the rebuild would be offered the same tiles.
     let extend_pyrowave =
         vaapi_passthrough && policy.pyrowave_session && !producer_is_gamescope && !tiled_refused;
-    let seed_encoder_mods =
-        vaapi_passthrough && producer_is_gamescope && policy.gamescope_tiled && !tiled_refused;
+    let seed_encoder_mods = encoder_tiled_offer(cfg, ladder);
     for (fourcc, mods) in &policy.encoder_modifiers {
         let nonzero: Vec<u64> = mods.iter().copied().filter(|m| *m != 0).collect();
         if !nonzero.is_empty() {
@@ -291,6 +290,20 @@ pub(super) fn packed_modifier_offers(
     (modifiers, modifiers_bgra, extend_pyrowave)
 }
 
+/// Whether the passthrough offers the tiled modifiers the session's VA or Vulkan Video encoder
+/// proved it imports. Gamescope has its own switch; any other producer gets them, so one on the
+/// encoder's GPU allocates tiled and not the packed LINEAR rows a VA driver reads at a rounded
+/// pitch. A refused tiled offer leaves LINEAR. PyroWave's lists ride `extend_pyrowave`.
+fn encoder_tiled_offer(cfg: &StreamConfig, ladder: &Ladder) -> bool {
+    let policy = &cfg.policy;
+    let wanted = if cfg.opts.producer_is_gamescope {
+        policy.gamescope_tiled
+    } else {
+        policy.backend_is_vaapi && !policy.pyrowave_session
+    };
+    cfg.plan.vaapi_passthrough && wanted && !ladder.refused(Refusal::Tiled)
+}
+
 /// Packed 10-bit offers, PQ or gamescope's SDR ([`StreamConfig::ten_bit`]). Tiled has two
 /// readers: NVENC's raw convert, for the modifiers it samples, and the VA encoder's own import —
 /// the latter only for `encoder_modifiers`-proved modifiers. Every other arm de-tiles into 8
@@ -303,11 +316,7 @@ pub(super) fn hdr_modifier_offers(
 ) -> Vec<(VideoFormat, Vec<u64>)> {
     let policy = &cfg.policy;
     let hdr_tiled_raw = cfg.hdr_tiled_raw(ladder);
-    let hdr_tiled_direct = cfg.ten_bit()
-        && cfg.plan.vaapi_passthrough
-        && cfg.opts.producer_is_gamescope
-        && policy.gamescope_tiled
-        && !ladder.refused(Refusal::Tiled);
+    let hdr_tiled_direct = cfg.ten_bit() && encoder_tiled_offer(cfg, ladder);
     let mut hdr_modifiers: Vec<(VideoFormat, Vec<u64>)> = Vec::new();
     for (i, fmt) in HDR_FORMAT_ORDER.into_iter().enumerate() {
         let mut list = Vec::new();
