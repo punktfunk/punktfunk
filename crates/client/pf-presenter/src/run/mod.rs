@@ -455,6 +455,8 @@ struct StreamState {
     resize_requested: Option<(u32, u32)>,
     /// Connector mode last shown in the HUD/title — a change refreshes both.
     shown_mode: Option<Mode>,
+    /// The picture size and refresh the window title names.
+    titled: Option<((u32, u32), u32)>,
     /// Scrim + spinner. Armed by [`resize_tick`](stream::resize_tick) when it requests a
     /// switch; cleared when a decoded frame reaches the target (or on timeout).
     resize_overlay: ResizeIndicator,

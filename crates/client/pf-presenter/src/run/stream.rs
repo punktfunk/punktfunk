@@ -92,6 +92,7 @@ impl StreamState {
             resize_sent_at: None,
             resize_requested: None,
             shown_mode: None,
+            titled: None,
             resize_overlay: ResizeIndicator::default(),
             last_video: None,
             screens: Default::default(),
@@ -163,7 +164,8 @@ pub(super) fn window_mode(
     )
 }
 
-/// Follow the live mode slot (any accepted ack — follower, another trigger, or rollback).
+/// Follow the live mode slot (any accepted ack — follower, another trigger, or rollback), and
+/// title the window with the picture on screen.
 pub(super) fn hud_mode_tick(
     st: &mut StreamState,
     window: &mut sdl3::video::Window,
@@ -173,10 +175,16 @@ pub(super) fn hud_mode_tick(
         return;
     };
     let m = c.mode();
+    // The title names the picture on screen: a host that scales sends less than its mode.
+    let picture = st.last_video.unwrap_or((m.width, m.height));
+    if st.titled != Some((picture, m.refresh_hz)) {
+        st.titled = Some((picture, m.refresh_hz));
+        let (w, h) = picture;
+        let _ = window.set_title(&format!("{title_base} · {w}×{h}@{}", m.refresh_hz));
+    }
     if st.shown_mode.is_some_and(|prev| prev != m) {
         st.mode_line = format!("{}×{}@{}", m.width, m.height, m.refresh_hz);
         tracing::info!(mode = %st.mode_line, "stream mode switched");
-        let _ = window.set_title(&format!("{title_base} · {}", st.mode_line));
         // A switch is a full host-side rebuild: the interval the cushion is bounded by
         // can change, and the gap must re-anchor the cadence estimate rather than slew over.
         st.source_interval_ns = frame_interval_ns(m.refresh_hz, 0);

@@ -667,7 +667,7 @@
 	"player_bitrate_kbps_pyrowave_switch_hint": "Apple, under the Automatic bitrate switch while the codec is PyroWave. 'off' is the switch's state.",
 	"player_bitrate_kbps_entry": "Label of the field where a fixed bitrate is typed.",
 	"player_pyrowave_bpp": "Setting label. PyroWave is a codec name; keep it.",
-	"player_pyrowave_bpp_rate": "What the PyroWave quality needs at the stream mode. {width}, {height}: pixels; {hz}: whole hertz; {rate}: formatted rate with unit (\"1.3 Gbit/s\").",
+	"player_pyrowave_bpp_rate": "What the PyroWave quality needs for the picture the host encodes. {width}, {height}: its pixels; {hz}: whole hertz; {rate}: formatted rate with unit (\"1.3 Gbit/s\").",
 	"player_pyrowave_bpp_wifi_warning": "Warning under PyroWave quality when this device is on Wi-Fi.",
 	"player_pyrowave_bpp_port_warning": "Warning under PyroWave quality. {need}: the rate the quality needs; {port}: what this device's Ethernet port carries. Both formatted with unit.",
 	"player_pyrowave_bpp_gbe_warning": "Warning under PyroWave quality when the port speed is unknown. {need}: the rate needed, formatted with unit. GbE = gigabit Ethernet.",

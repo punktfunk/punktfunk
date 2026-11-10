@@ -424,6 +424,12 @@ struct ContentView: View {
                 break
             }
         }
+        // The picture's size lands after the activity begins: a host that scales sends less
+        // than its mode.
+        .onChange(of: model.pictureText) { _, _ in
+            let line = currentModeLine()
+            liveActivity.update { $0.modeLine = line }
+        }
         .onChange(of: model.isBackgrounded) { _, backgrounded in
             liveActivity.update {
                 $0.stage = backgrounded ? .background : .streaming
@@ -680,7 +686,8 @@ struct ContentView: View {
     }
 
     #if os(iOS) || os(visionOS)
-    /// The Live Activity mode line, e.g. "2560×1440 @120 · HEVC · HDR", from the live connection.
+    /// The Live Activity mode line, e.g. "2560×1440 @120 · HEVC · HDR", from the live connection:
+    /// the decoded picture's size once a frame arrived, the mode's before.
     private func currentModeLine() -> String {
         guard let c = model.connection else { return "" }
         let codec: String
@@ -690,7 +697,7 @@ struct ContentView: View {
         case .av1: codec = "AV1"
         case .pyrowave: codec = "PyroWave"
         }
-        var line = "\(c.width)×\(c.height)"
+        var line = model.pictureText.isEmpty ? "\(c.width)×\(c.height)" : model.pictureText
         if c.refreshHz > 0 { line += " @\(c.refreshHz)" }
         line += " · \(codec)"
         if c.isHDR { line += " · HDR" }

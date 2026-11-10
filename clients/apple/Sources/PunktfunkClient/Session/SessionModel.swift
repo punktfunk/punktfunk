@@ -266,6 +266,8 @@ final class SessionModel: ObservableObject {
     /// The last decoded picture's size: smaller than the host's mode when the host encodes the
     /// view. nil until the first frame.
     private var picture: (width: UInt32, height: UInt32)?
+    /// `picture` as the Live Activity names it, `1920×1080`; empty until the first frame.
+    @Published private(set) var pictureText = ""
 
     /// Received AUs, for the once-a-second log gate: nothing is logged while no frame flows.
     let meter = FrameMeter()
@@ -1005,6 +1007,7 @@ final class SessionModel: ObservableObject {
         PresentLinkInfo.shared.clear()
         resizeIndicator = ResizeIndicator() // no stale target/timer into the next session
         picture = nil
+        pictureText = ""
     }
 
     /// Called (via the main actor) when the pump hits end-of-session.
@@ -1138,6 +1141,8 @@ final class SessionModel: ObservableObject {
     func resizeDecoded(width: Int, height: Int) {
         let size = (width: UInt32(max(width, 0)), height: UInt32(max(height, 0)))
         picture = size
+        let text = "\(size.width)×\(size.height)"
+        if text != pictureText { pictureText = text } // an unchanged size must not re-render
         resizeIndicator.decoded(width: size.width, height: size.height)
         resizing = resizeIndicator.active
     }
