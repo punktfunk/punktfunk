@@ -24,6 +24,7 @@ toolchain and CMake (SDL3 builds from source) and nothing else — decode is nat
 ```sh
 cargo build -p punktfunk-client-windows --target x86_64-pc-windows-msvc
 
+# Cargo names the exe punktfunk-client-windows.exe; the packages ship it as punktfunk-client.exe.
 punktfunk-client --discover                                     # list hosts on the LAN
 punktfunk-client --headless --connect host[:port] [--pin HEX]   # connect, count frames, print stats
 punktfunk-client --headless --speed-test --connect host[:port]  # probe burst → recommended bitrate
