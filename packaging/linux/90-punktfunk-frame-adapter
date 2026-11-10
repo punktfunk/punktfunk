@@ -2,23 +2,54 @@
 # NetworkManager dispatcher hook for the Steam Frame wireless adapter (USB 28de:2432).
 #
 # The headset's access point drops a station that misses its 10 s inactivity poll, and the
-# adapter misses it while it dozes: an idle link then carries traffic for a moment every ~14 s.
-# While the adapter is connected, both of its power saves stay off, the two that Steam's
-# low-latency mode turns off.
+# adapter misses it while it dozes: while it is connected, both of its power saves stay off.
+# Steam's low-latency mode turns the firmware's hardware scan off, and without a scan the adapter
+# never finds the headset's hidden network again. The scan is on while the link is down only.
 #
 # Installed to /usr/lib/NetworkManager/dispatcher.d/. NM runs it as root with the interface and
-# the action; PF_SYSFS only redirects /sys for scripts/ci/check-frame-adapter-hook.sh.
+# the action; PF_ROOT only redirects /sys and /run for scripts/ci/check-frame-adapter-hook.sh.
 iface=$1
-case ${2:-} in
-    up | reapply) ;;
+action=${2:-}
+case $action in
+    up | reapply | down) ;;
     *) exit 0 ;;
 esac
-sys=${PF_SYSFS:-/sys}
+sys=${PF_ROOT:-}/sys
 usb=$sys/class/net/$iface/device/..
 id="$(cat "$usb/idVendor" 2>/dev/null):$(cat "$usb/idProduct" 2>/dev/null)"
 [ "$id" = 28de:2432 ] || exit 0
 
 log() { logger -t punktfunk-frame-adapter "$iface: $*" 2>/dev/null || :; }
+
+# rtw89 turns a firmware feature off when its bit is set in disable_dm, which lists each one as
+# "[bit] NAME: O|X" (X = off). Sets feature $1 to $2; true only when that changed the mask.
+phy=$(basename "$(readlink -f "$sys/class/net/$iface/phy80211")")
+dm=$sys/kernel/debug/ieee80211/$phy/rtw89/disable_dm
+dm_set() {
+    [ -r "$dm" ] || return 1
+    mask=$(awk -v name="$1" -v want="$2" '
+        /^\[[0-9]+\][ \t]+[A-Z0-9_]+:[ \t]+[OX]$/ {
+            bit = substr($1, 2, length($1) - 2)
+            n = $2
+            sub(/:$/, "", n)
+            v = $3
+            if (n == name) { changed = v != want; v = want }
+            if (v == "X") mask += 2 ^ bit
+        }
+        END { if (changed) printf "0x%x\n", mask }' "$dm")
+    [ -n "$mask" ] && echo "$mask" >"$dm" 2>/dev/null
+}
+
+# Marks a scan this hook turned on, so the next connect gives Steam its setting back.
+mark=${PF_ROOT:-}/run/punktfunk-frame-adapter/$iface.hw-scan-off
+
+if [ "$action" = down ]; then
+    if dm_set HW_SCAN O; then
+        mkdir -p "${mark%/*}" && : >"$mark"
+        log "hardware scan on until the headset is back"
+    fi
+    exit 0
+fi
 
 if command -v iw >/dev/null 2>&1; then
     if iw dev "$iface" set power_save off; then
@@ -33,21 +64,13 @@ elif [ -n "${CONNECTION_UUID:-}" ]; then
     fi
 fi
 
-# The firmware's inactive power save: rtw89 turns a feature off when its bit is set in
-# disable_dm, which lists each one as "[bit] NAME: O|X" (X = off).
-phy=$(basename "$(readlink -f "$sys/class/net/$iface/phy80211")")
-dm=$sys/kernel/debug/ieee80211/$phy/rtw89/disable_dm
-[ -r "$dm" ] || exit 0
-mask=$(awk '
-    /^\[[0-9]+\][ \t]+[A-Z0-9_]+:[ \t]+[OX]$/ {
-        bit = substr($1, 2, length($1) - 2)
-        name = $2
-        sub(/:$/, "", name)
-        if ($3 == "X" || name == "INACTIVE_PS") mask += 2 ^ bit
-        if (name == "INACTIVE_PS") found = 1
-    }
-    END { if (found) printf "0x%x\n", mask }' "$dm")
-if [ -n "$mask" ] && echo "$mask" >"$dm" 2>/dev/null; then
+if dm_set INACTIVE_PS X; then
     log "firmware power save off"
+fi
+if [ -e "$mark" ]; then
+    rm -f "$mark"
+    if dm_set HW_SCAN X; then
+        log "hardware scan off again, as Steam set it"
+    fi
 fi
 exit 0

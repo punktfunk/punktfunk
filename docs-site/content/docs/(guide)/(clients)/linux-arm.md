@@ -48,7 +48,8 @@ the PC is not connected to the adapter, the app uses Wi-Fi.
 
 On a Linux PC, the adapter needs Linux 7.2 or SteamOS 3.9 or newer. The Punktfunk packages keep
 the adapter out of power saving while it is connected. In power saving, the headset drops the
-adapter after a few quiet seconds and the stream cannot start.
+adapter after a few quiet seconds and the stream cannot start. When the link drops, they also let
+the adapter search for the headset again, which Steam's low-latency mode turns off.
 
 If you built the host yourself, install that part by hand, then reconnect the adapter:
 
