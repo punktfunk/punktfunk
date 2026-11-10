@@ -822,6 +822,12 @@ pub struct PunktfunkConnectOpts {
     pub prompts_unlock: u8,
     /// Always `0`. Fills what would otherwise be padding.
     pub reserved6: [u8; 7],
+    /// The size this caller shows the picture at, when smaller than the mode: the host scales
+    /// the picture to it before encoding. `0` on either axis, which a shorter prefix defaults
+    /// to, encodes the mode.
+    pub view_width: u32,
+    /// See `view_width`.
+    pub view_height: u32,
 }
 
 /// [`PunktfunkProfileUnlock::kind`]: the account password as typed.
@@ -960,7 +966,7 @@ const _: () = {
     use core::mem::{offset_of, size_of};
     #[cfg(target_pointer_width = "64")]
     assert!(
-        size_of::<PunktfunkConnectOpts>() == 192
+        size_of::<PunktfunkConnectOpts>() == 200
             && offset_of!(PunktfunkConnectOpts, video_fit) == 100
             && offset_of!(PunktfunkConnectOpts, delivery_flags) == 121
             && offset_of!(PunktfunkConnectOpts, profile_id) == 128
@@ -971,11 +977,12 @@ const _: () = {
             && offset_of!(PunktfunkConnectOpts, shows_screens) == 169
             && offset_of!(PunktfunkConnectOpts, unlock) == 176
             && offset_of!(PunktfunkConnectOpts, prompts_unlock) == 184
+            && offset_of!(PunktfunkConnectOpts, view_width) == 192
             && size_of::<PunktfunkProfileUnlock>() == 40
     );
     #[cfg(target_pointer_width = "32")]
     assert!(
-        size_of::<PunktfunkConnectOpts>() == 136
+        size_of::<PunktfunkConnectOpts>() == 144
             && offset_of!(PunktfunkConnectOpts, video_fit) == 72
             && offset_of!(PunktfunkConnectOpts, delivery_flags) == 85
             && offset_of!(PunktfunkConnectOpts, profile_id) == 92
@@ -986,6 +993,7 @@ const _: () = {
             && offset_of!(PunktfunkConnectOpts, shows_screens) == 117
             && offset_of!(PunktfunkConnectOpts, unlock) == 124
             && offset_of!(PunktfunkConnectOpts, prompts_unlock) == 128
+            && offset_of!(PunktfunkConnectOpts, view_width) == 136
             && size_of::<PunktfunkProfileUnlock>() == 24
     );
 };
@@ -1038,6 +1046,8 @@ impl Default for PunktfunkConnectOpts {
             unlock: ptr::null(),
             prompts_unlock: 0,
             reserved6: [0; 7],
+            view_width: 0,
+            view_height: 0,
         }
     }
 }
@@ -1321,6 +1331,7 @@ unsafe fn connect_params(
     // SAFETY: `unlock` is null or a readable struct whose buffers match their lengths.
     let unlock = unsafe { unlock_of(o.unlock) }?;
     Ok(punktfunk_core::client::ConnectParams {
+        view: (o.view_width > 0 && o.view_height > 0).then_some((o.view_width, o.view_height)),
         prompts_unlock: o.prompts_unlock != 0,
         unlock,
         compositor,
@@ -1702,6 +1713,25 @@ mod tests {
         );
         // SAFETY: null `id` clears the fallback.
         unsafe { punktfunk_set_session_preset(std::ptr::null(), std::ptr::null()) };
+    }
+
+    /// The view reaches the dial; a zero axis is no view.
+    #[test]
+    fn connect_opts_carry_the_view() {
+        let mut o = PunktfunkConnectOpts {
+            host: c"127.0.0.1".as_ptr(),
+            view_width: 1366,
+            view_height: 768,
+            ..Default::default()
+        };
+        // SAFETY: every pointer field is null or a live C-string literal.
+        assert_eq!(
+            unsafe { connect_params(&o) }.unwrap().view,
+            Some((1366, 768))
+        );
+        o.view_height = 0;
+        // SAFETY: as above.
+        assert_eq!(unsafe { connect_params(&o) }.unwrap().view, None);
     }
 
     /// `profile_id` reaches the dial; one longer than the wire carries is no ask.

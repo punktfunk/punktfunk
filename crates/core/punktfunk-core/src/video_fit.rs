@@ -254,8 +254,9 @@ impl Reframe {
     }
 
     /// Frame `source` for a client whose `view` fills by `fit`. Crop takes the centred part of
-    /// the view's shape; every fit then shrinks to fit inside the view and never grows. Stretch
-    /// frames like Fit, since the client stretches whatever arrives.
+    /// the view's shape; every fit then shrinks to fit inside the view and never grows. A
+    /// shrink that misses the view by a rounding lands on it. Stretch frames like Fit, since
+    /// the client stretches whatever arrives.
     pub fn plan(fit: VideoFit, source: (u32, u32), view: (u32, u32)) -> Reframe {
         let (sw, sh) = (u64::from(source.0), u64::from(source.1));
         let (vw, vh) = (u64::from(view.0), u64::from(view.1));
@@ -280,6 +281,13 @@ impl Reframe {
             }
         }
         r.out = crate::render_scale::fit_inside(r.crop[2], r.crop[3], view.0, view.1);
+        // A scaled picture within two pixels of the view is the view: no bar for a rounding.
+        // An unscaled one stays unscaled.
+        let even = (view.0 & !1, view.1 & !1);
+        let near = |o: u32, v: u32| v.checked_sub(o).is_some_and(|d| d <= 2);
+        if r.out != (r.crop[2], r.crop[3]) && near(r.out.0, even.0) && near(r.out.1, even.1) {
+            r.out = even;
+        }
         r
     }
 
@@ -503,5 +511,28 @@ mod tests {
         let r = Reframe::plan(VideoFit::Crop, (1920, 1200), (2560, 1080));
         assert_eq!(r.crop, [0, 194, 1920, 810]);
         assert!(Reframe::default().to_frame(5, 7) == (5, 7));
+    }
+
+    #[test]
+    fn reframe_lands_a_rounded_shrink_on_the_view() {
+        // 1366x768 at 1.5x renders 2048x1152; a plain fit would encode 1364x768.
+        let r = Reframe::plan(VideoFit::Fit, (2048, 1152), (1366, 768));
+        assert_eq!((r.crop, r.out), ([0, 0, 2048, 1152], (1366, 768)));
+        assert_eq!(
+            Reframe::plan(VideoFit::Stretch, (2048, 1152), (1366, 768)),
+            r
+        );
+        // An odd view lands on its even floor.
+        assert_eq!(
+            Reframe::plan(VideoFit::Fit, (2048, 1152), (1367, 768)).out,
+            (1366, 768)
+        );
+        // Four pixels off is a real shape: the fit keeps its bars.
+        assert_eq!(
+            Reframe::plan(VideoFit::Fit, (3840, 2160), (1920, 1084)).out,
+            (1920, 1080)
+        );
+        // An unscaled picture is never grown onto the view.
+        assert!(Reframe::plan(VideoFit::Fit, (1364, 768), (1366, 768)).is_full());
     }
 }

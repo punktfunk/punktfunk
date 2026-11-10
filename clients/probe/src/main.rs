@@ -960,6 +960,7 @@ async fn handshake(
         profile: args.as_profile.clone(),
         access_only: false,
         screens: screens_ask(args),
+        view: None,
     };
     v2io::send(send, &hello).await?;
     // `Pending` repeats while the host asks its console about this probe.
@@ -1145,7 +1146,7 @@ fn spawn_remode(mut rs: CtlTx, mut rr: CtlRx, new_mode: Mode, after_secs: u32) {
         tracing::info!(?new_mode, "requesting mid-stream mode switch");
         let ask = Reconfigure {
             mode: new_mode,
-            exclude_codecs: 0,
+            ..Default::default()
         };
         if v2io::send(&mut rs, &ask).await.is_err() {
             tracing::error!("Reconfigure write failed");

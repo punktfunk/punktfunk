@@ -70,6 +70,10 @@ pub struct ClientHello {
     /// Every screen this client shows, screen 0 first and matching `hello.mode`; empty for
     /// one. Under [`reg::FEATURE_SCREENS`].
     pub screens: Vec<super::msg::Screen>,
+    /// The size the client shows the picture at, when smaller than `hello.mode`: the host builds
+    /// the display at the mode and scales the picture to this before encoding. `None` encodes
+    /// the mode.
+    pub view: Option<(u32, u32)>,
 }
 
 impl ClientHello {
@@ -151,6 +155,7 @@ impl V2Message for ClientHello {
             .when(!self.screens.is_empty(), |f| self.screens.put(f, 27))
             .when(self.slices != 0, |f| f.u8(28, self.slices))
             .when(h.audio_bitstreams != 0, |f| f.u8(29, h.audio_bitstreams))
+            .when(self.view.is_some(), |f| self.view.put(f, 30))
     }
 
     fn from_body(body: &[u8]) -> Result<Self> {
@@ -180,7 +185,7 @@ impl V2Message for ClientHello {
         let (mut pyrowave_bpp_x100, mut slices) = (0u16, 0u8);
         let mut features = FeatureSet::default();
         let (mut profile, mut access_only) = (None, false);
-        let mut screens = Vec::new();
+        let (mut screens, mut view) = (Vec::new(), None);
         let mut seen = Vec::new();
         let mut r = FieldReader::new(body);
         while let Some((tag, v)) = r.next_field()? {
@@ -237,6 +242,7 @@ impl V2Message for ClientHello {
                 27 => screens = <Vec<super::msg::Screen> as FieldValue>::get(v).unwrap_or_default(),
                 28 => slices = v.first().copied().unwrap_or(0),
                 29 => h.audio_bitstreams = u8_of(v)?,
+                30 => view = <Option<(u32, u32)> as FieldValue>::get(v)?,
                 _ => {}
             }
         }
@@ -263,6 +269,7 @@ impl V2Message for ClientHello {
             profile,
             access_only,
             screens,
+            view,
         })
     }
 }
@@ -663,7 +670,7 @@ mod tests {
         /// changes nothing.
         #[test]
         fn hellos_settle_after_one_trip(h in hello_strategy(), w in welcome_strategy()) {
-            let ch = ClientHello { hello: h, client_label: None, abr_features: 0, preset: None, link: LinkFacts::default(), probe_only: false, pyrowave_bpp_x100: 0, slices: 0, resume: None, suites: vec![], features: FeatureSet::default(), profile: None, access_only: false, screens: vec![] };
+            let ch = ClientHello { hello: h, client_label: None, abr_features: 0, preset: None, link: LinkFacts::default(), probe_only: false, pyrowave_bpp_x100: 0, slices: 0, resume: None, suites: vec![], features: FeatureSet::default(), profile: None, access_only: false, screens: vec![], view: None };
             let once = ClientHello::from_body(&ch.fields().into_body()).unwrap();
             let twice = ClientHello::from_body(&once.fields().into_body()).unwrap();
             prop_assert_eq!(twice, once);
@@ -784,6 +791,9 @@ mod tests {
         assert!(!tags(&ch).contains(&29));
         ch.hello.audio_bitstreams = 0x03;
         assert!(tags(&ch).contains(&29));
+        assert!(!tags(&ch).contains(&30));
+        ch.view = Some((1366, 768));
+        assert!(tags(&ch).contains(&30));
 
         let read = |tag, v: &[u8]| {
             ClientHello::from_body(&Fields::new().bytes(tag, v).into_body()).unwrap()
@@ -805,6 +815,12 @@ mod tests {
         assert!(read(26, &[1]).access_only);
         assert!(!read(26, &[0]).access_only);
         assert!(!read(24, &[]).access_only);
+        assert_eq!(
+            read(30, &[0x56, 5, 0, 0, 0, 3, 0, 0]).view,
+            Some((1366, 768))
+        );
+        assert_eq!(read(30, &[0x56, 5, 0, 0]).view, None);
+        assert_eq!(read(30, &[0x56, 5, 0, 0, 0, 0, 0, 0]).view, None);
     }
 
     #[test]
@@ -850,6 +866,7 @@ mod tests {
             profile: None,
             access_only: false,
             screens: vec![],
+            view: None,
         };
         // The bytes on the wire are pinned: a change here is a wire change.
         let frame: String = ch.encode_v2().iter().map(|b| format!("{b:02x}")).collect();
@@ -862,6 +879,23 @@ mod tests {
         );
         let back = ClientHello::from_body(&ch.fields().into_body()).unwrap();
         assert_eq!(back, ch);
+
+        // A view rides last, as tag 30.
+        let viewed = ClientHello {
+            view: Some((1366, 768)),
+            ..ch.clone()
+        };
+        let body: String = viewed
+            .fields()
+            .into_body()
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect();
+        assert!(body.ends_with("190278001e085605000000030000"), "{body}");
+        assert_eq!(
+            ClientHello::from_body(&viewed.fields().into_body()).unwrap(),
+            viewed
+        );
 
         // Screens ride along; a torn list reads as one screen, never a failed handshake.
         let two = ClientHello {

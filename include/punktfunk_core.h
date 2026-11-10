@@ -426,7 +426,7 @@
 //
 // The wire is versioned by ALPN, not by this. Pin the integer in `punktfunk-ffi`
 // (`abi_version_is_pinned`). Per-bump notes live in `CHANGELOG.md`.
-#define PUNKTFUNK_ABI_VERSION 65
+#define PUNKTFUNK_ABI_VERSION 66
 
 // This client silenced its own speakers (`client::NativeClient::set_audio_muted`). The host
 // keeps sending, so a session joined to the same sink still hears the game.
@@ -1817,6 +1817,12 @@ typedef struct {
     uint8_t prompts_unlock;
     // Always `0`. Fills what would otherwise be padding.
     uint8_t reserved6[7];
+    // The size this caller shows the picture at, when smaller than the mode: the host scales
+    // the picture to it before encoding. `0` on either axis, which a shorter prefix defaults
+    // to, encodes the mode.
+    uint32_t view_width;
+    // See `view_width`.
+    uint32_t view_height;
 } PunktfunkConnectOpts;
 #endif
 
@@ -3784,6 +3790,21 @@ PunktfunkStatus punktfunk_connection_request_mode(const PunktfunkConnection *c,
                                                   uint32_t width,
                                                   uint32_t height,
                                                   uint32_t refresh_hz);
+#endif
+
+#if defined(PUNKTFUNK_FEATURE_QUIC)
+// [`punktfunk_connection_request_mode`] with the size this caller shows the picture at, when
+// smaller than the mode: the host scales the picture to it before encoding. `0` on either
+// view axis encodes the mode, which is how a caller back at 1x clears it.
+//
+// # Safety
+// `c` is a valid connection handle.
+PunktfunkStatus punktfunk_connection_request_mode_view(const PunktfunkConnection *c,
+                                                       uint32_t width,
+                                                       uint32_t height,
+                                                       uint32_t refresh_hz,
+                                                       uint32_t view_width,
+                                                       uint32_t view_height);
 #endif
 
 #if defined(PUNKTFUNK_FEATURE_QUIC)

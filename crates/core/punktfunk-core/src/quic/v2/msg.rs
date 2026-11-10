@@ -127,6 +127,30 @@ impl FieldValue for Mode {
     }
 }
 
+/// A picture size, `width u32 ‖ height u32` as one 8-byte value. `None` and a zero axis are
+/// left out; a value of another length or with a zero axis reads as `None`, never an error.
+impl FieldValue for Option<(u32, u32)> {
+    fn put(&self, f: Fields, tag: u64) -> Fields {
+        match *self {
+            Some((w, h)) if w > 0 && h > 0 => {
+                let mut b = [0u8; 8];
+                b[..4].copy_from_slice(&w.to_le_bytes());
+                b[4..].copy_from_slice(&h.to_le_bytes());
+                f.bytes(tag, &b)
+            }
+            _ => f,
+        }
+    }
+    fn get(v: &[u8]) -> Result<Self> {
+        let Ok(b) = <[u8; 8]>::try_from(v) else {
+            return Ok(None);
+        };
+        let w = u32::from_le_bytes([b[0], b[1], b[2], b[3]]);
+        let h = u32::from_le_bytes([b[4], b[5], b[6], b[7]]);
+        Ok((w > 0 && h > 0).then_some((w, h)))
+    }
+}
+
 impl FieldValue for LaunchOutcomeKind {
     fn put(&self, f: Fields, tag: u64) -> Fields {
         f.u8(tag, *self as u8)
@@ -209,7 +233,7 @@ v2_message!(Refused = reg::MSG_REFUSED,
     { 1 => code, 2 => reason, 3 => reason_id, 4 => reason_params },
     check |m| m.bounded());
 
-v2_message!(Reconfigure = reg::MSG_RECONFIGURE, { 1 => mode, 2 => exclude_codecs });
+v2_message!(Reconfigure = reg::MSG_RECONFIGURE, { 1 => mode, 2 => exclude_codecs, 3 => view });
 v2_message!(Reconfigured = reg::MSG_RECONFIGURED,
     { 1 => accepted, 2 => mode, 3 => exclude_codecs });
 v2_message!(SetBitrate = reg::MSG_SET_BITRATE, { 1 => bitrate_kbps });
@@ -827,10 +851,17 @@ mod tests {
         round_trip(Reconfigure {
             mode,
             exclude_codecs: 0,
+            view: None,
+        });
+        round_trip(Reconfigure {
+            mode,
+            exclude_codecs: 0,
+            view: Some((1920, 1080)),
         });
         round_trip(Reconfigure {
             mode,
             exclude_codecs: CODEC_HEVC | CODEC_AV1,
+            view: None,
         });
         round_trip(Reconfigured {
             accepted: true,
@@ -1034,6 +1065,45 @@ mod tests {
                 0x28, 0x16, 0x01, 0x14, 0x01, 0x02, 0x00, 0x00, 0x80, 0x07, 0x38, 0x04, 0x3C, 0x00,
                 0x00, 0x00, 0x80, 0x07, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
             ]
+        );
+        let mut ask = Reconfigure {
+            mode: Mode {
+                width: 1920,
+                height: 1080,
+                refresh_hz: 60,
+            },
+            ..Default::default()
+        };
+        let no_view = [
+            0x20, 0x11, 0x01, 0x0C, 0x80, 0x07, 0x00, 0x00, 0x38, 0x04, 0x00, 0x00, 0x3C, 0x00,
+            0x00, 0x00, 0x02, 0x01, 0x00,
+        ];
+        assert_eq!(ask.encode_v2(), no_view);
+        ask.view = Some((1366, 768));
+        let mut with_view = no_view.to_vec();
+        with_view[1] = 0x1B;
+        with_view.extend([0x03, 0x08, 0x56, 0x05, 0x00, 0x00, 0x00, 0x03, 0x00, 0x00]);
+        assert_eq!(ask.encode_v2(), with_view);
+    }
+
+    /// A view of another length or with a zero axis reads as no view, never a failed message.
+    #[test]
+    fn a_bad_view_reads_as_none() {
+        let read = |v: &[u8]| Reconfigure::from_body(&Fields::new().bytes(3, v).into_body());
+        assert_eq!(
+            read(&[0x56, 5, 0, 0, 0, 3, 0, 0]).unwrap().view,
+            Some((1366, 768))
+        );
+        for bad in [&[][..], &[1, 0, 0, 0], &[0, 0, 0, 0, 0, 3, 0, 0], &[1; 12]] {
+            assert_eq!(read(bad).unwrap().view, None, "{bad:?}");
+        }
+        let zero = Reconfigure {
+            view: Some((0, 768)),
+            ..Default::default()
+        };
+        assert_eq!(
+            zero.fields().into_body(),
+            Reconfigure::default().fields().into_body()
         );
     }
 

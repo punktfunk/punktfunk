@@ -6,7 +6,8 @@ use crate::quic::{ClipControl, ClipOffer, ProbeRequest, Welcome};
 /// One outbound enum so the worker's `select!` has a single writer — two `&mut ctrl_send`
 /// borrows across branches do not compile.
 pub(crate) enum CtrlRequest {
-    Mode(Mode),
+    /// A mode and the view the picture is shown at, `None` for the mode itself.
+    Mode(Mode, Option<(u32, u32)>),
     /// A codec ask: these `CODEC_*` bits can't be decoded here.
     Codec(u8),
     Probe(ProbeRequest),

@@ -86,14 +86,16 @@ impl ControlTask {
                 req = ctrl_rx.recv() => {
                     let Some(req) = req else { break }; // client dropped
                     let frame = match req {
-                        CtrlRequest::Mode(m) => Reconfigure {
-                            mode: m,
+                        CtrlRequest::Mode(mode, view) => Reconfigure {
+                            mode,
                             exclude_codecs: 0,
+                            view,
                         }
                         .encode_v2(),
                         CtrlRequest::Codec(exclude) => Reconfigure {
                             mode: *mode_slot.lock().unwrap_or_else(|e| e.into_inner()),
                             exclude_codecs: exclude,
+                            view: None,
                         }
                         .encode_v2(),
                         CtrlRequest::Probe(p) => crate::quic::ProbeShaped::from(p).encode_v2(),

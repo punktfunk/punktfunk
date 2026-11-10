@@ -567,6 +567,10 @@ pub struct ConnectParams {
     pub port: u16,
     /// Asked-for size; the host answers in [`NativeClient::mode`].
     pub mode: Mode,
+    /// The size this client shows the picture at, when smaller than `mode`
+    /// ([`crate::render_scale::view`]): the host scales the picture to it before encoding.
+    /// `None` encodes `mode`.
+    pub view: Option<(u32, u32)>,
     pub compositor: CompositorPref,
     pub gamepad: GamepadPref,
     /// Encoder rate in kbps; `0` = host default, and the only value that arms ABR.
@@ -674,6 +678,7 @@ impl ConnectParams {
             host: host.into(),
             port,
             mode,
+            view: None,
             compositor: CompositorPref::Auto,
             gamepad: GamepadPref::Auto,
             bitrate_kbps: 0,
@@ -936,8 +941,14 @@ impl NativeClient {
     /// Queue a live mode switch (no reconnect). Accepted: next frames open with an IDR and
     /// [`NativeClient::mode`] updates. Rejected: session unchanged.
     pub fn request_mode(&self, mode: Mode) -> Result<()> {
+        self.request_mode_view(mode, None)
+    }
+
+    /// [`Self::request_mode`] with the size this client shows the picture at
+    /// ([`ConnectParams::view`]). `None` asks the host to encode `mode` again.
+    pub fn request_mode_view(&self, mode: Mode, view: Option<(u32, u32)>) -> Result<()> {
         self.ctrl_tx
-            .try_send(CtrlRequest::Mode(mode))
+            .try_send(CtrlRequest::Mode(mode, view))
             .map_err(|_| PunktfunkError::Closed)
     }
 
