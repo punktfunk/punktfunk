@@ -19,7 +19,7 @@
 
 // Every unsafe block in this module carries a `// SAFETY:` proof (parent module enforces it).
 
-use super::vk_csc::{bind_rgb, csc_layout, CursorPlane};
+use super::vk_csc::{bind_rgb, csc_layout, csc_push, CursorPlane, WordsCache};
 use super::vk_util::{
     color_range, import_failure_feeds_latch, import_rgb_dmabuf, imported_acquire_barrier,
     imported_release_barrier, make_host_buffer, make_plain_image, pixel_to_vk, reject_dmabuf,
@@ -626,6 +626,8 @@ pub struct PyroWaveEncoder {
     // Per-buffer, not per-slot: it retains the VkImage/VkDeviceMemory per inode, which is
     // what makes two slots sampling the same imported buffer safe.
     import_cache: ImportCache,
+    /// LINEAR sources this device reads as words, beside `import_cache`'s images.
+    words: WordsCache,
     /// Lays out CPU payloads for the staging buffer. Consumed inside `submit_frame` before
     /// return, so no GPU work reads its scratch.
     cpu_ingest: CpuIngest,
@@ -1069,6 +1071,7 @@ impl PyroWaveEncoder {
             csc_pool: vk::DescriptorPool::null(),
             sampler: vk::Sampler::null(),
             import_cache: ImportCache::default(),
+            words: WordsCache::default(),
             cpu_ingest: CpuIngest::default(),
             cmd_pool: vk::CommandPool::null(),
             slots: Vec::new(),
@@ -1229,6 +1232,13 @@ impl PyroWaveEncoder {
             None,
         )?;
         (self.csc_dsl, self.csc_layout) = csc_layout(dev)?;
+        self.words = WordsCache::new(
+            dev,
+            &self.mem_props,
+            self.instance
+                .get_physical_device_properties(self.pd)
+                .vendor_id,
+        )?;
         let spv = ash::util::read_spv(&mut std::io::Cursor::new(match shader {
             Shader::Sdr420 => CSC_SPV,
             Shader::Sdr444 => CSC444_SPV,
@@ -1261,6 +1271,10 @@ impl PyroWaveEncoder {
             vk::DescriptorPoolSize::default()
                 .ty(vk::DescriptorType::STORAGE_IMAGE)
                 .descriptor_count(storage),
+            // Binding 4: a LINEAR source's words.
+            vk::DescriptorPoolSize::default()
+                .ty(vk::DescriptorType::STORAGE_BUFFER)
+                .descriptor_count(sets),
         ];
         self.csc_pool = dev.create_descriptor_pool(
             &vk::DescriptorPoolCreateInfo::default()
@@ -1519,9 +1533,17 @@ impl PyroWaveEncoder {
                     .cursor
                     .prep(&dev, cmd, frame.cursor.as_ref(), self.pq)?;
 
-            let (rgb_view, imported) = match &frame.payload {
+            let (rgb_view, imported, lin) = match &frame.payload {
                 FramePayload::Dmabuf(d) => {
                     let (img, view, fresh) = self.import_cached(d, frame.width, frame.height)?;
+                    let lin = self.words.source(
+                        &dev,
+                        &self.ext_fd,
+                        &self.mem_props,
+                        self.import_key(d),
+                        d,
+                        (frame.width, frame.height),
+                    )?;
                     // Fresh or cached, acquire from the producer's family: it rewrote the
                     // buffer since. A cached one sits in GENERAL where the release left it.
                     let acq = imported_acquire_barrier(
@@ -1537,7 +1559,7 @@ impl PyroWaveEncoder {
                         cmd,
                         &vk::DependencyInfo::default().image_memory_barriers(&[acq]),
                     );
-                    (view, Some(img))
+                    (view, Some(img), lin)
                 }
                 FramePayload::Cpu(_) => {
                     let view = self.ensure_cpu_rgb(slot, frame)?;
@@ -1586,12 +1608,18 @@ impl PyroWaveEncoder {
                         cmd,
                         &vk::DependencyInfo::default().image_memory_barriers(&[to_read]),
                     );
-                    (view, None)
+                    (view, None, None)
                 }
                 _ => bail!("pyrowave: unsupported FramePayload (need Dmabuf or Cpu RGB)"),
             };
             // This slot's previous frame was retired before `submit` chose it.
-            bind_rgb(&dev, self.sampler, self.slots[slot].csc_set, rgb_view);
+            bind_rgb(
+                &dev,
+                self.sampler,
+                self.slots[slot].csc_set,
+                rgb_view,
+                lin.map_or(self.words.idle(), |l| l.buffer),
+            );
 
             // y/uv → GENERAL for CSC storage writes. This slot's previous frame was retired
             // before `submit` chose it (the execution barrier pyrowave asks for).
@@ -1621,16 +1649,12 @@ impl PyroWaveEncoder {
                 &[self.slots[slot].csc_set],
                 &[],
             );
-            let mut pc_bytes = [0u8; 16];
-            for (i, v) in cursor_pc.iter().enumerate() {
-                pc_bytes[i * 4..i * 4 + 4].copy_from_slice(&v.to_ne_bytes());
-            }
             dev.cmd_push_constants(
                 cmd,
                 self.csc_layout,
                 vk::ShaderStageFlags::COMPUTE,
                 0,
-                &pc_bytes,
+                &csc_push(cursor_pc, lin),
             );
             // 4:2:0: one invocation per 2×2 luma block; 4:4:4: per pixel.
             if self.chroma444 {
@@ -2084,6 +2108,7 @@ impl Drop for PyroWaveEncoder {
             }
             pw::pyrowave_device_destroy(self.pw_dev);
             self.import_cache.clear(&self.device);
+            self.words.destroy(&self.device);
             // Failed open leaves a partial prefix; `vkDestroy*(VK_NULL_HANDLE)` is a no-op.
             for sl in std::mem::take(&mut self.slots) {
                 if let Some((img, _)) = sl.cpu_img {

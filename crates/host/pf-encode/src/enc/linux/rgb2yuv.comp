@@ -10,11 +10,26 @@ layout(binding = 0) uniform sampler2D rgb;                  // packed RGB input 
 layout(binding = 1, r8)  uniform writeonly image2D yImg;    // full-res Y
 layout(binding = 2, rg8) uniform writeonly image2D uvImg;   // half-res UV (interleaved)
 layout(binding = 3) uniform sampler2D cursorTex;            // straight-alpha RGBA cursor (top-left)
+layout(std430, binding = 4) readonly buffer Lin { uint linWords[]; }; // a LINEAR source's bytes
 
 layout(push_constant) uniform Push {
     ivec2 curOrigin;   // top-left of the cursor in frame pixels (position - hotspot)
     ivec2 curSize;     // cursor w,h in pixels; x <= 0 => disabled
+    uvec3 lin;         // x != 0: read the source from `linWords`
 } pc;
+
+// A LINEAR dmabuf read as words at the producer's own stride (`lin.x` != 0), in place of the
+// sampled image: a driver may read a LINEAR image at a row pitch it rounds. `lin` is the
+// layout (1 = B,G,R,x bytes, 2 = R,G,B,x bytes, 3 = x:R:G:B 2:10:10:10, 4 = x:B:G:R), the
+// first pixel's word and the row stride in words.
+vec3 srcTexel(ivec2 p) {
+    if (pc.lin.x == 0u) return texelFetch(rgb, p, 0).rgb;
+    uint w = linWords[pc.lin.y + uint(p.y) * pc.lin.z + uint(p.x)];
+    if (pc.lin.x == 1u) return vec3(float((w >> 16) & 0xFFu), float((w >> 8) & 0xFFu), float(w & 0xFFu)) / 255.0;
+    if (pc.lin.x == 2u) return vec3(float(w & 0xFFu), float((w >> 8) & 0xFFu), float((w >> 16) & 0xFFu)) / 255.0;
+    if (pc.lin.x == 3u) return vec3(float((w >> 20) & 0x3FFu), float((w >> 10) & 0x3FFu), float(w & 0x3FFu)) / 1023.0;
+    return vec3(float(w & 0x3FFu), float((w >> 10) & 0x3FFu), float((w >> 20) & 0x3FFu)) / 1023.0;
+}
 
 // The session's range, a pipeline specialization constant: full (the default, whose arithmetic
 // is unchanged) or studio (Y 16..235, CbCr 16..240).
@@ -44,18 +59,18 @@ void main() {
     ivec2 uvc = ivec2(gl_GlobalInvocationID.xy);
     ivec2 p = uvc * 2;
     if (p.x >= sz.x || p.y >= sz.y) return;
-    vec3 c00 = withCursor(p,               texelFetch(rgb, min(p,               rmax), 0).rgb);
-    vec3 c10 = withCursor(p + ivec2(1, 0), texelFetch(rgb, min(p + ivec2(1, 0), rmax), 0).rgb);
-    vec3 c01 = withCursor(p + ivec2(0, 1), texelFetch(rgb, min(p + ivec2(0, 1), rmax), 0).rgb);
-    vec3 c11 = withCursor(p + ivec2(1, 1), texelFetch(rgb, min(p + ivec2(1, 1), rmax), 0).rgb);
+    vec3 c00 = withCursor(p,               srcTexel(min(p,               rmax)));
+    vec3 c10 = withCursor(p + ivec2(1, 0), srcTexel(min(p + ivec2(1, 0), rmax)));
+    vec3 c01 = withCursor(p + ivec2(0, 1), srcTexel(min(p + ivec2(0, 1), rmax)));
+    vec3 c11 = withCursor(p + ivec2(1, 1), srcTexel(min(p + ivec2(1, 1), rmax)));
     imageStore(yImg, p,               vec4(lumaY(c00), 0, 0, 1));
     imageStore(yImg, p + ivec2(1, 0), vec4(lumaY(c10), 0, 0, 1));
     imageStore(yImg, p + ivec2(0, 1), vec4(lumaY(c01), 0, 0, 1));
     imageStore(yImg, p + ivec2(1, 1), vec4(lumaY(c11), 0, 0, 1));
     // Left-sited chroma (H.273 type 0, what decoders assume): [1 2 1] over columns p.x-1..p.x+1.
     ivec2 pl = max(p + ivec2(-1, 0), ivec2(0));
-    vec3 cl0 = withCursor(pl,               texelFetch(rgb, min(pl,               rmax), 0).rgb);
-    vec3 cl1 = withCursor(pl + ivec2(0, 1), texelFetch(rgb, min(pl + ivec2(0, 1), rmax), 0).rgb);
+    vec3 cl0 = withCursor(pl,               srcTexel(min(pl,               rmax)));
+    vec3 cl1 = withCursor(pl + ivec2(0, 1), srcTexel(min(pl + ivec2(0, 1), rmax)));
     vec3 a = (cl0 + 2.0 * c00 + c10 + cl1 + 2.0 * c01 + c11) * 0.125;
     float U, V;
     if (!FULL_RANGE) {

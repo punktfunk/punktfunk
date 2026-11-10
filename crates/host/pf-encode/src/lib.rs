@@ -201,11 +201,11 @@ mod pyrowave_remote;
 #[cfg(all(target_os = "linux", feature = "pyrowave"))]
 #[path = "enc/linux/worker.rs"]
 pub mod worker;
-// CPU frames the Linux PyroWave and Vulkan Video tests share.
+// Frames the Linux encoder tests share.
 #[cfg(all(
     test,
     target_os = "linux",
-    any(feature = "pyrowave", feature = "vulkan-encode")
+    any(feature = "pyrowave", feature = "vulkan-encode", feature = "nvenc")
 ))]
 #[path = "enc/linux/test_frames.rs"]
 mod test_frames;
