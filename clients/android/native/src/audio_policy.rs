@@ -181,22 +181,33 @@ pub(crate) struct Supervisor {
     pub(crate) generation: u32,
     /// Ladder walks since the last open that found no device.
     attempt: u32,
+    /// The session already played another format: this one's first open retries like a reopen.
+    mid_session: bool,
 }
 
 impl Supervisor {
+    /// The supervisor of a format the host switched to mid-session. Its device can open inside
+    /// the route change the switch came with, as a reopen's can.
+    pub(crate) fn mid_session() -> Supervisor {
+        Supervisor {
+            mid_session: true,
+            ..Supervisor::default()
+        }
+    }
+
     /// A rung gave a device: the next disconnect gets its own retries.
     pub(crate) fn opened(&mut self) {
         self.attempt = 0;
     }
 
-    /// No rung gave a device. The first open gives up at once. A reopen retries up to
-    /// [`REOPEN_ATTEMPTS`] times, since it can land inside the route change that caused the
-    /// disconnect.
+    /// No rung gave a device. A session's first open gives up at once. A reopen, or the first
+    /// open after a format change, retries up to [`REOPEN_ATTEMPTS`] times, since it can land
+    /// inside a route change.
     pub(crate) fn no_device(&mut self, shutting_down: bool) -> NoDevice {
         if shutting_down {
             return NoDevice::Quit;
         }
-        if self.generation > 0 && self.attempt < REOPEN_ATTEMPTS {
+        if (self.generation > 0 || self.mid_session) && self.attempt < REOPEN_ATTEMPTS {
             self.attempt += 1;
             return NoDevice::Retry(self.attempt);
         }
@@ -581,6 +592,15 @@ mod tests {
     #[test]
     fn the_first_open_that_finds_no_device_gives_up_at_once() {
         assert_eq!(Supervisor::default().no_device(false), NoDevice::GiveUp);
+    }
+
+    #[test]
+    fn the_first_open_after_a_format_change_retries_like_a_reopen() {
+        let mut sup = Supervisor::mid_session();
+        assert_eq!(sup.no_device(false), NoDevice::Retry(1));
+        assert_eq!(sup.generation, 0, "it is still this format's first device");
+        sup.opened();
+        assert_eq!(sup.no_device(false), NoDevice::Retry(1));
     }
 
     #[test]

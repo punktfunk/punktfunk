@@ -551,6 +551,8 @@ fn supervise_format(
     shutdown: &AtomicBool,
     first: Option<punktfunk_core::client::AudioPacket>,
 ) -> Option<punktfunk_core::client::AudioPacket> {
+    // A format with a first packet is one the host switched to.
+    let mid_session = first.is_some();
     let mut carry = first.map(|pkt| punktfunk_core::client::AudioPacket {
         new_format: None,
         ..pkt
@@ -601,7 +603,11 @@ fn supervise_format(
         Some("0") | Some("false")
     );
 
-    let mut sup = Supervisor::default();
+    let mut sup = if mid_session {
+        Supervisor::mid_session()
+    } else {
+        Supervisor::default()
+    };
     while !shutdown.load(Ordering::Relaxed) {
         let disconnected = Arc::new(AtomicBool::new(false));
         let ctx = OpenCtx {
