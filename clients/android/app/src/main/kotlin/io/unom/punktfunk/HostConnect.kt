@@ -7,6 +7,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import io.unom.punktfunk.kit.Gamepad
 import io.unom.punktfunk.kit.ConnectRequest
+import io.unom.punktfunk.kit.DecodeNeed
 import io.unom.punktfunk.kit.NativeBridge
 import io.unom.punktfunk.kit.VideoDecoders
 import io.unom.punktfunk.kit.library.GameOverrides
@@ -155,9 +156,10 @@ fun Settings.underHost(o: GameOverrides?): Settings =
 
 /**
  * The one place [NativeBridge.nativeConnect] is assembled, for [JniHostNative]. Derives the mode,
- * HDR and gamepad settings the host needs from [spec]'s settings under its game overrides, waits
- * for the last session's close, and dials off the main thread. The dial cannot be interrupted, so
- * it runs `NonCancellable`. [unlock] crosses as byte arrays and is wiped when the native call
+ * HDR and gamepad settings the host needs from [spec]'s settings under its game overrides, keeps
+ * the codecs and 10-bit a hardware decoder takes at that mode ([VideoDecoders.probe]), waits for
+ * the last session's close, and dials off the main thread. The dial cannot be interrupted, so it
+ * runs `NonCancellable`. [unlock] crosses as byte arrays and is wiped when the native call
  * returns. Returns the session handle, or `0` on failure.
  */
 suspend fun connectToHost(context: Context, spec: DialSpec, unlock: Unlock? = null): Long {
@@ -207,14 +209,13 @@ suspend fun connectToHost(context: Context, spec: DialSpec, unlock: Unlock? = nu
         // Slice-progressive delivery: decoder truth AND the low-latency toggle — parts are part of
         // the fast pipeline, and the toggle's "off" is the conservative configuration throughout.
         val frameParts = settings.lowLatencyMode && partialFrame
-        val codecBits = VideoDecoders.decodableCodecBits()
-        // Automatic codec (P5, measured NP3 ↔ RTX 4090): AV1 beat HEVC by ~1.2 ms end-to-end at
-        // identical conditions, so under "Automatic" this device prefers AV1 when it hardware-
-        // decodes it (the AV1 bit is only ever set for a real, non-blocked hardware decoder) AND
-        // it lacks FEATURE_PartialFrame — a partial-frame device keeps HEVC, whose slice overlap
-        // AV1 cannot ride (AV1 has no slices; the host's chunked poll never arms). The host
-        // honors the preference only inside the probed shared codec set, so an AV1-less encoder
-        // still resolves HEVC. An explicit user choice always wins unchanged.
+        // A codec, and 10-bit, only where a hardware decoder takes them at this mode.
+        val decode = VideoDecoders.probe(DecodeNeed(w, h, hz, hdrEnabled || tenBitSdr))
+        val codecBits = decode.codecBits
+        // Automatic codec: AV1 beat HEVC by ~1.2 ms end-to-end (NP3 ↔ RTX 4090), so "Automatic"
+        // prefers AV1 when its bit is set AND the device lacks FEATURE_PartialFrame — a
+        // partial-frame device keeps HEVC, whose slice overlap AV1 cannot ride. The host honors
+        // the preference only inside the shared codec set. An explicit user choice always wins.
         val preferredCodec = settings.preferredCodec().takeIf { it != 0 }
             ?: if (codecBits and 4 != 0 && !partialFrame) 4 else 0
         // The connect-time capability readout (`adb logcat -s pf.caps`): the P2 slice pipeline
@@ -223,7 +224,7 @@ suspend fun connectToHost(context: Context, spec: DialSpec, unlock: Unlock? = nu
             "pf.caps",
             VideoDecoders.capsReport() +
                 " → multiSlice=$multiSlice parts=$frameParts studioRange=$studioRange" +
-                " prefer=$preferredCodec" +
+                " codecs=$codecBits tenBit=${decode.tenBit} prefer=$preferredCodec" +
                 " (lowLatency=${settings.lowLatencyMode})",
         )
         val request = ConnectRequest(
@@ -233,7 +234,8 @@ suspend fun connectToHost(context: Context, spec: DialSpec, unlock: Unlock? = nu
             // number and pins the player's quality.
             bitrateKbps = settings.bitrateKbps, compositorPref = settings.compositor,
             pyrowaveBppX100 = settings.pyrowaveBppX100(), gamepadPref = gamepadPref,
-            hdrEnabled = hdrEnabled, tenBitSdr = tenBitSdr, multiSliceOk = multiSlice,
+            hdrEnabled = hdrEnabled && decode.tenBit, tenBitSdr = tenBitSdr && decode.tenBit,
+            multiSliceOk = multiSlice,
             framePartsOk = frameParts, studioRange = studioRange,
             audioChannels = settings.audioChannels,
             // The audio format this session asks for. Only ever a request: the host's own gate
@@ -241,7 +243,7 @@ suspend fun connectToHost(context: Context, spec: DialSpec, unlock: Unlock? = nu
             // this device will not open the rate — a rate the wire has committed to cannot be
             // rescued afterwards, so the fallback has to happen before the Hello.
             audioRateHz = audioRateHz, audioBits = audioBits,
-            // What this device can decode (H.264 always; HEVC and AV1 when a real decoder exists) +
+            // What this device decodes (H.264 always; HEVC and AV1 when a hardware decoder fits) +
             // the soft codec preference (user choice, or the Automatic AV1 rule above) — the
             // host resolves the emitted codec from both.
             videoCodecs = codecBits, preferredCodec = preferredCodec,

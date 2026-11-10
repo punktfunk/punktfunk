@@ -243,8 +243,9 @@ fn unix_secs() -> u64 {
 /// stream, on a rung where none ever settled, move the rebuild down the bring-up ladder
 /// ([`RungFloor`]). The floor starts where the rung memory ([`Memory`]) puts it, and a floor
 /// that moved and then settled is written back for the next video start. Past
-/// [`MAX_BARREN_REBUILDS`](crate::run_end::MAX_BARREN_REBUILDS) failed runs that showed nothing,
-/// the loop ends ([`after_failure`]).
+/// [`MAX_BARREN_REBUILDS`](crate::run_end::MAX_BARREN_REBUILDS) failed runs that showed nothing
+/// ([`after_failure`]), the host is asked for another codec ([`other_codec`]); without one the
+/// loop ends and the video stays frozen.
 pub(super) fn run_async(
     client: Arc<NativeClient>,
     window: NativeWindow,
@@ -294,6 +295,17 @@ pub(super) fn run_async(
             } => {
                 match after_failure(&mut barren, &mut floor, rendered, clean, lower) {
                     Retry::GiveUp => {
+                        let from = codec_mime(client.video_format().codec);
+                        if let Some(frame) = other_codec(&client, &shutdown) {
+                            log::warn!(
+                                "decode: {barren} {from} decoders in a row showed no steady \
+                                 picture — the host moved to {}",
+                                codec_mime(client.video_format().codec)
+                            );
+                            (barren, floor) = (0, begin_memory(&mut memory, &client, &opts));
+                            carry = Some(frame);
+                            continue;
+                        }
                         log::error!(
                             "decode: {barren} rebuilt decoders in a row showed no steady picture — \
                              giving up; video stays frozen until the stream restarts"
@@ -542,6 +554,37 @@ fn no_codec(rebuilt: bool, shutdown: &AtomicBool) -> RunEnd {
         },
         _ => RunEnd::Stopped,
     }
+}
+
+/// How long the host has to answer a codec ask with a frame in the new codec, as on desktop.
+const CODEC_ASK_WAIT: Duration = Duration::from_secs(3);
+
+/// Ask the host to stream on without the current codec, and take the first frame of the new
+/// one. Frames still in the old codec are reported to core, as the feeder does, and dropped.
+/// `None` without format epochs, on a refusal, past [`CODEC_ASK_WAIT`], or once stopped.
+fn other_codec(client: &NativeClient, shutdown: &AtomicBool) -> Option<Box<Frame>> {
+    client
+        .request_codec_change(client.video_format().codec)
+        .ok()?;
+    let deadline = Instant::now() + CODEC_ASK_WAIT;
+    while Instant::now() < deadline
+        && !shutdown.load(Ordering::Relaxed)
+        && client.codec_refused() == 0
+    {
+        match client.next_frame(Duration::from_millis(5)) {
+            Ok(frame) => {
+                if delivery(&frame).first {
+                    client.recovery_on_au(frame.frame_index, frame.complete, 0);
+                }
+                if frame.new_format.is_some() {
+                    return Some(Box::new(frame));
+                }
+            }
+            Err(PunktfunkError::NoFrame) => {}
+            Err(_) => return None,
+        }
+    }
+    None
 }
 
 /// What the pass tail keeps between passes: the vsync clock, started lazily (see `vsync.rs`) with
