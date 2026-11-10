@@ -1,5 +1,6 @@
-//! GPU colour check for [`HdrP010Converter`]: the `hdr-p010-selftest` subcommand,
-//! the f64 analogue of its HLSL, and the f16 encoder that uploads the pattern.
+//! GPU checks on a real adapter: [`HdrP010Converter`]'s colour (the `hdr-p010-selftest`
+//! subcommand, against the f64 analogue of its HLSL), [`reframe_selftest_at`] for the scale
+//! pass, and the f16 codec both upload and read back through.
 //!
 //! Does not run in a session. Pin with `punktfunk-host hdr-p010-selftest WxH [vendor]`
 //! at a session size (1080 is not 16-aligned — encoder align16 pool seam). `vendor`
@@ -206,9 +207,6 @@ pub fn hdr_p010_convert_bars_on_luid(
 /// differently at real sizes. `vendor` is a PCI id; a PASS is only for that GPU.
 #[cfg(target_os = "windows")]
 pub fn hdr_p010_selftest_at(w: u32, h: u32, vendor: Option<u32>) -> Result<()> {
-    use windows::Win32::Graphics::Direct3D::{D3D_DRIVER_TYPE_HARDWARE, D3D_DRIVER_TYPE_UNKNOWN};
-    use windows::Win32::Graphics::Dxgi::{CreateDXGIFactory1, IDXGIAdapter, IDXGIFactory1};
-
     if w == 0 || h == 0 || w % 2 != 0 || h % 2 != 0 {
         bail!("hdr-p010-selftest needs even non-zero dimensions, got {w}x{h}");
     }
@@ -263,66 +261,12 @@ pub fn hdr_p010_selftest_at(w: u32, h: u32, vendor: Option<u32>) -> Result<()> {
         }
     }
 
+    let (device, context) = selftest_device(vendor)?;
     // SAFETY: this block's D3D11 device + immediate context (both non-null) own
     // every Create/convert/Copy/Map below; one device, this thread. `fp16` is
     // W×H R16G16B16A16 with SysMemPitch = W*8 and outlives the synchronous
     // CreateTexture2D. Mapped reads are proven at `read_u16`.
     unsafe {
-        let adapter: Option<IDXGIAdapter> = match vendor {
-            None => None,
-            Some(want) => {
-                let factory: IDXGIFactory1 = CreateDXGIFactory1().context("dxgi factory")?;
-                let mut found = None;
-                for i in 0.. {
-                    let Ok(a) = factory.EnumAdapters(i) else {
-                        break;
-                    };
-                    let desc = a.GetDesc().context("adapter desc")?;
-                    if desc.VendorId == want {
-                        found = Some(a);
-                        break;
-                    }
-                }
-                Some(found.with_context(|| format!("no adapter with vendor id {want:#x}"))?)
-            }
-        };
-        let mut device: Option<ID3D11Device> = None;
-        let mut context: Option<ID3D11DeviceContext> = None;
-        D3D11CreateDevice(
-            adapter.as_ref(),
-            if adapter.is_some() {
-                D3D_DRIVER_TYPE_UNKNOWN
-            } else {
-                D3D_DRIVER_TYPE_HARDWARE
-            },
-            HMODULE::default(),
-            D3D11_CREATE_DEVICE_BGRA_SUPPORT,
-            Some(&[D3D_FEATURE_LEVEL_11_0]),
-            D3D11_SDK_VERSION,
-            Some(&mut device),
-            None,
-            Some(&mut context),
-        )
-        .context("D3D11CreateDevice(hardware) for hdr-p010-selftest")?;
-        let device = device.context("null device")?;
-        let context = context.context("null context")?;
-        {
-            let dxgi: windows::Win32::Graphics::Dxgi::IDXGIDevice =
-                device.cast().context("device -> IDXGIDevice")?;
-            let desc = dxgi.GetAdapter().context("GetAdapter")?.GetDesc()?;
-            let name = String::from_utf16_lossy(
-                &desc.Description[..desc
-                    .Description
-                    .iter()
-                    .position(|&c| c == 0)
-                    .unwrap_or(desc.Description.len())],
-            );
-            println!(
-                "adapter: {name} (vendor {:#06x}, luid {:08x}:{:08x})",
-                desc.VendorId, desc.AdapterLuid.HighPart, desc.AdapterLuid.LowPart
-            );
-        }
-
         let src_desc = D3D11_TEXTURE2D_DESC {
             Width: W,
             Height: H,
@@ -508,9 +452,243 @@ pub fn hdr_p010_selftest_at(w: u32, h: u32, vendor: Option<u32>) -> Result<()> {
     }
 }
 
+/// A hardware device for a self-test: the first adapter with PCI vendor `vendor`, else the
+/// default one. Prints which adapter it got, since a PASS speaks only for that GPU.
+#[cfg(target_os = "windows")]
+fn selftest_device(vendor: Option<u32>) -> Result<(ID3D11Device, ID3D11DeviceContext)> {
+    use windows::Win32::Graphics::Direct3D::{D3D_DRIVER_TYPE_HARDWARE, D3D_DRIVER_TYPE_UNKNOWN};
+    use windows::Win32::Graphics::Dxgi::{CreateDXGIFactory1, IDXGIAdapter, IDXGIFactory1};
+    // SAFETY: `?`-checked DXGI and D3D11 calls with live out-params; the adapter description is
+    // a local copy, read within its own bounds.
+    unsafe {
+        let adapter: Option<IDXGIAdapter> = match vendor {
+            None => None,
+            Some(want) => {
+                let factory: IDXGIFactory1 = CreateDXGIFactory1().context("dxgi factory")?;
+                let mut found = None;
+                for i in 0.. {
+                    let Ok(a) = factory.EnumAdapters(i) else {
+                        break;
+                    };
+                    let desc = a.GetDesc().context("adapter desc")?;
+                    if desc.VendorId == want {
+                        found = Some(a);
+                        break;
+                    }
+                }
+                Some(found.with_context(|| format!("no adapter with vendor id {want:#x}"))?)
+            }
+        };
+        let mut device: Option<ID3D11Device> = None;
+        let mut context: Option<ID3D11DeviceContext> = None;
+        D3D11CreateDevice(
+            adapter.as_ref(),
+            if adapter.is_some() {
+                D3D_DRIVER_TYPE_UNKNOWN
+            } else {
+                D3D_DRIVER_TYPE_HARDWARE
+            },
+            HMODULE::default(),
+            D3D11_CREATE_DEVICE_BGRA_SUPPORT,
+            Some(&[D3D_FEATURE_LEVEL_11_0]),
+            D3D11_SDK_VERSION,
+            Some(&mut device),
+            None,
+            Some(&mut context),
+        )
+        .context("D3D11CreateDevice(hardware) for a self-test")?;
+        let device = device.context("null device")?;
+        let context = context.context("null context")?;
+        let dxgi: windows::Win32::Graphics::Dxgi::IDXGIDevice =
+            device.cast().context("device -> IDXGIDevice")?;
+        let desc = dxgi.GetAdapter().context("GetAdapter")?.GetDesc()?;
+        let name = String::from_utf16_lossy(
+            &desc.Description[..desc
+                .Description
+                .iter()
+                .position(|&c| c == 0)
+                .unwrap_or(desc.Description.len())],
+        );
+        println!(
+            "adapter: {name} (vendor {:#06x}, luid {:08x}:{:08x})",
+            desc.VendorId, desc.AdapterLuid.HighPart, desc.AdapterLuid.LowPart
+        );
+        Ok((device, context))
+    }
+}
+
+/// GPU check for [`ReframePass`](super::ReframePass): `crop` of a `source` pattern scaled to
+/// `out`, once from 8-bit BGRA and once from FP16 scRGB, against
+/// [`reframe_reference`](super::reframe::reframe_reference). PASS within 2 codes of 255
+/// (BGRA) and 1 % (FP16): the D3D11 spec lets `sin` miss by 8e-4. `vendor` as
+/// [`hdr_p010_selftest_at`].
+#[cfg(target_os = "windows")]
+pub fn reframe_selftest_at(
+    source: (u32, u32),
+    crop: [u32; 4],
+    out: (u32, u32),
+    vendor: Option<u32>,
+) -> Result<()> {
+    use super::ReframePass;
+    use windows::Win32::Graphics::Direct3D11::ID3D11RenderTargetView;
+    use windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_B8G8R8A8_UNORM;
+
+    let (sw, sh) = source;
+    let [cx, cy, cw, ch] = crop;
+    let fits =
+        cx.checked_add(cw).is_some_and(|r| r <= sw) && cy.checked_add(ch).is_some_and(|b| b <= sh);
+    if !fits || cw == 0 || ch == 0 || out.0 == 0 || out.1 == 0 {
+        bail!(
+            "reframe-selftest: crop {crop:?} of {sw}x{sh} to {}x{} does not fit",
+            out.0,
+            out.1
+        );
+    }
+    let (device, context) = selftest_device(vendor)?;
+    // A sawtooth, a smooth ramp and 8x8 checks: edges the kernel rings on beside flats it must
+    // keep. FP16 runs it to scRGB 4.0.
+    let pattern = |x: u32, y: u32| -> [f32; 3] {
+        [
+            ((x * 7 + y * 3) % 256) as f32 / 255.0,
+            x as f32 / sw as f32,
+            ((x / 8 + y / 8) % 2) as f32,
+        ]
+    };
+    for linear in [false, true] {
+        let format = if linear {
+            DXGI_FORMAT_R16G16B16A16_FLOAT
+        } else {
+            DXGI_FORMAT_B8G8R8A8_UNORM
+        };
+        let bpp = if linear { 8 } else { 4 };
+        // What the GPU reads, quantized as it stores it, so the reference starts from the same.
+        let mut bytes = Vec::with_capacity((sw * sh) as usize * bpp);
+        let mut seen = Vec::with_capacity((sw * sh) as usize);
+        for y in 0..sh {
+            for x in 0..sw {
+                let c = pattern(x, y);
+                if linear {
+                    let h = c.map(|v| f32_to_f16(v * 4.0));
+                    for v in [h[0], h[1], h[2], f32_to_f16(1.0)] {
+                        bytes.extend_from_slice(&v.to_le_bytes());
+                    }
+                    seen.push(h.map(f16_to_f32));
+                } else {
+                    let b = c.map(|v| (v * 255.0).round() as u8);
+                    bytes.extend_from_slice(&[b[2], b[1], b[0], 255]);
+                    seen.push(b.map(|v| f32::from(v) / 255.0));
+                }
+            }
+        }
+        let want = super::reframe::reframe_reference(&seen, source, crop, out, linear);
+        let texture = |w: u32, h: u32, bind: u32, init: Option<&[u8]>| -> Result<ID3D11Texture2D> {
+            let desc = D3D11_TEXTURE2D_DESC {
+                Width: w,
+                Height: h,
+                MipLevels: 1,
+                ArraySize: 1,
+                Format: format,
+                SampleDesc: DXGI_SAMPLE_DESC {
+                    Count: 1,
+                    Quality: 0,
+                },
+                Usage: if bind == 0 {
+                    D3D11_USAGE_STAGING
+                } else {
+                    D3D11_USAGE_DEFAULT
+                },
+                BindFlags: bind,
+                CPUAccessFlags: if bind == 0 {
+                    D3D11_CPU_ACCESS_READ.0 as u32
+                } else {
+                    0
+                },
+                ..Default::default()
+            };
+            let data = init.map(|b| D3D11_SUBRESOURCE_DATA {
+                pSysMem: b.as_ptr() as *const c_void,
+                SysMemPitch: w * bpp as u32,
+                SysMemSlicePitch: 0,
+            });
+            let mut t: Option<ID3D11Texture2D> = None;
+            // SAFETY: `desc` is a local; `data`, when present, points into `init`, which holds
+            // `h` rows of `w * bpp` bytes and outlives this synchronous call.
+            unsafe {
+                device.CreateTexture2D(&desc, data.as_ref().map(|d| d as *const _), Some(&mut t))
+            }
+            .context("CreateTexture2D(reframe selftest)")?;
+            t.context("null reframe selftest texture")
+        };
+        let src = texture(sw, sh, D3D11_BIND_SHADER_RESOURCE.0 as u32, Some(&bytes))?;
+        let dst = texture(out.0, out.1, D3D11_BIND_RENDER_TARGET.0 as u32, None)?;
+        let staging = texture(out.0, out.1, 0, None)?;
+        let pass = ReframePass::new(&device, crop, out, linear)?;
+        let (mut srv, mut rtv): (
+            Option<ID3D11ShaderResourceView>,
+            Option<ID3D11RenderTargetView>,
+        ) = (None, None);
+        // SAFETY: view creation on live textures of this device with live out-params, then a
+        // copy between two same-size, same-format textures of it.
+        unsafe {
+            device.CreateShaderResourceView(&src, None, Some(&mut srv))?;
+            device.CreateRenderTargetView(&dst, None, Some(&mut rtv))?;
+            pass.scale(
+                &context,
+                srv.as_ref().context("null srv")?,
+                rtv.as_ref().context("null rtv")?,
+            );
+            context.CopyResource(&staging, &dst);
+        }
+        let map = MappedSubresource::texture(&context, &staging, D3D11_MAP_READ)
+            .context("Map(reframe staging)")?;
+        let pitch = map.row_pitch();
+        let (mut worst, mut worst_at) = (0.0f64, (0, 0));
+        for y in 0..out.1 as usize {
+            for x in 0..out.0 as usize {
+                let at = y * pitch + x * bpp;
+                let got: [f32; 3] = if linear {
+                    std::array::from_fn(|k| {
+                        f16_to_f32(u16::from_le_bytes([map[at + 2 * k], map[at + 2 * k + 1]]))
+                    })
+                } else {
+                    [map[at + 2], map[at + 1], map[at]].map(|v| f32::from(v) / 255.0)
+                };
+                let w = want[y * out.0 as usize + x];
+                for k in 0..3 {
+                    let (g, e) = (f64::from(got[k]), f64::from(w[k]));
+                    // BGRA in codes of 255, FP16 relative to the value, floored at 1.0.
+                    let err = if linear {
+                        (g - e).abs() / e.abs().max(1.0)
+                    } else {
+                        (g - e).abs() * 255.0
+                    };
+                    if err > worst {
+                        (worst, worst_at) = (err, (x, y));
+                    }
+                }
+            }
+        }
+        drop(map);
+        let (name, limit) = if linear {
+            ("FP16 scRGB", 0.01)
+        } else {
+            ("BGRA", 2.0)
+        };
+        let (ow, oh) = out;
+        println!("reframe {name}: {crop:?} of {sw}x{sh} -> {ow}x{oh}");
+        println!("  worst error {worst:.4} at {worst_at:?} (limit {limit})");
+        if worst > limit {
+            println!("FAIL");
+            bail!("reframe {name} self-test out of tolerance: {worst:.4} at {worst_at:?}");
+        }
+    }
+    println!("PASS");
+    Ok(())
+}
+
 /// IEEE-754 binary16 bits for the FP16 upload. Round-to-nearest; normals and subnormals.
 #[cfg(target_os = "windows")]
-fn f32_to_f16(v: f32) -> u16 {
+pub(super) fn f32_to_f16(v: f32) -> u16 {
     let bits = v.to_bits();
     let sign = ((bits >> 16) & 0x8000) as u16;
     let exp = ((bits >> 23) & 0xff) as i32 - 127 + 15;
@@ -536,21 +714,22 @@ fn f32_to_f16(v: f32) -> u16 {
     }
 }
 
+/// Inverse of [`f32_to_f16`]: the value an FP16 texel holds.
+#[cfg(target_os = "windows")]
+pub(super) fn f16_to_f32(h: u16) -> f32 {
+    let sign = if h & 0x8000 != 0 { -1.0f32 } else { 1.0 };
+    let exp = ((h >> 10) & 0x1f) as i32;
+    let mant = (h & 0x3ff) as f32;
+    match exp {
+        0 => sign * mant * 2f32.powi(-24),
+        31 => sign * f32::INFINITY, // encoder never emits NaN
+        e => sign * (1.0 + mant / 1024.0) * 2f32.powi(e - 15),
+    }
+}
+
 #[cfg(test)]
 mod f16_tests {
-    use super::f32_to_f16;
-
-    /// Inverse of [`f32_to_f16`] for the round-trip oracle.
-    fn f16_to_f32(h: u16) -> f32 {
-        let sign = if h & 0x8000 != 0 { -1.0f32 } else { 1.0 };
-        let exp = ((h >> 10) & 0x1f) as i32;
-        let mant = (h & 0x3ff) as f32;
-        match exp {
-            0 => sign * mant * 2f32.powi(-24),
-            31 => sign * f32::INFINITY, // encoder never emits NaN
-            e => sign * (1.0 + mant / 1024.0) * 2f32.powi(e - 15),
-        }
-    }
+    use super::{f16_to_f32, f32_to_f16};
 
     #[test]
     fn a_rounding_carry_increments_the_exponent() {
@@ -616,5 +795,16 @@ mod hdr_selftests {
     #[ignore]
     fn hdr_p010_selftest_intel_1080_live() {
         super::hdr_p010_selftest_at(1920, 1080, Some(0x8086)).expect("hdr p010 selftest @1080");
+    }
+
+    /// The supersampled case (a 4K render to a 1080p view) and an off-centre crop, on the
+    /// default adapter. Run with `cargo test -p pf-encode-win -- --ignored reframe --nocapture`.
+    #[test]
+    #[ignore]
+    fn reframe_selftest_live() {
+        super::reframe_selftest_at((3840, 2160), [0, 0, 3840, 2160], (1920, 1080), None)
+            .expect("reframe 4K to 1080p");
+        super::reframe_selftest_at((1920, 1080), [200, 100, 1280, 720], (853, 480), None)
+            .expect("reframe crop");
     }
 }

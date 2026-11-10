@@ -35,29 +35,21 @@ pub const fn interface_guid_fields() -> (u32, u16, u16, [u8; 8]) {
     )
 }
 
-/// Bumped on any incompatible change to either plane. Exchanged via [`control::IOCTL_GET_INFO`];
-/// host and driver assert a match at startup.
+/// The protocol this host and its driver speak, exchanged via [`control::IOCTL_GET_INFO`]. The
+/// host drives any driver from [`MIN_DRIVER_PROTOCOL_VERSION`] up to this one.
 ///
-/// v9 widens [`encode::au::AuSlot`] from 32 to 48 bytes with the driver's encode-submit and
-/// publish QPC, so the host can split present → arrival into pool, encode and hand-off. A layout
-/// change, so not additive; host and driver ship in one installer.
+/// v10 adds [`encode::SetEncodeRequest::framing`] and [`encode::au::AuHeader::frames_input`]. A
+/// v9 driver reads the request's prefix, opens the surface at its own size and leaves the stamp
+/// zero, so the host encodes unscaled. Since v9 the AU slot is 48 bytes; since v8 a monitor, its
+/// encoder and its cursor channel answer only to the process whose `IOCTL_ADD` created them.
 ///
-/// v8 scopes the driver to the process that asks: a monitor, its encoder and its cursor channel
-/// answer only to the owner whose `IOCTL_ADD` created them, `IOCTL_CLEAR_ALL` departs the
-/// caller's own, and an owner's monitors depart when its last control handle closes or it goes
-/// silent for the watchdog window. `IOCTL_SET_RENDER_ADAPTER` stays adapter-wide by IddCx
-/// design. v7 replaced the pixel ring with driver-side encode into the host's section
-/// ([`encode::IOCTL_SET_ENCODE`]); `IOCTL_SET_FRAME_CHANNEL` no longer exists.
-///
-/// [`control::AddRequest`] luminance tail and [`control::AddReply::cursor_excluded`] are
-/// prefix-compatible (no bump): a short read/write sees zeros = unknown. A hardware-cursor
-/// declare is irrevocable on the adapter — DWM excludes the pointer from every later monitor
-/// until the adapter resets — so the driver blends the pointer when the client draws none.
-pub const PROTOCOL_VERSION: u32 = 9;
+/// [`control::AddRequest`]'s luminance tail and [`control::AddReply::cursor_excluded`] are
+/// prefix-compatible: a short read sees zeros, which mean unknown. A hardware-cursor declare is
+/// irrevocable on the adapter, so the driver blends the pointer when the client draws none.
+pub const PROTOCOL_VERSION: u32 = 10;
 
-/// Oldest driver this host still drives. Equal to [`PROTOCOL_VERSION`]: a v8 driver writes
-/// 32-byte slots into a table this host lays out at 48, v7 lets a second host reach this
-/// host's monitors, and v6 speaks a video transport that no longer exists.
+/// Oldest driver this host still drives. A v8 driver writes 32-byte slots into a table this host
+/// lays out at 48.
 pub const MIN_DRIVER_PROTOCOL_VERSION: u32 = 9;
 
 /// `CTL_CODE(FILE_DEVICE_UNKNOWN = 0x22, func, METHOD_BUFFERED = 0, FILE_ANY_ACCESS = 0)`.

@@ -397,10 +397,9 @@ mod tests {
         assert_eq!(bytes.len(), 24);
         assert_eq!(*bytemuck::from_bytes::<UpdateModesRequest>(bytes), req);
         assert_eq!(bytes[8..12], 2560u32.to_le_bytes());
-        // v9 widened the AU slot, v8 scoped the driver to its owners, v7 replaced the video
-        // transport; each makes the floor the version itself.
-        assert_eq!(PROTOCOL_VERSION, 9);
-        assert_eq!(MIN_DRIVER_PROTOCOL_VERSION, PROTOCOL_VERSION);
+        // v10's framing is additive, so a v9 driver still opens; v9's slot layout is the floor.
+        assert_eq!(PROTOCOL_VERSION, 10);
+        assert_eq!(MIN_DRIVER_PROTOCOL_VERSION, 9);
     }
 
     /// The driver writes these records and the host parses them in another process: a one-sided

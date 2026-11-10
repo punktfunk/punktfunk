@@ -120,6 +120,63 @@ pub struct SetEncodeRequest {
     /// [`SET_ENCODE_REQUEST_LEGACY_SIZE`]: an old host sends none and the driver zero-fills,
     /// which is every backend's default; an old driver reads the prefix and ignores them.
     pub knobs: EncodeKnobs,
+    /// The size the stream is encoded at when it is not the surface's; zero is the surface's
+    /// own. Protocol v10, after [`SET_ENCODE_REQUEST_V9_SIZE`]: `width` and `height` stay the
+    /// surface's, so a v9 driver, which reads none of this, opens the plain session.
+    pub encode_width: u32,
+    pub encode_height: u32,
+    /// The rectangle of the `width` × `height` surface that is encoded, `x, y, w, h`, scaled to
+    /// the encode size. Zero is the whole surface. [`SetEncodeRequest::framing`] resolves both.
+    pub src_rect: [u32; 4],
+}
+
+/// Bytes of [`SetEncodeRequest`] before [`SetEncodeRequest::encode_width`]: what a v9 host sends
+/// and a v9 driver reads.
+pub const SET_ENCODE_REQUEST_V9_SIZE: usize = 144;
+
+/// The picture a session encodes: `crop` of each `source`-sized surface, scaled to `encode`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Framing {
+    pub source: (u32, u32),
+    /// `x, y, w, h` in surface pixels.
+    pub crop: [u32; 4],
+    pub encode: (u32, u32),
+}
+
+impl Framing {
+    /// Anything but the whole surface at its own size: the session runs the scale pass.
+    #[must_use]
+    pub fn scales(&self) -> bool {
+        self.encode != self.source || self.crop != [0, 0, self.source.0, self.source.1]
+    }
+}
+
+impl SetEncodeRequest {
+    /// What this request encodes. A zero rectangle is the whole surface; a zero encode size is
+    /// the rectangle's own. `None` for a rectangle with an empty side or past the surface, or an
+    /// encode size with one empty side.
+    #[must_use]
+    pub fn framing(&self) -> Option<Framing> {
+        let source = (self.width, self.height);
+        let crop = if self.src_rect == [0; 4] {
+            [0, 0, self.width, self.height]
+        } else {
+            self.src_rect
+        };
+        let [x, y, w, h] = crop;
+        let inside = x.checked_add(w).is_some_and(|r| r <= self.width)
+            && y.checked_add(h).is_some_and(|b| b <= self.height);
+        let encode = match (self.encode_width, self.encode_height) {
+            (0, 0) => (w, h),
+            (0, _) | (_, 0) => return None,
+            size => size,
+        };
+        (w != 0 && h != 0 && inside).then_some(Framing {
+            source,
+            crop,
+            encode,
+        })
+    }
 }
 
 /// [`SetEncodeRequest::flags`]: the display composes FP16 scRGB under SDR wide colour, and the
@@ -590,8 +647,8 @@ impl core::fmt::Display for ReplyTooShort {
 impl core::error::Error for ReplyTooShort {}
 
 /// Whether a session's encoder reads the acquired surface itself instead of a copy of it.
-/// Only a `composed` input ([`EncodeInput::composed`]) can: every other kind needs its
-/// converter. On by default for AMF, QSV and NVENC: the copy runs on the 3D engine a game
+/// Only a `composed` input ([`EncodeInput::composed`]) at the surface's own size can: every
+/// other kind needs its converter, and a [`Framing`] that scales needs the scale pass. On by default for AMF, QSV and NVENC: the copy runs on the 3D engine a game
 /// renders on, and on an RTX 4090 at 4K120 under full load it held the frame 2.7 ms longer
 /// before the encoder saw it. `knob` is `PFVD_POOL_BYPASS`: `0` turns it off, any other
 /// value turns it on for every backend.
@@ -632,7 +689,9 @@ pub struct EncodeCtlRequest {
 const _: () = {
     use core::mem::{offset_of, size_of};
 
-    assert!(size_of::<SetEncodeRequest>() == 144);
+    assert!(size_of::<SetEncodeRequest>() == 168);
+    assert!(offset_of!(SetEncodeRequest, encode_width) == SET_ENCODE_REQUEST_V9_SIZE);
+    assert!(offset_of!(SetEncodeRequest, src_rect) == 152);
     assert!(offset_of!(SetEncodeRequest, target_id) == 0);
     assert!(offset_of!(SetEncodeRequest, section) == 8);
     assert!(offset_of!(SetEncodeRequest, event) == 16);
@@ -760,11 +819,18 @@ mod tests {
             offset_of!(SetEncodeRequest, flags),
             offset_of!(SetEncodeRequest, slices),
         );
-        assert_eq!(size_of::<SetEncodeRequest>(), 144);
+        assert_eq!(size_of::<SetEncodeRequest>(), 168);
         assert_eq!(
             offset_of!(SetEncodeRequest, knobs),
             SET_ENCODE_REQUEST_LEGACY_SIZE
         );
+        // v10's tail: everything a v9 driver reads ends where it starts.
+        assert_eq!(
+            offset_of!(SetEncodeRequest, encode_width),
+            SET_ENCODE_REQUEST_V9_SIZE
+        );
+        assert_eq!(offset_of!(SetEncodeRequest, encode_height), 148);
+        assert_eq!(offset_of!(SetEncodeRequest, src_rect), 152);
         assert_eq!(offset_of!(SetEncodeRequest, target_id), 0);
         assert_eq!(offset_of!(SetEncodeRequest, section), 8);
         assert_eq!(offset_of!(SetEncodeRequest, event), 16);
@@ -1034,20 +1100,27 @@ mod tests {
         req.backends = [1, 2, 0, 0];
 
         req.knobs.apply_env("PUNKTFUNK_NVENC_SLICES", "4");
+        (req.encode_width, req.encode_height) = (1920, 1080);
 
         let bytes = bytemuck::bytes_of(&req);
         println!("SetEncodeRequest on the wire: {} bytes", bytes.len());
-        assert_eq!(bytes.len(), 144);
+        assert_eq!(bytes.len(), 168);
         let back: SetEncodeRequest = bytemuck::pod_read_unaligned(bytes);
         assert_eq!(back, req);
         // A pre-knobs driver reads the first 120 bytes and sees the same request minus knobs;
         // a pre-knobs host's 120 bytes zero-fill to every backend's default.
-        let mut prefix = [0u8; 144];
+        let mut prefix = [0u8; 168];
         prefix[..SET_ENCODE_REQUEST_LEGACY_SIZE]
             .copy_from_slice(&bytes[..SET_ENCODE_REQUEST_LEGACY_SIZE]);
         let old: SetEncodeRequest = bytemuck::pod_read_unaligned(&prefix);
         assert_eq!(old.backends, req.backends);
         assert_eq!(old.knobs, EncodeKnobs::default());
+        // A v9 host's 144 bytes zero-fill to no framing: the surface at its own size.
+        let mut v9 = [0u8; 168];
+        v9[..SET_ENCODE_REQUEST_V9_SIZE].copy_from_slice(&bytes[..SET_ENCODE_REQUEST_V9_SIZE]);
+        let v9: SetEncodeRequest = bytemuck::pod_read_unaligned(&v9);
+        assert_eq!(v9.knobs, req.knobs);
+        assert!(!v9.framing().is_some_and(|f| f.scales()));
         // The two handle values sit where the driver reads them, byte for byte.
         assert_eq!(
             u64::from_le_bytes(bytes[8..16].try_into().unwrap()),
@@ -1060,7 +1133,44 @@ mod tests {
         // A zeroed request is inert: no target, no handles, no backend.
         let zero = SetEncodeRequest::zeroed();
         assert_eq!(zero.backends, [0; 4]);
-        assert_eq!(bytemuck::bytes_of(&zero), [0u8; 144]);
+        assert_eq!(bytemuck::bytes_of(&zero), [0u8; 168]);
+    }
+
+    /// The tail a v10 host appends: zero is the surface at its own size, an encode size alone
+    /// scales the whole surface, and a rectangle that leaves the surface is refused.
+    #[test]
+    fn a_request_resolves_its_framing() {
+        let req = |encode: (u32, u32), rect: [u32; 4]| SetEncodeRequest {
+            width: 3840,
+            height: 2160,
+            encode_width: encode.0,
+            encode_height: encode.1,
+            src_rect: rect,
+            ..SetEncodeRequest::zeroed()
+        };
+        let plain = req((0, 0), [0; 4]).framing().expect("plain");
+        assert_eq!(plain.encode, (3840, 2160));
+        assert!(!plain.scales());
+        let scaled = req((1920, 1080), [0; 4]).framing().expect("scaled");
+        assert_eq!(scaled.crop, [0, 0, 3840, 2160]);
+        assert_eq!(scaled.encode, (1920, 1080));
+        assert!(scaled.scales());
+        let crop = req((0, 0), [0, 0, 1920, 1080]).framing().expect("crop");
+        assert_eq!(crop.encode, (1920, 1080), "a crop alone keeps its own size");
+        assert!(crop.scales());
+        // Naming the whole surface is no framing.
+        let whole = req((3840, 2160), [0, 0, 3840, 2160])
+            .framing()
+            .expect("whole");
+        assert!(!whole.scales());
+        for (encode, rect) in [
+            ((1920, 0), [0; 4]),
+            ((0, 0), [1, 0, 3840, 2160]),
+            ((0, 0), [0, 0, 0, 1080]),
+            ((0, 0), [u32::MAX, 0, 2, 2]),
+        ] {
+            assert_eq!(req(encode, rect).framing(), None, "{encode:?} {rect:?}");
+        }
     }
 
     #[test]
