@@ -194,6 +194,9 @@ in
 
         # udev: /dev/uinput + /dev/uhid (virtual gamepads) + the vhci sysfs perms for the virtual Deck.
         install -Dm0644 scripts/60-punktfunk.rules "$out/lib/udev/rules.d/60-punktfunk.rules"
+        # NetworkManager hook: a connected Steam Frame wireless adapter stays out of power save.
+        install -Dm0755 packaging/linux/90-punktfunk-frame-adapter \
+          "$out/lib/NetworkManager/dispatcher.d/90-punktfunk-frame-adapter"
         # WirePlumber: hold a DualSense's sound card open + keep it off the graph clock.
         install -Dm0644 scripts/60-punktfunk-dualsense.conf "$out/share/wireplumber/wireplumber.conf.d/60-punktfunk-dualsense.conf"
 

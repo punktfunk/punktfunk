@@ -254,6 +254,9 @@ package_punktfunk-host() {
   install -Dm0644 "$R/scripts/punktfunk-modules.conf" "$pkgdir/usr/lib/modules-load.d/punktfunk.conf"
   # 32 MB UDP socket buffers (send-side headroom at high bitrate)
   install -Dm0644 "$R/scripts/99-punktfunk-net.conf"  "$pkgdir/usr/lib/sysctl.d/99-punktfunk-net.conf"
+  # Keeps a connected Steam Frame wireless adapter out of power save, which drops the headset link
+  install -Dm0755 "$R/packaging/linux/90-punktfunk-frame-adapter" \
+    "$pkgdir/usr/lib/NetworkManager/dispatcher.d/90-punktfunk-frame-adapter"
   # Nice-limit headroom for the host's data-plane threads: raises the user-session RLIMIT_NICE so
   # pf-frame's setpriority() works on boxes without RealtimeKit (with rtkit the host never needs
   # it). A limit, not a grant — and NEVER a file capability on the host binary (see the KWin

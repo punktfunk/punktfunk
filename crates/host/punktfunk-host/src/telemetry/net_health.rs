@@ -110,11 +110,16 @@ impl WireProbe {
 /// What this host knows about its own end of the path, for its `StreamConfig`: the kind and
 /// link speed of the interface holding `local_ip` ([`punktfunk_core::transport::ifinfo`]) and
 /// the data socket's granted send buffer. The socket is bound to every address, so its own
-/// address names no interface.
+/// address names no interface. A session over a Steam Frame wireless adapter is logged.
 pub fn host_link(
     local_ip: Option<IpAddr>,
     sock: Option<&UdpSocket>,
 ) -> punktfunk_core::quic::HostLink {
+    if let Some(IpAddr::V4(ip)) = local_ip.map(|ip| ip.to_canonical()) {
+        if punktfunk_core::discovery::on_frame_adapter_net(ip) {
+            log_frame_adapter(IpAddr::V4(ip));
+        }
+    }
     let link = local_ip.map_or(
         Default::default(),
         punktfunk_core::transport::ifinfo::link_facts,
@@ -132,6 +137,46 @@ pub fn host_link(
 
 fn iface_for(ip: IpAddr) -> Option<String> {
     punktfunk_core::transport::ifinfo::iface_for(ip)
+}
+
+/// The adapter's power save as `iw` reads it, unprivileged: on, the headset's access point drops
+/// the idle adapter and the stream stalls. The packages' NetworkManager hook turns it off.
+fn log_frame_adapter(ip: IpAddr) {
+    let iface = iface_for(ip).unwrap_or_default();
+    let power_save = frame_adapter_power_save(&iface);
+    if power_save.as_deref() == Some("on") {
+        tracing::warn!(
+            iface,
+            hook = "/usr/lib/NetworkManager/dispatcher.d/90-punktfunk-frame-adapter",
+            "Steam Frame wireless adapter left in power save"
+        );
+    } else {
+        tracing::info!(
+            iface,
+            power_save = power_save.as_deref().unwrap_or("unknown"),
+            "session over the Steam Frame wireless adapter"
+        );
+    }
+}
+
+/// `on` or `off`; `None` where `iw` is missing or did not say.
+#[cfg(target_os = "linux")]
+fn frame_adapter_power_save(iface: &str) -> Option<String> {
+    // A user service's PATH may leave out /usr/sbin, where Debian keeps iw.
+    ["iw", "/usr/sbin/iw"].into_iter().find_map(|iw| {
+        let out = std::process::Command::new(iw)
+            .args(["dev", iface, "get", "power_save"])
+            .output()
+            .ok()?;
+        let text = String::from_utf8(out.stdout).ok()?;
+        let state = text.trim().strip_prefix("Power save:")?.trim();
+        Some(state.to_string())
+    })
+}
+
+#[cfg(not(target_os = "linux"))]
+fn frame_adapter_power_save(_iface: &str) -> Option<String> {
+    None
 }
 
 #[cfg(target_os = "linux")]

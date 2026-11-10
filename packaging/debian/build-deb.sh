@@ -103,6 +103,9 @@ install -Dm0644 scripts/punktfunk-modules.conf     "$STAGE/usr/lib/modules-load.
 # UDP socket-buffer tuning (32 MB) — without it the kernel clamps the host's SO_SNDBUF to ~416 KB
 # and high-bitrate frames overflow it (send-side packet loss). systemd-sysctl applies it at boot.
 install -Dm0644 scripts/99-punktfunk-net.conf      "$STAGE/usr/lib/sysctl.d/99-punktfunk-net.conf"
+# Keeps a connected Steam Frame wireless adapter out of power save, which drops the headset link.
+install -Dm0755 packaging/linux/90-punktfunk-frame-adapter \
+                                                   "$STAGE/usr/lib/NetworkManager/dispatcher.d/90-punktfunk-frame-adapter"
 # Nice-limit headroom for the host's data-plane threads: raises the user-session RLIMIT_NICE so
 # pf-frame's setpriority() works on boxes without RealtimeKit (with rtkit the host never needs
 # it). A limit, not a grant, and never a file capability on the host binary (KWin identification).

@@ -60,6 +60,9 @@ apply_system_tuning() {
         /etc/systemd/system/user@.service.d/50-punktfunk-nice.conf
     sudo systemctl daemon-reload || true
     ok "nice-limit drop-in installed (data-plane thread priority; applies after a reboot)"
+    sudo install -Dm755 "$SRC/packaging/linux/90-punktfunk-frame-adapter" \
+        /etc/NetworkManager/dispatcher.d/90-punktfunk-frame-adapter
+    ok "Steam Frame wireless adapter hook installed (keeps the adapter out of power save)"
     sudo install -Dm644 "$SRC/scripts/60-punktfunk.rules" /etc/udev/rules.d/60-punktfunk.rules
     sudo udevadm control --reload-rules >/dev/null 2>&1 || true
     sudo udevadm trigger >/dev/null 2>&1 || true

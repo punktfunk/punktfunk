@@ -70,27 +70,36 @@ pub struct Advert {
 
 const IP_RECHECK: Duration = Duration::from_secs(10);
 
-/// Loopback only while the machine still has none.
-fn current_ip() -> IpAddr {
-    crate::host::primary_local_ip().unwrap_or(IpAddr::V4(Ipv4Addr::LOCALHOST))
+/// The addresses an advert carries: the routed one first (loopback while the machine has none),
+/// then this machine's address on a Steam Frame adapter network, which no default route names.
+/// mdns-sd sends each address only on the interface that holds it.
+fn current_addrs() -> Vec<IpAddr> {
+    let routed = crate::host::primary_local_ip().unwrap_or(IpAddr::V4(Ipv4Addr::LOCALHOST));
+    let mut addrs = vec![routed];
+    for ip in punktfunk_core::discovery::frame_adapter_ips() {
+        if IpAddr::V4(ip) != routed {
+            addrs.push(IpAddr::V4(ip));
+        }
+    }
+    addrs
 }
 
-/// Register `build(ip)` for the current address and again whenever it changes. Shared by
-/// [`advertise_native`] and [`crate::gamestream::mdns`].
+/// Register `build(addrs)` for the current [`current_addrs`] and again whenever they change.
+/// Shared by [`advertise_native`] and [`crate::gamestream::mdns`].
 ///
-/// mDNS records are pushed: the address true at `register()` keeps being announced until a
-/// newer one is registered. A second `register()` of the same fullname is an update.
+/// mDNS records are pushed: the addresses true at `register()` keep being announced until a
+/// newer set is registered. A second `register()` of the same fullname is an update.
 ///
-/// Poll the *routed* address; do not subscribe to the daemon's `IpAdd` events. The NIC often
-/// already has an address and only the default route lands late, so no interface event fires.
+/// Poll the addresses; do not subscribe to the daemon's `IpAdd` events. The NIC often already
+/// has an address and only the default route lands late, so no interface event fires.
 pub(crate) fn advertise_live(
     service: &'static str,
-    build: impl Fn(IpAddr) -> Result<ServiceInfo> + Send + 'static,
+    build: impl Fn(&[IpAddr]) -> Result<ServiceInfo> + Send + 'static,
 ) -> Result<Advert> {
     let daemon = ServiceDaemon::new().context("create mDNS daemon")?;
-    let registered = current_ip();
+    let registered = current_addrs();
     daemon
-        .register(build(registered)?)
+        .register(build(&registered)?)
         .with_context(|| format!("register {service} mDNS service"))?;
 
     let (stop_tx, stop_rx) = mpsc::channel::<()>();
@@ -102,15 +111,15 @@ pub(crate) fn advertise_live(
             stop_rx.recv_timeout(IP_RECHECK),
             Err(mpsc::RecvTimeoutError::Timeout)
         ) {
-            let now = current_ip();
+            let now = current_addrs();
             if now == announced {
                 continue;
             }
-            match build(now)
+            match build(&now)
                 .and_then(|info| bg_daemon.register(info).context("re-register mDNS service"))
             {
                 Ok(()) => {
-                    tracing::info!(service, from = %announced, to = %now, "host address changed — re-announced");
+                    tracing::info!(service, from = ?announced, to = ?now, "host address changed — re-announced");
                     announced = now;
                 }
                 // Keep the previous record and retry next tick rather than going dark.
@@ -170,7 +179,8 @@ pub fn advertise_native(
         pair = if require_pairing { "required" } else { "optional" },
         "native punktfunk mDNS advertising"
     );
-    advertise_live(NATIVE_SERVICE, move |ip| {
+    advertise_live(NATIVE_SERVICE, move |addrs| {
+        let ip = addrs[0];
         let mut props = fixed.clone();
         // Re-read on each rebuild: the routed NIC (and its MAC) may have changed.
         let macs = crate::wol::wake_macs(ip);
@@ -180,7 +190,7 @@ pub fn advertise_native(
         props.insert("addr".into(), ip.to_string());
         // Detect and warn only. Re-check on address change: the routed NIC may be a different one.
         crate::wol::warn_if_not_armed(ip);
-        ServiceInfo::new(NATIVE_SERVICE, &instance, &host_name, ip, port, props)
+        ServiceInfo::new(NATIVE_SERVICE, &instance, &host_name, addrs, port, props)
             .context("build native mDNS ServiceInfo")
     })
 }
