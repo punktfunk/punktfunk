@@ -225,20 +225,23 @@ pub fn tray(canvas: &Canvas, ui: &Frame, rect: Rect, toward: Toward, k: f64) {
     if rect.height() < 1.0 {
         return;
     }
+    crate::blur::backdrop(canvas, ui, rect, tray_band(rect, toward, k));
+}
+
+/// A tray's ramp over `rect`.
+fn tray_band(rect: Rect, toward: Toward, k: f64) -> crate::blur::Band {
     let (edge, clear) = match toward {
         Toward::Top => (rect.top, rect.bottom),
         Toward::Bottom => (rect.bottom, rect.top),
     };
-    let sigma = (TRAY_SIGMA * k) as f32;
-    let over = (TRAY_OVERHANG * k) as f32;
-    let band = crate::blur::Band {
+    crate::blur::Band {
         edge,
         clear,
-        sigma,
-        over,
-    };
-    crate::blur::backdrop(canvas, ui, rect, band);
+        sigma: (TRAY_SIGMA * k) as f32,
+        over: (TRAY_OVERHANG * k) as f32,
+    }
 }
+
 /// The band at a screen's foot, on the shell's bottom tray: a focused title with its
 /// provenance, or one detail line led by a mark. A screen reaches the tray in by the
 /// band's height (`Screen::pinned`) and paints this from `render_pinned`, so one tray
@@ -262,6 +265,11 @@ pub struct Foot<'a> {
 /// Band heights, design units: a title with its line, or one detail line.
 pub const FOOT_TITLE_H: f64 = 66.0;
 pub const FOOT_DETAIL_H: f64 = 34.0;
+/// The tray's run-up above a detail band that rows bleed under, design units: the ramp
+/// starts this far over the line, which then sits at 40 % of full blur or more.
+pub const FOOT_LEAD: f64 = 30.0;
+/// The detail line's top, in from its band's.
+const FOOT_DETAIL_TOP: f64 = 6.0;
 
 impl Foot<'_> {
     /// Over `band`, the tray already under it; the detail runs from `left` to `right`.
@@ -348,7 +356,7 @@ impl Foot<'_> {
             );
         }
         if let Some(detail) = self.detail.filter(|d| !d.is_empty()) {
-            let top = f64::from(band.top) + 6.0 * k;
+            let top = f64::from(band.top) + FOOT_DETAIL_TOP * k;
             let mark = self.mark.and_then(crate::icons::by_name);
             let lead = if mark.is_some() { 22.0 * k } else { 0.0 };
             let ink = ui.fg(0.55);
@@ -1602,6 +1610,17 @@ fn chevron(canvas: &Canvas, ui: &Frame, x: f64, cy: f64, r: f64, left: bool, alp
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A detail line over bleeding rows starts well into its tray's blur, on a screen
+    /// with no inset under it: the shallowest tray there is.
+    #[test]
+    fn a_detail_line_over_rows_sits_in_the_blur() {
+        let depth = (FOOT_LEAD + FOOT_DETAIL_H) as f32;
+        let tray = Rect::from_ltrb(0.0, 100.0, 400.0, 100.0 + depth);
+        let line = tray.top + (FOOT_LEAD + FOOT_DETAIL_TOP) as f32;
+        let strength = tray_band(tray, Toward::Bottom, 1.0).strength(line);
+        assert!(strength >= 0.4, "{strength}");
+    }
 
     #[test]
     fn menu_list_moves_and_recoils() {

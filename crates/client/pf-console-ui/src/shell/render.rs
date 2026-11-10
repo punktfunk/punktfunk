@@ -546,6 +546,9 @@ impl LayerEnv<'_> {
             // a slide or a zoom never carries it. Its targets still count here.
             pinned = screen.pinned(self.k, &ctx);
             if pinned != (0.0, 0.0) {
+                // Its text sits on a tray that blurs the lines under it.
+                #[cfg(test)]
+                crate::textprobe::layer();
                 let mut rec = PictureRecorder::new();
                 let rc = rec.begin_recording(device_edges, false);
                 rc.set_matrix(&base);

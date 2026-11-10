@@ -912,7 +912,8 @@ impl LibraryScreen {
     }
 
     /// The screen's lines in one scroll: the pills, the chips and the bands, then the
-    /// field — grid, shelf, or the card a failed or empty list leaves — above the title band.
+    /// field — grid, shelf, or the card a failed or empty list leaves — and the title band
+    /// over its foot.
     fn draw_field(
         &mut self,
         canvas: &Canvas,
@@ -926,14 +927,9 @@ impl LibraryScreen {
         let t = ctx.t;
         let (bands, lines) = self.place_zone(ctx);
         let sectioned = self.sectioned();
-        // The lines stop at the title band, so its caption never sits on one. Without the
-        // band they run on to the screen's foot and blur under the tray there.
+        // The lines run on to the screen's foot and blur under the band there.
         let clip = canvas.local_clip_bounds().unwrap_or(rect);
-        let foot = if self.band_shown() {
-            rect.bottom - self.pinned(k).1
-        } else {
-            clip.bottom.max(rect.bottom)
-        };
+        let foot = clip.bottom.max(rect.bottom);
         let g = self.field_geom(ui, rect, foot, k);
         let FieldGeom {
             shape,
@@ -1115,7 +1111,7 @@ impl LibraryScreen {
                     ),
                     Line::Grid => root.children(field(id)),
                     Line::State => root.child(
-                        this.state_el(ui, fonts, avail, g.state_h, k, t, hits)
+                        this.state_el(ui, fonts, avail, g.state_h, g.view_h - g.usable, k, t, hits)
                             .id(id),
                     ),
                 };
@@ -1334,7 +1330,7 @@ impl LibraryScreen {
         }
     }
 
-    /// The focused title's band reaches the shell's tray in this far, under the lines.
+    /// The focused title's band reaches the shell's tray in this far, over the lines' foot.
     pub(crate) fn pinned(&self, k: f64) -> (f32, f32) {
         if self.band_shown() {
             (0.0, (crate::widgets::FOOT_TITLE_H * k) as f32)
@@ -1343,7 +1339,7 @@ impl LibraryScreen {
         }
     }
 
-    /// The focused title on the shell's tray: drawn after the trays, under the lines.
+    /// The focused title on the shell's tray: drawn after the trays, over the lines.
     pub(crate) fn render_pinned(
         &mut self,
         canvas: &Canvas,
@@ -1620,9 +1616,10 @@ impl LibraryScreen {
     }
 
     /// What a list that is not ready says, and the button it offers, centred in a block
-    /// `h` tall. A block the clip cuts at its foot centres the copy in what shows of it, so
-    /// a first screenful that ends at the title band still says it. A pushed or failed shelf
-    /// with nothing else to stand on focuses the button.
+    /// `h` tall. A block that runs under the title band, whose top stands `under` above the
+    /// clip's foot, centres the copy in what shows above it, so a phone's first screenful
+    /// still says it. A pushed or failed shelf with nothing else to stand on focuses the
+    /// button.
     #[allow(clippy::too_many_arguments)]
     fn state_el<'a>(
         &'a self,
@@ -1630,6 +1627,7 @@ impl LibraryScreen {
         fonts: &'a Fonts,
         width: f64,
         h: f64,
+        under: f64,
         k: f64,
         t: f64,
         hits: &'a RefCell<Vec<(Zone, Rect)>>,
@@ -1666,7 +1664,7 @@ impl LibraryScreen {
             // Only ever up from `y0`: the button keeps its laid-out place under the copy.
             let shown = canvas
                 .local_clip_bounds()
-                .map_or(h, |c| f64::from(c.bottom - r.top).min(h));
+                .map_or(h, |c| (f64::from(c.bottom - r.top) - under).min(h));
             let top = f64::from(r.top) + ((shown - content) / 2.0).clamp(0.0, y0);
             let max_w = (600.0 * k).min(width * 0.85);
             if loading {
