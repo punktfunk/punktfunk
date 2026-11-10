@@ -3,9 +3,8 @@ use super::{
     PHASE_REPORT_EVERY, PHASE_SPIKE, PHASE_SPIKE_EVERY, PHASE_WAIT,
 };
 use crate::env_knobs::Knobs;
-use crate::test_frames::{
-    assert_edge_is_straight, cpu_frame, cpu_frame_24, edge_frame, LinearDmabuf, ODD_H, ODD_W,
-};
+use crate::test_dmabuf::{assert_edge_is_straight, edge_frame, LinearDmabuf, ODD_H, ODD_W};
+use crate::test_frames::{cpu_frame, cpu_frame_24};
 use crate::{Codec, Encoder};
 use pf_frame::{CapturedFrame, FramePayload, PixelFormat};
 
