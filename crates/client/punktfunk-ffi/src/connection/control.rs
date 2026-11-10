@@ -87,7 +87,8 @@ pub unsafe extern "C" fn punktfunk_connection_request_mode(
 
 /// [`punktfunk_connection_request_mode`] with the size this caller shows the picture at, when
 /// smaller than the mode: the host scales the picture to it before encoding. `0` on either
-/// view axis encodes the mode, which is how a caller back at 1x clears it.
+/// view axis names none: a new size is then encoded as it is, which is how a caller back at 1x
+/// clears the view, and the size last asked keeps its view, so a rate change leaves the scale.
 ///
 /// # Safety
 /// `c` is a valid connection handle.

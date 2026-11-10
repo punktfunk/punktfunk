@@ -269,6 +269,8 @@ pub struct NativeClient {
     sc2: Mutex<[sc2::Filter; sc2::PADS]>,
     /// Bounded ([`CTRL_QUEUE`]). Sparse; full means the control task is wedged — treat as closed.
     ctrl_tx: tokio::sync::mpsc::Sender<CtrlRequest>,
+    /// The size and view of the last mode ask, the connect's first ([`carried_view`]).
+    asked_view: Mutex<AskedView>,
     /// Unbounded like `input_tx`; sparse, at most one paste's bytes each.
     clip_cmd_tx: tokio::sync::mpsc::UnboundedSender<ClipCommand>,
     /// Outbound fetch ids. Stay below [`crate::clipboard::INBOUND_REQ_FLAG`] or they collide
@@ -743,6 +745,7 @@ impl NativeClient {
         let (clip_cmd_tx, clip_cmd_rx) = tokio::sync::mpsc::unbounded_channel::<ClipCommand>();
         let (ready_tx, ready_rx) = std::sync::mpsc::channel::<Result<Negotiated>>();
         let shared = Arc::new(ClientShared::new(params.mode));
+        let asked_view = Mutex::new(((params.mode.width, params.mode.height), params.view));
         shared
             .probe_only
             .store(params.probe_only, Ordering::Relaxed);
@@ -845,6 +848,7 @@ impl NativeClient {
             pad_touch_tx,
             sc2: Mutex::default(),
             ctrl_tx,
+            asked_view,
             clip_cmd_tx,
             next_xfer_id: AtomicU32::new(1),
             pen_seq: AtomicU16::new(0),
@@ -945,8 +949,17 @@ impl NativeClient {
     }
 
     /// [`Self::request_mode`] with the size this client shows the picture at
-    /// ([`ConnectParams::view`]). `None` asks the host to encode `mode` again.
+    /// ([`ConnectParams::view`]). `None` at a new size asks the host to encode `mode`; at the
+    /// size last asked it keeps that ask's view, so a rate change alone leaves the host's
+    /// scale in place.
     pub fn request_mode_view(&self, mode: Mode, view: Option<(u32, u32)>) -> Result<()> {
+        let size = (mode.width, mode.height);
+        let view = {
+            let mut last = self.asked_view.lock().unwrap_or_else(|e| e.into_inner());
+            let view = carried_view(*last, size, view);
+            *last = (size, view);
+            view
+        };
         self.ctrl_tx
             .try_send(CtrlRequest::Mode(mode, view))
             .map_err(|_| PunktfunkError::Closed)
@@ -2230,6 +2243,30 @@ mod end_reason_tests {
             PunktfunkEndReason::GameExited
         );
         assert_eq!(closed_with(0x6B), PunktfunkEndReason::HostError);
+    }
+}
+
+/// A mode ask's size, and the view it carried.
+type AskedView = ((u32, u32), Option<(u32, u32)>);
+
+/// The view a mode ask of `size` carries: its own, else the `last` ask's while the size stays.
+/// A rate change alone then keeps the host's scale; a new size without a view clears it.
+fn carried_view(last: AskedView, size: (u32, u32), view: Option<(u32, u32)>) -> Option<(u32, u32)> {
+    view.or(last.1.filter(|_| last.0 == size))
+}
+
+#[cfg(test)]
+mod view_tests {
+    use super::carried_view;
+
+    #[test]
+    fn a_rate_change_keeps_the_view_and_a_new_size_clears_it() {
+        let (big, view) = ((3840, 2160), Some((1920, 1080)));
+        assert_eq!(carried_view((big, view), big, None), view, "same size");
+        assert_eq!(carried_view((big, view), (2560, 1440), None), None);
+        let own = Some((1280, 720));
+        assert_eq!(carried_view((big, view), big, own), own, "its own wins");
+        assert_eq!(carried_view((big, None), big, None), None);
     }
 }
 

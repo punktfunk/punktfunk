@@ -418,7 +418,7 @@ fun StreamScreen(
     var padSize by remember { mutableStateOf(IntSize.Zero) }
     val split = fold?.takeIf { hingeCompanion || (padShown && !companionUp) }
     // A live mode switch, shown at [view] when the mode is larger: the asked-for mode shows at
-    // once, the host's answer half a second later. No view clears the one asked before.
+    // once, the host's answer half a second later. No view at a new size clears the one asked before.
     fun switchMode(w: Int, h: Int, hz: Int, view: Pair<Int, Int>? = null) {
         if (NativeBridge.nativeRequestMode(handle, w, h, hz, view?.first ?: 0, view?.second ?: 0)) {
             requestedMode = intArrayOf(w, h, hz)
@@ -542,7 +542,8 @@ fun StreamScreen(
             }
         },
         currentMode = { requestedMode },
-        // The ring picks the host's mode itself, so the picture is shown at it: no view.
+        // The ring picks the host's mode itself: a new size is shown at it, a rate pick keeps
+        // the view.
         requestMode = { w, h, hz ->
             modePicked = true
             switchMode(w, h, hz)

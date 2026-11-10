@@ -1020,13 +1020,15 @@ impl Shell {
                     cap.set_touch_mode(next);
                 }
             }
-            // The ring picks the host's mode itself, so the picture is shown at it: no view.
+            // The ring picks the host's mode itself: a new size is shown at it, with no view. A
+            // rate pick keeps the size, and core keeps its view.
             RingCommand::RequestMode {
                 width,
                 height,
                 refresh_hz,
             } => {
                 if let Some(c) = &st.connector {
+                    let live = c.mode();
                     if let Err(e) = c.request_mode(punktfunk_core::config::Mode {
                         width,
                         height,
@@ -1034,7 +1036,9 @@ impl Shell {
                     }) {
                         tracing::warn!(error = %e, "ring: mode request");
                     }
-                    st.params.view = None;
+                    if (live.width, live.height) != (width, height) {
+                        st.params.view = None;
+                    }
                 }
             }
             RingCommand::Shortcut(keys) => {

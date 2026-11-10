@@ -869,7 +869,8 @@ pub extern "system" fn Java_io_unom_punktfunk_kit_NativeBridge_nativeDisconnectQ
 }
 
 /// Request an in-stream resolution switch without reconnecting, shown at the `view_width` ×
-/// `view_height` view (`request_mode_view`); a side of `0` names none and clears an earlier one.
+/// `view_height` view (`request_mode_view`); a side of `0` names none, which
+/// clears an earlier one at a new size and keeps it at the same size.
 ///
 /// Returns `false` for a missing session, nonpositive geometry, or a closed request channel.
 /// A concurrent close cannot invalidate the table-retained session during this enqueue.
