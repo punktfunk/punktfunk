@@ -63,41 +63,56 @@ impl LogFile {
         Ok(())
     }
 
-    /// The newest [`MAX_BYTES`] of both files behind `header`, oldest line first.
-    fn render(&self, header: &str) -> io::Result<String> {
-        let mut budget = MAX_BYTES as u64;
-        let mut cut = false;
-        let mut parts = Vec::new();
+    /// Both files, newest first, opened for a bundle. Opened under the sink's lock, so a
+    /// rotation cannot land between the two; reading them needs no lock.
+    fn open_both(&self) -> io::Result<Vec<File>> {
+        let mut files = Vec::new();
         for name in [CURRENT, PREVIOUS] {
-            let mut file = match File::open(self.dir.join(name)) {
-                Ok(file) => file,
-                Err(e) if e.kind() == io::ErrorKind::NotFound => continue,
+            match File::open(self.dir.join(name)) {
+                Ok(file) => files.push(file),
+                Err(e) if e.kind() == io::ErrorKind::NotFound => {}
                 Err(e) => return Err(e),
-            };
-            let len = file.metadata()?.len();
-            let want = len.min(budget);
-            cut |= want < len;
-            budget -= want;
-            file.seek(SeekFrom::Start(len - want))?;
-            let mut bytes = Vec::new();
-            file.take(want).read_to_end(&mut bytes)?;
-            parts.push(bytes);
+            }
         }
-        parts.reverse();
-        let mut text = parts.concat();
-        let mut out = format!("{header}\n");
-        if cut {
-            // The cut lands mid-line; the bundle starts at the next whole one.
-            let start = text
-                .iter()
-                .position(|&b| b == b'\n')
-                .map_or(text.len(), |i| i + 1);
-            text.drain(..start);
-            out.push_str("… older lines trimmed …\n");
-        }
-        out.push_str(&String::from_utf8_lossy(&text));
-        Ok(out)
+        Ok(files)
     }
+
+    /// The newest [`MAX_BYTES`] of both files behind `header`, oldest line first.
+    #[cfg(test)]
+    fn render(&self, header: &str) -> io::Result<String> {
+        render_files(self.open_both()?, header)
+    }
+}
+
+/// The newest [`MAX_BYTES`] of `files` (newest file first) behind `header`, oldest line first.
+fn render_files(files: Vec<File>, header: &str) -> io::Result<String> {
+    let mut budget = MAX_BYTES as u64;
+    let mut cut = false;
+    let mut parts = Vec::new();
+    for mut file in files {
+        let len = file.metadata()?.len();
+        let want = len.min(budget);
+        cut |= want < len;
+        budget -= want;
+        file.seek(SeekFrom::Start(len - want))?;
+        let mut bytes = Vec::new();
+        file.take(want).read_to_end(&mut bytes)?;
+        parts.push(bytes);
+    }
+    parts.reverse();
+    let mut text = parts.concat();
+    let mut out = format!("{header}\n");
+    if cut {
+        // The cut lands mid-line; the bundle starts at the next whole one.
+        let start = text
+            .iter()
+            .position(|&b| b == b'\n')
+            .map_or(text.len(), |i| i + 1);
+        text.drain(..start);
+        out.push_str("… older lines trimmed …\n");
+    }
+    out.push_str(&String::from_utf8_lossy(&text));
+    Ok(out)
 }
 
 fn sink() -> MutexGuard<'static, Option<LogFile>> {
@@ -151,7 +166,9 @@ pub extern "system" fn Java_io_unom_punktfunk_kit_NativeBridge_nativeRenderLogs<
 ) -> JString<'local> {
     env.with_env(|env| {
         let header: String = header.try_to_string(env)?;
-        let file = sink().as_ref().and_then(|file| file.render(&header).ok());
+        // Every log line takes the sink's lock: hold it for the two opens, not the read.
+        let files = sink().as_ref().and_then(|file| file.open_both().ok());
+        let file = files.and_then(|files| render_files(files, &header).ok());
         env.new_string(file.unwrap_or_else(|| logring::render(&header)))
     })
     .resolve::<LogErrorAndDefault>()
