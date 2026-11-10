@@ -208,14 +208,22 @@ mod pyrowave_remote;
 #[cfg(all(target_os = "linux", feature = "pyrowave"))]
 #[path = "enc/linux/worker.rs"]
 pub mod worker;
-// Frames the Linux encoder tests share.
+// CPU frames the Linux PyroWave and Vulkan Video tests share.
 #[cfg(all(
     test,
     target_os = "linux",
-    any(feature = "pyrowave", feature = "vulkan-encode", feature = "nvenc")
+    any(feature = "pyrowave", feature = "vulkan-encode")
 ))]
 #[path = "enc/linux/test_frames.rs"]
 mod test_frames;
+// The LINEAR dmabuf the NVENC and Vulkan Video tests share.
+#[cfg(all(
+    test,
+    target_os = "linux",
+    any(feature = "nvenc", feature = "vulkan-encode")
+))]
+#[path = "enc/linux/test_dmabuf.rs"]
+mod test_dmabuf;
 // Live tests pairing a `pf_encode_win` backend with the P010 converter's real output.
 #[cfg(all(test, target_os = "windows"))]
 #[path = "enc/windows/live_tests.rs"]

@@ -449,7 +449,7 @@ impl Resolved {
         }
         #[cfg(not(feature = "vulkan-encode"))]
         let _ = (bit_depth, hdr);
-        let candidates = vk_util::sampled_capture_modifiers(fourcc);
+        let candidates = vaapi_native::capture_candidates(fourcc);
         vaapi_native::vaapi_capture_modifiers(fourcc, &candidates)
     }
 
