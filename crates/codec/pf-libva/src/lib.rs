@@ -9,7 +9,9 @@
 //! decoder ends up on a different GPU than the presenter.
 //!
 //! A missing libva is a clean `Err`, never a link error: the decode and encode ladders
-//! both fall through it.
+//! both fall through it. Empty off Linux.
+
+#![cfg(target_os = "linux")]
 
 use std::os::fd::AsRawFd as _;
 /// An H.264 encode session driven with `pf-vaapi`'s parameter buffers.

@@ -3,6 +3,7 @@
 
 use crate::*;
 use punktfunk_core::config::{Config, FecConfig, FecScheme, Role};
+#[cfg(feature = "quic")]
 use punktfunk_core::input::InputEvent;
 use punktfunk_core::session::{MediaV2, Session};
 use punktfunk_core::stats::Stats;
@@ -273,6 +274,7 @@ pub unsafe extern "C" fn punktfunk_client_poll_frame(
 ///
 /// # Safety
 /// `ev` is null (status) or readable for `size_of::<InputEvent>()` bytes.
+#[cfg(feature = "quic")]
 pub(crate) unsafe fn read_input_event<'a>(
     ev: *const InputEvent,
 ) -> Result<&'a InputEvent, PunktfunkStatus> {

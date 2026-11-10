@@ -21,11 +21,11 @@ publish = false
 name = "punktfunk-setup-win"
 path = "src/main.rs"
 
-# The client artifact's twin (M4): the same source, but build.rs gives only the host bin the
-# requireAdministrator manifest — the client installs per user and never elevates (D1/D2).
+# The client artifact's twin (M4): the same `entry::run`, but build.rs gives only the host bin
+# the requireAdministrator manifest — the client installs per user and never elevates (D1/D2).
 [[bin]]
 name = "punktfunk-setup-client"
-path = "src/main.rs"
+path = "src/bin/client.rs"
 
 # The console-subsystem packer: PowerShell's `&` neither waits for nor captures a GUI exe
 # (S2), so every tool verb lives in a sibling bin.

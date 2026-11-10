@@ -6,6 +6,8 @@
 //!
 //! Ignored: needs a VAAPI device. `.25` and `.50` both have one.
 
+#![cfg(target_os = "linux")]
+
 use std::os::fd::FromRawFd as _;
 use std::os::fd::OwnedFd;
 

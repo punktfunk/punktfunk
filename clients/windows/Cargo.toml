@@ -10,8 +10,10 @@ license.workspace = true
 authors.workspace = true
 repository.workspace = true
 
+# Not `punktfunk-client`: the Linux client builds that bin, and two same-named bins collide in
+# one workspace target dir. pack-msix.ps1 ships this exe as `punktfunk-client.exe`.
 [[bin]]
-name = "punktfunk-client"
+name = "punktfunk-client-windows"
 path = "src/main.rs"
 
 # The couch/HTPC Start-menu entry. Its own executable because an MSIX <Application> cannot
