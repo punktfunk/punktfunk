@@ -66,7 +66,7 @@ public struct StreamView: UIViewControllerRepresentable {
     private let onDial: ((DialEvent) -> Void)?
     private let onFrame: (@Sendable (AccessUnit) -> Void)?
     private let onSessionEnd: (@Sendable () -> Void)?
-    private let onResizeTarget: ((UInt32, UInt32) -> Void)?
+    private let onResizeTarget: ResizeTarget?
     private let onDecodedSize: (@Sendable (Int, Int) -> Void)?
     private let endToEndMeter: LatencyMeter?
     #if os(visionOS)
@@ -86,7 +86,7 @@ public struct StreamView: UIViewControllerRepresentable {
         onDial: ((DialEvent) -> Void)? = nil,
         onFrame: (@Sendable (AccessUnit) -> Void)? = nil,
         onSessionEnd: (@Sendable () -> Void)? = nil,
-        onResizeTarget: ((UInt32, UInt32) -> Void)? = nil,
+        onResizeTarget: ResizeTarget? = nil,
         onDecodedSize: (@Sendable (Int, Int) -> Void)? = nil,
         endToEndMeter: LatencyMeter? = nil
     ) {
@@ -248,9 +248,9 @@ public final class StreamViewController: StreamViewControllerBase {
     /// Resize-overlay START: forwarded to the Match-window follower so a scene resize drives the
     /// blur+spinner the instant the window differs from the live mode (iOS only — tvOS has no
     /// follower). See `MatchWindowFollower.onResizeTarget`.
-    var onResizeTarget: ((UInt32, UInt32) -> Void)?
+    var onResizeTarget: ResizeTarget?
     /// Resize-overlay END: the presenter reports the coded dims of each new-mode IDR here, so the
-    /// overlay clears when a frame at the requested size actually decodes.
+    /// overlay clears when a frame at the requested mode or its view actually decodes.
     var onDecodedSize: (@Sendable (Int, Int) -> Void)?
     /// Last decoded size fed into the presenter's aspect-fit. A new-mode IDR (an iPad scene resize,
     /// or a tvOS AVDisplayManager mode switch) re-fits the metal sublayer to the REAL content aspect
@@ -1169,22 +1169,25 @@ public final class StreamViewController: StreamViewControllerBase {
             heightPx: Int((b.height * scale).rounded()))
     }
 
-    /// Ask the host for the session's mode where the picture is: Native is the monitor's pixels at
-    /// its top refresh, or the phone's back on the phone. Skipped when it already streams that.
+    /// Ask the host for the session's mode where the picture is, with its view above 1x: Native is
+    /// the monitor's pixels at its top refresh, or the phone's back on the phone. Skipped when it
+    /// already streams that.
     private func requestSurfaceMode() {
         guard let connection else { return }
         let settings = connection.settings
         #if os(iOS)
-        let target = (onExternal ? ExternalDisplay.streamMode(settings) : nil)
-            ?? settings.streamMode(native: nativeMode)
+        let native = (onExternal ? ExternalDisplay.nativeMode : nil) ?? nativeMode
         #else
-        let target = settings.streamMode(native: NativeDisplay.mode)
+        let native = NativeDisplay.mode
         #endif
+        let target = settings.streamMode(native: native)
         let live = connection.currentMode()
         guard live.width != target.width || live.height != target.height
             || live.refreshHz != target.hz
         else { return }
-        connection.requestMode(width: target.width, height: target.height, refreshHz: target.hz)
+        connection.requestMode(
+            width: target.width, height: target.height, refreshHz: target.hz,
+            view: settings.streamView(native: native, mode: target))
     }
 
     /// `fromClick` marks a click-driven engage (the released-state pointer click that re-captures):

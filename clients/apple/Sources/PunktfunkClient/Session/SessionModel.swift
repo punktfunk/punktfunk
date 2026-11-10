@@ -263,6 +263,9 @@ final class SessionModel: ObservableObject {
     /// hopped to main), TIMEOUT = safety net for a rejected/capped switch that never yields a
     /// differently-sized frame. Ticked from the 1 Hz stats timer.
     private var resizeIndicator = ResizeIndicator()
+    /// The last decoded picture's size: smaller than the host's mode when the host encodes the
+    /// view. nil until the first frame.
+    private var picture: (width: UInt32, height: UInt32)?
 
     /// Received AUs, for the once-a-second log gate: nothing is logged while no frame flows.
     let meter = FrameMeter()
@@ -400,6 +403,7 @@ final class SessionModel: ObservableObject {
 
     /// Dial `host` with `effective`, the session's settings already resolved from the globals and
     /// its preset (§4.4). The connection carries them, so kit-side readers never re-read globals.
+    /// A mode render scale makes larger goes with its view (`EffectiveSettings.streamView`).
     ///
     /// `allowTofu` is true only for an unpinned host that advertised `pair=optional` (rule 3a);
     /// any other unpinned host is refused and routed to pairing (rule 3b). A pinned host's stored
@@ -477,6 +481,7 @@ final class SessionModel: ObservableObject {
         let own = effective.streamMode(native: native)
         let mode = overrides?.fit(
             own, native: native, codecMax: RenderScale.maxDimension(codec: effective.codec)) ?? own
+        let view = effective.streamView(native: native, mode: mode)
         let pin = host.pinnedSHA256
         // Screens (main-actor — screen APIs): with All monitors, a host screen per display now and
         // the promise to show more as displays come.
@@ -525,7 +530,8 @@ final class SessionModel: ObservableObject {
                 hw444EightBit: Stage444Probe.hwDecode444_8bit,
                 hw444TenBit: Stage444Probe.hwDecode444_10bit)
             let connectLine = "connect \(host.displayName) \(host.address):\(host.port) "
-                + "mode=\(offer.width)x\(offer.height)@\(offer.hz) codec=\(effective.codec) "
+                + "mode=\(offer.width)x\(offer.height)@\(offer.hz) "
+                + "view=\(view.map { "\($0.width)x\($0.height)" } ?? "-") codec=\(effective.codec) "
                 + "bitrate=\(offer.bitrateKbps)kbps "
                 + "hdr=\(offer.hdr) 10bit=\(offer.tenBit) 444=\(offer.want444) "
                 + "audio=\(offer.audioChannels)ch/\(offer.audioRateHz)Hz/\(offer.audioBits)bit "
@@ -535,7 +541,7 @@ final class SessionModel: ObservableObject {
             sessionLog.info("\(connectLine, privacy: .public)")
             let result = Result { try PunktfunkConnection(
                 host: host.address, port: host.port,
-                width: offer.width, height: offer.height, refreshHz: offer.hz,
+                width: offer.width, height: offer.height, refreshHz: offer.hz, view: view,
                 pinSHA256: pin, identity: identity, compositor: offer.compositor,
                 gamepad: gamepad, bitrateKbps: offer.bitrateKbps, videoCaps: offer.videoCaps,
                 audioChannels: offer.audioChannels,
@@ -997,6 +1003,7 @@ final class SessionModel: ObservableObject {
         // link may never come up (a non-deadline rung has none at all).
         PresentLinkInfo.shared.clear()
         resizeIndicator = ResizeIndicator() // no stale target/timer into the next session
+        picture = nil
     }
 
     /// Called (via the main actor) when the pump hits end-of-session.
@@ -1114,19 +1121,23 @@ final class SessionModel: ObservableObject {
     }
 
     /// Resize overlay START (main actor — from the Match-window follower's `onResizeTarget`): the
-    /// window began differing from the live mode, so a `Reconfigure` toward `(width, height)` is
-    /// imminent. Show the blur+spinner immediately, before the debounced request even leaves.
-    func resizeTargeted(width: UInt32, height: UInt32) {
+    /// window began differing from the live mode, so a `Reconfigure` toward `(width, height)`,
+    /// shown at `view`, is imminent. Show the blur+spinner immediately, before the debounced
+    /// request even leaves.
+    func resizeTargeted(width: UInt32, height: UInt32, view: (width: UInt32, height: UInt32)?) {
         resizeIndicator.steering(
-            width: width, height: height, now: ProcessInfo.processInfo.systemUptime)
+            width: width, height: height, view: view, now: ProcessInfo.processInfo.systemUptime)
         resizing = resizeIndicator.active
     }
 
     /// Resize overlay END (main actor — hopped from the decode pump's `onDecodedSize`): a new-mode
-    /// IDR decoded at `(width, height)`. Clears the overlay only when that matches the size we're
-    /// steering to (a same-size loss-recovery IDR, or the initial connect IDR, is a no-op).
+    /// IDR decoded at `(width, height)`. Notes the picture's size for the stats line, and clears
+    /// the overlay only when that matches the mode or view we're steering to (a same-size
+    /// loss-recovery IDR, or the initial connect IDR, is a no-op).
     func resizeDecoded(width: Int, height: Int) {
-        resizeIndicator.decoded(width: UInt32(max(width, 0)), height: UInt32(max(height, 0)))
+        let size = (width: UInt32(max(width, 0)), height: UInt32(max(height, 0)))
+        picture = size
+        resizeIndicator.decoded(width: size.width, height: size.height)
         resizing = resizeIndicator.active
     }
 
@@ -1392,7 +1403,7 @@ final class SessionModel: ObservableObject {
                 // The window in the unified log, once a second while frames flow: the Advanced
                 // Detailed text whatever the overlay shows (and stdout, see `statsToStdout`).
                 if frames > 0 {
-                    let text = conn.hudLines(tier: .detailed, advanced: true, facts: self.hudFacts())
+                    let text = self.overlayLines(conn, tier: .detailed, advanced: true)
                         .map(\.text).joined(separator: " | ")
                     statsLog.info("\(text, privacy: .public)")
                     if statsToStdout { print("pf.stats \(text)") }
@@ -1412,8 +1423,17 @@ final class SessionModel: ObservableObject {
             return
         }
         let advanced = UserDefaults.standard.bool(forKey: DefaultsKey.advancedStats)
-        let lines = conn.hudLines(tier: statsVerbosity, advanced: advanced, facts: hudFacts())
+        let lines = overlayLines(conn, tier: statsVerbosity, advanced: advanced)
         if lines != hudLines { hudLines = lines } // an unchanged overlay must not re-render
+    }
+
+    /// The core's lines for `tier`, naming the decoded size beside a larger host mode.
+    private func overlayLines(
+        _ conn: PunktfunkConnection, tier: StatsVerbosity, advanced: Bool
+    ) -> [PunktfunkConnection.HudLine] {
+        PunktfunkConnection.HudLine.naming(
+            picture: picture, mode: conn.currentMode(),
+            in: conn.hudLines(tier: tier, advanced: advanced, facts: hudFacts()))
     }
 
     /// What only the app knows: the floor policy, this app's audio ring, the preset and whether

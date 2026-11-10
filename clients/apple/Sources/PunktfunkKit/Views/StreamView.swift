@@ -111,7 +111,7 @@ public struct StreamView: NSViewRepresentable {
     private let onShortcut: ((Shortcuts.Action, Shortcuts.Phase) -> Void)?
     private let onFrame: (@Sendable (AccessUnit) -> Void)?
     private let onSessionEnd: (@Sendable () -> Void)?
-    private let onResizeTarget: ((UInt32, UInt32) -> Void)?
+    private let onResizeTarget: ResizeTarget?
     private let onDecodedSize: (@Sendable (Int, Int) -> Void)?
     private let endToEndMeter: LatencyMeter?
 
@@ -138,7 +138,7 @@ public struct StreamView: NSViewRepresentable {
         onDial: ((DialEvent) -> Void)? = nil,
         onFrame: (@Sendable (AccessUnit) -> Void)? = nil,
         onSessionEnd: (@Sendable () -> Void)? = nil,
-        onResizeTarget: ((UInt32, UInt32) -> Void)? = nil,
+        onResizeTarget: ResizeTarget? = nil,
         onDecodedSize: (@Sendable (Int, Int) -> Void)? = nil,
         endToEndMeter: LatencyMeter? = nil
     ) {
@@ -301,7 +301,7 @@ public final class StreamLayerView: NSView {
     /// (main thread, via the follower) fires the instant the window starts steering toward a new
     /// size; `onDecodedSize` (PUMP thread) fires when a new-mode IDR's dims land. The owner drives
     /// the blur+spinner from these — set before `start()`.
-    public var onResizeTarget: ((UInt32, UInt32) -> Void)?
+    public var onResizeTarget: ResizeTarget?
     public var onDecodedSize: (@Sendable (Int, Int) -> Void)?
 
     /// Main-thread only. False = input capture disabled outright (UI layered over the

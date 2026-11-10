@@ -389,6 +389,22 @@ extension EffectiveSettings {
         return (mode.width, mode.height, UInt32(clamping: hz))
     }
 
+    /// The size `streamMode(native:)` shows the picture at when render scale makes the mode larger
+    /// (`RenderScale.view`). `mode` is what the session asks for after any game override; the
+    /// view goes only while that is still larger on both axes.
+    public func streamView(
+        native: (width: Int, height: Int, hz: Int), mode: (width: UInt32, height: UInt32, hz: UInt32)
+    ) -> (width: UInt32, height: UInt32)? {
+        guard let view = RenderScale.view(
+            baseWidth: width == 0 ? native.width : width,
+            baseHeight: height == 0 ? native.height : height, scale: renderScale,
+            maxDimension: RenderScale.maxDimension(codec: codec)),
+            mode.width >= view.width, mode.height >= view.height,
+            (mode.width, mode.height) != (view.width, view.height)
+        else { return nil }
+        return view
+    }
+
     /// `pyrowaveBpp` in the hundredths the dial carries, held inside 0.5…2.
     public var pyrowaveBppX100: UInt16 {
         UInt16((min(max(pyrowaveBpp, 0.5), 2.0) * 100).rounded())

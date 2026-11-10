@@ -98,8 +98,8 @@ struct StreamScene: View {
             },
             // Resize overlay START — the follower is main-actor, so this drives the blur
             // + spinner synchronously the instant the window differs from the live mode.
-            onResizeTarget: { [weak model] w, h in
-                model?.resizeTargeted(width: w, height: h)
+            onResizeTarget: { [weak model] w, h, view in
+                model?.resizeTargeted(width: w, height: h, view: view)
             },
             // Resize overlay END — the coded dims of each new-mode IDR, reported from the
             // decode pump thread; hop to the main actor to clear the overlay.

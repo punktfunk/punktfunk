@@ -525,9 +525,9 @@ extension SettingsView {
         }
     }
 
-    /// Render-scale picker + the resulting host resolution. > 1 supersamples (sharper, at more
-    /// bandwidth AND client decode); < 1 renders under native (lighter). The presenter resamples the
-    /// decoded frame to this display, so the multiplier is where the sharpness/cost trade-off lives.
+    /// Render-scale picker + the resulting host resolution. > 1 supersamples (sharper, at more host
+    /// work; a host that cannot scale the picture down also costs bandwidth and client decode);
+    /// < 1 renders under native (lighter), and the presenter upscales.
     /// Any percent from 50 to 400 can be typed: "Custom…" shows the field, a TV has its own row.
     @ViewBuilder var renderScaleRow: some View {
         #if os(tvOS)

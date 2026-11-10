@@ -52,6 +52,15 @@ final class RenderScaleTests: XCTestCase {
             )
             XCTAssertEqual([Int(m.width), Int(m.height)], want, name)
         }
+        let views = try XCTUnwrap(root["view"] as? [[String: Any]])
+        XCTAssertFalse(views.isEmpty)
+        for row in views {
+            let base = try XCTUnwrap(row["base"] as? [Int], "\(row)")
+            let v = RenderScale.view(
+                baseWidth: base[0], baseHeight: base[1], scale: num(row["scale"]),
+                maxDimension: try XCTUnwrap(row["max"] as? Int, "\(row)"))
+            XCTAssertEqual(v.map { [Int($0.width), Int($0.height)] }, row["want"] as? [Int], "\(row)")
+        }
     }
 
     func testLabels() {
