@@ -140,6 +140,13 @@ impl Band {
         let depth = (self.clear - self.edge).abs().max(1.0);
         0.6 * (depth + self.over) / depth
     }
+
+    /// The share of full σ at row `y`, as the shaders ramp it.
+    #[cfg(test)]
+    pub(crate) fn strength(self, y: f32) -> f32 {
+        let t = ((self.clear - y) / (self.clear - self.edge)).clamp(0.0, 1.0);
+        (t / self.full()).min(1.0)
+    }
 }
 
 /// The style this frame draws: the blur everywhere, the reduced interface included — the

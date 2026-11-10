@@ -214,17 +214,28 @@ impl SettingsScreen {
     /// trays run in this far so the rows bleed under both on one ramp. The keyboard
     /// lifts the bottom reach away, or the tray would slab the keys.
     pub(crate) fn pinned(&self, k: f64) -> (f32, f32) {
-        let bottom = DETAIL_H * k * (1.0 - self.keyboard.seated().min(1.0));
+        let bottom = DETAIL_H * k * (1.0 - self.keyboard.seated().min(1.0)) + self.lead(k);
         ((TAB_STRIP_H * k) as f32, bottom as f32)
     }
 
-    /// The rows' band: under the section strip, above the explainer and the keyboard.
+    /// The tray's run-up over the explainer while rows bleed under it: the blur is under
+    /// way where the line starts. None once the keyboard is up or nothing blurs.
+    fn lead(&self, k: f64) -> f64 {
+        if crate::blur::active() {
+            crate::widgets::FOOT_LEAD * k * (1.0 - self.keyboard.seated().min(1.0))
+        } else {
+            0.0
+        }
+    }
+
+    /// The rows' band: under the section strip, above the explainer's run-up and the
+    /// keyboard. The focused row rests in it, clear of the blur.
     fn list_rect(&self, rect: Rect, k: f64) -> Rect {
         Rect::from_ltrb(
             rect.left,
             rect.top + (TAB_STRIP_H * k) as f32,
             rect.right,
-            rect.bottom - (DETAIL_H * k + self.keyboard.reserve(k)) as f32,
+            rect.bottom - (DETAIL_H * k + self.keyboard.reserve(k) + self.lead(k)) as f32,
         )
     }
 
@@ -494,7 +505,12 @@ impl SettingsScreen {
             canvas,
             ui,
             fonts,
-            Rect::from_ltrb(rect.left, list_rect.bottom, rect.right, rect.bottom),
+            Rect::from_ltrb(
+                rect.left,
+                list_rect.bottom + self.lead(k) as f32,
+                rect.right,
+                rect.bottom,
+            ),
             (inner, f64::from(col.right)),
             k,
         );
