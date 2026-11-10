@@ -65,6 +65,9 @@ pub(crate) struct Feed {
     open: Option<PartFeed>,
     /// Oversize AUs since a piece last went in.
     oversize: u32,
+    /// Oversize keyframes since a keyframe last went in. The frames fed between two of them
+    /// say nothing: each one's replacement outgrew the buffer too.
+    oversize_keys: u32,
 }
 
 /// The call [`Feed::next`] asks of the loop.
@@ -171,7 +174,10 @@ impl Feed {
     /// poisoned ledger closes at that one ([`spoiled`]).
     pub(crate) fn spoil(&mut self, slot: usize, piece: &Piece, cause: Cause) -> Spoiled {
         self.slots.push_front(slot);
-        self.oversize += u32::from(matches!(cause, Cause::Oversize));
+        if matches!(cause, Cause::Oversize) {
+            self.oversize += 1;
+            self.oversize_keys += u32::from(piece.keyframe);
+        }
         let left = spoiled(piece, cause);
         if let Spoiled::Poison { ledger, .. } = &left {
             self.open = Some(*ledger);
@@ -183,11 +189,15 @@ impl Feed {
     pub(crate) fn queued(&mut self, piece: &Piece, len: usize) {
         self.open = piece.queued(len);
         self.oversize = 0;
+        if piece.keyframe {
+            self.oversize_keys = 0;
+        }
     }
 
-    /// [`OVERSIZE_RUN`] AUs in a row outgrew the codec's input buffer: the run ends.
+    /// [`OVERSIZE_RUN`] AUs in a row outgrew the codec's input buffer, or as many keyframes
+    /// with no keyframe fed between them: the run ends.
     pub(crate) fn outgrown(&self) -> bool {
-        self.oversize >= OVERSIZE_RUN
+        self.oversize >= OVERSIZE_RUN || self.oversize_keys >= OVERSIZE_RUN
     }
 }
 
@@ -214,6 +224,8 @@ mod tests {
     enum Op {
         /// Park AU `index` whole.
         Whole(u32),
+        /// Park keyframe AU `index` whole.
+        Key(u32),
         /// Park a 100-byte piece of AU `index`: offset, first, last.
         Part(u32, u32, bool, bool),
         /// Park `n` whole AUs from index `from`.
@@ -222,7 +234,7 @@ mod tests {
         /// One feed pass, the codec answering each call in turn and then taking everything.
         Pass(&'static [Answer]),
     }
-    use Op::{Burst, Part, Pass, Slot, Whole};
+    use Op::{Burst, Key, Part, Pass, Slot, Whole};
 
     /// What a spoiled piece leaves behind.
     #[derive(Debug, PartialEq)]
@@ -330,6 +342,10 @@ mod tests {
         for &op in ops {
             match op {
                 Whole(i) => feed.park(frame(i, None)),
+                Key(i) => feed.park(Frame {
+                    flags: u32::from(punktfunk_core::packet::FLAG_SOF),
+                    ..frame(i, None)
+                }),
                 Part(i, offset, first, last) => {
                     let part = FramePart {
                         offset,
@@ -457,6 +473,46 @@ mod tests {
                 Out::Oversize(2, Left::Lost),
                 Out::Oversize(3, Left::Lost),
                 Out::Wedged,
+            ],
+        ),
+        (
+            "R1-4: three oversize keyframes end the run, whatever was fed between them",
+            &[
+                Key(1),
+                Whole(2),
+                Key(3),
+                Whole(4),
+                Key(5),
+                Slot(0),
+                Slot(1),
+                Slot(2),
+                Pass(&[Small, Answer::Takes, Small, Answer::Takes, Small]),
+            ],
+            &[
+                Out::Oversize(1, Left::Lost),
+                Fed(2, 0),
+                Out::Oversize(3, Left::Lost),
+                Fed(4, 1),
+                Out::Oversize(5, Left::Lost),
+                Out::Wedged,
+            ],
+        ),
+        (
+            "R1-4: a keyframe that goes in restarts the keyframe count",
+            &[
+                Key(1),
+                Key(2),
+                Key(3),
+                Key(4),
+                Slot(0),
+                Slot(1),
+                Pass(&[Small, Small, Answer::Takes, Small]),
+            ],
+            &[
+                Out::Oversize(1, Left::Lost),
+                Out::Oversize(2, Left::Lost),
+                Fed(3, 0),
+                Out::Oversize(4, Left::Lost),
             ],
         ),
         (
