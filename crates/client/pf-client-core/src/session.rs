@@ -27,6 +27,8 @@ pub struct SessionParams {
     pub host: String,
     pub port: u16,
     pub mode: Mode,
+    /// The size the picture is shown at when `mode` is larger ([`ConnectParams::view`]).
+    pub view: Option<(u32, u32)>,
     pub compositor: CompositorPref,
     pub gamepad: GamepadPref,
     pub bitrate_kbps: u32,
@@ -203,7 +205,9 @@ impl SessionParams {
     ///
     /// The mode is [`Settings::stream_mode`](crate::trust::Settings::stream_mode) over the
     /// probed one, then the host's game overrides [`fit`](punktfunk_core::game_overrides::fit)
-    /// to that panel and the codec. Their HDR and pad are already in `settings`
+    /// to that panel and the codec. The view is
+    /// [`Settings::stream_view`](crate::trust::Settings::stream_view), kept only while the
+    /// mode is still larger. Their HDR and pad are already in `settings`
     /// ([`ResolvedSpec::new`](crate::orchestrate::ResolvedSpec::new)). `exclude_codecs` stays
     /// 0. `want_444` is the switch; caps carry 4:4:4 only when `hevc_444_hardware` is set
     /// too. HDR caps need the setting and [`Probes::hdr_enabled`]. The panel volume follows
@@ -222,6 +226,9 @@ impl SessionParams {
             let max = punktfunk_core::render_scale::max_dimension(&settings.codec);
             mode = punktfunk_core::game_overrides::fit(mode, probes.mode, o, max);
         }
+        let view = settings.stream_view(probes.mode).filter(|&(w, h)| {
+            mode.width >= w && mode.height >= h && (mode.width, mode.height) != (w, h)
+        });
         let caps_444 = settings.enable_444 && probes.hevc_444_hardware;
         // The CPU rung is 8-bit: without a hardware 10-bit path the host would
         // build a stream this client tears down.
@@ -240,6 +247,7 @@ impl SessionParams {
             host: dial.host,
             port: dial.port,
             mode,
+            view,
             compositor: CompositorPref::from_name(&settings.compositor)
                 .unwrap_or(CompositorPref::Auto),
             gamepad: probes.gamepad,
@@ -752,6 +760,7 @@ fn dial(
                 let _ = ev_tx.try_send(SessionEvent::AwaitingApproval);
             })
         }),
+        view: params.view,
         ..ConnectParams::new(
             &params.host,
             params.port,
@@ -1281,6 +1290,7 @@ fn pump(
         notices: WindowNotices::default(),
         window_start: Instant::now(),
         total_frames: 0,
+        picture: None,
         dec_path: "",
         codec_fallback: None,
         codec_ask: None,
@@ -1333,6 +1343,8 @@ struct Pump {
     notices: WindowNotices,
     window_start: Instant,
     total_frames: u64,
+    /// The last picture's size: the host may encode smaller than its mode.
+    picture: Option<(u32, u32)>,
     /// What actually decoded the last frame — VAAPI can demote mid-session.
     dec_path: &'static str,
     /// Set when the ladder ran out of rungs. `Some` is the only way the pump ends
@@ -1629,8 +1641,8 @@ impl Pump {
         Pass::Drain
     }
 
-    /// A decoded picture: settle the freeze gate, then hand the previous frame in flight
-    /// on before this one is handed on or queued.
+    /// A decoded picture: settle the freeze gate, note its size, then hand the previous frame
+    /// in flight on before this one is handed on or queued.
     fn on_decoded(&mut self, image: DecodedImage, frame: &Frame, received_ns: u64) {
         let evidence = image.anchor_evidence();
         if evidence == punktfunk_core::reanchor::AnchorEvidence::ReferencesDamaged
@@ -1659,10 +1671,11 @@ impl Pump {
         let present = !shown.hold;
         self.total_frames += 1;
         self.dec_path = image.path_label();
+        let (width, height) = image.dimensions();
         if self.total_frames == 1 {
-            let (width, height) = image.dimensions();
             tracing::info!(width, height, path = self.dec_path, "first frame decoded");
         }
+        self.picture = Some((width, height));
         // Hardware rungs return at submission. A picture is handed on when its
         // own fence completes, so the presenter never waits on a decode; the
         // next AU is submitted meanwhile, so the decoder always has a picture
@@ -1722,14 +1735,19 @@ impl Pump {
         }
     }
 
-    /// Close the 1-second window: the notices it owes, then the decode facts.
+    /// Close the 1-second window: the notices it owes, then the decode facts. A notice names
+    /// the size this device decodes, not the host's mode.
     fn tick_window(&mut self) {
         let c = &self.connector;
+        let m = c.mode();
+        let decoded = self
+            .picture
+            .map_or(m, |(width, height)| Mode { width, height, ..m });
         for notice in self.notices.tick(
             c.frames_behind(),
             self.total_frames,
             c.unsustainable_pin_kbps(),
-            c.mode(),
+            decoded,
             c.launch_outcome(),
         ) {
             let _ = self.ev_tx.try_send(SessionEvent::Notice(notice));

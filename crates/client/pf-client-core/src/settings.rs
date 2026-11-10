@@ -503,10 +503,10 @@ impl Settings {
     /// The mode a connect asks for: a `0` size or refresh takes `native`'s (a refresh under 30
     /// reads 30), then render scale.
     pub fn stream_mode(&self, native: punktfunk_core::Mode) -> punktfunk_core::Mode {
-        let pick = |set: u32, native: u32| if set == 0 { native } else { set };
+        let (w, h) = self.stream_base(native);
         let (width, height) = punktfunk_core::render_scale::apply(
-            pick(self.width, native.width),
-            pick(self.height, native.height),
+            w,
+            h,
             self.render_scale,
             punktfunk_core::render_scale::max_dimension(&self.codec),
         );
@@ -515,6 +515,26 @@ impl Settings {
             height,
             refresh_hz: pick(self.refresh_hz, native.refresh_hz.max(30)),
         }
+    }
+
+    /// The size [`Self::stream_mode`] shows the picture at, when render scale makes the mode
+    /// larger ([`punktfunk_core::render_scale::view`]).
+    pub fn stream_view(&self, native: punktfunk_core::Mode) -> Option<(u32, u32)> {
+        let (w, h) = self.stream_base(native);
+        punktfunk_core::render_scale::view(
+            w,
+            h,
+            self.render_scale,
+            punktfunk_core::render_scale::max_dimension(&self.codec),
+        )
+    }
+
+    /// The chosen size before render scale; a `0` axis takes `native`'s.
+    fn stream_base(&self, native: punktfunk_core::Mode) -> (u32, u32) {
+        (
+            pick(self.width, native.width),
+            pick(self.height, native.height),
+        )
     }
 
     /// [`Self::pyrowave_bpp`] in the hundredths the dial carries, held inside
@@ -547,6 +567,15 @@ impl Settings {
             rate_label(kbps),
         );
         (caption, link_warning(kbps, link))
+    }
+}
+
+/// `set`, or `native` where it is `0`.
+fn pick(set: u32, native: u32) -> u32 {
+    if set == 0 {
+        native
+    } else {
+        set
     }
 }
 

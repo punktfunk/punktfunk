@@ -1062,7 +1062,10 @@ pub(super) fn close_window(
     snap.extras = desktop_extras(present, st.facts.health, prev, session::codec_fallbacks());
     // The field bundle's per-second record, whatever the HUD tier: a report with no
     // stats line cannot say where its frames went.
-    let text = hud::join(&hud::format(&snap, StatsVerbosity::Detailed, true), " | ");
+    let text = hud::join(
+        &hud_lines(&snap, StatsVerbosity::Detailed, true, st.last_video),
+        " | ",
+    );
     tracing::info!(target: "stats", "{text}");
     if tier != StatsVerbosity::Off {
         emit(SessionLine::Stats {
@@ -1082,9 +1085,31 @@ pub(super) fn close_window(
 /// Re-render the OSD from the last closed window at `tier`.
 pub(super) fn render_osd(st: &mut StreamState, tier: StatsVerbosity) {
     st.osd = match &st.last_snap {
-        Some(s) => hud::format(s, tier, st.params.advanced_stats),
+        Some(s) => hud_lines(s, tier, st.params.advanced_stats, st.last_video),
         None => Vec::new(),
     };
+}
+
+/// [`hud::format`], led by the size the picture decodes at when that is not the host's mode:
+/// `1920×1080@60 · host renders 3840×2160`.
+pub(super) fn hud_lines(
+    s: &StatsSnapshot,
+    tier: StatsVerbosity,
+    advanced: bool,
+    picture: Option<(u32, u32)>,
+) -> Vec<HudLine> {
+    let mut lines = hud::format(s, tier, advanced);
+    let Some((w, h)) = picture.filter(|&p| p != (s.width, s.height)) else {
+        return lines;
+    };
+    let mode = format!("{}×{}@{}", s.width, s.height, s.refresh_hz);
+    if let Some(l) = lines.iter_mut().find(|l| l.fields.first() == Some(&mode)) {
+        l.fields[0] = format!("{w}×{h}@{}", s.refresh_hz);
+        let host = pf_l10n::client::overlay_host_renders(s.width, s.height);
+        l.fields.insert(1, host);
+        l.text = l.fields.join(" · ");
+    }
+    lines
 }
 
 /// How the stream reaches the screen. No present arm sets `untonemapped` today; the tag
@@ -1445,5 +1470,34 @@ mod tests {
         assert_eq!(hdr_shown(true, true, false), hud::Hdr::Hdr);
         assert_eq!(hdr_shown(true, false, false), hud::Hdr::ToneMapped);
         assert_eq!(hdr_shown(true, false, true), hud::Hdr::Untonemapped);
+    }
+
+    /// A picture at the host's mode reads as the mode alone; one the host scaled down leads
+    /// with its own size and names the mode after it.
+    #[test]
+    fn the_mode_line_names_the_host_size_beside_a_smaller_picture() {
+        let s = StatsSnapshot {
+            width: 3840,
+            height: 2160,
+            refresh_hz: 60,
+            ..Default::default()
+        };
+        let first = |picture, tier| hud_lines(&s, tier, false, picture)[0].text.clone();
+        let normal = StatsVerbosity::Normal;
+        assert!(first(None, normal).starts_with("3840×2160@60"));
+        assert_eq!(first(Some((3840, 2160)), normal), first(None, normal));
+        let scaled = first(Some((1920, 1080)), normal);
+        assert!(
+            scaled.starts_with("1920×1080@60 · host renders 3840×2160"),
+            "{scaled}"
+        );
+        let advanced = hud_lines(&s, StatsVerbosity::Detailed, true, Some((1920, 1080)));
+        assert_eq!(
+            advanced[0].fields[..2],
+            ["1920×1080@60", "host renders 3840×2160"]
+        );
+        // Compact names no size at all.
+        let compact = StatsVerbosity::Compact;
+        assert_eq!(first(Some((1920, 1080)), compact), first(None, compact));
     }
 }

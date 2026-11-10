@@ -252,9 +252,10 @@ impl Shell {
         apply_capture(&mut self.window, &self.mouse, false, false, inhibit, 0);
     }
 
-    /// Resize the window to `mode` within the display's usable area, before the stream
-    /// starts. Match-window and fullscreen keep the size they own.
-    pub(super) fn size_to_stream(&mut self, mode: Mode) {
+    /// Resize the window to `picture`, the size the stream is shown at (its view, else its
+    /// mode), within the display's usable area, before the stream starts. Match-window and
+    /// fullscreen keep the size they own.
+    pub(super) fn size_to_stream(&mut self, picture: (u32, u32)) {
         if self.fullscreen || self.opts.match_window {
             return;
         }
@@ -268,7 +269,7 @@ impl Shell {
         // Windows and X11 report the frame; Wayland reports none.
         let frame = self.window.border_size().unwrap_or_default();
         let (w, h, x, y) = stream_window_rect(
-            (mode.width, mode.height),
+            picture,
             self.window.pixel_density(),
             frame,
             area,
