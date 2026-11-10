@@ -58,7 +58,12 @@ pub(crate) fn ladder_for(
     use Sharing::{Exclusive, Shared};
     let mut rungs = Vec::new();
     if track {
-        for perf in [LowLatency, PerfNone] {
+        let pinned: &[Perf] = match perf {
+            Some("none") => &[PerfNone],
+            Some("lowlatency") | Some("low") => &[LowLatency],
+            _ => &[LowLatency, PerfNone],
+        };
+        for &perf in pinned {
             rungs.push(OpenRung {
                 sharing: Shared,
                 perf,
@@ -408,17 +413,12 @@ mod tests {
             &[(SH, LL, R, false), (SH, LL, None, false)],
         ),
         (
-            "audio_perf never reaches the track rungs",
+            "audio_perf pins the track rungs too",
             true,
             true,
             None,
             Some("none"),
-            &[
-                (SH, LL, R, true),
-                (SH, NO, R, true),
-                (SH, NO, R, false),
-                (SH, NO, None, false),
-            ],
+            &[(SH, NO, R, true), (SH, NO, R, false), (SH, NO, None, false)],
         ),
     ];
 
