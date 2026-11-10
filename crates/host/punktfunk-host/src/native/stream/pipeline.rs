@@ -645,7 +645,7 @@ pub(super) fn open_session_encoder_with(
 /// The wire budget a build priced at `priced` runs once its encoder takes `encoded`. A PyroWave
 /// pin follows the pixels: a mirrored head's fit, a view the backend could not frame, a size the
 /// display delivered. Every other codec's rate is not priced by size, so it stands.
-fn rate_at_encoded(
+pub(super) fn rate_at_encoded(
     bitrate_kbps: u32,
     bitrate_auto: bool,
     priced: punktfunk_core::Mode,

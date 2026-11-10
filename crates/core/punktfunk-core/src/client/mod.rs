@@ -638,7 +638,8 @@ pub struct ConnectParams {
     /// ([`NativeClient::profile`] says which it did).
     pub profile: Option<String>,
     /// Every screen this embedder shows, screen 0 first with `mode`'s size; empty for one.
-    /// Screens past the first arrive on [`NativeClient::next_screen_frame`].
+    /// Screens past the first arrive on [`NativeClient::next_screen_frame`], each at its `view`
+    /// when it names one. Screen 0's view is [`Self::view`].
     pub screens: Vec<crate::quic::v2::msg::Screen>,
     /// This embedder can show more than one picture, so screens are offered even with `screens`
     /// empty and [`NativeClient::request_screens`] can ask for them later.
@@ -1668,8 +1669,9 @@ impl NativeClient {
     }
 
     /// Show these screens from now on, screen 0 first: the host adds, drops and resizes the
-    /// others and answers with a new [`Self::screen_layout`]. Screen 0's size still moves by
-    /// [`Self::request_mode`]. A host or dial without screens ignores it.
+    /// others, each framed for its `view`, and answers with a new [`Self::screen_layout`].
+    /// Screen 0's size and view still move by [`Self::request_mode_view`]. A host or dial
+    /// without screens ignores it.
     pub fn request_screens(&self, screens: Vec<crate::quic::v2::msg::Screen>) -> Result<()> {
         self.ctrl_tx
             .try_send(CtrlRequest::Screens(screens))

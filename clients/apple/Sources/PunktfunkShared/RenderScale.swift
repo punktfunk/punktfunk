@@ -97,4 +97,18 @@ public enum RenderScale {
             baseWidth: baseWidth, baseHeight: baseHeight, scale: scale, maxDimension: maxDimension)
         return sanitize(scale) > 1 && mode != view ? view : nil
     }
+
+    /// A further screen's mode at its `base` pixels and the view beside it: above 1x the base ×
+    /// `scale`, shown at the base, as screen 0's mode and view are. At 1x and below, and where the
+    /// codec cap leaves nothing to shrink, the base itself and no view.
+    public static func screenAsk(
+        baseWidth: Int, baseHeight: Int, scale: Double, maxDimension: Int
+    ) -> (mode: (width: UInt32, height: UInt32), view: (width: UInt32, height: UInt32)?) {
+        guard let shown = view(
+            baseWidth: baseWidth, baseHeight: baseHeight, scale: scale, maxDimension: maxDimension)
+        else { return ((UInt32(max(baseWidth, 0)), UInt32(max(baseHeight, 0))), nil) }
+        let mode = apply(
+            baseWidth: baseWidth, baseHeight: baseHeight, scale: scale, maxDimension: maxDimension)
+        return (mode, shown)
+    }
 }

@@ -63,6 +63,19 @@ final class RenderScaleTests: XCTestCase {
         }
     }
 
+    /// Above 1x a further screen asks for its panel × the scale, shown at its panel; at 1x and
+    /// below, and against the codec cap, its panel and no view.
+    func testAFurtherScreenSupersamplesLikeTheFirst() {
+        let ask = { (w: Int, h: Int, scale: Double, cap: Int) -> [UInt32] in
+            let a = RenderScale.screenAsk(baseWidth: w, baseHeight: h, scale: scale, maxDimension: cap)
+            return [a.mode.width, a.mode.height] + (a.view.map { [$0.width, $0.height] } ?? [])
+        }
+        XCTAssertEqual(ask(2560, 1440, 1.5, 8192), [3840, 2160, 2560, 1440])
+        XCTAssertEqual(ask(2560, 1440, 1.0, 8192), [2560, 1440])
+        XCTAssertEqual(ask(2560, 1440, 0.5, 8192), [2560, 1440])
+        XCTAssertEqual(ask(4096, 2304, 2.0, 4096), [4096, 2304])
+    }
+
     func testLabels() {
         XCTAssertEqual(RenderScale.label(1.0), String(localized: L10n.playerRenderScaleNative))
         XCTAssertEqual(

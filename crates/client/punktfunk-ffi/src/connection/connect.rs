@@ -828,6 +828,9 @@ pub struct PunktfunkConnectOpts {
     pub view_width: u32,
     /// See `view_width`.
     pub view_height: u32,
+    /// Each asked screen's view, read for `screen_count` records beside `screens` during the
+    /// call; null, which a shorter prefix defaults to, names none.
+    pub screen_views: *const PunktfunkScreenView,
 }
 
 /// [`PunktfunkProfileUnlock::kind`]: the account password as typed.
@@ -966,7 +969,7 @@ const _: () = {
     use core::mem::{offset_of, size_of};
     #[cfg(target_pointer_width = "64")]
     assert!(
-        size_of::<PunktfunkConnectOpts>() == 200
+        size_of::<PunktfunkConnectOpts>() == 208
             && offset_of!(PunktfunkConnectOpts, video_fit) == 100
             && offset_of!(PunktfunkConnectOpts, delivery_flags) == 121
             && offset_of!(PunktfunkConnectOpts, profile_id) == 128
@@ -978,11 +981,12 @@ const _: () = {
             && offset_of!(PunktfunkConnectOpts, unlock) == 176
             && offset_of!(PunktfunkConnectOpts, prompts_unlock) == 184
             && offset_of!(PunktfunkConnectOpts, view_width) == 192
+            && offset_of!(PunktfunkConnectOpts, screen_views) == 200
             && size_of::<PunktfunkProfileUnlock>() == 40
     );
     #[cfg(target_pointer_width = "32")]
     assert!(
-        size_of::<PunktfunkConnectOpts>() == 144
+        size_of::<PunktfunkConnectOpts>() == 148
             && offset_of!(PunktfunkConnectOpts, video_fit) == 72
             && offset_of!(PunktfunkConnectOpts, delivery_flags) == 85
             && offset_of!(PunktfunkConnectOpts, profile_id) == 92
@@ -994,6 +998,7 @@ const _: () = {
             && offset_of!(PunktfunkConnectOpts, unlock) == 124
             && offset_of!(PunktfunkConnectOpts, prompts_unlock) == 128
             && offset_of!(PunktfunkConnectOpts, view_width) == 136
+            && offset_of!(PunktfunkConnectOpts, screen_views) == 144
             && size_of::<PunktfunkProfileUnlock>() == 24
     );
 };
@@ -1048,6 +1053,7 @@ impl Default for PunktfunkConnectOpts {
             reserved6: [0; 7],
             view_width: 0,
             view_height: 0,
+            screen_views: ptr::null(),
         }
     }
 }
@@ -1322,8 +1328,9 @@ unsafe fn connect_params(
         refresh_hz: o.refresh_hz,
     };
     let n = usize::from(o.screen_count).min(PUNKTFUNK_SCREENS_MAX);
-    // SAFETY: `screens` is null or readable for `screen_count >= n` records (caller contract).
-    let screens = unsafe { super::screens::screens_at(o.screens, n) };
+    // SAFETY: `screens` and `screen_views` are null or readable for `screen_count >= n` records
+    // (caller contract).
+    let screens = unsafe { super::screens::screens_at(o.screens, o.screen_views, n) };
     // An unlock goes only to a pinned host; refused before its secret is read.
     if !o.unlock.is_null() && pin.is_none() {
         return Err(PunktfunkStatus::InvalidArg);
@@ -1725,10 +1732,8 @@ mod tests {
             ..Default::default()
         };
         // SAFETY: every pointer field is null or a live C-string literal.
-        assert_eq!(
-            unsafe { connect_params(&o) }.unwrap().view,
-            Some((1366, 768))
-        );
+        let params = unsafe { connect_params(&o) }.unwrap();
+        assert_eq!(params.view, Some((1366, 768)));
         o.view_height = 0;
         // SAFETY: as above.
         assert_eq!(unsafe { connect_params(&o) }.unwrap().view, None);
@@ -1819,6 +1824,28 @@ mod tests {
         assert!(p.screens[0].primary);
         assert_eq!((p.screens[1].index, p.screens[1].x), (1, 1920));
         assert_eq!(p.screens[1].mode.refresh_hz, 144);
+        assert!(p.screens.iter().all(|s| s.view.is_none()), "no views");
+        // Each view rides with the screen at its place; a zero axis is none.
+        let views = [
+            PunktfunkScreenView {
+                width: 0,
+                height: 1080,
+            },
+            PunktfunkScreenView {
+                width: 1280,
+                height: 720,
+            },
+        ];
+        let viewed = PunktfunkConnectOpts {
+            screen_views: views.as_ptr(),
+            ..o
+        };
+        // SAFETY: as above, and `views` is readable for `screen_count` records.
+        let p = unsafe { connect_params(&viewed) }.unwrap();
+        assert_eq!(
+            (p.screens[0].view, p.screens[1].view),
+            (None, Some((1280, 720)))
+        );
         let one = PunktfunkConnectOpts {
             host: c"127.0.0.1".as_ptr(),
             ..Default::default()

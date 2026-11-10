@@ -354,11 +354,18 @@ impl StreamState {
     }
 
     /// Follow the further screens: the client's list, their layout, and the first screen's
-    /// share of the video, which its encoder retargets to in place.
+    /// share of the video at the size it encodes, which its encoder retargets to in place.
     pub(super) fn on_screens(&mut self) {
         let (mode, first_gen) = (self.delivered_mode(), self.live.cur_display_gen);
         if let Some(set) = self.screens.as_mut() {
-            set.poll(mode, first_gen);
+            let out = self
+                .shared
+                .frame_map
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .out;
+            let encoded = Some(out).filter(|&(w, h)| w > 0 && h > 0);
+            set.poll(mode, crate::session_plan::picture(mode, encoded), first_gen);
         }
         let share = self
             .shared

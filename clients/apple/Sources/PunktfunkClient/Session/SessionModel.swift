@@ -487,7 +487,8 @@ final class SessionModel: ObservableObject {
         // the promise to show more as displays come.
         #if os(macOS)
         let showsScreens = effective.screens == "all"
-        let screenAsk = showsScreens ? ScreenAsk.ofThisMac(mode: mode) : .none
+        let scale = (effective.renderScale, RenderScale.maxDimension(codec: effective.codec))
+        let screenAsk = showsScreens ? ScreenAsk.ofThisMac(mode: mode, scale: scale) : .none
         #else
         let showsScreens = false
         let screenAsk = ScreenAsk.none

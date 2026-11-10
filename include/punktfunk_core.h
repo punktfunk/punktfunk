@@ -426,7 +426,7 @@
 //
 // The wire is versioned by ALPN, not by this. Pin the integer in `punktfunk-ffi`
 // (`abi_version_is_pinned`). Per-bump notes live in `CHANGELOG.md`.
-#define PUNKTFUNK_ABI_VERSION 66
+#define PUNKTFUNK_ABI_VERSION 67
 
 // This client silenced its own speakers (`client::NativeClient::set_audio_muted`). The host
 // keeps sending, so a session joined to the same sink still hears the game.
@@ -1701,6 +1701,16 @@ typedef struct {
 #endif
 
 #if defined(PUNKTFUNK_FEATURE_QUIC)
+// The size an asked screen is shown at when smaller than its mode: the host scales that screen's
+// picture to it before encoding. `0` on either axis names none. Read beside the screens, the one
+// at `i` for `screens[i]`; screen 0's view is the connect's or the mode ask's.
+typedef struct {
+    uint32_t width;
+    uint32_t height;
+} PunktfunkScreenView;
+#endif
+
+#if defined(PUNKTFUNK_FEATURE_QUIC)
 // Growable connect options for [`punktfunk_connect_opts`]. Zero-init, set
 // `struct_size = sizeof(PunktfunkConnectOpts)`, then the fields you mean.
 // Zero = auto/unspecified (`audio_rate_hz = 0` is Opus; a non-zero pair is
@@ -1823,6 +1833,9 @@ typedef struct {
     uint32_t view_width;
     // See `view_width`.
     uint32_t view_height;
+    // Each asked screen's view, read for `screen_count` records beside `screens` during the
+    // call; null, which a shorter prefix defaults to, names none.
+    const PunktfunkScreenView *screen_views;
 } PunktfunkConnectOpts;
 #endif
 
@@ -3332,6 +3345,20 @@ PunktfunkStatus punktfunk_connection_screen_layout(const PunktfunkConnection *c,
 PunktfunkStatus punktfunk_connection_request_screens(const PunktfunkConnection *c,
                                                      const PunktfunkScreen *screens,
                                                      uintptr_t n);
+#endif
+
+#if defined(PUNKTFUNK_FEATURE_QUIC)
+// [`punktfunk_connection_request_screens`] with each screen's view, `views[i]` for
+// `screens[i]`: a further screen shown smaller than its mode is scaled to its view before
+// encoding. Null `views` names none.
+//
+// # Safety
+// `c` is a valid connection handle; `screens` and `views` are each null or readable for `n`
+// records.
+PunktfunkStatus punktfunk_connection_request_screens_view(const PunktfunkConnection *c,
+                                                          const PunktfunkScreen *screens,
+                                                          const PunktfunkScreenView *views,
+                                                          uintptr_t n);
 #endif
 
 #if defined(PUNKTFUNK_FEATURE_QUIC)

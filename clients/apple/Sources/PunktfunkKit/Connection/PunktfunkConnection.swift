@@ -32,10 +32,12 @@ private let statusNoFrame: Int32 = PUNKTFUNK_STATUS_NO_FRAME.rawValue
 private let statusClosed: Int32 = PUNKTFUNK_STATUS_CLOSED.rawValue
 
 /// One reassembled, FEC-recovered, decrypted access unit (Annex-B HEVC from the host).
-/// The screens a connect asks the host for, screen 0 first; none for one picture.
+/// The screens a connect asks the host for, screen 0 first; none for one picture. `views` holds
+/// the size each is shown at when smaller than its mode, zero for none.
 public struct ScreenAsk: Sendable {
     let records: [PunktfunkScreen]
-    public static let none = ScreenAsk(records: [])
+    let views: [PunktfunkScreenView]
+    public static let none = ScreenAsk(records: [], views: [])
 }
 
 public struct AccessUnit: Sendable {
@@ -1262,18 +1264,23 @@ public final class PunktfunkConnection: @unchecked Sendable {
                                         func dial(_ pin: UnsafePointer<UInt8>?) -> OpaquePointer? {
                                             opts.pin_sha256 = pin
                                             // Read during the call only.
+                                            let views = screens.views
                                             return screens.records.withUnsafeBufferPointer { list in
-                                                opts.screens = list.baseAddress
-                                                opts.screen_count = UInt8(clamping: list.count)
-                                                func call() -> OpaquePointer? {
-                                                    punktfunk_connect_opts(
-                                                        &opts, &observed, &connectStatus)
-                                                }
-                                                guard let unlock else { return call() }
-                                                return unlock.withC { c in
-                                                    opts.unlock = c
-                                                    defer { opts.unlock = nil }
-                                                    return call()
+                                                views.withUnsafeBufferPointer { views in
+                                                    opts.screens = list.baseAddress
+                                                    opts.screen_count = UInt8(clamping: list.count)
+                                                    opts.screen_views =
+                                                        views.count == list.count ? views.baseAddress : nil
+                                                    func call() -> OpaquePointer? {
+                                                        punktfunk_connect_opts(
+                                                            &opts, &observed, &connectStatus)
+                                                    }
+                                                    guard let unlock else { return call() }
+                                                    return unlock.withC { c in
+                                                        opts.unlock = c
+                                                        defer { opts.unlock = nil }
+                                                        return call()
+                                                    }
                                                 }
                                             }
                                         }
@@ -1797,12 +1804,17 @@ public final class PunktfunkConnection: @unchecked Sendable {
         }
     }
 
-    /// Show these screens from now on, screen 0 first: the host adds, drops and resizes the others
-    /// and answers with a new `screenLayout()`. A host without screens ignores it.
-    public func requestScreens(_ screens: [PunktfunkScreen]) {
+    /// Show these screens from now on, screen 0 first, each at its view in `views` (zero for
+    /// none): the host adds, drops and resizes the others and answers with a new
+    /// `screenLayout()`. A host without screens ignores it.
+    public func requestScreens(_ screens: [PunktfunkScreen], views: [PunktfunkScreenView] = []) {
         withLiveHandle(or: ()) { h in
-            _ = screens.withUnsafeBufferPointer {
-                punktfunk_connection_request_screens(h, $0.baseAddress, UInt($0.count))
+            _ = screens.withUnsafeBufferPointer { list in
+                views.withUnsafeBufferPointer {
+                    punktfunk_connection_request_screens_view(
+                        h, list.baseAddress, $0.count == list.count ? $0.baseAddress : nil,
+                        UInt(list.count))
+                }
             }
         }
     }

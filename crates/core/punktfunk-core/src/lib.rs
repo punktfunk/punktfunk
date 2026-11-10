@@ -112,11 +112,11 @@ fn env_value_on(value: &str) -> bool {
 ///
 /// The wire is versioned by ALPN, not by this. Pin the integer in `punktfunk-ffi`
 /// (`abi_version_is_pinned`). Per-bump notes live in `CHANGELOG.md`.
-pub const ABI_VERSION: u32 = 66;
+pub const ABI_VERSION: u32 = 67;
 /// FNV-1a of the generated `include/punktfunk_core.h` without comments or the version define.
 /// `gen-headers`'s `abi_header_hash` test fails on a change; update this beside `ABI_VERSION`.
 /// cbindgen:ignore
-pub const ABI_HEADER_HASH: u64 = 0x8f42_af0c_940c_cc0b;
+pub const ABI_HEADER_HASH: u64 = 0x3188_2850_7682_25f6;
 
 #[cfg(test)]
 mod env_tests {
