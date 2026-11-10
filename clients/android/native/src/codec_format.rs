@@ -87,11 +87,16 @@ pub(crate) fn low_latency_keys(
     }
     keys.extend(vendor_keys(codec_name, aggressive));
     match profile {
-        "mtk-tv" => keys.extend([
-            ("vendor.mtk-codec2.game-mode", 1),
-            ("vendor.mtk-codec2.low-latency-mode", 1),
-            ("operating-rate", refresh_hz as i32),
-        ]),
+        "mtk-tv" => {
+            keys.extend([
+                ("vendor.mtk-codec2.game-mode", 1),
+                ("vendor.mtk-codec2.low-latency-mode", 1),
+            ]);
+            // A mode with no stated rate names none here either: 0 is no rate to run at.
+            if refresh_hz > 0 {
+                keys.push(("operating-rate", refresh_hz as i32));
+            }
+        }
         "mtk-boost" => keys.push(("vendor.mtk.vdec.cpu.boost.mode.value", 1)),
         "qti-fence" if qti_fence_eligible(codec_name, sdk) => keys.extend([
             // Decode-order output is the fence's prerequisite. The sw-fence key is the 8 Gen 2
@@ -737,7 +742,11 @@ mod tests {
         assert_eq!(rate(120), Some(("operating-rate", 120)));
         assert_eq!(rate(24), Some(("operating-rate", 24)));
         // A mode without a rate writes 0, though `frame-rate` is left out for it.
-        assert_eq!(rate(0), Some(("operating-rate", 0)));
+        assert_eq!(
+            rate(0),
+            Some(("vendor.mtk-codec2.low-latency-mode", 1)),
+            "no rate key for a mode that states none"
+        );
     }
 
     #[test]
