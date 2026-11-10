@@ -1077,7 +1077,7 @@ private fun DisplaySettings(s: Settings, update: (String, Settings) -> Unit, con
         ) { v -> update("present_priority", s.copy(presentPriority = v)) }
         // Only codecs this device can actually decode are offered — a preference the client never
         // advertises would be a dead setting (see [codecOptionsFor]).
-        val av1Capable = remember { VideoDecoders.pickDecoder("video/av01") != null }
+        val av1Capable = remember { VideoDecoders.decodableCodecBits() and 4 != 0 }
         // Mirror the Automatic AV1 rule in HostConnect (hardware AV1 AND no partial-frame
         // support) so the picker says what "Automatic" actually does on THIS device.
         val autoPrefersAv1 = remember {
