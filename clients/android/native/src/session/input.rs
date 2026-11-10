@@ -667,6 +667,9 @@ pub extern "system" fn Java_io_unom_punktfunk_kit_NativeBridge_nativeSendPadHidR
             _ => return Ok(()),
         };
         let n = hid_report_len(len, cap);
+        if n == 0 {
+            return Ok(()); // no report in the buffer: nothing to forward
+        }
         let mut data = [0u8; HID_REPORT_MAX];
         // SAFETY: `ptr`/`cap` describe the direct ByteBuffer's backing store, valid for this call;
         // `n` is bounded by both the buffer capacity and the fixed wire body.
