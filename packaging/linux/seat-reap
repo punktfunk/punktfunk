@@ -4,10 +4,11 @@
 # session-N.scope, where stopping the unit can't reach them.
 #
 # The session file is written by the seat user, so it is data, not a command: it must be a bare
-# session id, and that session must belong to the seat user being stopped.
+# session id, and that session must belong to the seat user being stopped. It is opened without
+# following a link or waiting on a FIFO, which would hang the stop and skip the unmounts after it.
 user=$1
 file=/run/punktfunk-seat-$user/session
-id=$(head -c 32 "$file" 2>/dev/null | tr -d '\n')
+id=$(dd if="$file" bs=32 count=1 iflag=nofollow,nonblock 2>/dev/null | tr -d '\n')
 case $id in
 '' | *[!0-9a-z]*) exit 0 ;;
 esac
