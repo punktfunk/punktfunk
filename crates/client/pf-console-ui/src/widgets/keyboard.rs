@@ -111,9 +111,16 @@ fn type_into(text: &mut String, ch: char, admits: impl Fn(&str, char) -> bool) -
 }
 
 /// SDL text (a hardware keyboard, or Steam's under gamescope) into an open field, one
-/// character at a time through `admits`.
+/// character at a time through `admits`. A full-width form the field refuses (`１` in a
+/// PIN) is typed as its ASCII twin: a CJK input method writes those by default.
 pub(crate) fn type_text(text: &mut String, typed: &str, admits: impl Fn(&str, char) -> bool) {
     for ch in typed.chars() {
+        let ch = match ch {
+            '\u{FF01}'..='\u{FF5E}' if !admits(text, ch) => {
+                char::from_u32(ch as u32 - 0xFEE0).unwrap_or(ch)
+            }
+            _ => ch,
+        };
         type_into(text, ch, &admits);
     }
 }
@@ -839,5 +846,16 @@ mod tests {
         assert!(permits(Charset::Hostname, '-'));
         assert!(!permits(Charset::Hostname, ' '));
         assert!(permits(Charset::Free, ' '));
+    }
+
+    #[test]
+    fn full_width_digits_reach_a_digit_field_as_ascii() {
+        let mut pin = String::new();
+        type_text(&mut pin, "１２a３", |_, c| permits(Charset::Digits, c));
+        assert_eq!(pin, "123");
+        // A field that takes the full-width form keeps it as typed.
+        let mut name = String::new();
+        type_text(&mut name, "ＰＣ１", |_, c| permits(Charset::Free, c));
+        assert_eq!(name, "ＰＣ１");
     }
 }
