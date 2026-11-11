@@ -53,7 +53,8 @@ A new Rust part needs a feature of its name in `Cargo.toml`.
 | `vectors.json` | What a reader of the format must produce; the tests replay it |
 
 A language ships when `locales.json` lists it. Until then its files are drafts: `check`
-checks them, the build ignores them.
+checks them, the build ignores them. `locales` in `web/project.inlang/settings.json` is the
+same list, the source first; `check` fails when the two differ.
 
 ## Commands
 

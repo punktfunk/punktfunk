@@ -54,7 +54,7 @@ public struct HostFormDraft: Equatable, Sendable {
     public var resolvedPort: UInt16? {
         let split = Self.split(address)
         if let fromAddress = split.port { return fromAddress }
-        let typed = port.trimmingCharacters(in: .whitespacesAndNewlines)
+        let typed = port.trimmingCharacters(in: .whitespacesAndNewlines).withASCIIDigits
         if typed.isEmpty { return Self.defaultPort }
         guard let value = UInt16(typed), value > 0 else { return nil }
         return value
@@ -108,17 +108,17 @@ public struct HostFormDraft: Equatable, Sendable {
         return macs.isEmpty ? nil : macs
     }
 
-    /// Split a trailing `:port` off an address. Bare IPv6 (more than one colon, unbracketed) is
-    /// returned whole.
+    /// Split a trailing `:port` off an address, after mapping what a CJK keyboard types (full-width
+    /// forms, `。`) to ASCII. Bare IPv6 (more than one colon, unbracketed) is returned whole.
     static func split(_ raw: String) -> (host: String, port: UInt16?) {
-        let text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        let text = raw.withASCIIAddress.trimmingCharacters(in: .whitespacesAndNewlines)
         guard let colon = text.lastIndex(of: ":") else { return (text, nil) }
         let head = String(text[text.startIndex..<colon])
         let tail = String(text[text.index(after: colon)...])
         // `[fd7a::1]:9777` splits; `fd7a::1` does not.
         let bracketed = head.hasPrefix("[") && head.hasSuffix("]")
         let looksIPv6 = head.contains(":") && !bracketed
-        guard !looksIPv6, !head.isEmpty, let value = UInt16(tail), value > 0 else {
+        guard !looksIPv6, !head.isEmpty, let value = UInt16(tail.withASCIIDigits), value > 0 else {
             return (text, nil)
         }
         return (head, value)

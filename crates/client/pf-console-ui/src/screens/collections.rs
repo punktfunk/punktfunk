@@ -275,16 +275,15 @@ fn draw_monogram(
     let mono = initials(label);
     // Sized off the card, not `k`: deck cards are smaller than a shelf poster.
     let size = f64::from(front.height()) * 0.30;
-    let font = fonts.font(W::Bold, size);
-    let tw = font.measure_str(&mono, None).0;
-    canvas.draw_str(
+    let tw = fonts.measure(&mono, W::Bold, size);
+    fonts.draw(
+        canvas,
         &mono,
-        Point::new(
-            front.center_x() - tw / 2.0,
-            front.center_y() + (size * 0.36) as f32,
-        ),
-        &font,
-        &fill(ui.fg(0.85)),
+        f64::from(front.center_x() - tw / 2.0),
+        f64::from(front.center_y()) + size * 0.36,
+        W::Bold,
+        size,
+        ui.fg(0.85),
     );
 }
 

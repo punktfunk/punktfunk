@@ -13,6 +13,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { useLocale } from "@/lib/i18n";
 import { isBoolean, useLocalPref } from "@/lib/prefs";
 import { cn } from "@/lib/utils";
 import { m } from "@/paraglide/messages";
@@ -51,6 +52,7 @@ export const BrowseTab: FC<{
 	onInstall: (entry: CatalogEntry) => void;
 	onInstallSpec: () => void;
 }> = ({ onInstall, onInstallSpec }) => {
+	const locale = useLocale();
 	const catalog = useGetPluginCatalog();
 	const seat = useSeat();
 	const own = seat?.own ?? null;
@@ -91,8 +93,9 @@ export const BrowseTab: FC<{
 						(group === null || groupOf(e) === group) &&
 						matches(e, query),
 				),
+				locale,
 			),
-		[forHost, source, group, query],
+		[forHost, source, group, query, locale],
 	);
 
 	return (

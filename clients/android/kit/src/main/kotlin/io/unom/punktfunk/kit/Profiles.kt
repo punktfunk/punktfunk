@@ -158,7 +158,10 @@ fun pictureUrl(base: String, path: String?): String? = path?.takeIf { it.startsW
 
 /** Initials for a profile without a picture: the first letters of its first two words. */
 fun initials(name: String): String = name.trim().split(Regex("\\s+")).filter { it.isNotEmpty() }
-    .take(2).joinToString("") { it.substring(0, it.offsetByCodePoints(0, 1)).uppercase() }
+    .take(2).joinToString("") { firstLetter(it) }
+
+/** The first character of a non-empty [word], upper-cased. A character past U+FFFF stays whole. */
+fun firstLetter(word: String): String = word.substring(0, word.offsetByCodePoints(0, 1)).uppercase()
 
 /** The profile [wanted] names in [listed]: its id, else its name in any case. */
 fun findProfile(listed: List<ListedProfile>, wanted: String): ListedProfile? =

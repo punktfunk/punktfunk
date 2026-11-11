@@ -2,7 +2,7 @@ messages/one/en.json: Bad_Key: not a key; write <area>_<thing> in lowercase snak
 messages/one/en.json: one_brace: a { is never closed; write \{ for a literal brace
 messages/two/notes.json: missing; write {} for a part without notes
 glossary.json: needs terms, a list, and never_translate, a list of strings
-locales.json: ja ships without a plural rule in src/plural.rs
+locales.json: ar ships without a plural rule in src/plural.rs
 messages/two/en.json: one_args: also in messages/one/en.json
 rules.json: debt: one_gone: no part has this key
 messages/one/de.json: one_ghost: not in messages/one/en.json
@@ -18,18 +18,18 @@ messages/one/en.json: one_speed_hint: "Mbps" is retired; write "Mbit/s"
 messages/one/de.json: one_pads: de plurals need one, other; this has one, few, other
 messages/web/de.json: web_joined: placeholders are {count} {nom}, the source has {count} {name}
 messages/web/en.json: web_joined: 47 characters, over the budget of 30
+missing: messages/one/ar.json: one_label: not translated
+missing: messages/one/ar.json: one_wait_hint: not translated
+missing: messages/one/ar.json: one_done_title: not translated
+missing: messages/one/ar.json: one_speed_hint: not translated
+missing: messages/one/ar.json: one_args: not translated
+missing: messages/one/ar.json: one_pads: not translated
+missing: messages/one/ar.json: one_debt_hint: not translated
 missing: messages/one/de.json: one_label: not translated
 missing: messages/one/de.json: one_wait_hint: not translated
 missing: messages/one/de.json: one_done_title: not translated
 missing: messages/one/de.json: one_speed_hint: not translated
 missing: messages/one/de.json: one_debt_hint: not translated
-missing: messages/one/ja.json: one_label: not translated
-missing: messages/one/ja.json: one_wait_hint: not translated
-missing: messages/one/ja.json: one_done_title: not translated
-missing: messages/one/ja.json: one_speed_hint: not translated
-missing: messages/one/ja.json: one_args: not translated
-missing: messages/one/ja.json: one_pads: not translated
-missing: messages/one/ja.json: one_debt_hint: not translated
+missing: messages/two/ar.json: one_args: not translated
 missing: messages/two/de.json: one_args: not translated
-missing: messages/two/ja.json: one_args: not translated
-missing: messages/web/ja.json: web_joined: not translated
+missing: messages/web/ar.json: web_joined: not translated

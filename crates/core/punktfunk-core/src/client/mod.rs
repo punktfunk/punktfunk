@@ -152,9 +152,10 @@ pub struct MicUplinkStats {
     pub dropped_stale: u64,
 }
 
-/// Sparse requests (mode, keyframe, ~1.3 loss reports/s). 32 is hours of headroom;
-/// full means the control task is wedged — callers treat that as a closed session.
-const CTRL_QUEUE: usize = 32;
+/// Requests (mode, keyframe, ~1.3 loss reports/s) plus key and text edges. 1024 holds one
+/// Android IME edit: up to 256 Backspace and 256 Delete taps, two edges each. Full means the
+/// control task is wedged — callers treat that as a closed session.
+const CTRL_QUEUE: usize = 1024;
 
 /// Client-wall unix seconds from a relative remaining; `0` stays `0` (permanent).
 /// Anchor on the client clock: the wire is relative, so host/client skew must not
@@ -267,7 +268,7 @@ pub struct NativeClient {
     pad_touch_tx: tokio::sync::mpsc::UnboundedSender<pad_touch::Contact>,
     /// Per wire pad: what of a Steam Controller 2's raw reports reaches the host.
     sc2: Mutex<[sc2::Filter; sc2::PADS]>,
-    /// Bounded ([`CTRL_QUEUE`]). Sparse; full means the control task is wedged — treat as closed.
+    /// Bounded ([`CTRL_QUEUE`]). Full means the control task is wedged — treat as closed.
     ctrl_tx: tokio::sync::mpsc::Sender<CtrlRequest>,
     /// Unbounded like `input_tx`; sparse, at most one paste's bytes each.
     clip_cmd_tx: tokio::sync::mpsc::UnboundedSender<ClipCommand>,

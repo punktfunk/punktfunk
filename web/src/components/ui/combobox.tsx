@@ -23,6 +23,7 @@ import {
 	useState,
 } from "react";
 import { Input } from "@/components/ui/input";
+import { isImeEvent } from "@/lib/ime";
 import { cn } from "@/lib/utils";
 
 export interface ComboboxOption {
@@ -118,6 +119,8 @@ export function Combobox({
 					}}
 					onFocus={() => setOpen(true)}
 					onKeyDown={(e) => {
+						// Candidate arrows, Enter and Escape belong to the IME while it composes.
+						if (isImeEvent(e)) return;
 						if (e.key === "ArrowDown" || e.key === "ArrowUp") {
 							e.preventDefault();
 							setOpen(true);

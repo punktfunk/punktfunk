@@ -9,15 +9,16 @@ export const groupOf = (entry: CatalogEntry): Group =>
 
 /**
  * The non-empty groups in page order. Inside one, a launcher found on this host comes first, then
- * by title. `detected` is tri-state and only a positive probe lifts an entry.
+ * by title in `locale`'s order. `detected` is tri-state; only a positive probe lifts an entry.
  */
 export function groupCatalog(
 	entries: CatalogEntry[],
+	locale: string,
 ): [Group, CatalogEntry[]][] {
 	const sorted = [...entries].sort(
 		(a, b) =>
 			Number(b.detected === true) - Number(a.detected === true) ||
-			a.title.localeCompare(b.title),
+			a.title.localeCompare(b.title, locale),
 	);
 	return GROUPS.map(
 		(g) =>

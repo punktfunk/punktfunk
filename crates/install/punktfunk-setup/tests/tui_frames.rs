@@ -207,20 +207,7 @@ fn the_mark_mutes_the_half_that_is_not_being_installed() {
 }
 
 fn columns(line: &str) -> usize {
-    let mut cols = 0;
-    let mut chars = line.chars();
-    while let Some(c) = chars.next() {
-        if c == '\x1b' {
-            for c in chars.by_ref() {
-                if c.is_ascii_alphabetic() {
-                    break;
-                }
-            }
-        } else {
-            cols += 1;
-        }
-    }
-    cols
+    console::measure_text_width(line)
 }
 
 /// A wrapped line makes `clear_last_lines` rewind fewer rows than the frame

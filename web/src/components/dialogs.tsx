@@ -17,6 +17,7 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { isImeEvent } from "@/lib/ime";
 import { m } from "@/paraglide/messages";
 
 /**
@@ -157,7 +158,7 @@ export const DialogsProvider: FC<{ children: ReactNode }> = ({ children }) => {
 									onChange={(e) => setDraft(e.target.value)}
 									onKeyDown={(e) => {
 										// Enter submits — the reflex `prompt()` trained everyone into.
-										if (e.key === "Enter") {
+										if (e.key === "Enter" && !isImeEvent(e)) {
 											e.preventDefault();
 											close(draft);
 										}

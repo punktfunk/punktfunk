@@ -13,11 +13,13 @@
 //!
 //! Pin `lines()`. Evidence: `design/installer-v2.md`.
 
+use console::measure_text_width;
 use pf_l10n::tools as t;
 
 use crate::choices::{Action, Choices};
 use crate::facts::{Channel, Facts, Family};
 use crate::plan::{self, Plan};
+use crate::ui::columns;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Field {
@@ -246,7 +248,7 @@ impl Screen {
     pub fn label_width() -> usize {
         let widest = Field::ALL
             .iter()
-            .map(|f| Screen::label(*f).chars().count())
+            .map(|f| measure_text_width(Screen::label(*f)))
             .max()
             .unwrap_or(0);
         widest + 2
@@ -256,9 +258,9 @@ impl Screen {
     /// reasons line up under each other.
     fn with_reason(on: bool, reason: &str) -> String {
         let (yes, no) = (t::setup_yes(), t::setup_no());
-        let width = yes.chars().count().max(no.chars().count());
+        let width = measure_text_width(yes).max(measure_text_width(no));
         let word = if on { yes } else { no };
-        format!("{word:<width$} — {reason}")
+        format!("{} — {reason}", columns::pad(word, width))
     }
 
     pub fn value(&self, field: Field) -> String {
@@ -320,8 +322,8 @@ impl Screen {
         for item in &self.items {
             if let Item::Row(field) = item {
                 out.push(format!(
-                    "  {:<width$}{}",
-                    Screen::label(*field),
+                    "  {}{}",
+                    columns::pad(Screen::label(*field), width),
                     self.value(*field)
                 ));
             }

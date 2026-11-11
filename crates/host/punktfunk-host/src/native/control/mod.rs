@@ -1001,10 +1001,11 @@ fn clip_offer_permitted(grants: u32, clip_enabled: bool) -> bool {
     grants & punktfunk_core::quic::GRANT_CLIPBOARD != 0 && clip_enabled
 }
 
-/// A key edge off the control stream joins the datagram plane's queue: the same grant
-/// gate and count, and a press drops when the input thread is behind. A release waits up
-/// to [`RELEASE_WAIT`] for room: a lost one holds the key down on the host, and this lane
-/// exists so none is lost. The lane keeps its order; the queue keeps it too.
+/// An edge off the control stream joins the datagram plane's queue: the same grant gate
+/// and count, and a press drops when the input thread is behind. A release and a typed
+/// character wait up to [`MUST_ARRIVE_WAIT`] for room: a lost release holds the key down,
+/// a lost character is missing text, and this lane exists so neither is lost. The lane
+/// keeps its order; the queue keeps it too.
 async fn offer_edge(
     ev: InputEvent,
     grants: &AtomicU32,
@@ -1023,16 +1024,16 @@ async fn offer_edge(
     if matches!(ev.kind, InputKind::KeyDown | InputKind::KeyUp) {
         ev.flags &= !crate::inject::KEY_FLAG_SEMANTIC_VK;
     }
-    let release = matches!(
+    let must_arrive = matches!(
         ev.kind,
-        InputKind::KeyUp | InputKind::MouseButtonUp | InputKind::TouchUp
+        InputKind::KeyUp | InputKind::MouseButtonUp | InputKind::TouchUp | InputKind::TextInput
     );
-    let deadline = tokio::time::Instant::now() + RELEASE_WAIT;
+    let deadline = tokio::time::Instant::now() + MUST_ARRIVE_WAIT;
     let mut msg = super::input::ClientInput::Event(ev);
     loop {
         match input_tx.try_send(msg) {
             Err(std::sync::mpsc::TrySendError::Full(back))
-                if release && tokio::time::Instant::now() < deadline =>
+                if must_arrive && tokio::time::Instant::now() < deadline =>
             {
                 msg = back;
                 tokio::time::sleep(std::time::Duration::from_millis(1)).await;
@@ -1047,8 +1048,8 @@ async fn offer_edge(
 }
 
 /// A blocking pad create or the 200 ms "owned elsewhere" wait stalls the input thread; a
-/// release outlasts both. Longer, and the session is gone anyway.
-const RELEASE_WAIT: std::time::Duration = std::time::Duration::from_secs(1);
+/// wait for room outlasts both. Longer, and the session is gone anyway.
+const MUST_ARRIVE_WAIT: std::time::Duration = std::time::Duration::from_secs(1);
 
 /// Fire the stream loop's capture poke, so a recovery ask goes out this tick, not the next.
 fn poke_capture(poke: &super::wiring::ArrivalPoke) {
@@ -1739,5 +1740,57 @@ mod tests {
         offer_edge(up, &grants, &tx, &counters, &mut denied).await;
         assert_eq!(drain.join().unwrap().ok(), Some(InputKind::KeyUp));
         assert_eq!(counters.input_dropped.load(Ordering::Relaxed), 1);
+    }
+
+    /// A typed character is a lost syllable if it drops, so a full queue holds it like a
+    /// release until the input thread drains.
+    #[tokio::test]
+    async fn typed_text_waits_for_room_in_a_full_queue() {
+        use punktfunk_core::quic::GRANT_ALL;
+        let (tx, rx) = std::sync::mpsc::sync_channel::<super::super::input::ClientInput>(1);
+        let counters = crate::session_status::SessionCounters::default();
+        let mut denied = crate::session_status::GrantDrops::new(crate::events::Plane::Native);
+        let grants = AtomicU32::new(GRANT_ALL);
+        let ev = |kind, code| InputEvent {
+            kind,
+            _pad: [0; 3],
+            code,
+            x: 0,
+            y: 0,
+            flags: 0,
+        };
+        let kind_of = |m: super::super::input::ClientInput| match m {
+            super::super::input::ClientInput::Event(ev) => (ev.kind, ev.code),
+            _ => panic!("an input event"),
+        };
+        offer_edge(
+            ev(InputKind::KeyDown, 0x41),
+            &grants,
+            &tx,
+            &counters,
+            &mut denied,
+        )
+        .await;
+
+        // The queue is full: the text event waits until the input thread takes the press.
+        let hangul = '한' as u32;
+        let drain = std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(50));
+            let first = kind_of(rx.recv().unwrap());
+            (first, kind_of(rx.recv().unwrap()))
+        });
+        offer_edge(
+            ev(InputKind::TextInput, hangul),
+            &grants,
+            &tx,
+            &counters,
+            &mut denied,
+        )
+        .await;
+        let (first, second) = drain.join().unwrap();
+        assert_eq!(first, (InputKind::KeyDown, 0x41));
+        assert_eq!(second, (InputKind::TextInput, hangul));
+        assert_eq!(counters.input_events.load(Ordering::Relaxed), 2);
+        assert_eq!(counters.input_dropped.load(Ordering::Relaxed), 0);
     }
 }

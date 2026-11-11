@@ -46,6 +46,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import io.unom.punktfunk.kit.R
+import io.unom.punktfunk.kit.firstLetter
 import io.unom.punktfunk.models.HostStatus
 
 /** Left-aligned section header above each block of the connect screen. */
@@ -337,7 +338,7 @@ private val PRESENCE_ONLINE = Color(0xFF4ADE80)
  */
 @Composable
 fun HostAvatar(name: String, online: Boolean = false, os: String = "") {
-    val letter = name.trim().firstOrNull()?.uppercaseChar()?.toString() ?: "?"
+    val letter = name.trim().takeIf { it.isNotEmpty() }?.let(::firstLetter) ?: "?"
     val cardColor = CardDefaults.elevatedCardColors().containerColor
     val osIcon = resolveOsIcon(os)
     val presence = stringResource(if (online) R.string.hostcard_status_online else R.string.hostcard_status_offline)

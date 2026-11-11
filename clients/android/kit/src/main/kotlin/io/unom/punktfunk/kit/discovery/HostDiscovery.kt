@@ -10,6 +10,7 @@ import android.os.Handler
 import android.os.Looper
 import android.util.Log
 import io.unom.punktfunk.kit.NativeBridge
+import io.unom.punktfunk.kit.nameOrder
 
 private const val TAG = "PunktfunkMdns"
 
@@ -353,7 +354,7 @@ class HostDiscovery private constructor(context: Context) {
             .mapNotNull { parseHostRecord(it) }
             .associateBy { it.key } // dedup by stable key (id, or addr:port)
             .values
-            .sortedBy { it.name.lowercase() }
+            .sortedWith(nameOrder { it.name })
     }
 
     private fun acquireMulticastLock() {

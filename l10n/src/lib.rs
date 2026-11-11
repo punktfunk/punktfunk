@@ -80,7 +80,8 @@ fn current() -> usize {
 
 /// Picks the best shipped language for the OS's preferred list, most preferred first, and
 /// returns it. Each tag is tried exactly, through `locales.json`'s fallback, then one subtag
-/// shorter (`de-AT`, then `de`); English when none matches.
+/// shorter (`de-AT`, then `de`); English when none matches. A `zh` tag with no script is read
+/// with the one its region writes, `Hant` for TW, HK and MO and `Hans` otherwise.
 pub fn set_languages<S: AsRef<str>>(tags: &[S]) -> &'static str {
     let i = pick(tags, LANGS, FALLBACK);
     LANGUAGE.store(i, Ordering::Relaxed);
@@ -106,17 +107,48 @@ pub fn with_language<R>(tag: &str, f: impl FnOnce() -> R) -> R {
     f()
 }
 
+/// A `zh` tag with no script, written with the one its region uses: `zh-TW` is `zh-Hant-TW`,
+/// `zh-CN` and bare `zh` are `zh-Hans-CN` and `zh-Hans`. Any other tag is `None`.
+fn chinese_script(tag: &str) -> Option<String> {
+    let (primary, rest) = tag.split_once('-').unwrap_or((tag, ""));
+    let next = rest.split('-').next().unwrap_or("");
+    let has_script = next.len() == 4 && next.chars().all(|c| c.is_ascii_alphabetic());
+    if !primary.eq_ignore_ascii_case("zh") || has_script {
+        return None;
+    }
+    let traditional = ["TW", "HK", "MO"]
+        .iter()
+        .any(|r| r.eq_ignore_ascii_case(next));
+    let script = if traditional { "Hant" } else { "Hans" };
+    Some(if rest.is_empty() {
+        format!("{primary}-{script}")
+    } else {
+        format!("{primary}-{script}-{rest}")
+    })
+}
+
 /// The index in `langs` of the best match for `tags`; 0, the source, when none matches.
 fn pick<S: AsRef<str>>(tags: &[S], langs: &[&str], fallback: &[(&str, &str)]) -> usize {
     let find = |t: &str| langs.iter().position(|l| l.eq_ignore_ascii_case(t));
+    let exact = |t: &str| {
+        let via = fallback
+            .iter()
+            .find(|(from, _)| from.eq_ignore_ascii_case(t))
+            .and_then(|&(_, to)| find(to));
+        find(t).or(via)
+    };
     for tag in tags {
-        let mut t = tag.as_ref().trim().replace('_', "-");
+        // A POSIX locale's `.UTF-8` and `@euro` are not part of the tag.
+        let tag = tag.as_ref().split(['.', '@']).next().unwrap_or("");
+        let mut t = tag.trim().replace('_', "-");
+        if let Some(scripted) = chinese_script(&t) {
+            if let Some(i) = exact(&t) {
+                return i;
+            }
+            t = scripted;
+        }
         loop {
-            let via = fallback
-                .iter()
-                .find(|(from, _)| from.eq_ignore_ascii_case(&t))
-                .and_then(|&(_, to)| find(to));
-            if let Some(i) = find(&t).or(via) {
+            if let Some(i) = exact(&t) {
                 return i;
             }
             match t.rfind('-') {

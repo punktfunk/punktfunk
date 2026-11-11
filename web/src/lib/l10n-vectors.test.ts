@@ -1,6 +1,6 @@
 // l10n/vectors.json through Paraglide, the console's reader of the shared message files. pf-l10n's
 // Rust tests replay the same file, so a case that passes there and fails here is the two readers
-// disagreeing. The `pick` cases are the OS language picker, which the console does not use.
+// disagreeing. The `pick` cases are the language picker; locale-match.test.ts replays them.
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import {
 	mkdirSync,

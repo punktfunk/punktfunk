@@ -19,6 +19,7 @@ import {
 	overwriteGetLocale,
 	setLocale,
 } from "@/paraglide/runtime";
+import { matchLocale } from "./locale-match";
 
 /** The available locales as a union (`'en' | 'de'`), derived from Paraglide's `locales`. */
 export type Locale = (typeof locales)[number];
@@ -50,8 +51,10 @@ export function adoptStoredLocale() {
 	if (stored && isLocale(stored)) {
 		target = stored;
 	} else {
-		const nav = navigator.language?.slice(0, 2);
-		if (nav && isLocale(nav)) target = nav;
+		const asked = navigator.languages?.length
+			? navigator.languages
+			: [navigator.language];
+		target = matchLocale(asked, locales) ?? target;
 	}
 	if (target !== rendered) changeLocale(target);
 }

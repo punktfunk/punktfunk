@@ -40,6 +40,7 @@ classify() {
                 clients/shared/*|clients/android/native/*|clients/apple/native/*|include/*|\
                 api/openapi.json|l10n/*|\
                 data/platforms.json|ci/rust-ci.Dockerfile|web/src/lib/command-execution.ts|\
+                web/project.inlang/settings.json|\
                 scripts/ci/ensure-sccache.sh|scripts/ci/install-retrying-curl.sh|\
                 scripts/ci/check-installer-behavior.sh|scripts/ci/check-install-defaults.sh|\
                 scripts/ci/check-unsafe-hygiene.sh|scripts/ci/check-android-jni-names.sh|\
@@ -180,6 +181,9 @@ self_test() {
         'rust=true rust_arm64=true web=true docs_site=false sdk_plugin_kit=true decky_typecheck=false'
     # The host's unprivileged launch kinds and the console's copy: each side's test reads the other.
     check launch-kinds-console 'web/src/lib/command-execution.ts' \
+        'rust=true rust_arm64=false web=true docs_site=false sdk_plugin_kit=false decky_typecheck=false'
+    # `pf-l10n check` compares the console's language list with locales.json.
+    check web-locales 'web/project.inlang/settings.json' \
         'rust=true rust_arm64=false web=true docs_site=false sdk_plugin_kit=false decky_typecheck=false'
     check launch-kinds-host 'crates/host/punktfunk-host/src/library/custom.rs' \
         'rust=true rust_arm64=false web=true docs_site=false sdk_plugin_kit=false decky_typecheck=false'

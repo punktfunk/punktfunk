@@ -96,7 +96,9 @@ struct AddHostSheet: View {
                     title: String(localized: L10n.hostsFieldPort), text: port,
                     keyboardType: .numberPad
                 ) {
-                    if let value = Int($0), (1...65535).contains(value) { port = String(value) }
+                    if let value = Int($0.withASCIIDigits), (1...65535).contains(value) {
+                        port = String(value)
+                    }
                     editingField = nil
                 }
             case .mac:

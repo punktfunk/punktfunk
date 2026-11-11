@@ -2,6 +2,7 @@ package io.unom.punktfunk
 
 import android.content.Context
 import android.content.SharedPreferences
+import io.unom.punktfunk.kit.nameOrder
 import io.unom.punktfunk.kit.security.KnownHost
 import java.security.SecureRandom
 import org.json.JSONObject
@@ -176,7 +177,7 @@ class PresetStore(context: Context) {
     /** Every preset, name-sorted — the order the scope switcher and the menus show. */
     fun all(): List<StreamPreset> = prefs.all.values
         .mapNotNull { (it as? String)?.let(::parse) }
-        .sortedBy { it.name.lowercase() }
+        .sortedWith(nameOrder { it.name })
 
     /** `as? String`: the file also holds a Boolean flag, and `id` can come from a link. */
     fun byId(id: String): StreamPreset? = (prefs.all[id] as? String)?.let(::parse)

@@ -138,9 +138,40 @@ fn budget(rules: &Rules, key: &str, source: bool) -> usize {
     }
 }
 
+/// Whether `c` is East Asian Wide or Fullwidth: it draws about two Latin letters wide.
+// A hand table of the common Wide blocks. Emoji, Yi and the rare blocks count 1; use
+// `unicode-width` when pf-l10n may take a dependency.
+fn is_wide(c: char) -> bool {
+    matches!(u32::from(c),
+        0x1100..=0x115F // Hangul Jamo
+        | 0x2E80..=0x303E // CJK radicals, Kangxi, CJK punctuation
+        | 0x3041..=0x33FF // kana, Bopomofo, Hangul compatibility Jamo, enclosed CJK
+        | 0x3400..=0x4DBF // CJK ideographs, extension A
+        | 0x4E00..=0x9FFF // CJK ideographs
+        | 0xA960..=0xA97F // Hangul Jamo extended A
+        | 0xAC00..=0xD7A3 // Hangul syllables
+        | 0xF900..=0xFAFF // CJK compatibility ideographs
+        | 0xFE30..=0xFE6F // CJK compatibility and small forms
+        | 0xFF01..=0xFF60 // fullwidth forms
+        | 0xFFE0..=0xFFE6 // fullwidth signs
+        | 0x20000..=0x3FFFD // CJK ideographs, extension B onward
+    )
+}
+
+/// The length a budget counts: a character is 1, a wide one 2. Latin text counts as
+/// `chars().count()`.
+fn width(text: &str) -> usize {
+    text.chars().map(|c| if is_wide(c) { 2 } else { 1 }).sum()
+}
+
 fn over_budget(rules: &Rules, key: &str, text: &str, source: bool) -> Option<String> {
-    let (len, max) = (text.chars().count(), budget(rules, key, source));
-    (len > max).then(|| format!("{len} characters, over the budget of {max}"))
+    let (len, max) = (width(text), budget(rules, key, source));
+    let wide = if len == text.chars().count() {
+        ""
+    } else {
+        " (a CJK character counts 2)"
+    };
+    (len > max).then(|| format!("{len} characters, over the budget of {max}{wide}"))
 }
 
 /// `needle` in `hay` as a whole word or phrase, ignoring case.
@@ -293,6 +324,49 @@ fn shipped_rules(shipped: &[String]) -> Vec<String> {
         .filter(|l| plural::categories(l).is_none())
         .map(|l| format!("locales.json: {l} ships without a plural rule in src/plural.rs"))
         .collect()
+}
+
+const WEB_SETTINGS: &str = "web/project.inlang/settings.json";
+
+/// The web console compiles the languages its inlang project lists, so that list is
+/// `locales.json`'s source and shipped languages, no more and no fewer.
+fn web_locales(shipped: &[String], settings: &str) -> Vec<String> {
+    let listed = match json::parse(settings) {
+        Ok(v) => v.get("locales").and_then(Json::as_strs),
+        Err(e) => return vec![format!("{WEB_SETTINGS}: {e}")],
+    };
+    let Some(listed) = listed else {
+        return vec![format!("{WEB_SETTINGS}: needs locales, a list of tags")];
+    };
+    let only = |a: &[String], b: &[String]| a.iter().filter(|l| !b.contains(l)).cloned().collect();
+    let (lacks, extra): (Vec<String>, Vec<String>) =
+        (only(shipped, &listed), only(&listed, shipped));
+    let mut out = Vec::new();
+    if !lacks.is_empty() {
+        out.push(format!(
+            "{WEB_SETTINGS}: locales lacks {}, which locales.json ships",
+            lacks.join(", ")
+        ));
+    }
+    if !extra.is_empty() {
+        out.push(format!(
+            "{WEB_SETTINGS}: locales lists {}, which locales.json does not ship",
+            extra.join(", ")
+        ));
+    }
+    out
+}
+
+/// [`web_locales`] for the web console beside `root`. A tree without a `web/` directory, such as
+/// a test fixture, has nothing to check.
+fn web_settings(root: &Path, shipped: &[String]) -> Vec<String> {
+    let Some(repo) = root.parent().filter(|r| r.join("web").is_dir()) else {
+        return Vec::new();
+    };
+    match std::fs::read_to_string(repo.join(WEB_SETTINGS)) {
+        Ok(text) => web_locales(shipped, &text),
+        Err(e) => vec![format!("{WEB_SETTINGS}: {e}")],
+    }
 }
 
 fn stale_debt(rules: &Rules, parts: &[Part]) -> Vec<String> {
@@ -478,6 +552,7 @@ pub fn run(root: &Path) -> Report {
     let (cat, mut problems) = catalog::load(root, true);
     problems.extend(glossary(root));
     problems.extend(shipped_rules(&cat.shipped));
+    problems.extend(web_settings(root, &cat.shipped));
     problems.extend(duplicates(&cat.parts));
     let rules = match Rules::from_json(&cat.rules) {
         Ok(rules) => Some(rules),
@@ -592,6 +667,41 @@ mod tests {
         assert_eq!(
             over_budget(&r, "player_bitrate", &"é".repeat(201), true).unwrap(),
             "201 characters, over the budget of 200"
+        );
+    }
+
+    #[test]
+    fn latin_counts_as_characters() {
+        for text in [
+            "Statistics size",
+            "Größe der Statistik… — wählen",
+            "Tamaño: ¿está bien? ñ",
+            "Размер статистики",
+            "Ελληνικά ✓ ½ ‹x›",
+            "e\u{301} combining",
+            "ｱｲｳ halfwidth",
+        ] {
+            assert_eq!(width(text), text.chars().count(), "{text}");
+        }
+    }
+
+    #[test]
+    fn wide_characters_count_twice() {
+        for (text, want) in [
+            ("日本語", 6),
+            ("ひらがなカタカナ", 16),
+            ("한국어", 6),
+            ("設定，ＯＫ。", 12),
+            ("\u{3400}\u{20000}", 4),
+            ("Wi-Fi 設定", 10),
+        ] {
+            assert_eq!(width(text), want, "{text}");
+        }
+        let r = rules();
+        assert!(over_budget(&r, "player_bitrate", &"日".repeat(100), true).is_none());
+        assert_eq!(
+            over_budget(&r, "player_bitrate", &"日".repeat(101), true).unwrap(),
+            "202 characters, over the budget of 200 (a CJK character counts 2)"
         );
     }
 
@@ -712,8 +822,29 @@ mod tests {
         )
         .is_none());
         assert!(categories("ru", &pl(r#""n=one": "a", "n=other": "d""#)).is_some());
-        assert!(categories("ja", &pl(r#""n=other": "d""#)).is_none());
+        assert!(categories("ar", &pl(r#""n=one": "a", "n=other": "d""#)).is_none());
         assert!(categories("en", &plain("x")).is_none());
+    }
+
+    #[test]
+    fn other_only_plural() {
+        let pl = |arms: &str| {
+            let src = format!(
+                r#"[{{"declarations": ["local n = count: plural"], "selectors": ["n"], "match": {{{arms}}}}}]"#
+            );
+            parse_message(&json::parse(&src).unwrap(), false).unwrap()
+        };
+        for lang in ["ja", "ko", "zh-Hans", "zh-Hant"] {
+            assert!(categories(lang, &pl(r#""n=*": "d""#)).is_none(), "{lang}");
+            assert!(
+                categories(lang, &pl(r#""n=other": "d""#)).is_none(),
+                "{lang}"
+            );
+            assert_eq!(
+                categories(lang, &pl(r#""n=one": "a", "n=other": "d""#)).unwrap(),
+                format!("{lang} plurals need other; this has one, other")
+            );
+        }
     }
 
     #[test]
@@ -765,11 +896,35 @@ mod tests {
 
     #[test]
     fn shipped_languages_have_rules() {
-        assert!(shipped_rules(&["en".into(), "pl".into()]).is_empty());
+        let ok = ["en", "pl", "ja", "zh-Hant"].map(String::from);
+        assert!(shipped_rules(&ok).is_empty());
         assert_eq!(
-            shipped_rules(&["ja".into()]),
-            ["locales.json: ja ships without a plural rule in src/plural.rs"]
+            shipped_rules(&["ar".into()]),
+            ["locales.json: ar ships without a plural rule in src/plural.rs"]
         );
+    }
+
+    #[test]
+    fn web_lists_the_shipped_languages() {
+        let shipped = ["en", "de", "fr"].map(String::from);
+        let settings = |locales: &str| format!(r#"{{"baseLocale": "en", "locales": {locales}}}"#);
+        assert!(web_locales(&shipped, &settings(r#"["fr", "en", "de"]"#)).is_empty());
+        assert_eq!(
+            web_locales(&shipped, &settings(r#"["en", "de", "es"]"#)),
+            [
+                "web/project.inlang/settings.json: locales lacks fr, which locales.json ships",
+                "web/project.inlang/settings.json: locales lists es, which locales.json does not ship"
+            ]
+        );
+        assert_eq!(web_locales(&shipped, "{}").len(), 1);
+        assert_eq!(web_locales(&shipped, "{").len(), 1);
+    }
+
+    #[test]
+    fn web_settings_follow_the_repository() {
+        let l10n = Path::new(env!("CARGO_MANIFEST_DIR"));
+        assert!(web_settings(&l10n.join("tests/fixture"), &["xx".into()]).is_empty());
+        assert_eq!(web_settings(l10n, &["xx".into()]).len(), 2);
     }
 
     #[test]

@@ -114,6 +114,10 @@ object SkiaConsole {
     var healthy by mutableStateOf(true)
         private set
 
+    /** The field the console opened for the system keyboard; [SkiaConsoleShell] shows it. */
+    internal var systemEntry by mutableStateOf<SystemEntry?>(null)
+        private set
+
     internal var appContext: Context? = null
         private set
 
@@ -214,6 +218,12 @@ object SkiaConsole {
             // The same MediaCodec answer the Hello advertises by: without a real AV1
             // decoder the codec row marks AV1 unsupported instead of offering a dead pick.
             .put("av1_ok", VideoDecoders.decodableCodecBits() and 4 != 0)
+            // A player whose language the tray cannot type gets the system IME for every field
+            // but a password: composition, candidates and dictation live there.
+            .put(
+                "system_keyboard",
+                needsSystemKeyboard(imeLanguageTag(app), io.unom.punktfunk.languageTags(app).firstOrNull().orEmpty()),
+            )
             // Answers `FetchProfiles`, so a connect checks the box's profiles first.
             .put("profiles", true)
             // Takes each launch's password out of the console (`nativeConsoleTakeUnlock`) and
@@ -684,13 +694,32 @@ object SkiaConsole {
         if (handle != 0L) NativeBridge.nativeConsoleNotice(handle, text)
     }
 
+    /** The system keyboard finished: [typed] replaces the field's text, and the field closes. */
+    fun finishEntry(typed: String) {
+        val entry = systemEntry ?: return
+        systemEntry = null
+        if (handle == 0L) return
+        val (erase, text) = entry.replacement(typed)
+        repeat(erase) { NativeBridge.nativeConsoleKey(handle, 7, false, false) }
+        NativeBridge.nativeConsoleText(handle, text)
+        NativeBridge.nativeConsoleKey(handle, 4, false, false)
+    }
+
+    /** The system keyboard was dismissed: the field closes as it was (Escape). */
+    fun cancelEntry() {
+        systemEntry ?: return
+        systemEntry = null
+        if (handle != 0L) NativeBridge.nativeConsoleKey(handle, 6, false, false)
+    }
+
     // ---- events from the console ---------------------------------------------------------
 
     private fun ConsoleState.onEvent(ev: JSONObject) {
         when {
             ev.has("action") -> onAction(ev.get("action"))
             ev.has("pulse") -> onPulse?.invoke(ev.optString("pulse"))
-            ev.has("editing") -> {} // the shell draws its own keyboard; nothing to raise here
+            ev.has("edit_text") -> systemEntry = SystemEntry.from(ev.getJSONObject("edit_text"))
+            ev.has("editing") -> if (!ev.optBoolean("editing")) systemEntry = null
             // The Skia surface has no accessibility node tree, so the focused row is spoken
             // instead. Already de-duplicated by the render thread: this fires only on a change.
             ev.has("announce") -> onAnnounce?.invoke(ev.optString("announce"))

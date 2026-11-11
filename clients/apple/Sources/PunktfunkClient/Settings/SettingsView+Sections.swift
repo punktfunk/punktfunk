@@ -541,7 +541,7 @@ extension SettingsView {
                     title: String(localized: L10n.playerRenderScaleEntry), text: "",
                     keyboardType: .numberPad
                 ) {
-                    if let percent = Int($0), percent > 0 {
+                    if let percent = Int($0.withASCIIDigits), percent > 0 {
                         scoped(SettingsFields.renderScale).wrappedValue =
                             RenderScale.fromPercent(percent)
                     }

@@ -81,13 +81,14 @@ export function streamSummary(
 	return parts.length ? parts.join(" · ") : null;
 }
 
-/** The shared overrides, by name. */
+/** The shared overrides, by name in `locale`'s order. */
 export const setList = (
 	doc: OverridesDoc | undefined,
+	locale: string,
 ): (GameOverrides & { id: string })[] =>
 	Object.entries(doc?.sets ?? {})
 		.map(([id, s]) => ({ ...s, id }))
-		.sort((a, b) => (a.name ?? "").localeCompare(b.name ?? ""));
+		.sort((a, b) => (a.name ?? "").localeCompare(b.name ?? "", locale));
 
 /** How many games and sources name shared override `set`. */
 export function usageOf(

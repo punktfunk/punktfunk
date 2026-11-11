@@ -65,7 +65,7 @@ struct PairSheet: View {
                     ProgressView()
                 }
                 Button(L10n.pairAction) { runCeremony() }
-                    .disabled(busy || pin.trimmingCharacters(in: .whitespaces).isEmpty)
+                    .disabled(busy || pin.asciiDigits.isEmpty)
             }
             .padding(.top, 12)
         }
@@ -80,7 +80,7 @@ struct PairSheet: View {
                     title: String(localized: L10n.pairPin), text: pin,
                     keyboardType: .numberPad
                 ) {
-                    pin = $0.trimmingCharacters(in: .whitespaces)
+                    pin = $0.asciiDigits
                     editing = nil
                 }
             case .clientName:
@@ -150,7 +150,7 @@ struct PairSheet: View {
                     #if !os(tvOS)
                     .keyboardShortcut(.defaultAction)
                     #endif
-                    .disabled(busy || pin.trimmingCharacters(in: .whitespaces).isEmpty)
+                    .disabled(busy || pin.asciiDigits.isEmpty)
             }
             #if os(iOS) || os(visionOS)
             .controlSize(.large)

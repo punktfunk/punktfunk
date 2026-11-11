@@ -16,6 +16,7 @@ import {
 	SelectTrigger,
 	SelectValue,
 } from "@/components/ui/select";
+import { isImeEvent } from "@/lib/ime";
 import { m } from "@/paraglide/messages";
 import { SETTING_COPY } from "./copy";
 
@@ -121,7 +122,9 @@ const NumberControl: FC<ControlProps> = ({ row, disabled, onSet }) => {
 				disabled={disabled}
 				onChange={setDraft}
 				onBlur={() => draft !== committed && onSet(draft)}
-				onKeyDown={(e) => e.key === "Enter" && e.currentTarget.blur()}
+				onKeyDown={(e) =>
+					e.key === "Enter" && !isImeEvent(e) && e.currentTarget.blur()
+				}
 			/>
 			{row.unit && (
 				<span className="text-sm text-muted-foreground">{row.unit}</span>
@@ -143,7 +146,9 @@ const TextControl: FC<ControlProps> = ({ row, disabled, onSet }) => {
 			disabled={disabled}
 			onChange={(e) => setDraft(e.target.value)}
 			onBlur={() => draft.trim() !== committed && onSet(draft.trim())}
-			onKeyDown={(e) => e.key === "Enter" && e.currentTarget.blur()}
+			onKeyDown={(e) =>
+				e.key === "Enter" && !isImeEvent(e) && e.currentTarget.blur()
+			}
 		/>
 	);
 };

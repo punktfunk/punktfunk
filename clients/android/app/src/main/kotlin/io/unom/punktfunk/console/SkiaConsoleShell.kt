@@ -58,8 +58,9 @@ import kotlin.math.roundToInt
  * composable owns and driven through [SkiaConsole]. `App.kt` shows it when [SkiaConsole.wanted].
  *
  * What lives here is only what needs a composition: the surface lifecycle, the safe-area insets,
- * the pad probes (raw pad → the shared menu synthesizer, over JNI), the system Back, and the two
- * intents the app hands over on the way in (a deep link, "come back to this shelf").
+ * the pad probes (raw pad → the shared menu synthesizer, over JNI), the system Back, the system
+ * keyboard's [SystemEntryDialog], and the two intents the app hands over on the way in (a deep
+ * link, "come back to this shelf").
  */
 @Composable
 fun SkiaConsoleShell(
@@ -366,6 +367,15 @@ fun SkiaConsoleShell(
     BackHandler {
         if (handle != 0L) NativeBridge.nativeConsoleMenu(handle, 5)
     }
+
+    // The entry dialog's window takes the pad while it is up, so what was held is unknown at
+    // both edges: a press that opened it would otherwise swallow the next one.
+    val entry = SkiaConsole.systemEntry
+    LaunchedEffect(handle, entry != null) {
+        padState.reset()
+        if (handle != 0L) padState.push(handle)
+    }
+    if (entry != null) SystemEntryDialog(entry, SkiaConsole::finishEntry, SkiaConsole::cancelEntry)
 
     Box(Modifier.fillMaxSize()) {
         AndroidView(

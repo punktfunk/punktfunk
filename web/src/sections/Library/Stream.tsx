@@ -34,6 +34,7 @@ import {
 	SelectValue,
 } from "@/components/ui/select";
 import { apiErrorMessage } from "@/lib/errors";
+import { useLocale } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 import { m } from "@/paraglide/messages";
 import { refreshLibrary } from "./helpers";
@@ -246,6 +247,7 @@ export const StreamControls: FC<{
 	/** A game's source by name, for "from Lutris". */
 	from?: string;
 }> = ({ kind, id, from }) => {
+	const locale = useLocale();
 	const doc = useGetLibraryOverrides();
 	const setGame = useSetGameOverrides();
 	const setSource = useSetSourceOverrides();
@@ -325,7 +327,7 @@ export const StreamControls: FC<{
 									]
 								: []),
 							[CUSTOM, m.library_stream_custom()],
-							...setList(d).map((s): [string, string] => [
+							...setList(d, locale).map((s): [string, string] => [
 								s.id,
 								s.name ?? s.id,
 							]),
@@ -381,6 +383,7 @@ export const SharedOverridesDialog: FC<{
 	only?: string;
 	onClose: () => void;
 }> = ({ only, onClose }) => {
+	const locale = useLocale();
 	const doc = useGetLibraryOverrides();
 	const create = useCreateOverrideSet();
 	const update = useUpdateOverrideSet();
@@ -388,7 +391,7 @@ export const SharedOverridesDialog: FC<{
 	const { busy, run } = useStreamWrite();
 	const { confirm } = useDialogs();
 	const askName = useAskName();
-	const sets = setList(doc.data).filter((s) => !only || s.id === only);
+	const sets = setList(doc.data, locale).filter((s) => !only || s.id === only);
 
 	const onNew = async () => {
 		const name = await askName(m.library_stream_new_title(), m.common_create());

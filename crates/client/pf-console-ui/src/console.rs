@@ -174,6 +174,14 @@ impl Console {
         Ok(Console { shell, fonts })
     }
 
+    /// The console with the host's own faces for what Geist lacks, ahead of the system's
+    /// ([`crate::theme::build_fonts_with`]). A host with no system fonts chains it onto
+    /// [`Console::new`], before the first frame.
+    pub fn with_fallback_fonts(mut self, faces: &[&[u8]]) -> Result<Console> {
+        self.fonts = crate::theme::build_fonts_with(faces)?;
+        Ok(self)
+    }
+
     /// `pad` is the chip label; `None` means no controller.
     pub fn frame(
         &mut self,

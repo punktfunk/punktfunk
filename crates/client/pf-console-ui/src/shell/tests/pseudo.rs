@@ -1,5 +1,6 @@
 //! The pseudo-language gate: the screens the dump walks, drawn in `en-XA` at the sizes the kit
-//! ships. It fails on text that skips pf-l10n and on text wider than the room it was given.
+//! ships. It fails on text that skips pf-l10n, on text wider than the room it was given, and on
+//! a char that draws as a box.
 
 use super::*;
 use crate::console::{Insets, Viewport};
@@ -63,7 +64,7 @@ type Rule = (&'static str, fn(&str) -> bool);
 const LITERAL: &[Rule] = &[
     ("a number, port or version the code formats", is_number),
     (
-        "a name the scene's data brings: host, title, device, profile, controller",
+        "a name the scene's data brings, or its initials: host, title, device, profile, controller",
         is_data,
     ),
     (
@@ -131,7 +132,9 @@ const DATA: &[&str] = &[
 ];
 
 fn is_data(t: &str) -> bool {
-    DATA.contains(&t) || t.parse::<std::net::IpAddr>().is_ok()
+    DATA.contains(&t)
+        || DATA.iter().any(|d| crate::library::initials(d) == t)
+        || t.parse::<std::net::IpAddr>().is_ok()
 }
 
 fn is_key(t: &str) -> bool {
@@ -891,12 +894,16 @@ fn every_screen_reads_the_pseudo_language() {
 
     // Findings by what they say: the same text on many screens is one finding.
     let mut literal: BTreeMap<&str, String> = BTreeMap::new();
+    let mut boxed: BTreeMap<&str, String> = BTreeMap::new();
     let mut over: BTreeMap<(&str, String), String> = BTreeMap::new();
     for (scene, runs) in &seen_scenes {
         let at = format!("{} / {}", scene.0, scene.1);
         for r in runs {
             if let Some(text) = stray(&r.text) {
                 literal.entry(text).or_insert_with(|| at.clone());
+            }
+            if r.missing {
+                boxed.entry(&r.text).or_insert_with(|| at.clone());
             }
         }
         for (i, what) in problems(runs) {
@@ -916,6 +923,9 @@ fn every_screen_reads_the_pseudo_language() {
         if !OVERFLOW_DEBT.iter().any(|(k, _)| k == key) {
             report += &format!("overflow: {key} {what} at {at}\n");
         }
+    }
+    for (text, at) in &boxed {
+        report += &format!("missing glyph: {text:?} at {at}\n");
     }
     for (text, _) in LITERAL_DEBT {
         if !literal.contains_key(text) {
@@ -998,4 +1008,28 @@ fn the_gate_sees_a_run_that_does_not_fit() {
     assert!(collides(&runs[2], &runs[3]), "{:?} {:?}", runs[2], runs[3]);
     assert!(collides(&runs[4], &runs[5]), "{:?} {:?}", runs[4], runs[5]);
     assert!(!collides(&runs[0], &runs[1]));
+}
+
+/// The probe sees a char no face has, on both text paths, and not one a fallback face draws.
+#[test]
+fn the_gate_sees_a_missing_glyph() {
+    use crate::theme::{test_fonts, TEST_FALLBACK, W};
+    let mut surface = skia_safe::surfaces::raster_n32_premul((200, 120)).unwrap();
+    let ink = skia_safe::Color4f::new(1.0, 1.0, 1.0, 1.0);
+    let c = surface.canvas();
+    // A Lucide icon's codepoint: Geist has no glyph there.
+    let text = "Play \u{e58a}";
+    let mut missing = Vec::new();
+    for fonts in [test_fonts(&[]), test_fonts(&[TEST_FALLBACK])] {
+        textprobe::begin();
+        fonts.draw(c, text, 10.0, 20.0, W::Regular, 16.0, ink);
+        fonts.leading(c, text, W::Regular, 16.0, ink, 10.0, 40.0, 180.0);
+        missing.push(
+            textprobe::end()
+                .iter()
+                .map(|r| r.missing)
+                .collect::<Vec<_>>(),
+        );
+    }
+    assert_eq!(missing, [[true, true], [false, false]]);
 }

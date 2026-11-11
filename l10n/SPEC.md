@@ -60,8 +60,18 @@ A count is a plural message, in exactly this shape:
 | en, de, nl, sv, da, nb, fi, tr | one, other |
 | es, fr, it, pt | one, many, other |
 | pl, cs, ru, uk | one, few, many, other |
+| ja, ko, zh, vi, th, id, ms | other |
+
+A message in an other-only language has one arm, `n=*`.
 
 A language without a rule in `src/plural.rs` cannot ship.
+
+## Length
+
+`rules.json` gives each role a budget, and a translation `translation_slack` times it. `check`
+counts width, not characters: an East Asian Wide or Fullwidth character (Han, kana, Hangul,
+CJK punctuation, fullwidth forms) counts 2, every other character 1. Latin, Greek and Cyrillic
+text counts as its characters.
 
 ## TypeScript-only parts
 
@@ -87,6 +97,12 @@ message in any language that holds `*`, a backtick, `~~`, `](` or an `_emphasis_
   category reads `other`.
 - **The language** is picked from the OS's list, most preferred first. Each tag is tried as
   it is, then through `locales.json`'s `fallback`, then one subtag shorter (`de-AT`, `de`).
-  Case and `_` do not matter. Nothing matches: the source language. A program drawn in a
-  terminal reads the terminal's `LC_ALL`, `LC_MESSAGES` or `LANG` first when one is set, so
-  `LC_ALL=C` gives the source language on every OS.
+  Case and `_` do not matter, and a POSIX locale's `.UTF-8` or `@euro` is dropped. Nothing
+  matches: the source language.
+- **Chinese script.** A `zh` tag with no script subtag is tried as it is, then with one added:
+  `Hant` when the region is TW, HK or MO, `Hans` for any other region or none (`zh-TW` is
+  `zh-Hant-TW`, `zh-CN` and `zh` are `zh-Hans-CN` and `zh-Hans`), then shortened as above. A
+  tag that has a script (`zh-Hant-HK`) is left alone. `zh-Hans` and `zh-Hant` ship as they
+  are; `locales.json` needs no `fallback` for them.
+- **Terminal.** A program drawn in a terminal reads the terminal's `LC_ALL`, `LC_MESSAGES` or
+  `LANG` first when one is set, so `LC_ALL=C` gives the source language on every OS.

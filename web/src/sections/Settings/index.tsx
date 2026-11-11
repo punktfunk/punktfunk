@@ -9,6 +9,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
 import { changeLocale, type Locale, locales, useLocale } from "@/lib/i18n";
+import { languageName } from "@/lib/language-name";
 import { pluginPin, togglePin, usePins } from "@/lib/nav";
 import { m } from "@/paraglide/messages";
 import { AppearanceCard } from "./Appearance";
@@ -44,16 +45,16 @@ export const SectionSettings: FC = () => {
 							{m.settings_language()}
 						</CardTitle>
 					</CardHeader>
-					<CardContent className="flex gap-2">
+					<CardContent className="flex flex-wrap gap-2">
 						{locales.map((l: Locale) => (
 							<Button
 								key={l}
 								variant={l === current ? "default" : "outline"}
 								size="sm"
-								className="uppercase"
+								lang={l}
 								onClick={() => changeLocale(l)}
 							>
-								{l}
+								{languageName(l)}
 							</Button>
 						))}
 					</CardContent>

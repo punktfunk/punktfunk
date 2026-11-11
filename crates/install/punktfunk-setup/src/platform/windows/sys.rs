@@ -3,22 +3,101 @@
 //! implementations; everywhere else an honest error so a cross-OS test that reaches one
 //! sees a warning path, never a lie.
 
+/// The parent console's output end. Writes go to the console as UTF-16: the bytes of a plain
+/// file write are read in the console's code page (932, 949, 936), which garbles any
+/// non-ASCII text, an install path under `C:\Users\田中` above all.
+#[cfg(windows)]
+pub struct ConsoleOut {
+    file: std::fs::File,
+    /// `GetConsoleMode` answers only for a console. Anything else keeps the raw byte write.
+    console: bool,
+    /// The head of a UTF-8 character a write stopped inside.
+    pending: Vec<u8>,
+}
+
+/// Off Windows [`attach_parent_console`] is always `None`.
+#[cfg(not(windows))]
+pub type ConsoleOut = std::fs::File;
+
+#[cfg(windows)]
+impl std::io::Write for ConsoleOut {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        use ::windows::Win32::Foundation::HANDLE;
+        use ::windows::Win32::System::Console::WriteConsoleW;
+        use std::os::windows::io::AsRawHandle;
+        if !self.console {
+            return std::io::Write::write(&mut self.file, buf);
+        }
+        let wide = utf16_of(&mut self.pending, buf);
+        if !wide.is_empty() {
+            let mut written = 0u32;
+            // SAFETY: the handle is the live `CONOUT$` file this struct owns; `wide` and
+            // `written` are live for the call.
+            unsafe {
+                WriteConsoleW(
+                    HANDLE(self.file.as_raw_handle()),
+                    &wide,
+                    Some(&mut written),
+                    None,
+                )?
+            };
+        }
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        std::io::Write::flush(&mut self.file)
+    }
+}
+
+/// `buf` as UTF-16, after what the last call held back. A UTF-8 sequence cut at the end of
+/// `buf` waits in `pending` for the next call; bytes that are not UTF-8 become U+FFFD.
+#[cfg(any(windows, test))]
+fn utf16_of(pending: &mut Vec<u8>, buf: &[u8]) -> Vec<u16> {
+    pending.extend_from_slice(buf);
+    let whole = match std::str::from_utf8(pending) {
+        Err(e) if e.error_len().is_none() => e.valid_up_to(),
+        _ => pending.len(),
+    };
+    let tail = pending.split_off(whole);
+    let wide = String::from_utf8_lossy(pending).encode_utf16().collect();
+    *pending = tail;
+    wide
+}
+
 /// A GUI-subsystem exe launched from a terminal: bind the parent's console and open its
 /// output end. `None` when no parent console exists (a double-click), which simply means
 /// no console output. The updater's spawn does attach: the service host owns a hidden
 /// console, and that one dies when the upgrade stops the service. `CONOUT$` rather than
 /// `stdout()`: the std handles were fixed at startup, before the attach.
 #[cfg(windows)]
-pub fn attach_parent_console() -> Option<std::fs::File> {
-    use ::windows::Win32::System::Console::{AttachConsole, ATTACH_PARENT_PROCESS};
+pub fn attach_parent_console() -> Option<ConsoleOut> {
+    use ::windows::Win32::Foundation::HANDLE;
+    use ::windows::Win32::System::Console::{
+        AttachConsole, GetConsoleMode, ATTACH_PARENT_PROCESS, CONSOLE_MODE,
+    };
+    use std::os::windows::io::AsRawHandle;
     // SAFETY: a plain call with a process-id constant; it binds an already-existing console
     // or fails, and either way touches no memory of ours.
     unsafe { AttachConsole(ATTACH_PARENT_PROCESS).ok()? };
-    std::fs::OpenOptions::new().write(true).open("CONOUT$").ok()
+    // Read access too: `GetConsoleMode` refuses a handle without it.
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open("CONOUT$")
+        .ok()?;
+    let mut mode = CONSOLE_MODE(0);
+    // SAFETY: the handle is the live file just opened; `mode` is a live local.
+    let console = unsafe { GetConsoleMode(HANDLE(file.as_raw_handle()), &mut mode) }.is_ok();
+    Some(ConsoleOut {
+        file,
+        console,
+        pending: Vec::new(),
+    })
 }
 
 #[cfg(not(windows))]
-pub fn attach_parent_console() -> Option<std::fs::File> {
+pub fn attach_parent_console() -> Option<ConsoleOut> {
     None
 }
 
@@ -435,7 +514,34 @@ pub fn random_hex(_n: usize) -> Result<String, String> {
 
 #[cfg(test)]
 mod tests {
-    use super::runtime_meets_floor;
+    use super::{runtime_meets_floor, utf16_of};
+
+    fn utf16(text: &str) -> Vec<u16> {
+        text.encode_utf16().collect()
+    }
+
+    #[test]
+    fn the_console_gets_non_ascii_text_as_utf16() {
+        let mut pending = Vec::new();
+        let line = "install to C:\\Users\\田中\\Punktfunk 😀\n";
+        assert_eq!(utf16_of(&mut pending, line.as_bytes()), utf16(line));
+        assert!(pending.is_empty());
+    }
+
+    #[test]
+    fn a_character_split_across_writes_is_held_until_whole() {
+        let bytes = "田".as_bytes();
+        let mut pending = Vec::new();
+        assert!(utf16_of(&mut pending, &bytes[..2]).is_empty());
+        assert_eq!(utf16_of(&mut pending, &bytes[2..]), utf16("田"));
+        assert!(pending.is_empty());
+    }
+
+    #[test]
+    fn bytes_that_are_not_utf8_do_not_panic() {
+        let mut pending = Vec::new();
+        assert_eq!(utf16_of(&mut pending, b"a\xffb"), utf16("a\u{fffd}b"));
+    }
 
     #[test]
     fn the_runtime_floor_reads_the_package_version() {
