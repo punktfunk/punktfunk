@@ -27,14 +27,13 @@ public struct FetchGuard: Equatable, Sendable {
         self.serial = serial
     }
 
-    /// Whether `arrival` for the host `fp` may touch this shelf. A list fetch is for its host;
-    /// an answer is from its current fetch, since a newer one owns the shelf by the time a slow
-    /// host answers. A refresh always runs.
+    /// Whether `arrival` for the host `fp` may touch this shelf. Everything is for its host, so
+    /// one host's titles and downloads never go up under another's shelf; an answer is also from
+    /// its current fetch, since a newer one owns the shelf by the time a slow host answers.
     public func accepts(_ arrival: Arrival, fp: String) -> Bool {
         switch arrival {
-        case .list: fp == self.fp
-        case .refresh: true
-        case .answer(let serial): serial == self.serial
+        case .list, .refresh: fp == self.fp
+        case .answer(let serial): serial == self.serial && fp == self.fp
         }
     }
 }
