@@ -125,6 +125,7 @@
 	"launch_download_refused": "{title} is the game's title. {reason} is the plugin's own refusal, its words, shown as is.",
 	"launch_download_stalled": "{title} is the game's title.",
 	"launch_nothing_to_run": "{title} is the game's title.",
+	"launch_shared_screen": "Toast when a device joins a screen another device opened (Play together) and the game it picked is not started.",
 	"seatcheck_account_administrator": "Seat check about one seat. {account} is a Windows account name.",
 	"seatcheck_account_gone": "Seat check about one seat. {account} is a Windows account name.",
 	"seatcheck_account_group": "Seat check about one seat. {account} is a Windows account, {group} a local group name.",

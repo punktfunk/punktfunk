@@ -895,6 +895,10 @@ public final class PunktfunkConnection: @unchecked Sendable {
         hostCaps2 & UInt8(PUNKTFUNK_HOST_CAP2_TOUCH) != 0
     }
 
+    /// The session started on a screen another device opened and sized
+    /// (`punktfunk_connection_shares_screen`). As it started: that device may leave later.
+    public private(set) var sharesScreen = false
+
     // MARK: - Per-client access (design/per-client-access.md §7)
 
     /// The `PUNKTFUNK_GRANT_*` access bits — what a paired device may DO on the host, per the
@@ -1371,6 +1375,9 @@ public final class PunktfunkConnection: @unchecked Sendable {
         var caps2: UInt8 = 0
         _ = punktfunk_connection_host_caps2(opened, &caps2)
         hostCaps2 = caps2
+        var shared = false
+        _ = punktfunk_connection_shares_screen(opened, &shared)
+        sharesScreen = shared
         // Where this host serves its game library, straight from the session's Welcome. 0 = the
         // host advertised none (older host / no management API), and the caller keeps whatever it
         // already had. This is the answer that does NOT require an mDNS advert to have been seen.

@@ -62,6 +62,9 @@ object NativeBridge {
     /** 64-hex SHA-256 of the cert the host presented on [handle]; valid after a successful connect. */
     external fun nativeHostFingerprint(handle: Long): String
 
+    /** The session on [handle] started on a screen another device opened and sized. */
+    external fun nativeSharesScreen(handle: Long): Boolean
+
     /**
      * Has the underlying QUIC session ended? `true` once the connection closed — a host suspend /
      * crash / network drop idle-timed it out (~8 s), or the host closed it — from then on no frame

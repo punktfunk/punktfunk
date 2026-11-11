@@ -426,7 +426,7 @@
 //
 // The wire is versioned by ALPN, not by this. Pin the integer in `punktfunk-ffi`
 // (`abi_version_is_pinned`). Per-bump notes live in `CHANGELOG.md`.
-#define PUNKTFUNK_ABI_VERSION 67
+#define PUNKTFUNK_ABI_VERSION 68
 
 // This client silenced its own speakers (`client::NativeClient::set_audio_muted`). The host
 // keeps sending, so a session joined to the same sink still hears the game.
@@ -3653,6 +3653,15 @@ PunktfunkStatus punktfunk_connection_end_reject_said(const PunktfunkConnection *
 PunktfunkStatus punktfunk_connection_profile(const PunktfunkConnection *c,
                                              char *out,
                                              uintptr_t cap);
+#endif
+
+#if defined(PUNKTFUNK_FEATURE_QUIC)
+// `true` when this session started on a screen another device opened and sized. As the session
+// started: that device may leave later. `false` from a host that does not say.
+//
+// # Safety
+// `c` is a valid connection handle; `shared` is writable (NULL is skipped).
+PunktfunkStatus punktfunk_connection_shares_screen(const PunktfunkConnection *c, bool *shared);
 #endif
 
 #if defined(PUNKTFUNK_FEATURE_QUIC)

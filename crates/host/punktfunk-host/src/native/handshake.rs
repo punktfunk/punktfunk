@@ -476,6 +476,8 @@ pub(super) struct Negotiated {
     pub(super) encoder: Arc<crate::encode::Resolved>,
     /// The session streams a host monitor: the device's screen as `ServerHello` stated it.
     pub(super) mirrored: bool,
+    /// The client asked for a game, and joining a shared screen dropped it.
+    pub(super) launch_dropped: bool,
 }
 
 impl Negotiated {
@@ -593,7 +595,8 @@ struct Terms {
     shard_payload: usize,
     chacha: bool,
     audio_plane: AudioPlane,
-    /// What the Welcome says this session streams; `None` for a joiner or a synthetic source.
+    /// What this session streams; `None` for a joiner, whose hello says `Shared`, or a synthetic
+    /// source.
     screen: Option<ScreenEcho>,
     /// `screen` is a monitor this session mirrors.
     mirrored: bool,
@@ -616,7 +619,9 @@ pub(super) async fn negotiate(
     cap_mode(&n, &mut hello, codec);
     // Against the mode this client gets, before a join hands it the owner's.
     let view = kept_view(n.first.view, &hello.mode, codec);
+    let asked_launch = hello.launch.is_some();
     let (joined, reservation) = admit_mode(&n, &mut hello, codec, view).await?;
+    let launch_dropped = asked_launch && hello.launch.is_none();
 
     crate::encode::validate_dimensions(codec, hello.mode.width, hello.mode.height)
         .context("client-requested mode")?;
@@ -762,6 +767,7 @@ pub(super) async fn negotiate(
         resolved: n.resolved,
         encoder: t.encoder,
         mirrored: t.mirrored,
+        launch_dropped,
     })
 }
 
@@ -891,7 +897,7 @@ fn welcome(n: &Negotiation<'_>, t: &Terms) -> Welcome {
 }
 
 /// The `ServerHello` around `welcome`. Settles the session's media suite, which keys the media,
-/// and offers the native features this session can run.
+/// offers the native features this session can run, and tells a joiner its screen is shared.
 fn server_hello(n: &Negotiation<'_>, t: &Terms, welcome: Welcome) -> ServerHello {
     // A browser's media goes unsealed, inside WebTransport's own encryption.
     let suite = (!n.conn.is_web()).then_some(if t.chacha {
@@ -931,7 +937,10 @@ fn server_hello(n: &Negotiation<'_>, t: &Terms, welcome: Welcome) -> ServerHello
         suite,
         features: n.first.features.intersect(offered),
         profile: Some(n.resolved.id.clone()),
-        screen: t.screen.clone(),
+        screen: match t.joined {
+            Some(_) => Some(ScreenEcho::Shared),
+            None => t.screen.clone(),
+        },
     }
 }
 
@@ -1134,10 +1143,11 @@ fn game_override_terms(
 }
 
 /// Mode-conflict before Welcome: stop this client's own earlier sessions, then join, steal or
-/// refuse a live one. `Some` = joined: the owner's display and the size this client shows it
-/// at, its kept `view` or else the mode it asked for. Same-client reconnect never conflicts. The
-/// reservation is this connect's place in the live set from here on: a later client conflicts
-/// with it, and a steal raises this session's `stop`.
+/// refuse a live one; a join inside another connect's bring-up waits for it
+/// ([`JOIN_WAIT`](crate::vdisplay::admission::JOIN_WAIT)). `Some` = joined: the owner's display
+/// and the size this client shows it at, its kept `view` or else the mode it asked for.
+/// Same-client reconnect never conflicts. The reservation is this connect's place in the live
+/// set from here on: a later client conflicts with it, and a steal raises this session's `stop`.
 async fn admit_mode(
     n: &Negotiation<'_>,
     hello: &mut Hello,
@@ -1173,7 +1183,11 @@ async fn admit_mode(
     }
 
     let mode = (hello.mode.width, hello.mode.height, hello.mode.refresh_hz);
-    let (decision, reservation) = admit(peer_fp, mode, n.stop.clone());
+    // `join` may wait out another connect's bring-up: off the runtime's workers.
+    let stop = n.stop.clone();
+    let (decision, reservation) = tokio::task::spawn_blocking(move || admit(peer_fp, mode, stop))
+        .await
+        .context("admission task")?;
     let joined = match decision {
         Admission::Separate => None,
         Admission::Join(m, display) => {

@@ -466,6 +466,7 @@
 	"launch_download_refused": "{title} ließ sich nicht herunterladen – {reason}",
 	"launch_download_stalled": "Der Download von {title} ist stehen geblieben. Starte es erneut, um es noch einmal zu versuchen.",
 	"launch_nothing_to_run": "{title} ließ sich nicht starten – dieser Host hatte nichts, was er dafür ausführen konnte.",
+	"launch_shared_screen": "Dieses Spiel wurde nicht gestartet – der Bildschirm wird geteilt, und welches Spiel läuft, bestimmt das Gerät, das sich zuerst verbunden hat.",
 	"launch_title_not_in_library": "Dieses Spiel ließ sich nicht starten – es ist nicht mehr in der Bibliothek dieses Hosts.",
 	"launch_title_not_on_desktop": "Dieses Spiel ließ sich nicht starten – diesem Desktop fehlen sein Emulator, sein Launcher oder die Spieldateien.",
 	"seatcheck_account_administrator": "Sein Windows-Konto {account} ist Administrator, und das darf ein Seat nicht sein. Entferne es aus den Administratoren.",

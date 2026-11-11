@@ -101,6 +101,16 @@ async fn resolve_launch(
     Ok(found)
 }
 
+/// The verdict for a game a joiner asked for: the shared screen plays its first device's game.
+fn shared_screen_refusal() -> punktfunk_core::quic::LaunchOutcome {
+    punktfunk_core::quic::LaunchOutcome::new(
+        punktfunk_core::quic::LaunchOutcomeKind::Refused,
+        "Couldn't start that game — this screen is shared, and the first device to connect \
+         picks the game.",
+    )
+    .worded("launch_shared_screen", &[])
+}
+
 /// What a bare connect opens: Steam's Game Mode on a seat in Game Mode, else Big Picture for a
 /// seat profile whose home is `bigpicture`. A connect that named a title opens nothing more.
 fn home_launch(
@@ -167,7 +177,7 @@ pub(super) struct Launch {
 }
 
 /// The library launch, before the display opens. Its prep guard, waiting row and audio
-/// policy are held to the session's end.
+/// policy are held to the session's end. A game the join dropped is refused onto `outcome`.
 pub(super) async fn launch_session(
     scope: &mut SessionScope,
     who: &Admitted,
@@ -191,6 +201,9 @@ pub(super) async fn launch_session(
     };
     #[cfg(test)]
     super::tests::fail_at_launch(&conn, scope.life())?;
+    if n.launch_dropped {
+        let _ = outcome.send(shared_screen_refusal());
+    }
     let (
         target,
         command,

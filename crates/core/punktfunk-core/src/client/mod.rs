@@ -940,8 +940,9 @@ impl NativeClient {
     }
 
     /// Queue a live mode switch (no reconnect). Accepted: next frames open with an IDR and
-    /// [`NativeClient::mode`] updates. Rejected: session unchanged. At the live size the host
-    /// keeps the view it scales to, so a rate change alone leaves its scale in place.
+    /// [`NativeClient::mode`] updates. Rejected: session unchanged and
+    /// [`NativeClient::mode_refusals`] moves. At the live size the host keeps the view it scales
+    /// to, so a rate change alone leaves its scale in place.
     pub fn request_mode(&self, mode: Mode) -> Result<()> {
         self.ctrl_tx
             .try_send(CtrlRequest::Mode(mode, None))
@@ -990,6 +991,12 @@ impl NativeClient {
     /// unchanged: reconnect without those codecs.
     pub fn codec_refused(&self) -> u8 {
         self.shared.codec_refused.load(Ordering::Relaxed)
+    }
+
+    /// Mode switches the host refused this session, counted: a change since an ask means no
+    /// frame at the asked size is coming.
+    pub fn mode_refusals(&self) -> u32 {
+        self.shared.mode_refusals.load(Ordering::Relaxed)
     }
 
     /// Who draws the pointer: `true` = client (host forwards shape/state, excludes it from
@@ -1910,8 +1917,9 @@ impl NativeClient {
         self.profile.as_deref()
     }
 
-    /// The screen this session streams: its own, or the host monitor it mirrors. `None` from a
-    /// host that does not say. Fixed for the session: a pick applies at the next connect.
+    /// The screen this session streams: its own, the host monitor it mirrors, or a screen another
+    /// device opened. `None` from a host that does not say. As the session started: a pick
+    /// applies at the next connect, and a shared screen may be this device's alone later.
     pub fn screen(&self) -> Option<&crate::quic::v2::hello::ScreenEcho> {
         self.screen.as_ref()
     }

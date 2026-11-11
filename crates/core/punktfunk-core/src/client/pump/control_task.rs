@@ -162,6 +162,7 @@ impl ControlTask {
                             tracing::info!(mode = ?ack.mode, "host accepted mode switch");
                         } else {
                             tracing::warn!(active = ?ack.mode, "host rejected mode switch");
+                            shared.mode_refusals.fetch_add(1, Ordering::Relaxed);
                         }
                     } else if let Some(cfg) = decode::<v2msg::AudioConfig>(ty, &body)
                         .ok()
