@@ -23,6 +23,14 @@ final class HostFormDraftTests: XCTestCase {
         XCTAssertEqual(HostFormDraft(address: "nuc.local", port: "no").problem, .badPort)
     }
 
+    func testFullWidthDigitsMakeAPort() {
+        let typed = HostFormDraft(address: "nuc.local", port: "９７７７")
+        XCTAssertEqual(typed.resolvedPort, 9777)
+        XCTAssertEqual(HostFormDraft(address: "nuc.local:４７９８９").resolvedPort, 47989)
+        // A letter still refuses; it is not dropped on the way to a number.
+        XCTAssertEqual(HostFormDraft(address: "nuc.local", port: "９７a").problem, .badPort)
+    }
+
     func testPortInsideTheAddressIsSplitOut() {
         // What the host cards render, so it is what a user pastes back in.
         let draft = HostFormDraft(address: " 192.168.1.5:47989 ")

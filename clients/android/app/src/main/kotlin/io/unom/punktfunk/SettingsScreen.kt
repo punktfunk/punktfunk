@@ -91,6 +91,7 @@ import io.unom.punktfunk.kit.R
 import io.unom.punktfunk.kit.Shortcuts
 import io.unom.punktfunk.kit.SlotId
 import io.unom.punktfunk.kit.VideoDecoders
+import io.unom.punktfunk.kit.asciiDigits
 import io.unom.punktfunk.kit.deviceBodyVibrator
 import io.unom.punktfunk.kit.link.StartIn
 import io.unom.punktfunk.kit.link.StartScreen
@@ -1708,7 +1709,7 @@ private fun ResolutionField(
     OutlinedTextField(
         value = text,
         onValueChange = { raw ->
-            text = raw.filter { it.isDigit() }.take(4)
+            text = asciiDigits(raw).take(4)
             val v = text.toIntOrNull() ?: 0
             if (v > 0) onCommit(v)
         },
@@ -1728,7 +1729,7 @@ private fun BitrateField(kbps: Int, onCommit: (Int) -> Unit) {
     OutlinedTextField(
         value = text,
         onValueChange = { raw ->
-            text = raw.filter { it.isDigit() }.take(4)
+            text = asciiDigits(raw).take(4)
             val mbps = (text.toIntOrNull() ?: 0).coerceAtMost(CUSTOM_BITRATE_MAX_MBPS)
             if (mbps > 0) onCommit(mbps * 1000)
         },
@@ -1752,7 +1753,7 @@ private fun RenderScaleField(scale: Double, onCommit: (Double) -> Unit) {
     }
     OutlinedTextField(
         value = text,
-        onValueChange = { raw -> text = raw.filter { it.isDigit() }.take(3) },
+        onValueChange = { raw -> text = asciiDigits(raw).take(3) },
         label = { Text(stringResource(R.string.player_render_scale_entry)) },
         singleLine = true,
         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number, imeAction = ImeAction.Done),

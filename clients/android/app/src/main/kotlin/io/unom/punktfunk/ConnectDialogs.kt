@@ -35,6 +35,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import io.unom.punktfunk.kit.R
+import io.unom.punktfunk.kit.asciiDigits
 import io.unom.punktfunk.kit.security.ClientIdentity
 import io.unom.punktfunk.kit.security.KnownHost
 import io.unom.punktfunk.kit.security.KnownHostStore
@@ -100,7 +101,7 @@ internal fun AddHostSheet(
             Spacer(Modifier.height(16.dp))
             OutlinedTextField(
                 value = port,
-                onValueChange = { v -> onPortChange(v.filter { it.isDigit() }.take(5)) },
+                onValueChange = { v -> onPortChange(asciiDigits(v).take(5)) },
                 label = { Text(stringResource(R.string.hosts_field_port)) },
                 singleLine = true,
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
@@ -151,7 +152,7 @@ internal fun PairPinDialog(
                 Text(stringResource(R.string.pair_intro_pin_only))
                 OutlinedTextField(
                     value = pin,
-                    onValueChange = { v -> pin = v.filter { it.isDigit() }.take(4) },
+                    onValueChange = { v -> pin = asciiDigits(v).take(4) },
                     label = { Text(stringResource(R.string.pair_pin)) },
                     singleLine = true,
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
@@ -248,7 +249,7 @@ internal fun EditHostDialog(
                 )
                 OutlinedTextField(
                     value = port,
-                    onValueChange = { v -> port = v.filter { it.isDigit() }.take(5) },
+                    onValueChange = { v -> port = asciiDigits(v).take(5) },
                     label = { Text(stringResource(R.string.hosts_field_port)) },
                     singleLine = true,
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),

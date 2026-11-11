@@ -54,7 +54,7 @@ public struct HostFormDraft: Equatable, Sendable {
     public var resolvedPort: UInt16? {
         let split = Self.split(address)
         if let fromAddress = split.port { return fromAddress }
-        let typed = port.trimmingCharacters(in: .whitespacesAndNewlines)
+        let typed = port.trimmingCharacters(in: .whitespacesAndNewlines).withASCIIDigits
         if typed.isEmpty { return Self.defaultPort }
         guard let value = UInt16(typed), value > 0 else { return nil }
         return value
@@ -118,7 +118,7 @@ public struct HostFormDraft: Equatable, Sendable {
         // `[fd7a::1]:9777` splits; `fd7a::1` does not.
         let bracketed = head.hasPrefix("[") && head.hasSuffix("]")
         let looksIPv6 = head.contains(":") && !bracketed
-        guard !looksIPv6, !head.isEmpty, let value = UInt16(tail), value > 0 else {
+        guard !looksIPv6, !head.isEmpty, let value = UInt16(tail.withASCIIDigits), value > 0 else {
             return (text, nil)
         }
         return (head, value)

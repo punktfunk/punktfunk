@@ -37,7 +37,8 @@ final class PairCeremony: ObservableObject {
     ) {
         busy = true
         errorText = nil
-        let pin = rawPIN.trimmingCharacters(in: .whitespaces)
+        // The host's PIN is ASCII digits; a CJK keyboard types full-width ones.
+        let pin = rawPIN.asciiDigits
         let name = rawName.trimmingCharacters(in: .whitespaces)
         token = Token()
         let token = token

@@ -201,7 +201,7 @@ enum SettingsOptions {
     /// `0`, which leave the stored rate alone — Automatic is a list entry, not a number.
     static func customBitrateKbps(_ text: String) -> Int? {
         // Nine digits always fit an Int: a longer entry is past the cap anyway.
-        guard let mbps = Int(text.prefix(9)), mbps > 0 else { return nil }
+        guard let mbps = Int(text.withASCIIDigits.prefix(9)), mbps > 0 else { return nil }
         return min(mbps, 3_000) * 1_000
     }
 
@@ -312,7 +312,8 @@ enum SettingsOptions {
 
     /// A typed "2560 × 1440" (any separator) through the shared rule; nil without two numbers.
     static func typedSize(_ text: String, codec: String) -> (w: Int, h: Int)? {
-        let numbers = text.split(whereSeparator: { !$0.isNumber }).compactMap { Int($0) }
+        let numbers = text.withASCIIDigits
+            .split(whereSeparator: { !$0.isNumber }).compactMap { Int($0) }
         guard numbers.count >= 2, numbers[0] > 0, numbers[1] > 0 else { return nil }
         return Resolutions.custom(numbers[0], numbers[1], codec: codec)
     }
