@@ -62,15 +62,17 @@ final class DialRecoveryTests: XCTestCase {
             .alert(String(localized: L10n.errorRequestFailed)))
     }
 
-    /// Every recovery drops the launch hold before it runs.
-    func testEveryRecoveryDropsTheLaunchHold() {
-        let all: [DialRecovery] = [
+    /// R1-2: a wake redial keeps the launch hold up to the game; every other recovery drops it.
+    func testOnlyAWakeRedialKeepsTheLaunchHold() {
+        XCTAssertTrue(
+            decide(PunktfunkClientError.rejected(.setupFailed), wake: .seconds(2)).keepsLaunchHold)
+        let drops: [DialRecovery] = [
             decide(PunktfunkClientError.rejected(.profileUnknown)),
             decide(PunktfunkClientError.rejected(.profileLocked)),
-            decide(PunktfunkClientError.rejected(.setupFailed), wake: .seconds(2)),
+            decide(PunktfunkClientError.rejected(.setupFailed)),
             decide(PunktfunkClientError.connectFailed),
             decide(PunktfunkClientError.connectFailed, callerRecovers: true),
         ]
-        for recovery in all { XCTAssertFalse(recovery.keepsLaunchHold, "\(recovery)") }
+        for recovery in drops { XCTAssertFalse(recovery.keepsLaunchHold, "\(recovery)") }
     }
 }

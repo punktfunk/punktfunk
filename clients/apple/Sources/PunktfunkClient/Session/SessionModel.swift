@@ -437,6 +437,9 @@ final class SessionModel: ObservableObject {
                  autoWake: Bool = false,
                  /// When the host first refused as still waking; nil on a first dial.
                  wakeSince: ContinuousClock.Instant? = nil,
+                 /// A wake redial's launch hold, still up from the dial it repeats. nil raises
+                 /// the launch's own from `LaunchedEntry`.
+                 hold: LaunchHoldTarget? = nil,
                  /// The host refused `profileID` as unknown. Return true to re-dial: the error
                  /// is then not shown.
                  onProfileUnknown: (@MainActor () -> Bool)? = nil,
@@ -468,7 +471,7 @@ final class SessionModel: ObservableObject {
         launchedShelf = shelf
         // The host never tracks a launcher tile, so there is nothing to wait for.
         launchSeq += 1
-        launchHold = launchID.flatMap { LaunchedEntry.take($0, seq: launchSeq) }
+        launchHold = hold ?? launchID.flatMap { LaunchedEntry.take($0, seq: launchSeq) }
             .flatMap { $0.entry.isLauncher ? nil : $0 }
         launchWindowWait = false
         launchDownload = nil
@@ -1040,6 +1043,7 @@ final class SessionModel: ObservableObject {
         sessionLog.info("\(endLine, privacy: .public)")
         // The shelf, not the launch id, says this came from the library: a Resume launches nothing.
         let shelf = activeHost == nil ? nil : launchedShelf
+        let hold = launchHold
         let route = SessionEndRoute.decide(
             phase: phase, reason: reason, rejection: rejection, said: conn.endRejectionMessage,
             wakeDelay: conn.wakeRedialDelay(
@@ -1048,6 +1052,8 @@ final class SessionModel: ObservableObject {
         disconnect(deliberate: false) // host/network ended it — keep the linger for a reconnect
         switch route {
         case .wakeRedial(let wait):
+            // `disconnect` dropped the hold; a wake redial keeps it up to the game.
+            launchHold = hold
             if let plan = lastDial { redialWhileWaking(plan, after: wait) }
         case .lossRedial(let pin):
             guard var plan = lastDial else { return }
@@ -1091,7 +1097,8 @@ final class SessionModel: ObservableObject {
     private var sinceFirstWake: Duration? { lastDial?.wakeSince.map { ContinuousClock.Instant.now - $0 } }
 
     /// Dial `plan` again after `wait`, the core's answer for a woken host that answered before
-    /// it could stream. The connect overlay stays up for the redial, and Cancel ends it.
+    /// it could stream. The connect overlay stays up for the redial, and Cancel ends it. The
+    /// launch hold still up rides into the redial; one the player dismissed stays down.
     private func redialWhileWaking(_ plan: Redial, after wait: Duration) {
         var next = plan
         next.wakeSince = next.wakeSince ?? .now
@@ -1106,7 +1113,8 @@ final class SessionModel: ObservableObject {
                 to: next.host, effective: next.effective, gamepad: next.gamepad,
                 overrides: next.overrides, launchID: next.launchID, profileID: next.profileID,
                 shelf: next.shelf,
-                allowTofu: next.allowTofu, autoWake: next.autoWake, wakeSince: next.wakeSince)
+                allowTofu: next.allowTofu, autoWake: next.autoWake, wakeSince: next.wakeSince,
+                hold: self.launchHold)
         }
     }
 

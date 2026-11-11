@@ -18,8 +18,12 @@ public indirect enum DialRecovery: Equatable {
     /// The caller recovers (the wake wait), and its overlay explains it.
     case handBack
 
-    /// The launch hold stays up through this recovery. One that drops it does so before it runs.
-    public var keepsLaunchHold: Bool { false }
+    /// The launch hold stays up through this recovery: a wake redial holds from the tap to the
+    /// game. Every other one drops it before it runs.
+    public var keepsLaunchHold: Bool {
+        if case .wakeRedial = self { return true }
+        return false
+    }
 
     /// `wakeDelay` is the core's wait for a host still waking, nil without a dial to repeat. The
     /// rest feed `ConnectOffer.failureMessage`; `callerRecovers` says the caller has a recovery.
