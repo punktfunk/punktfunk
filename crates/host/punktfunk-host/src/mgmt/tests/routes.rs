@@ -824,3 +824,62 @@ fn every_route_has_a_side_on_the_door() {
         );
     }
 }
+
+/// Every route a paired device may call has a side on a door: the seat it plays on, as
+/// `owner::DEVICE` says, or the door's own, as this list says. A new device route fails here
+/// until someone decides.
+#[test]
+fn every_device_route_has_a_side_on_the_door() {
+    use crate::mgmt::owner::{device_route, template_matches, DEVICE};
+    use axum::http::Method;
+
+    // What the door answers a device itself: what it merges, power, its logs, the profiles and
+    // the box's library copy.
+    const DOOR_OWN: &[(&str, &str)] = &[
+        ("GET", "/api/v1/host"),
+        ("GET", "/api/v1/status"),
+        ("GET", "/api/v1/actions"),
+        ("POST", "/api/v1/actions/{id}"),
+        ("POST", "/api/v1/client-logs"),
+        ("GET", "/api/v1/profiles/enumerate"),
+        ("GET", "/api/v1/profiles/{id}/avatar"),
+        ("POST", "/api/v1/profiles/{id}/wake"),
+        ("POST", "/api/v1/profiles/{id}/unlock-challenge"),
+        ("GET", "/api/v1/library"),
+        ("GET", "/api/v1/library/page"),
+        ("GET", "/api/v1/library/art/{id}/{kind}"),
+    ];
+
+    let doc: serde_json::Value = serde_json::from_str(&openapi_json()).unwrap();
+    let mut device: Vec<(Method, &str)> = Vec::new();
+    for (path, ops) in doc["paths"].as_object().unwrap() {
+        for method in ops.as_object().unwrap().keys() {
+            let method = Method::from_bytes(method.to_uppercase().as_bytes()).unwrap();
+            if !auth::cert_may_access(&method, path) {
+                continue;
+            }
+            let rest = path.strip_prefix("/api/v1/").unwrap();
+            let door = DOOR_OWN.contains(&(method.as_str(), path.as_str()));
+            assert!(
+                device_route(&method, rest) != door,
+                "{method} {path}: a paired device calls it; its seat's (`DEVICE`) or the door's?"
+            );
+            device.push((method, rest));
+        }
+    }
+    for (method, path) in DOOR_OWN {
+        let rest = path.strip_prefix("/api/v1/").unwrap();
+        assert!(
+            device.iter().any(|(m, p)| m == method && *p == rest),
+            "{method} {path} is in the list and no device route"
+        );
+    }
+    for (method, template) in DEVICE {
+        assert!(
+            device
+                .iter()
+                .any(|(m, rest)| m == method && template_matches(template, rest)),
+            "DEVICE names {method} {template}, which no device route has"
+        );
+    }
+}

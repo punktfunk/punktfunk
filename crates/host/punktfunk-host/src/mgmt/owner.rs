@@ -55,11 +55,16 @@ pub(crate) const DOOR: &[(&str, &str)] = &[
     ("GET", "library/art/*"),
 ];
 
-/// Routes a device may call about its own play, which go to the seat it plays on.
-const DEVICE: &[(&str, &str)] = &[
+/// Routes a device may call about its own play, which go to the seat it plays on: its game, its
+/// installs, its screen and the compositors there. `mgmt::tests::routes` holds every other
+/// device route to the door.
+pub(crate) const DEVICE: &[(&str, &str)] = &[
     ("POST", "game/end"),
     ("POST", "library/install/*"),
     ("DELETE", "library/install/*"),
+    ("GET", "display/targets"),
+    ("PUT", "display/clients/*"),
+    ("GET", "compositors"),
 ];
 
 /// Answers that never end: a tail the console keeps open.
@@ -105,7 +110,7 @@ pub(crate) fn classify(method: &Method, rest: &str) -> Verdict {
 }
 
 /// Whether a device's call to `method` `rest` is about its own play.
-fn device_route(method: &Method, rest: &str) -> bool {
+pub(crate) fn device_route(method: &Method, rest: &str) -> bool {
     !has_dot_segment(rest) && listed(DEVICE, method, rest)
 }
 
@@ -337,8 +342,9 @@ fn device_seat(st: &MgmtState, seats: &crate::seats::Snapshot, fp: &str) -> Opti
 }
 
 /// On a door: an admin call the door does not answer itself goes to the owner's host, and a
-/// device's call about its own play to the seat it plays on. Every other lane, and every
-/// other host, is answered here.
+/// device's call about its own play to the seat it plays on. A device's read wakes no seat: a
+/// client asks each time it shows the host. Every other lane, and every other host, is
+/// answered here.
 pub(crate) async fn pass_on(
     State(st): State<Arc<MgmtState>>,
     req: Request,
@@ -393,7 +399,7 @@ pub(crate) async fn pass_on(
         body: bytes.to_vec(),
         device: parts.extensions.get::<PairedDevice>().map(|d| d.0.clone()),
         stream: tail(&rest),
-        start: true,
+        start: lane != Some(AuthLane::Cert) || parts.method != Method::GET,
     };
     let to_owner = target == Target::Owner;
     match tokio::task::spawn_blocking(move || seats.call(&target, call)).await {
