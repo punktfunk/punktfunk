@@ -113,7 +113,7 @@ struct TVQuickActionsEditor: View {
     }
 
     private func disc(_ k: Int) -> some View {
-        let s = cfg.ring[k].map { spec($0, cfg, previewRingActions) }
+        let s = cfg.ring[k].map { spec($0, cfg, previewRingActions(cfg)) }
         return Button {
             if let from = moving {
                 swapSlots(from, k)
@@ -161,7 +161,7 @@ struct TVQuickActionsEditor: View {
     }
 
     private func label(_ k: Int) -> String {
-        cfg.ring[k].map { spec($0, cfg, previewRingActions).label } ?? String(localized: L10n.ringSlotEmpty)
+        cfg.ring[k].map { spec($0, cfg, previewRingActions(cfg)).label } ?? String(localized: L10n.ringSlotEmpty)
     }
 
     private var detailTitle: String {
@@ -174,7 +174,7 @@ struct TVQuickActionsEditor: View {
         guard let k = focused, let slot = cfg.ring[k] else {
             return String(localized: L10n.appleTvRingPickHint)
         }
-        let s = spec(slot, cfg, previewRingActions)
+        let s = spec(slot, cfg, previewRingActions(cfg))
         return s.enabled ? String(localized: L10n.appleTvRingSlotHint) : s.reason
     }
 

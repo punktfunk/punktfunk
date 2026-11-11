@@ -79,7 +79,7 @@ struct QuickActionsEditor: View {
                         // button above it, so closing the ring here closed it on every pick.
                         DialCatcher(onDial: { ring.handle($0) }) { ring.sheet = false }
                         #endif
-                        RingOverlay(state: ring, cfg: cfg, actions: previewRingActions,
+                        RingOverlay(state: ring, cfg: cfg, actions: previewRingActions(cfg),
                                     editing: RingEditing(pick: { picking = PickSlot(k: $0) },
                                                          swap: { a, b in edit { $0.swap(a, b) } }))
                     }

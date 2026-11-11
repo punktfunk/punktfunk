@@ -110,31 +110,43 @@ struct ShortcutDraft: Identifiable, Hashable {
     var isNew: Bool
 }
 
-/// The three power actions as the ring would show them on a host that offers all three; an
-/// editor has no host on the line, and a dimmed "does not offer it" would lie about the slot.
-let previewHosts = [
-    HostAction(id: "power.sleep", title: "Sleep"),
-    HostAction(id: "power.reboot", title: "Restart", danger: true),
-    HostAction(id: "power.shutdown", title: "Shut down", danger: true),
-]
+/// The power actions and every other host action `cfg`'s ring holds, each by this app's word for
+/// it, as a host that offers them all lists them. An editor has no host on the line, and a dimmed
+/// "does not offer it" would lie about the slot.
+private func previewHosts(_ cfg: OverlayConfig) -> [HostAction] {
+    var ids = ["power.sleep", "power.reboot", "power.shutdown"]
+    for case .host(let id)? in cfg.ring where !ids.contains(id) { ids.append(id) }
+    return ids.map {
+        HostAction(id: $0, title: SlotId.host($0).label(), danger: ["power.reboot", "power.shutdown"].contains($0))
+    }
+}
 
-/// The ring's commands with nothing behind them: an editor shows, it never fires (§3.3).
-var previewRingActions: RingActions {
+/// A game this device started, so the preview's End game is not dimmed. Decoded: `RunningGame`'s
+/// memberwise init is PunktfunkKit's.
+private let previewGame = try? JSONDecoder().decode(
+    RunningGame.self, from: Data(#"{"title": "", "state": "running"}"#.utf8))
+
+/// The ring's commands for `cfg` with nothing behind them: an editor shows, it never fires
+/// (§3.3). Every slot this device runs reads as available.
+func previewRingActions(_ cfg: OverlayConfig) -> RingActions {
     #if os(tvOS)
     let micAvailable = false
     #else
     let micAvailable = true
     #endif
-    return RingActions(
+    var actions = RingActions(
         endStream: {}, disconnectLinger: {},
         touchMode: { .trackpad }, cycleTouchMode: {},
         keyboard: {},
         stats: { .compact }, cycleStats: {},
         micAvailable: { micAvailable }, micMuted: { false }, toggleMic: {},
-        hostActions: { previewHosts }, invokeHost: { _ in },
+        hostActions: { previewHosts(cfg) }, invokeHost: { _ in },
         sendShortcut: { _ in },
         padAvailable: { true }, padShown: { false }, togglePad: {}, tapPadButton: { _, _ in },
         pointerGranted: { true }, padMouseTarget: { 1 }, padMouseMode: { .off }, cyclePadMouse: {},
         currentMode: { (1920, 1080, 60) }, requestMode: { _, _, _ in },
         padTypeAvailable: { true })
+    actions.streamedGame = { previewGame }
+    actions.clipboardAvailable = { true }
+    return actions
 }
