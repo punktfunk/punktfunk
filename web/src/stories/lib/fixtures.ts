@@ -571,7 +571,7 @@ export const displayPresets: {
 	{
 		id: "play-together",
 		summary:
-			"For playing or watching with friends. Everyone who connects sees the same screen and can use it.",
+			"For playing or watching with friends. Everyone sees and uses one screen, sized for the first to connect.",
 		fields: policyFields({ mode_conflict: "join" }),
 	},
 	{

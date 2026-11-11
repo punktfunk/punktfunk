@@ -120,6 +120,12 @@ SDR** (`PUNKTFUNK_10BIT_SDR_WIDEN`, advanced, off by default) is on.
 [Full chroma](/docs/client-settings#video) and HDR work together on Windows and Linux hosts,
 with HEVC or PyroWave. AV1 is always 4:2:0.
 
+## HDR on a shared screen
+
+Devices that [share one screen](/docs/play-together) share its HDR or SDR too. A device that joins
+a screen in HDR must ask for HDR ([Per client](#per-client)), or it is told it can't join. A screen
+in SDR streams SDR to every device, an HDR TV included.
+
 ## Check it
 
 **On the client**, set the [stats overlay](/docs/stats) to **Detailed**. Its first line names the

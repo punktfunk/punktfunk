@@ -1791,5 +1791,5 @@
 	"display_preset_hotdesk_hint": "One person at a time, with instant reconnects between your devices; anyone else is told it's busy.",
 	"display_preset_shared_desktop_hint": "For a host you also use in person: your monitors stay on, and extra viewers get their own screen.",
 	"display_preset_workstation_hint": "Your multi-monitor daily driver: displays return where you put them, and the desktop is yours alone.",
-	"display_preset_play_together_hint": "For playing or watching with friends: everyone who connects sees the same screen and can use it."
+	"display_preset_play_together_hint": "For playing or watching with friends: everyone sees and uses one screen, sized for the first to connect."
 }
