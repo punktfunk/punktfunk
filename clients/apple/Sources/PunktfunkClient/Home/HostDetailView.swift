@@ -298,8 +298,12 @@ struct HostDetailView: View {
                 paired ? L10n.appleHostcardPairAgainWithPin : L10n.hostcardPairWithPin,
                 systemImage: "number", action: a.pair)
             if paired {
+                // The rule the card's star reads: the sole paired host is the default unasked.
                 Toggle(L10n.hostcardDefaultHost, isOn: Binding(
-                    get: { defaultHostID.lowercased() == host.id.uuidString.lowercased() },
+                    get: {
+                        StartScreen.defaultHost(id: defaultHostID, hosts: store.hosts).host?.id
+                            == host.id
+                    },
                     set: { defaultHostID = $0 ? host.id.uuidString : "" }))
                 Button(L10n.hostcardForgetIdentity, role: .destructive) { confirmForget = true }
                     .tint(.red)
@@ -362,15 +366,15 @@ struct HostDetailView: View {
     }
 }
 
-/// The Connection section's fields under the host form's rules: a field saves when focus leaves it
-/// or on Return, a TV row when its keyboard closes. What the rules refuse snaps back to the record.
+/// The Connection section's fields under the host form's rules: a field saves when focus leaves it,
+/// on Return and when the page closes, a TV row when its keyboard closes. What the rules refuse
+/// snaps back to the record.
 private struct HostConnectionFields: View {
     let host: StoredHost
     let onSave: (StoredHost) -> Void
-    @State private var name: String
-    @State private var address: String
-    @State private var port: String
-    @State private var macs: String
+    @State private var form: HostFormDraft
+    /// The form as it last loaded the record: a field still equal to it is one the player left.
+    @State private var loaded: HostFormDraft
     #if os(tvOS)
     @State private var editing: Field?
     #else
@@ -381,6 +385,15 @@ private struct HostConnectionFields: View {
         case name, address, port, macs
 
         var id: Self { self }
+
+        var text: WritableKeyPath<HostFormDraft, String> {
+            switch self {
+            case .name: \.name
+            case .address: \.address
+            case .port: \.port
+            case .macs: \.macs
+            }
+        }
 
         #if os(tvOS)
         /// The TV keyboard's prompt.
@@ -398,83 +411,60 @@ private struct HostConnectionFields: View {
     init(host: StoredHost, onSave: @escaping (StoredHost) -> Void) {
         self.host = host
         self.onSave = onSave
-        _name = State(initialValue: host.name)
-        _address = State(initialValue: host.address)
-        _port = State(initialValue: String(host.port))
-        _macs = State(initialValue: host.wakeMacs.joined(separator: ", "))
+        _form = State(initialValue: HostFormDraft(record: host))
+        _loaded = State(initialValue: HostFormDraft(record: host))
     }
 
     var body: some View {
         #if os(tvOS)
         TVFieldRow(
-            label: String(localized: L10n.hostsFieldName), value: name,
+            label: String(localized: L10n.hostsFieldName), value: form.name,
             placeholder: String(localized: L10n.hostsFieldNamePlaceholder)
         ) { editing = .name }
             .fullScreenCover(item: $editing) { field in
                 TVTextEntry(
-                    title: field.prompt, text: text(field),
+                    title: field.prompt, text: form[keyPath: field.text],
                     keyboardType: field == .port ? .numberPad : .default
                 ) { value in
-                    set(field, value)
+                    form[keyPath: field.text] = value.trimmingCharacters(in: .whitespaces)
                     editing = nil
                     save()
                 }
             }
             .onChange(of: host) { _, saved in if editing == nil { load(saved) } }
         TVFieldRow(
-            label: String(localized: L10n.hostsFieldAddress), value: address, placeholder: ""
+            label: String(localized: L10n.hostsFieldAddress), value: form.address, placeholder: ""
         ) { editing = .address }
         TVFieldRow(
-            label: String(localized: L10n.hostsFieldPort), value: port, placeholder: ""
+            label: String(localized: L10n.hostsFieldPort), value: form.port, placeholder: ""
         ) { editing = .port }
         TVFieldRow(
-            label: String(localized: L10n.hostsFieldMac), value: macs,
+            label: String(localized: L10n.hostsFieldMac), value: form.macs,
             placeholder: String(localized: L10n.hostsFieldMacPlaceholder)
         ) { editing = .macs }
         #else
         row(
-            String(localized: L10n.hostsFieldName), .name, $name,
+            String(localized: L10n.hostsFieldName), .name,
             prompt: String(localized: L10n.hostsFieldNamePlaceholder))
             .onChange(of: host) { _, saved in if focused == nil { load(saved) } }
             .onChange(of: focused) { save() }
+            // Leaving the page with a field focused moves no focus. Untouched, a save writes nothing.
+            .onDisappear(perform: save)
         row(
-            String(localized: L10n.hostsFieldAddress), .address, $address,
+            String(localized: L10n.hostsFieldAddress), .address,
             prompt: String(localized: L10n.hostsFieldAddressPlaceholder))
+        row(String(localized: L10n.hostsFieldPort), .port, prompt: String(HostFormDraft.defaultPort))
         row(
-            String(localized: L10n.hostsFieldPort), .port, $port,
-            prompt: String(HostFormDraft.defaultPort))
-        row(
-            String(localized: L10n.hostsFieldMac), .macs, $macs,
+            String(localized: L10n.hostsFieldMac), .macs,
             prompt: String(localized: L10n.hostsFieldMacPlaceholder))
         #endif
     }
 
-    #if os(tvOS)
-    private func text(_ field: Field) -> String {
-        switch field {
-        case .name: name
-        case .address: address
-        case .port: port
-        case .macs: macs
-        }
-    }
-
-    private func set(_ field: Field, _ value: String) {
-        let value = value.trimmingCharacters(in: .whitespaces)
-        switch field {
-        case .name: name = value
-        case .address: address = value
-        case .port: port = value
-        case .macs: macs = value
-        }
-    }
-    #else
+    #if !os(tvOS)
     /// A labelled field with its value trailing, as in a settings row.
-    private func row(
-        _ label: String, _ field: Field, _ text: Binding<String>, prompt: String
-    ) -> some View {
+    private func row(_ label: String, _ field: Field, prompt: String) -> some View {
         LabeledContent(label) {
-            TextField(label, text: text, prompt: Text(prompt))
+            TextField(label, text: $form[dynamicMember: field.text], prompt: Text(prompt))
                 .labelsHidden()
                 .multilineTextAlignment(.trailing)
                 .autocorrectionDisabled()
@@ -488,22 +478,17 @@ private struct HostConnectionFields: View {
     }
     #endif
 
-    /// Writes what the rules take (name, address and port together, the MACs on their own), then
-    /// shows the record as saved: a pasted `address:port` split, the MACs normalised.
+    /// Writes the fields the player changed (`HostFormDraft.commit`), then shows the record as
+    /// saved: a pasted `address:port` split, the MACs normalised.
     private func save() {
         var updated = host
-        let draft = HostFormDraft(name: name, address: address, port: port)
-        if draft.canSave { draft.apply(to: &updated) }
-        let parsed = AddHostSheet.parseMacs(macs)
-        if parsed != nil || macs.allSatisfy(\.isWhitespace) { updated.macAddresses = parsed }
+        form.commit(to: &updated, changedFrom: loaded)
         if updated != host { onSave(updated) }
         load(updated)
     }
 
     private func load(_ saved: StoredHost) {
-        name = saved.name
-        address = saved.address
-        port = String(saved.port)
-        macs = saved.wakeMacs.joined(separator: ", ")
+        form = HostFormDraft(record: saved)
+        loaded = form
     }
 }

@@ -198,6 +198,10 @@ public struct PadTweak: Equatable, Sendable {
 /// the same for a narrow (upright) layer — the two classes the preset already lays out
 /// differently.
 public struct PadConfig: Equatable, Sendable {
+    /// The two sliders' ranges; `OverlayConfig.parse` clamps a stored value into them.
+    public static let opacityRange: ClosedRange<Float> = 0.15...1
+    public static let scaleRange: ClosedRange<Float> = 0.6...1.6
+
     public var layout = "full"
     public var opacity: Float = 0.45
     public var scale: Float = 1
@@ -239,6 +243,16 @@ public struct OverlayConfig: Equatable, Sendable {
         shortcuts.first { $0.id == id }
     }
 
+    /// Put the action `id` names in slot `k`; an empty or unknown id empties it.
+    public mutating func assign(_ k: Int, id: String) {
+        ring[k] = SlotId.parse(id)
+    }
+
+    /// Trade two slots' actions: a disc dragged onto another.
+    public mutating func swap(_ a: Int, _ b: Int) {
+        ring.swapAt(a, b)
+    }
+
     /// Add or replace a shortcut. A new one takes the first empty slot, as the editors promise.
     public mutating func saveShortcut(_ sc: OverlayShortcut) {
         if let i = shortcuts.firstIndex(where: { $0.id == sc.id }) {
@@ -249,8 +263,11 @@ public struct OverlayConfig: Equatable, Sendable {
         }
     }
 
-    /// Remove a shortcut, emptying every slot that sent it: `parse` would, on the next read.
-    public mutating func removeShortcut(_ id: String) {
+    /// Remove a shortcut, emptying every slot that sent it (`parse` would, on the next read) and
+    /// dropping each of `bindings` that sent it. The caller writes `bindings` back only to the
+    /// layer that holds this ring.
+    public mutating func removeShortcut(_ id: String, bindings: inout Shortcuts) {
+        bindings.bindings.removeAll { $0.action == .slot(.shortcut(id)) }
         shortcuts.removeAll { $0.id == id }
         ring = ring.map { slot in
             if case .shortcut(let sid) = slot, sid == id { return nil }
@@ -258,9 +275,14 @@ public struct OverlayConfig: Equatable, Sendable {
         }
     }
 
-    /// The id a new shortcut takes: one past the highest `s<n>` in use.
-    public var nextShortcutID: String {
-        "s\((shortcuts.compactMap { Int($0.id.dropFirst()) }.max() ?? 0) + 1)"
+    /// The id a new shortcut takes: one past the highest `s<n>` here or sent by one of
+    /// `bindings`, so a binding a removed shortcut left behind never fires the new one.
+    public func nextShortcutID(bindings: Shortcuts) -> String {
+        let sent = bindings.bindings.compactMap { b -> String? in
+            if case .slot(.shortcut(let id)) = b.action { return id }
+            return nil
+        }
+        return "s\(((shortcuts.map(\.id) + sent).compactMap { Int($0.dropFirst()) }.max() ?? 0) + 1)"
     }
 
     public static func platformDefault(_ platform: RingPlatform = .touch) -> OverlayConfig {
@@ -274,7 +296,8 @@ public struct OverlayConfig: Equatable, Sendable {
         }
     }
 
-    /// Parse the setting; an empty or unparseable blob is the platform default.
+    /// Parse the setting; an empty or unparseable blob is the platform default, and a pad
+    /// slider's value outside its range is clamped into it.
     public static func parse(_ json: String?, platform: RingPlatform = .touch) -> OverlayConfig {
         guard let json, !json.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
               let data = json.data(using: .utf8),
@@ -296,8 +319,12 @@ public struct OverlayConfig: Equatable, Sendable {
         let padIn = obj["pad"] as? [String: Any] ?? [:]
         var pad = PadConfig()
         if let l = padIn["layout"] as? String, !l.isEmpty { pad.layout = l }
-        if let o = padIn["opacity"] as? Double { pad.opacity = Float(o) }
-        if let s = padIn["scale"] as? Double { pad.scale = Float(s) }
+        // Into the sliders' ranges: a slider's percentage traps on an infinity.
+        func clamped(_ v: Double, _ r: ClosedRange<Float>) -> Float {
+            Float.minimum(Float.maximum(Float(v), r.lowerBound), r.upperBound)
+        }
+        if let o = padIn["opacity"] as? Double { pad.opacity = clamped(o, PadConfig.opacityRange) }
+        if let s = padIn["scale"] as? Double { pad.scale = clamped(s, PadConfig.scaleRange) }
         func tweaks(_ key: String) -> [String: PadTweak] {
             guard let m = padIn[key] as? [String: Any] else { return [:] }
             var out: [String: PadTweak] = [:]

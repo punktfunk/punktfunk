@@ -62,18 +62,25 @@ extension SettingsView {
     func described<Content: View>(
         _ caption: String, field: String? = nil, @ViewBuilder content: () -> Content
     ) -> some View {
+        described(caption, fields: field.map { [$0] } ?? [], content: content)
+    }
+
+    /// `described` for a row that writes several overrides: its marker shows while any of
+    /// `fields` is overridden, and its Reset clears them all.
+    func described<Content: View>(
+        _ caption: String, fields: [String], @ViewBuilder content: () -> Content
+    ) -> some View {
         // A name the overlay does not model silently loses both the marker and its Reset, with no
-        // compile error to say so — the one-way door the marker exists to prevent. Caught here in
-        // debug rather than by noticing a missing badge.
-        assert(field.map { OverlayField.isModelled($0) } ?? true,
-               "described(field:) got \(field ?? "") — not a field SettingsOverlay models")
+        // compile error to say so. Caught here in debug rather than by a missing badge.
+        assert(fields.allSatisfy(OverlayField.isModelled),
+               "described(fields:) got \(fields) — not all fields SettingsOverlay models")
         #if os(tvOS)
         // A TV row carries no caption of its own: its focus names the one the pane's band shows,
         // and an overridden row wears a dot and resets from its context menu.
-        let overridden = field.map(isOverridden) ?? false
+        let overridden = fields.contains(where: isOverridden)
         return content()
             .modifier(TVOverrideMark(overridden: overridden) {
-                if let field { resetOverride(field) }
+                fields.forEach(resetOverride)
             })
             .focused($tvCaption, equals: SettingsCaption(text: caption, overridden: overridden))
         #else
@@ -85,12 +92,9 @@ extension SettingsView {
                 // Wrap, never truncate, in Form cells.
                 .fixedSize(horizontal: false, vertical: true)
                 .modifier(CaptionWidth())
-            if let field {
-                // Full cell width, deliberately: the marker's Reset is a CONTROL, and it belongs
-                // on the same trailing edge as the row's own control above it. Sharing the
-                // caption's reserved column left it stranded mid-row.
-                overrideMarker(field)
-            }
+            // Full cell width, deliberately: the marker's Reset is a CONTROL, and it belongs on
+            // the same trailing edge as the row's own control above it.
+            overrideMarker(fields)
         }
         .padding(.vertical, 2)
         #endif
@@ -131,12 +135,6 @@ extension SettingsView {
 
     // MARK: - Bitrate
 
-    /// Slider domain, log-scale: the useful range spans three orders of magnitude
-    /// (a few Mbps … 3 Gbps) — linear would cram everything below 100 Mbps into the
-    /// first pixels.
-    private static let minSliderKbps = 2_000.0
-    private static let maxSliderKbps = 3_000_000.0
-
     static var gigabitWarning: String {
         String(localized: L10n.appleBitrateKbpsGigabitWarning)
     }
@@ -150,23 +148,12 @@ extension SettingsView {
             set: { bitrate.wrappedValue = $0 ? 0 : 20_000 })
     }
 
-    /// Slider position 0...1 ↔ kbps on the log scale, snapped to two significant figures
-    /// so the readout shows round numbers instead of 47_322.
+    /// The manual rate's slider, on `BitrateScale`.
     var bitrateSlider: Binding<Double> {
         let bitrate = scoped(SettingsFields.bitrateKbps)
         return Binding(
-            get: {
-                let v = min(max(Double(bitrate.wrappedValue), Self.minSliderKbps),
-                            Self.maxSliderKbps)
-                return log(v / Self.minSliderKbps)
-                    / log(Self.maxSliderKbps / Self.minSliderKbps)
-            },
-            set: { pos in
-                let raw = Self.minSliderKbps
-                    * pow(Self.maxSliderKbps / Self.minSliderKbps, pos)
-                let mag = pow(10, floor(log10(raw)) - 1)
-                bitrate.wrappedValue = Int((raw / mag).rounded() * mag)
-            })
+            get: { BitrateScale.position(kbps: bitrate.wrappedValue) },
+            set: { bitrate.wrappedValue = BitrateScale.kbps(position: $0) })
     }
 
     // MARK: - Statistics

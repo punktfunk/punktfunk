@@ -20,32 +20,6 @@
 import PunktfunkKit
 import SwiftUI
 
-/// Which layer the settings surface is editing.
-enum SettingsScope: Equatable, Hashable {
-    /// The global defaults every preset inherits from — the only scope before this feature.
-    case defaults
-    /// One preset's overrides, by id.
-    case preset(String)
-
-    var presetID: String? {
-        if case .preset(let id) = self { return id }
-        return nil
-    }
-}
-
-/// One presetable setting, in the one place that knows all three of its faces: the
-/// `UserDefaults` key its global lives under, the overlay slot an override lives in, and the
-/// serialized name a per-row reset carries. Keeping them together is what stops a row from
-/// writing an override the reset button can't find.
-struct SettingsField<Value> {
-    /// The overlay's serialized field name — also the reset key. `resolution` is the one alias,
-    /// covering the width/height/match-window tri-state a single control drives.
-    let name: String
-    let key: String
-    let overlay: WritableKeyPath<SettingsOverlay, Value?>
-    let effective: KeyPath<EffectiveSettings, Value>
-}
-
 /// The catalog of presetable rows. A plain namespace rather than statics on the generic
 /// `SettingsField` itself: members of a generic type can't have their parameter inferred from the
 /// member alone, so every call site would need to spell the type out anyway.
@@ -191,21 +165,31 @@ enum SettingsFields {
     }
 }
 
+/// `SettingsView.effective` for one body pass, so the hundred-odd reads of a pass resolve the
+/// layers once. A reference in `@State`: filling it while `body` runs never invalidates the view.
+final class SettingsPass {
+    var settings: EffectiveSettings?
+}
+
 extension SettingsView {
     // MARK: - The layer being edited
 
-    var activePreset: StreamPreset? {
-        scope.presetID.flatMap { presets.preset(id: $0) }
-    }
+    var activePreset: StreamPreset? { scope.preset(in: presets.catalog) }
 
     /// True while a preset is being edited — the gate every tier-G/H row is hidden behind.
     var inPresetScope: Bool { activePreset != nil }
 
-    /// What every row displays: the globals as this view's `@AppStorage` sees them (so SwiftUI
-    /// tracks each of them), with the edited preset's overrides on top. A row the preset doesn't
-    /// override therefore reads as the LIVE global, which is what inherit-by-default has to look
-    /// like.
+    /// What every row displays (`SettingsScope.resolve`), resolved once per body pass and kept
+    /// in `pass` until the next pass or the next write.
     var effective: EffectiveSettings {
+        if let settings = pass.settings { return settings }
+        let settings = SettingsScope.resolve(globals: globals, scope: scope, catalog: presets.catalog)
+        pass.settings = settings
+        return settings
+    }
+
+    /// The globals as this view's `@AppStorage` sees them, so SwiftUI tracks each of them.
+    private var globals: EffectiveSettings {
         var base = EffectiveSettings()
         base.width = width
         base.height = height
@@ -249,30 +233,34 @@ extension SettingsView {
         #if os(iOS) || os(visionOS)
         base.touchMode = touchMode
         #endif
-        guard let preset = activePreset else { return base }
-        return base.applying(preset.overrides)
+        return base
     }
 
     // MARK: - Scoped bindings
 
-    /// A control's binding for whichever layer is being edited: `UserDefaults` in defaults scope,
-    /// the preset's overlay in preset scope.
-    ///
-    /// The setter always WRITES on touch. It never compares the new value against the global to
-    /// decide whether to record an override — that comparison is exactly the "copy the settings"
-    /// behaviour the design rejects, and it would silently drop a deliberate pin.
+    /// A control's binding for whichever layer is being edited, written where
+    /// `SettingsScope.route` sends it. The setter always writes on touch.
     func scoped<Value>(_ field: SettingsField<Value>) -> Binding<Value> {
         Binding(
             get: { effective[keyPath: field.effective] },
             set: { newValue in
-                guard let id = scope.presetID else {
+                pass.settings = nil
+                switch SettingsScope.route(scope: scope, catalog: presets.catalog, field: field) {
+                case .defaults(let key):
                     // @AppStorage observes this key, so the write re-renders the whole surface.
+                    UserDefaults.standard.set(newValue, forKey: key)
+                case .override(let id):
+                    presets.setOverride(id, field.overlay, newValue)
+                case .gone:
+                    // The screen already shows Default settings: the write and the scope follow.
+                    scope = .defaults
                     UserDefaults.standard.set(newValue, forKey: field.key)
-                    return
                 }
-                presets.setOverride(id, field.overlay, newValue)
             })
     }
+
+    /// The layer the screen shows: Default settings once the edited preset left the catalog.
+    var shownScope: SettingsScope { inPresetScope ? scope : .defaults }
 
     /// The resolution row's tri-state, written as one act: a single control drives width, height
     /// and (where it exists) match-window, so all of them move together and one reset clears all
@@ -294,22 +282,36 @@ extension SettingsView {
     }
 
     /// Put a row back to inheriting. The ONLY way an override is removed — the model never infers
-    /// "not overridden" from a value comparison.
+    /// "not overridden" from a value comparison. The row's sticky Custom… goes with it, so the
+    /// picker shows the inherited value.
     func resetOverride(_ name: String) {
         guard let id = scope.presetID else { return }
+        pass.settings = nil
         presets.clearOverride(id, field: name)
+        #if os(iOS) || os(visionOS) || os(macOS)
+        if name == OverlayField.resolution { customMode = false }
+        if name == SettingsFields.renderScale.name { customScaleMode = false }
+        #endif
     }
 
-    /// The accent dot + Reset affordance a row carries while it overrides the defaults. Rendered
-    /// inside `described`'s caption line, so it sits with the row it belongs to instead of in some
-    /// separate list of exceptions.
+    #if os(iOS) || os(visionOS) || os(macOS)
+    /// The sticky Custom… flags belong to the layer they were set in.
+    func clearCustomFlags() {
+        customMode = false
+        customScaleMode = false
+    }
+    #endif
+
+    /// The accent dot + Reset affordance a row carries while it overrides any of `names`.
+    /// Rendered inside `described`'s caption line, so it sits with the row it belongs to; Reset
+    /// clears every one of `names`.
     ///
     /// Reset is a BORDERED control pushed to the far edge, not tinted text next to the label: as a
     /// plain button it read as a third word of the notice, and the one action that can undo an
     /// override must not look like prose.
     @ViewBuilder
-    func overrideMarker(_ name: String) -> some View {
-        if isOverridden(name) {
+    func overrideMarker(_ names: [String]) -> some View {
+        if names.contains(where: isOverridden) {
             HStack(spacing: 5) {
                 Circle()
                     .fill(Color.brand)
@@ -321,7 +323,7 @@ extension SettingsView {
                     .foregroundStyle(Color.brand)
                 Spacer(minLength: 12)
                 Button {
-                    resetOverride(name)
+                    names.forEach(resetOverride)
                 } label: {
                     Label(L10n.commonReset, systemImage: "arrow.uturn.backward")
                         .font(.geist(11, .medium, relativeTo: .caption2))
@@ -540,10 +542,10 @@ extension SettingsView {
         return parts.joined(separator: " ")
     }
 
-    /// Switching scope is a plain state change — the rows are built by one code path and simply
-    /// read the other layer, so there is nothing to commit on the way out.
+    /// Switching scope is a plain state change: the rows read the other layer, so there is
+    /// nothing to commit on the way out. The menu checks the layer the screen shows.
     private var scopeSelection: Binding<SettingsScope> {
-        Binding(get: { scope }, set: { scope = $0 })
+        Binding(get: { shownScope }, set: { scope = $0 })
     }
 
     /// "Game copy", "Game copy 2", … — the first name that isn't taken, so Duplicate never opens

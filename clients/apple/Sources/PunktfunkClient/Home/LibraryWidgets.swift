@@ -200,7 +200,7 @@ private struct TileFramePreference: PreferenceKey {
 
 /// Sequentially tries cover-art URLs over `loader` (so a paired client can reach the host's own
 /// art proxy, not just public CDNs — see `LibraryArtLoader`), advancing past any that fail to
-/// load, then a placeholder. The loaded image is hard-clipped to fill the card's actual frame
+/// load, then a placeholder until `round` moves on. The loaded image is hard-clipped to fill the card's actual frame
 /// regardless of its own aspect ratio: a portrait capsule fills it as intended, and a fallback
 /// banner (wide hero/header art, used when a title has no portrait capsule) is cropped to the same
 /// tile rather than allowed to size it — see the `Color.clear` in `body` for why that takes more
@@ -218,6 +218,9 @@ struct PosterImage: View {
     /// Publish this poster's on-screen rect to `TileFrames` under this id (the entry's). What the
     /// launch hold flies its cover out of; nil for a poster nothing launches from.
     var frameID: String?
+    /// The shelf's `artRound`: when it moves on, a poster whose candidates all failed walks them
+    /// again.
+    var round = 0
     @State private var index = 0
     @State private var image: PlatformImage?
     @Environment(\.displayScale) private var displayScale
@@ -275,6 +278,7 @@ struct PosterImage: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .clipped()
         .task(id: LoadKey(index: index, hasLoader: loader != nil)) { await loadCurrent() }
+        .onChange(of: round) { if image == nil, index >= candidates.count { index = 0 } }
     }
 
     private func loadCurrent() async {

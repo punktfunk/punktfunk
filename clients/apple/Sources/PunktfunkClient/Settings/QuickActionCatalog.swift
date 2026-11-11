@@ -1,6 +1,7 @@
 // The dial editors' shared vocabulary: the catalogue of actions by group with each entry's note
-// on this platform, the shortcut keys, and the ring's inert preview commands. The touch/desktop
-// editor (QuickActionsEditor) and the TV's (TVQuickActionsEditor) both read it.
+// on this platform, the shortcut draft, and the ring's inert preview commands. The touch/desktop
+// editor (QuickActionsEditor) and the TV's (TVQuickActionsEditor) both read it; the keys a
+// shortcut can hold are `Chord`'s.
 
 import PunktfunkKit
 import PunktfunkShared
@@ -101,21 +102,6 @@ private let keyboardNote: String? = nil
 private let micNote: String? = nil
 #endif
 
-let modifierKeys = ["ctrl", "alt", "shift", "win"]
-
-/// The keys a chord can end on, as the keyboard the editor draws lays them out — every name
-/// `keyVk` knows, grouped the way a keyboard groups them.
-let keyGroups: [(id: String, title: String, keys: [String])] = [
-    ("function", String(localized: L10n.ringKeyGroupFunction), ["escape"] + (1...12).map { "f\($0)" }),
-    ("letters", String(localized: L10n.ringKeyGroupLetters), "qwertyuiopasdfghjklzxcvbnm".map(String.init)),
-    ("numbers", String(localized: L10n.ringKeyGroupNumbers), (1...9).map(String.init) + ["0"]),
-    ("editing", String(localized: L10n.ringKeyGroupEditing),
-     ["tab", "space", "enter", "backspace", "delete", "insert"]),
-    ("navigation", String(localized: L10n.ringKeyGroupNavigation),
-     ["home", "end", "pageup", "pagedown", "up", "down", "left", "right"]),
-    ("other", String(localized: L10n.ringKeyGroupOther), ["printscreen", "pause", "capslock"]),
-]
-
 /// A shortcut being edited, new or existing.
 struct ShortcutDraft: Identifiable, Hashable {
     var id: String
@@ -124,31 +110,43 @@ struct ShortcutDraft: Identifiable, Hashable {
     var isNew: Bool
 }
 
-/// The three power actions as the ring would show them on a host that offers all three; an
-/// editor has no host on the line, and a dimmed "does not offer it" would lie about the slot.
-let previewHosts = [
-    HostAction(id: "power.sleep", title: "Sleep"),
-    HostAction(id: "power.reboot", title: "Restart", danger: true),
-    HostAction(id: "power.shutdown", title: "Shut down", danger: true),
-]
+/// The power actions and every other host action `cfg`'s ring holds, each by this app's word for
+/// it, as a host that offers them all lists them. An editor has no host on the line, and a dimmed
+/// "does not offer it" would lie about the slot.
+private func previewHosts(_ cfg: OverlayConfig) -> [HostAction] {
+    var ids = ["power.sleep", "power.reboot", "power.shutdown"]
+    for case .host(let id)? in cfg.ring where !ids.contains(id) { ids.append(id) }
+    return ids.map {
+        HostAction(id: $0, title: SlotId.host($0).label(), danger: ["power.reboot", "power.shutdown"].contains($0))
+    }
+}
 
-/// The ring's commands with nothing behind them: an editor shows, it never fires (§3.3).
-var previewRingActions: RingActions {
+/// A game this device started, so the preview's End game is not dimmed. Decoded: `RunningGame`'s
+/// memberwise init is PunktfunkKit's.
+private let previewGame = try? JSONDecoder().decode(
+    RunningGame.self, from: Data(#"{"title": "", "state": "running"}"#.utf8))
+
+/// The ring's commands for `cfg` with nothing behind them: an editor shows, it never fires
+/// (§3.3). Every slot this device runs reads as available.
+func previewRingActions(_ cfg: OverlayConfig) -> RingActions {
     #if os(tvOS)
     let micAvailable = false
     #else
     let micAvailable = true
     #endif
-    return RingActions(
+    var actions = RingActions(
         endStream: {}, disconnectLinger: {},
         touchMode: { .trackpad }, cycleTouchMode: {},
         keyboard: {},
         stats: { .compact }, cycleStats: {},
         micAvailable: { micAvailable }, micMuted: { false }, toggleMic: {},
-        hostActions: { previewHosts }, invokeHost: { _ in },
+        hostActions: { previewHosts(cfg) }, invokeHost: { _ in },
         sendShortcut: { _ in },
         padAvailable: { true }, padShown: { false }, togglePad: {}, tapPadButton: { _, _ in },
         pointerGranted: { true }, padMouseTarget: { 1 }, padMouseMode: { .off }, cyclePadMouse: {},
         currentMode: { (1920, 1080, 60) }, requestMode: { _, _, _ in },
         padTypeAvailable: { true })
+    actions.streamedGame = { previewGame }
+    actions.clipboardAvailable = { true }
+    return actions
 }

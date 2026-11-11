@@ -185,18 +185,13 @@ struct HostSectionsView: View {
                 }))
     }
 
-    /// Explain an unavailable action, confirm a destructive one, run the rest — as the grid does.
+    /// A power action on its `HostOffers.route`, as the grid runs it.
     private func power(_ action: HostAction, on host: StoredHost) {
-        guard action.available else {
-            outcome = (
-                String(localized: L10n.appleHostcardActionFailedTitle),
-                action.unavailableReason ?? L10n.hostcardActionUnavailableBody(action: action.label))
-            return
-        }
-        if action.danger {
-            confirmPower = PendingHostAction(host: host, action: action)
-        } else {
-            run(action, on: host)
+        switch HostOffers.route(action: action) {
+        case .explain(let why):
+            outcome = (String(localized: L10n.appleHostcardActionFailedTitle), why)
+        case .confirm: confirmPower = PendingHostAction(host: host, action: action)
+        case .run: run(action, on: host)
         }
     }
 

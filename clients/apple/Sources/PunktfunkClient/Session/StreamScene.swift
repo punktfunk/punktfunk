@@ -201,7 +201,8 @@ struct StreamScene: View {
                 .padding(12)
                 .overFlatPicture()
                 .transition(.opacity)
-                .task {
+                // Keyed on the tier: a jump from compact straight to off starts the timer too.
+                .task(id: statsVerbosity) {
                     guard statsVerbosity == .off else { return }
                     try? await Task.sleep(for: .seconds(8))
                     withAnimation(.easeOut(duration: 0.6)) { showTouchExit = false }
@@ -229,6 +230,7 @@ struct StreamScene: View {
                     .overFlatPicture()
             }
         }
+        .onChange(of: captureEnabled, initial: true) { _, on in ring.takesInput = on }
         .onChange(of: ring.committed) { _, open in
             model.setRingOpen(open)
             #if os(macOS) || os(iOS)

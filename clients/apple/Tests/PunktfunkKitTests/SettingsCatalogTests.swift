@@ -47,7 +47,6 @@ final class SettingsCatalogTests: XCTestCase {
     /// Pickers that list the catalogue's options in another order, or fewer, with the list.
     private static let differs: [String: [String]] = [
         "codec": ["auto", "hevc", "av1", "h264", "pyrowave"],
-        "gamepad": ["auto", "xbox360", "xboxone", "dualsense", "dualshock4", "steamdeck"],
     ]
 
     /// The sections of the settings screen, by the category each draws.

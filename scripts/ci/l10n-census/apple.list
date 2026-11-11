@@ -98,7 +98,6 @@ clients/apple/Sources/PunktfunkClient/Settings/ControllerTestView.swift	Player L
 clients/apple/Sources/PunktfunkClient/Settings/ControllerTestView.swift	Settings → Controllers → Use controller.
 clients/apple/Sources/PunktfunkClient/Settings/ControllerTestView.swift	Test Controller
 clients/apple/Sources/PunktfunkClient/Settings/ControllerTestView.swift	Toggle a motor to feel it. The host maps a game's low/high-frequency
-clients/apple/Sources/PunktfunkClient/Settings/QuickActionCatalog.swift	Shut down
 clients/apple/Sources/PunktfunkClient/Settings/SettingsView+Sections.swift	Test Controller…
 clients/apple/Sources/PunktfunkClient/Settings/SettingsView+Sections.swift	⌘Space, ⌘Tab, Mission Control, …
 clients/apple/Sources/PunktfunkKit/Connection/ClientTLS.swift	Couldn't build the client identity: {}

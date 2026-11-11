@@ -30,31 +30,26 @@ struct PendingHostAction: Identifiable {
 final class HostPowerStore: ObservableObject {
     static let shared = HostPowerStore()
 
-    /// How long an answer stays fresh. Long on purpose: what it governs (whether this device
-    /// holds the grant, whether the box can suspend) changes when an operator edits access, not
-    /// minute to minute, and every refresh is a TLS handshake against an otherwise idle host.
-    private static let ttl: TimeInterval = 300
-
-    @Published private var byHost: [String: [HostAction]] = [:]
-    private var askedAt: [String: Date] = [:]
+    /// Each host's answer. 300 s on purpose: what it governs (whether this device holds the
+    /// grant, whether the box can suspend) changes when an operator edits access, not minute to
+    /// minute, and every refresh is a TLS handshake against an otherwise idle host.
+    private var cache = TTLCache<[HostAction]>(ttl: 300)
 
     /// What `host` last said this device may do to it. Empty until a refresh answers, and empty
-    /// for an older host, an unreachable one, or a device without the grant.
-    func actions(for host: StoredHost) -> [HostAction] { byHost[host.id.uuidString] ?? [] }
+    /// for an older host or a device without the grant. A refresh the host missed keeps it.
+    func actions(for host: StoredHost) -> [HostAction] { cache[host.id.uuidString] ?? [] }
 
     /// Ask again unless the cached answer is still fresh. Cheap and idempotent — call it from
     /// whatever the surface already does on appear or on a refresh tick.
     func refresh(_ host: StoredHost) {
-        let key = host.id.uuidString
-        // Stamp BEFORE the request, so a slow or hanging host cannot make every pass ask again.
-        if let at = askedAt[key], Date().timeIntervalSince(at) < Self.ttl { return }
         // The demo host serves no management API.
-        guard !DemoMode.isDemo(host), case .success(let target) = MgmtTarget.make(host: host)
+        guard !DemoMode.isDemo(host), case .success(let target) = MgmtTarget.make(host: host),
+              let ticket = cache.ask(host.id.uuidString, now: Date())
         else { return }
-        askedAt[key] = Date()
         Task { @MainActor in
-            let found = await LibraryClient.actions(target)
-            byHost[key] = found
+            let found = await LibraryClient.actionsIfAnswered(target)
+            objectWillChange.send()
+            cache.land(ticket, found)
         }
     }
 
@@ -62,9 +57,8 @@ final class HostPowerStore: ObservableObject {
     /// said is about to be wrong. Without this, a menu goes on offering "Sleep Host" for a
     /// machine that is already asleep until the TTL lapses.
     func invalidate(_ host: StoredHost) {
-        let key = host.id.uuidString
-        byHost[key] = []
-        askedAt[key] = nil
+        objectWillChange.send()
+        cache.invalidate(host.id.uuidString)
     }
 
     /// Run one action against `host`. Never throws: the caller shows `message` either way.

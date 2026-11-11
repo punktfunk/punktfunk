@@ -151,16 +151,9 @@ private struct ShortcutSheet: View {
         _trigger = State(initialValue: b?.trigger)
     }
 
-    /// The other bindings, which the new one is checked against.
-    private var others: Shortcuts {
-        var s = shortcuts
-        if let index { s.bindings.remove(at: index) }
-        return s
-    }
-
-    private var conflict: Shortcuts.Conflict? {
-        guard let trigger else { return nil }
-        return others.validate(.init(trigger: trigger, action: action ?? .ring))
+    /// What Save does with the trigger as it stands; nil before there is one.
+    private var decision: Shortcuts.SaveDecision? {
+        trigger.map { shortcuts.saveDecision($0, action: action ?? .ring, editing: index) }
     }
 
     var body: some View {
@@ -203,9 +196,7 @@ private struct ShortcutSheet: View {
                 if let index {
                     Section {
                         Button(L10n.shortcutsRemove, role: .destructive) {
-                            var s = shortcuts
-                            s.bindings.remove(at: index)
-                            save(s)
+                            save(shortcuts.without(index))
                             dismiss()
                         }
                     }
@@ -219,7 +210,7 @@ private struct ShortcutSheet: View {
                 ToolbarItem(placement: .cancellationAction) { Button(L10n.commonCancel) { dismiss() } }
                 ToolbarItem(placement: .confirmationAction) {
                     Button(index == nil ? L10n.commonAdd : L10n.commonSave) {
-                        if case .identical(let i) = conflict { replacing = i } else { commit() }
+                        if case .replace(let i)? = decision { replacing = i } else { commit() }
                     }
                     .disabled(action == nil || trigger == nil || blocking != nil)
                 }
@@ -278,11 +269,11 @@ private struct ShortcutSheet: View {
     /// Why Save is off, in the player's words; nil when it may save (an identical trigger asks
     /// to replace instead).
     private var blocking: String? {
-        guard let conflict, let trigger else { return nil }
+        guard case .blocked(let conflict)? = decision, let trigger else { return nil }
         switch conflict {
         case .identical: return nil
         case .pressSubset(let i):
-            let other = others.bindings[i].trigger
+            let other = shortcuts.without(index).bindings[i].trigger
             let (first, second) = trigger.ids.count < other.ids.count ? (trigger, other) : (other, trigger)
             return L10n.shortcutsSubset(first: first.chord(client: shortcutClient),
                                         second: second.chord(client: shortcutClient))
@@ -294,19 +285,15 @@ private struct ShortcutSheet: View {
 
     private var replacePrompt: String {
         guard let replacing else { return "" }
-        let b = others.bindings[replacing]
+        let b = shortcuts.without(index).bindings[replacing]
         return L10n.shortcutsIdenticalReplace(keys: b.trigger.label(client: shortcutClient),
                                               action: b.action.label(overlay))
     }
 
-    /// Store the edit; `replacing` indexes `others`, the binding the new one takes over from.
+    /// Store the edit, less the binding at `replacing` (an index of the others) it takes over from.
     private func commit(replacing: Int? = nil) {
         guard let action, let trigger else { return }
-        var s = shortcuts
-        let binding = Shortcuts.Binding(trigger: trigger, action: action)
-        if let index { s.bindings[index] = binding } else { s.bindings.append(binding) }
-        if let r = replacing { s.bindings.remove(at: index.map { r >= $0 ? r + 1 : r } ?? r) }
-        save(s)
+        save(shortcuts.applying(binding: .init(trigger: trigger, action: action), at: index, replacing: replacing))
         dismiss()
     }
 
@@ -332,16 +319,17 @@ private struct ShortcutSheet: View {
     }
 }
 
-/// Records a trigger by pressing it: a controller's buttons through GameController, taken when
-/// the first one lifts, or a key with the modifiers held. Every pad's own handler is put back
-/// when it stops.
+/// Records a trigger by pressing it: a controller's buttons, taken when the first one lifts, or
+/// a key with the modifiers held. Pads are polled, so a stream in another window keeps its pad
+/// handlers.
 @MainActor
 private final class ShortcutRecorder: ObservableObject {
     @Published private(set) var active = false
     /// The buttons pressed so far, in press order.
     @Published private(set) var held: [UInt32] = []
     private var take: ((Shortcuts.Trigger) -> Void)?
-    private var saved: [(GCExtendedGamepad, GCExtendedGamepadValueChangedHandler?)] = []
+    private var poll: Timer?
+    /// Each pad's buttons at the last poll.
     private var last: [ObjectIdentifier: UInt32] = [:]
     #if os(macOS)
     private var monitor: Any?
@@ -356,13 +344,12 @@ private final class ShortcutRecorder: ObservableObject {
         stop()
         self.take = take
         active = true
-        for controller in GCController.controllers() {
-            guard let ext = controller.extendedGamepad else { continue }
-            saved.append((ext, ext.valueChangedHandler))
-            ext.valueChangedHandler = { [weak self] g, _ in
-                MainActor.assumeIsolated { self?.pad(g) }
-            }
+        let timer = Timer(timeInterval: 1.0 / 60.0, repeats: true) { [weak self] timer in
+            guard let self else { return timer.invalidate() }
+            MainActor.assumeIsolated { self.pollPads() }
         }
+        RunLoop.main.add(timer, forMode: .common)
+        poll = timer
         #if os(macOS)
         monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
             guard let self, let vk = InputCapture.vk(keyCode: event.keyCode) else { return event }
@@ -375,9 +362,10 @@ private final class ShortcutRecorder: ObservableObject {
         #endif
     }
 
+    /// Safe to call again: the second call finds nothing to undo.
     func stop() {
-        for (ext, handler) in saved { ext.valueChangedHandler = handler }
-        saved = []
+        poll?.invalidate()
+        poll = nil
         last = [:]
         held = []
         active = false
@@ -388,10 +376,20 @@ private final class ShortcutRecorder: ObservableObject {
         #endif
     }
 
-    private func pad(_ g: GCExtendedGamepad) {
+    private func pollPads() {
+        for controller in GCController.controllers() where active {
+            if let g = controller.extendedGamepad { pad(g, id: ObjectIdentifier(controller)) }
+        }
+    }
+
+    /// A pad's first poll only notes what it holds: the press that started recording is no part
+    /// of the trigger.
+    private func pad(_ g: GCExtendedGamepad, id: ObjectIdentifier) {
         let now = GamepadCapture.heldButtons(g)
-        let id = ObjectIdentifier(g)
-        let was = last[id] ?? 0
+        guard let was = last[id] else {
+            last[id] = now
+            return
+        }
         last[id] = now
         for bit in GamepadWire.allButtons where now & ~was & bit != 0 && held.count < 4 && !held.contains(bit) {
             held.append(bit)
@@ -415,7 +413,7 @@ private final class ShortcutRecorder: ObservableObject {
 
     /// The stored name of a key's VK, from the names the key grid knows.
     static func keyName(_ vk: UInt32) -> String? {
-        keyGroups.flatMap(\.keys).first { keyVk($0) == vk }
+        Chord.keyGroups.flatMap(\.keys).first { keyVk($0) == vk }
     }
 }
 
@@ -568,7 +566,7 @@ private struct ChooseGrid: View {
                 }
             }
         }
-        ForEach(keyGroups, id: \.id) { group in
+        ForEach(Chord.keyGroups, id: \.id) { group in
             Section(group.title) {
                 let wide = group.keys.contains { keyLegend($0).count > 2 }
                 LazyVGrid(columns: [GridItem(.adaptive(minimum: wide ? 80 : 44), spacing: 6)], spacing: 6) {

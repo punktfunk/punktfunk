@@ -115,9 +115,9 @@ struct LibraryView: View {
     @State private var showCustomize = false
     /// The title whose details sheet is up (the title menu's Details…).
     @State private var detailGame: GameEntry?
-    /// A Play pressed on that sheet, run once the sheet is down so the session never presents
-    /// over a sheet that is still leaving.
-    @State private var launchAfterDetails: String?
+    /// An act pressed on that sheet that runs once the sheet is down
+    /// (`LibraryShelf.Act.waitsForDetailsToClose`).
+    @State private var afterDetails: (act: LibraryShelf.Act, game: GameEntry)?
     /// The title End Game is asking about, and what the host said when it refused.
     @State private var endingGame: GameEntry?
     @State private var endGameNotice: String?
@@ -130,8 +130,8 @@ struct LibraryView: View {
     /// it, and a pinned shelf is the same host seen through one of its cards.
     private var host: StoredHost { target.host }
 
-    @State private var games: [GameEntry] = []
-    @State private var loading = false
+    /// The titles, where they came from, and what the host runs: `LibraryShelf.reduce` fills it.
+    @State private var shelf = LibraryShelf.State()
     /// Bumped by Reload and Retry: the load runs in the view's task, which leaving cancels.
     @State private var reloadToken = 0
     /// Held back a moment, so a cache that answers at once never flashes a spinner.
@@ -139,18 +139,6 @@ struct LibraryView: View {
     /// The catalogs this run has shown, by host: a shelf the filter switches back to opens on its
     /// titles rather than on an empty frame and a spinner.
     @MainActor private static var shown: [String: [GameEntry]] = [:]
-    @State private var errorText: String?
-    /// The host didn't answer and auto-wake is off: the shelf offers a wake instead of sending one.
-    @State private var wakeOffered = false
-    /// What the host has launched right now, keyed by library id — the `Resume` affordance. Empty
-    /// on an older host, an unreachable one, or while the catalog is being served from cache.
-    @State private var running: [String: RunningGame] = [:]
-    /// `/status` downloads by library id, and this device's grants: host state, as `running`.
-    @State private var downloads: [String: HostDownload] = [:]
-    @State private var grants: UInt32?
-    /// When the catalog on screen was fetched, if it came from disk rather than from the host.
-    /// Non-nil ⇒ these titles are a memory, not an observation, and the view says so.
-    @State private var servedFromCacheAt: Date?
     /// Guards the one-shot scroll restore. `onAppear` fires again on every re-layout (and once per
     /// section), and re-scrolling after the player has started browsing would yank the grid out
     /// from under them — which is a worse bug than the one being fixed.
@@ -206,8 +194,8 @@ struct LibraryView: View {
                 Button(L10n.commonOk, role: .cancel) {}
             }
             // Percentages move while a download runs and the shelf is up.
-            .task(id: downloads.values.contains(where: \.live)) {
-                while downloads.values.contains(where: \.live), !Task.isCancelled {
+            .task(id: shelf.polls) {
+                while shelf.polls, !Task.isCancelled {
                     try? await Task.sleep(for: .seconds(2))
                     await refreshStatus()
                 }
@@ -259,30 +247,30 @@ struct LibraryView: View {
             #endif
             #if os(tvOS)
             // A TV's sheet is a narrow card; the details want the screen.
-            .fullScreenCover(item: $detailGame, onDismiss: launchPendingTitle) { detailSheet($0) }
+            .fullScreenCover(item: $detailGame, onDismiss: runAfterDetails) { detailSheet($0) }
             #else
-            .sheet(item: $detailGame, onDismiss: launchPendingTitle) { detailSheet($0) }
+            .sheet(item: $detailGame, onDismiss: runAfterDetails) { detailSheet($0) }
             #endif
             // Before the first frame: a shelf seen this run opens on its titles, any other one on
             // the (held back) spinner rather than a flash of the empty state.
             .onAppear {
-                guard games.isEmpty else { return }
-                if let seen = Self.shown[host.id.uuidString] { games = seen } else { loading = true }
+                guard shelf.games.isEmpty else { return }
+                if let seen = Self.shown[host.id.uuidString] { shelf.games = seen } else { shelf.loading = true }
             }
             .task(id: reloadToken) {
                 if keptForDetail { keptForDetail = false } else { await load() }
             }
-            .task(id: loading) {
+            .task(id: shelf.loading) {
                 spinnerDue = false
-                guard loading else { return }
+                guard shelf.loading else { return }
                 try? await Task.sleep(for: .milliseconds(300))
-                spinnerDue = loading
+                spinnerDue = shelf.loading
             }
             .onDisappear {
                 // tvOS's full-screen details hide the shelf without leaving it: keep the loader
                 // they draw with, and skip the reload on return unless a load was cut short.
                 if detailGame != nil {
-                    keptForDetail = !loading
+                    keptForDetail = !shelf.loading
                     return
                 }
                 // Hand the loader off before clearing it, so its pooled connections are closed
@@ -303,9 +291,9 @@ struct LibraryView: View {
     /// and never as an error: a cached library is a working library, and a host that is still
     /// waking is the case this whole path exists to serve.
     @ViewBuilder private var staleNote: some View {
-        if let text = staleness.text {
+        if let text = shelf.staleness.text {
             HStack(spacing: 6) {
-                Image(systemName: staleness.symbol)
+                Image(systemName: shelf.staleness.symbol)
                 Text(text)
                 wakeButton
             }
@@ -320,12 +308,12 @@ struct LibraryView: View {
     @ViewBuilder private var content: some View {
         if inTab {
             tabBody
-        } else if loading && games.isEmpty {
+        } else if shelf.loading && shelf.games.isEmpty {
             ProgressView(String(localized: L10n.libLoading))
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-        } else if let errorText, games.isEmpty {
+        } else if let errorText = shelf.errorText, shelf.games.isEmpty {
             errorState(errorText)
-        } else if games.isEmpty {
+        } else if shelf.games.isEmpty {
             emptyState
         } else {
             VStack(spacing: 0) {
@@ -335,31 +323,13 @@ struct LibraryView: View {
         }
     }
 
-    /// A catalog collated by the shared rules: launchers lead (design D4), then one section per
-    /// group under the chosen grouping (none = one section of games), each in the chosen sort.
-    private func sections(of items: [GameEntry]) -> [(label: String, games: [GameEntry])] {
-        let groupBy: LibraryGroupBy?
-        switch groupByRaw {
-        case "platform": groupBy = .platform
-        case "store": groupBy = .store
-        default: groupBy = nil
-        }
-        return LibraryCollation.collate(items, sort: LibrarySortKey(stored: sortRaw), groupBy: groupBy)
-            .map { group in
-                // The ungrouped bucket names itself "All"; on this grid it has always been "Games".
-                let label = (groupBy == nil && group.key != .launchers)
-                    ? String(localized: L10n.libSectionGames) : group.label
-                return (label, group.indices.map { items[$0] })
-            }
-    }
+    private var sort: LibrarySortKey { LibrarySortKey(stored: sortRaw) }
+    private var groupBy: LibraryGroupBy? { LibraryGroupBy(stored: groupByRaw) }
 
-    /// The plain grid's sections. Headers only when there is more than one.
-    private var sections: [(label: String, games: [GameEntry])] {
-        sections(of: ordered)
-    }
-
+    /// The plain grid, launchers included. Headers only when there is more than one section.
     private var grid: some View {
-        let sections = self.sections
+        let sections = LibraryShelf.grid(
+            shelf.games, sort: sort, groupBy: groupBy, running: Set(shelf.running.keys))
         return ScrollViewReader { proxy in
             keyNavigation(sections: sections, proxy: proxy) {
                 ScrollView {
@@ -374,8 +344,7 @@ struct LibraryView: View {
     /// cursor. Leaving a stream re-presents this view, so the last title opened from this shelf
     /// is scrolled back to once, without animation.
     private func gridBlock(
-        _ sections: [(label: String, games: [GameEntry])], showsHeaders: Bool,
-        proxy: ScrollViewProxy
+        _ sections: [LibraryShelf.Section], showsHeaders: Bool, proxy: ScrollViewProxy
     ) -> some View {
         VStack(alignment: .leading, spacing: 18) {
             ForEach(Array(sections.enumerated()), id: \.offset) { _, section in
@@ -407,7 +376,7 @@ struct LibraryView: View {
     /// Arrow keys pick a title in the grid and Return launches it: an iPad on a Magic Keyboard
     /// with no pad sees this grid.
     @ViewBuilder private func keyNavigation(
-        sections: [(label: String, games: [GameEntry])], proxy: ScrollViewProxy,
+        sections: [LibraryShelf.Section], proxy: ScrollViewProxy,
         @ViewBuilder content: () -> some View
     ) -> some View {
         #if os(iOS) || os(visionOS) || os(macOS)
@@ -432,10 +401,13 @@ struct LibraryView: View {
     // MARK: - The Library tab
 
     /// The Library tab: the stored sections in order, each hidden while it has nothing to show.
+    /// The rows are computed once here, over the titles the search leaves.
     private var tabBody: some View {
-        let groups = gameSections
+        let rows = LibraryShelf.rows(
+            shelf.games, sort: sort, groupBy: groupBy, running: Set(shelf.running.keys),
+            favorites: Set(favoriteIDs), search: search)
         return ScrollViewReader { proxy in
-            keyNavigation(sections: groups, proxy: proxy) {
+            keyNavigation(sections: rows.games, proxy: proxy) {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 26) {
                         #if os(tvOS)
@@ -444,7 +416,7 @@ struct LibraryView: View {
                         tabHeader
                         staleNote
                         ForEach(sectionLayout.visible) { section in
-                            tabSection(section, groups: groups, proxy: proxy)
+                            tabSection(section, rows: rows, proxy: proxy)
                         }
                         shelfState
                     }
@@ -455,8 +427,7 @@ struct LibraryView: View {
     }
 
     @ViewBuilder private func tabSection(
-        _ section: LibrarySection, groups: [(label: String, games: [GameEntry])],
-        proxy: ScrollViewProxy
+        _ section: LibrarySection, rows: LibraryShelf.Rows, proxy: ScrollViewProxy
     ) -> some View {
         switch section {
         case .desktops:
@@ -472,36 +443,33 @@ struct LibraryView: View {
                 }
             }
         case .recent:
-            let played = recentTitles
-            if !played.isEmpty {
+            if !rows.recent.isEmpty {
                 row(section) {
-                    ForEach(played) { game in
+                    ForEach(rows.recent) { game in
                         tile(game, caption: PlayStatsText.lastPlayed(game.stats), scope: "recent")
                             .frame(width: rowTileWidth)
                     }
                 }
             }
         case .favorites:
-            let marked = favoriteTitles
-            if !marked.isEmpty {
+            if !rows.favorites.isEmpty {
                 row(section) {
-                    ForEach(marked) { game in
+                    ForEach(rows.favorites) { game in
                         tile(game, scope: "favorites").frame(width: rowTileWidth)
                     }
                 }
             }
         case .launchers:
-            let launchers = shelfGames.filter(\.isLauncher)
-            if !launchers.isEmpty {
+            if !rows.launchers.isEmpty {
                 row(section) {
-                    ForEach(launchers) { game in
+                    ForEach(rows.launchers) { game in
                         tile(game, scope: "launchers").frame(width: rowTileWidth)
                     }
                 }
             }
         case .games:
-            if !groups.isEmpty {
-                gridBlock(groups, showsHeaders: true, proxy: proxy)
+            if !rows.games.isEmpty {
+                gridBlock(rows.games, showsHeaders: true, proxy: proxy)
             }
         }
     }
@@ -534,11 +502,11 @@ struct LibraryView: View {
 
     /// Loading, error or empty, in place of the shelf's sections. Desktops still show above it.
     @ViewBuilder private var shelfState: some View {
-        if games.isEmpty {
+        if shelf.games.isEmpty {
             Group {
-                if loading {
+                if shelf.loading {
                     if spinnerDue { ProgressView(String(localized: L10n.libLoading)) }
-                } else if let errorText {
+                } else if let errorText = shelf.errorText {
                     errorState(errorText)
                 } else {
                     emptyState
@@ -571,45 +539,11 @@ struct LibraryView: View {
     private static let gridSpacing: CGFloat = 18
     #endif
 
-    /// The shelf the search leaves, launchers included, in the host's order.
-    private var shelfGames: [GameEntry] {
-        guard !search.isEmpty else { return games }
-        return games.filter { $0.title.localizedStandardContains(search) }
-    }
-
-    /// The Games section: the searched shelf without its launchers, which have their own row;
-    /// anything running leads, as on the plain grid.
-    private var gameSections: [(label: String, games: [GameEntry])] {
-        let titles = shelfGames.filter { !$0.isLauncher }
-        return sections(of: running.isEmpty ? titles : LibraryOrder.display(titles, running: Set(running.keys)))
-    }
-
-    /// Played titles, newest first, at most twelve: the shared Recent order, cut at the first
-    /// title never played.
-    private var recentTitles: [GameEntry] {
-        // Filtered first: the sort then runs over the played titles, not the shelf.
-        let titles = shelfGames.filter {
-            !$0.isLauncher && ($0.stats?.lastPlayedUnixMs ?? 0) > 0
-        }
-        let order = LibraryCollation.collate(titles, sort: .recent, groupBy: nil).first?.indices ?? []
-        return Array(order.map { titles[$0] }.prefix(12))
-    }
-
     private var favoriteIDs: [String] {
         #if DEBUG
         if let shotFavorites { return shotFavorites }
         #endif
         return favorites.ids(for: host.id.uuidString)
-    }
-
-    /// Favorited titles, in the shelf's current sort.
-    private var favoriteTitles: [GameEntry] {
-        let marked = Set(favoriteIDs)
-        guard !marked.isEmpty else { return [] }
-        // Filtered first: the sort then runs over the favorites, not the shelf.
-        let titles = shelfGames.filter { marked.contains($0.id) }
-        return LibraryCollation.collate(titles, sort: LibrarySortKey(stored: sortRaw), groupBy: nil)
-            .flatMap(\.indices).map { titles[$0] }
     }
 
     #if os(visionOS)
@@ -718,49 +652,38 @@ struct LibraryView: View {
     private func card(_ game: GameEntry, caption: String?, frameID: String) -> GameCard {
         GameCard(
             game: game, artLoader: artLoader, selected: isKeyCursor(game),
-            isRunning: running[game.id] != nil,
-            badge: TileBadge.forTitle(game.install, download: downloads[game.id]),
-            caption: caption, host: host, frameID: frameID)
+            isRunning: shelf.running[game.id] != nil,
+            badge: TileBadge.forTitle(game.install, download: shelf.downloads[game.id]),
+            caption: caption, host: host, frameID: frameID, artRound: shelf.artRound)
     }
 
-    /// A title's own acts, one level below a host card's (design §2.5): Play / Resume leads,
-    /// then what a tap cannot do.
-    @ViewBuilder private func titleMenu(_ game: GameEntry) -> some View {
-        if let launch = launchAndRemember {
-            Button(playLabel(game), systemImage: "play.fill") { launch(game.id) }
-        }
-        if inTab, game.id != LibraryCollation.desktopID {
-            let marked = favoriteIDs.contains(game.id)
+    /// A title's own acts, one level below a host card's (design §2.5).
+    private func titleMenu(_ game: GameEntry) -> some View {
+        ForEach(titleActs(game), id: \.self) { act in
             Button(
-                marked ? L10n.libFavoriteRemove : L10n.libFavoriteAdd,
-                systemImage: marked ? "heart.slash" : "heart"
-            ) {
-                favorites.toggle(game.id, host: host.id.uuidString)
-            }
-        }
-        if game.id != LibraryCollation.desktopID {
-            Button(L10n.libTitleDetails, systemImage: "info.circle") { detailGame = game }
-        }
-        if LinkClipboard.isAvailable {
-            Button(L10n.hostcardCopyLink, systemImage: "link") { copyLink(game) }
-        }
-        if let files = InstallAction.forTitle(
-            game.install, download: downloads[game.id], grants: grants)
-        {
-            Button(files.label(game.install), systemImage: Self.filesSymbol(files)) {
-                if files == .remove { removingGame = game } else { changeInstall(game, files) }
-            }
-        }
-        if canEnd(game) {
-            Button(L10n.libEndGame, systemImage: "xmark.circle", role: .destructive) { endingGame = game }
+                act.label(game.install), systemImage: act.symbol,
+                role: act == .endGame ? .destructive : nil
+            ) { perform(act, on: game) }
         }
     }
 
-    private static func filesSymbol(_ action: InstallAction) -> String {
-        switch action {
-        case .install, .resume: return "arrow.down.circle"
-        case .pause: return "pause.circle"
-        case .remove: return "trash"
+    private func titleActs(_ game: GameEntry) -> [LibraryShelf.Act] {
+        LibraryShelf.acts(
+            game, running: shelf.running[game.id], download: shelf.downloads[game.id],
+            grants: shelf.grants, canLaunch: onLaunch != nil,
+            favorite: inTab ? favoriteIDs.contains(game.id) : nil,
+            canCopyLink: LinkClipboard.isAvailable)
+    }
+
+    private func perform(_ act: LibraryShelf.Act, on game: GameEntry) {
+        switch act {
+        case .play, .resume, .desktop: launch(game.id)
+        case .favorite, .unfavorite: favorites.toggle(game.id, host: host.id.uuidString)
+        case .details: detailGame = game
+        case .copyLink: copyLink(game)
+        case .files(.remove): removingGame = game
+        case .files(let action): changeInstall(game, action)
+        case .endGame: endingGame = game
         }
     }
 
@@ -771,42 +694,25 @@ struct LibraryView: View {
         else { return }
         Task {
             let outcome = await LibraryClient.changeInstall(appID: game.id, action: action, on: target)
-            if outcome == .done, action == .remove, let i = games.firstIndex(where: { $0.id == game.id }) {
-                games[i].install?.state = "missing"
+            if outcome == .done, action == .remove,
+               let i = shelf.games.firstIndex(where: { $0.id == game.id }) {
+                shelf.games[i].install?.state = "missing"
             }
             if outcome != .done { endGameNotice = outcome.notice(action, title: game.title) }
             await refreshStatus()
         }
     }
 
-    /// What the host runs and downloads, and what this device may do there.
+    /// What the host runs and downloads, and what this device may do there. A read the host
+    /// didn't answer changes nothing.
     private func refreshStatus() async {
         let current = host
         guard case .success(let target) = MgmtTarget.make(host: current) else { return }
-        applyStatus(await LibraryClient.status(target), for: current)
-    }
-
-    private func applyStatus(
-        _ status: (games: [RunningGame], downloads: [HostDownload], grants: UInt32?),
-        for current: StoredHost
-    ) {
-        running = Dictionary(
-            status.games.filter(\.isUp).compactMap { g in g.appID.map { ($0, g) } },
-            // Two sessions can have the same title up (the host admits concurrent sessions); for a
-            // Resume badge either one is the same answer, and the endable one carries End Game.
-            uniquingKeysWith: { first, other in other.endable == true ? other : first })
-        downloads = Dictionary(
-            status.downloads.map { ($0.appID, $0) }, uniquingKeysWith: { _, last in last })
-        grants = status.grants
-        // The host cards read the same fact from the store; hand it this answer rather than
-        // letting their TTL ask the host a second time for what we just fetched. It also carries
-        // the entries no badge can: a launch the host cannot track has no id to key on.
-        nowPlayingStore.adopt(status.games, for: current)
-    }
-
-    /// The host runs a launch of this device's of `game`, so it lets this device end it.
-    private func canEnd(_ game: GameEntry) -> Bool {
-        game.id != LibraryCollation.desktopID && running[game.id]?.endable == true
+        let answer = await LibraryClient.statusIfAnswered(target)
+        shelf = shelf.applying(answer)
+        // The host cards read what runs from the store: hand it this answer rather than let
+        // their TTL ask again. It also carries what no badge can: an untracked launch has no id.
+        if let answer { nowPlayingStore.adopt(answer.games, for: current) }
     }
 
     /// Ask the host to end `game`. Gone either way drops the badge; a refusal, or no way to ask,
@@ -818,7 +724,7 @@ struct LibraryView: View {
         Task {
             let outcome = await LibraryClient.endGame(appID: game.id, on: target)
             if outcome.gameGone {
-                running[game.id] = nil
+                shelf.running[game.id] = nil
                 nowPlayingStore.invalidate(current)
             } else {
                 endGameNotice = outcome.notice(title: game.title)
@@ -826,25 +732,19 @@ struct LibraryView: View {
         }
     }
 
-    private func playLabel(_ game: GameEntry) -> String {
-        if game.id == LibraryCollation.desktopID { return String(localized: L10n.libDesktopAction) }
-        return String(localized: running[game.id] != nil ? L10n.libResume : L10n.commonPlay)
-    }
-
+    /// The title menu's acts on the details sheet, less Details and the files act.
     private func detailSheet(_ game: GameEntry) -> some View {
-        TitleDetailSheet(
-            game: game, artLoader: artLoader, playLabel: playLabel(game),
-            isFavorite: inTab ? favoriteIDs.contains(game.id) : nil,
-            onToggleFavorite: { favorites.toggle(game.id, host: host.id.uuidString) },
-            onPlay: launchAndRemember == nil ? nil : {
-                launchAfterDetails = game.id
-                detailGame = nil
-            },
-            onCopyLink: LinkClipboard.isAvailable ? { copyLink(game) } : nil,
-            onEndGame: canEnd(game) ? {
-                detailGame = nil
-                endingGame = game
-            } : nil,
+        let acts = titleActs(game)
+        let play = acts.first { [.play, .resume, .desktop].contains($0) }
+        let heart = acts.first { $0 == .favorite || $0 == .unfavorite }
+        func pressed(_ act: LibraryShelf.Act?) -> (() -> Void)? {
+            guard let act, acts.contains(act) else { return nil }
+            return { fromDetails(act, game) }
+        }
+        return TitleDetailSheet(
+            game: game, artLoader: artLoader, playLabel: play?.label(nil) ?? "",
+            isFavorite: heart.map { $0 == .unfavorite }, onToggleFavorite: pressed(heart) ?? {},
+            onPlay: pressed(play), onCopyLink: pressed(.copyLink), onEndGame: pressed(.endGame),
             host: host)
             #if os(iOS) || os(visionOS)
             .presentationDetents([.medium, .large])
@@ -853,16 +753,23 @@ struct LibraryView: View {
             #endif
     }
 
-    private func launchPendingTitle() {
-        guard let id = launchAfterDetails else { return }
-        launchAfterDetails = nil
-        launchAndRemember?(id)
+    /// An act pressed on the details sheet: one that waits for the sheet runs from its dismissal.
+    private func fromDetails(_ act: LibraryShelf.Act, _ game: GameEntry) {
+        guard act.waitsForDetailsToClose else { return perform(act, on: game) }
+        afterDetails = (act, game)
+        detailGame = nil
+    }
+
+    private func runAfterDetails() {
+        guard let pending = afterDetails else { return }
+        afterDetails = nil
+        perform(pending.act, on: pending.game)
     }
 
     /// What a tile says under its title for the active sort (design P6): when it was last
     /// played under Recent, how long under Most played, nothing otherwise.
     private func sortCaption(_ game: GameEntry) -> String? {
-        switch LibrarySortKey(stored: sortRaw) {
+        switch sort {
         // Blank, not nil, for a title with nothing recorded: its tile keeps the caption line.
         case .recent: return PlayStatsText.lastPlayed(game.stats) ?? ""
         case .playTime: return PlayStatsText.playTime(game.stats) ?? ""
@@ -936,7 +843,7 @@ struct LibraryView: View {
 
     /// The wake offer: the explicit wake, then a reload once the host answers.
     @ViewBuilder private var wakeButton: some View {
-        if wakeOffered, let wake {
+        if shelf.wakeOffered, let wake {
             Button(L10n.hostcardWake) {
                 wake(store.hosts.first { $0.id == host.id } ?? host) { reloadToken += 1 }
             }
@@ -959,7 +866,7 @@ struct LibraryView: View {
         Button { reloadToken += 1 } label: {
             Label(L10n.libReload, systemImage: "arrow.clockwise")
         }
-        .disabled(loading)
+        .disabled(shelf.loading)
     }
 
     /// Sort and group for the plain grid — the console's bar, as a menu. The sort is the shared
@@ -1000,16 +907,16 @@ struct LibraryView: View {
         // The demo host serves no management API; its shelf is built in.
         if DemoMode.isDemo(host) {
             artLoader = DemoMode.art
-            games = DemoMode.games
-            running = [:]
-            servedFromCacheAt = nil
-            errorText = nil
-            loading = false
+            shelf.games = DemoMode.games
+            shelf.running = [:]
+            shelf.servedFromCacheAt = nil
+            shelf.errorText = nil
+            shelf.loading = false
             return
         }
-        loading = true
-        errorText = nil
-        wakeOffered = false
+        shelf.loading = true
+        shelf.errorText = nil
+        shelf.wakeOffered = false
         // Dev hook, the twin of the desktop console's `PUNKTFUNK_FAKE_LIBRARY`: a file holding
         // the host's `/api/v1/library` JSON (or the shared collate vectors file, whose `library`
         // array is the same shape) stands in for the host, so the grid, the sort bar and the
@@ -1020,9 +927,10 @@ struct LibraryView: View {
             return
         }
         let current = store.hosts.first { $0.id == host.id } ?? host
-        guard let target = MgmtTarget.make(host: current).target(orSay: { errorText = $0 }) else {
-            games = []
-            loading = false
+        guard let target = MgmtTarget.make(host: current).target(orSay: { shelf.errorText = $0 })
+        else {
+            shelf.games = []
+            shelf.loading = false
             return
         }
         // Built ahead of the first suspension: a remounted shelf draws its restored tiles
@@ -1036,28 +944,13 @@ struct LibraryView: View {
         let hostID = current.id.uuidString
         let events = LibraryLoad.run(
             target: target, hostID: hostID, wakeMacs: current.wakeMacs, autoWake: autoWake)
+        let canWake = WakePolicy.canWake(current.wakeMacs)
         for await event in events {
+            shelf = LibraryShelf.reduce(shelf, event, autoWake: autoWake, canWake: canWake)
             switch event {
-            case .cached(let cached):
-                games = cached.games
-                servedFromCacheAt = cached.fetchedAt
-                Self.shown[hostID] = games
-            case .waking:
-                break
-            case .fetched(let fetched):
-                games = fetched
-                servedFromCacheAt = nil
-                errorText = nil
-                Self.shown[hostID] = games
-            case .failed(let error, _):
-                // Titles on screen outrank the error; the staleness note carries the situation.
-                if games.isEmpty { errorText = LibraryLoad.failure(error) }
-                if case .unreachable = error, !autoWake, WakePolicy.canWake(current.wakeMacs) {
-                    wakeOffered = true
-                }
-            case .status(let up, let downloads, let grants):
-                applyStatus((up, downloads, grants), for: current)
-                loading = false
+            case .cached, .fetched: Self.shown[hostID] = shelf.games
+            case .status(let answer?): nowPlayingStore.adopt(answer.games, for: current)
+            case .waking, .failed, .status(nil): break
             }
         }
     }
@@ -1067,16 +960,16 @@ struct LibraryView: View {
         artLoader = ShotPosterArt.source
         switch phase {
         case .loading:
-            loading = true
+            shelf.loading = true
         case .error(let text):
-            errorText = text
+            shelf.errorText = text
         case .empty:
-            games = []
+            shelf.games = []
         case .catalog(let list, let staleness, let up):
-            games = list.launchersFirst
-            servedFromCacheAt = staleness == .none ? nil : Date()
-            loading = staleness == .waking
-            running = Dictionary(
+            shelf.games = list.launchersFirst
+            shelf.servedFromCacheAt = staleness == .none ? nil : Date()
+            shelf.loading = staleness == .waking
+            shelf.running = Dictionary(
                 up.compactMap { id in ShotMock.running(id).map { (id, $0) } },
                 uniquingKeysWith: { first, _ in first })
         }
@@ -1086,26 +979,26 @@ struct LibraryView: View {
     /// The `PUNKTFUNK_FAKE_LIBRARY` path: a plain `[GameEntry]` array, or a `{ "library": [...] }`
     /// wrapper (the shared vectors file). A bad file reads as an error state, not a crash.
     private func loadFake(path: String) {
-        defer { loading = false }
+        defer { shelf.loading = false }
         struct Wrapped: Decodable { let library: [GameEntry] }
-        servedFromCacheAt = nil
-        running = [:]
+        shelf.servedFromCacheAt = nil
+        shelf.running = [:]
         // A source that fails every URL, so the posters settle on their placeholders rather
         // than wait on a loader this path never builds.
         artLoader = ShotArtSource(fixtures: [:])
         guard let data = FileManager.default.contents(atPath: path) else {
-            games = []
-            errorText = "PUNKTFUNK_FAKE_LIBRARY: can't read \(path)"
+            shelf.games = []
+            shelf.errorText = "PUNKTFUNK_FAKE_LIBRARY: can't read \(path)"
             return
         }
         let decoder = JSONDecoder()
         if let list = try? decoder.decode([GameEntry].self, from: data) {
-            games = list.launchersFirst
+            shelf.games = list.launchersFirst
         } else if let wrapped = try? decoder.decode(Wrapped.self, from: data) {
-            games = wrapped.library.launchersFirst
+            shelf.games = wrapped.library.launchersFirst
         } else {
-            games = []
-            errorText = "PUNKTFUNK_FAKE_LIBRARY: \(path) is not a library JSON"
+            shelf.games = []
+            shelf.errorText = "PUNKTFUNK_FAKE_LIBRARY: \(path) is not a library JSON"
         }
     }
 
@@ -1128,41 +1021,13 @@ struct LibraryView: View {
             return
         }
         LibraryScrollMemory.remember(id, forHost: host.id.uuidString)
-        LaunchedEntry.remember(games.first { $0.id == id }, from: TileFrames.rect(frameID ?? id))
+        LaunchedEntry.remember(shelf.games.first { $0.id == id }, from: TileFrames.rect(frameID ?? id))
         onLaunch(id)
     }
 
     /// `host`, or `host · preset` for a pinned card's shelf — the desktop's title shape.
     private var shelfTitle: String {
         target.title(in: presets)
-    }
-
-    /// The catalog in display order — `LibraryOrder.display`, the desktop's `order()`: launcher
-    /// entries lead, and anything already running leads WITHIN its band, so getting back into it
-    /// is the first thing on the screen rather than something to scroll for.
-    private var ordered: [GameEntry] {
-        // …and the desktop tile leads all of it, so streaming the host itself is one press
-        // rather than a menu — and a host with no plugins still has something to press.
-        // Only where a launch is possible: browse-only mode has nothing to connect with.
-        let all = onConnect == nil ? games : [desktopTile] + games
-        guard !running.isEmpty else { return all }
-        return LibraryOrder.display(all, running: Set(running.keys))
-    }
-
-    /// The tile names what the press does, so it does not read "Desktop" while pressing it
-    /// resumes a game the host already has up.
-    private var desktopTile: GameEntry {
-        let playing = nowPlayingStore.title(for: host)
-        return LibraryCollation.desktopEntry(
-            title: playing.map { L10n.libResumeTitle(title: $0) } ?? String(localized: L10n.libDesktop))
-    }
-
-    /// Whether the titles on screen are remembered rather than observed, and what the host is
-    /// doing about it — the three-state staleness both presentations show. Never an error: a
-    /// cached library is a working library.
-    private var staleness: LibraryStaleness {
-        guard servedFromCacheAt != nil else { return .none }
-        return loading ? .waking : .offline
     }
 }
 
@@ -1175,30 +1040,6 @@ enum ShotLibraryPhase {
     case catalog([GameEntry], staleness: LibraryStaleness = .none, running: [String] = [])
 }
 #endif
-
-/// The catalog's provenance, as the shelf states it. Three states rather than a flag so "waking
-/// the host…" can never be shown while nothing is happening — the same enum the desktop console
-/// keeps (`Stale::{No, Waking, Offline}`), with its exact wording.
-enum LibraryStaleness: Equatable {
-    case none
-    /// Served from disk; a fetch (and a wake) is in flight.
-    case waking
-    /// Served from disk; the host did not answer.
-    case offline
-
-    /// The note the shelf shows, or nil when the titles are live.
-    var text: String? {
-        switch self {
-        case .none: return nil
-        case .waking: return String(localized: L10n.libStaleWaking)
-        case .offline: return String(localized: L10n.libStaleOffline)
-        }
-    }
-
-    var symbol: String {
-        self == .waking ? "arrow.clockwise" : "wifi.slash"
-    }
-}
 
 /// One poster tile. Steam vs custom is marked with a badge; the art walks the candidate URLs
 /// (portrait → header → hero) and finally a text placeholder.
@@ -1221,6 +1062,8 @@ struct GameCard: View {
     var host: StoredHost? = nil
     /// The key the poster publishes its rect under (`TileFrames`); the entry's id when nil.
     var frameID: String? = nil
+    /// The shelf's art round (`PosterImage.round`).
+    var artRound = 0
 
     #if os(tvOS)
     @Environment(\.isFocused) private var focused
@@ -1305,7 +1148,7 @@ struct GameCard: View {
     private var poster: some View {
         PosterImage(
             candidates: game.art.posterCandidates, title: game.title, loader: artLoader,
-            icon: game.iconToken, frameID: frameID ?? game.id)
+            icon: game.iconToken, frameID: frameID ?? game.id, round: artRound)
             .aspectRatio(2.0 / 3.0, contentMode: .fit)
             .frame(maxWidth: .infinity)
             .clipShape(RoundedRectangle(cornerRadius: Self.coverRadius, style: .continuous))

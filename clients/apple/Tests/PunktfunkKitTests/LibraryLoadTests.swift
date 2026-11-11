@@ -28,7 +28,7 @@ final class LibraryLoadTests: XCTestCase {
             case .waking: events.append("waking")
             case .fetched(let games): events.append("fetched \(games.count)")
             case .failed(let error, let hadCache): events.append("failed \(error) \(hadCache)")
-            case .status(_, _, let grants): events.append("status \(grants ?? 0)")
+            case .status(let answer): events.append("status \(answer?.grants ?? 0)")
             }
         }
         return (events, fetches)

@@ -100,6 +100,8 @@ struct ContentView: View {
     @State private var seatWait: SeatWait?
     /// The password prompt of a profile on a person's own account, before the dial.
     @State private var unlockAsk: UnlockAsk?
+    /// What this window's connect flow keeps between taps.
+    @State private var flowLife = ConnectFlow.Life()
     @State private var speedTestTarget: StoredHost?
     @State private var libraryTarget: LibraryTarget?
     #if os(iOS) || os(visionOS) || os(tvOS)
@@ -234,13 +236,13 @@ struct ContentView: View {
                 Text(model.errorMessage ?? "")
             }
             // The delegated-approval wait: the host holds the request until the operator approves
-            // it. Cancel returns the UI at once; `ConnectFlow.requestAccess` drops the late answer.
+            // it. Cancel returns the UI at once and ends a dial the host parked (`cancelApproval`).
             .alert(
                 L10n.pairWaitingForApproval,
                 isPresented: awaitingApprovalPresented,
                 presenting: awaitingApproval
-            ) { _ in
-                Button(L10n.commonCancel, role: .cancel) {}
+            ) { req in
+                Button(L10n.commonCancel, role: .cancel) { flow.cancelApproval(req) }
             } message: { req in
                 Text(L10n.dialApproveNoPin(host: req.host.displayName))
             }
@@ -332,13 +334,16 @@ struct ContentView: View {
         }
         .animation(.easeInOut(duration: 0.3), value: model.launchHold)
         .onAppear {
+            flowLife.open()
             // A plain connect the host parked for its operator gets the request-access wait.
             let approval = $awaitingApproval
             model.onAwaitingApproval = { host in
                 if approval.wrappedValue == nil {
-                    approval.wrappedValue = ApprovalRequest(host: host, advertisedFingerprint: nil)
+                    approval.wrappedValue = ApprovalRequest(
+                        host: host, advertisedFingerprint: nil, viaDial: true)
                 }
             }
+            model.currentRecord = { [store] id in store.hosts.first { $0.id == id } }
             DemoMode.resume(in: store)
             autoConnectIfAsked()
             // An intent that ran before this window subscribed. Ahead of the start screen,
@@ -449,26 +454,32 @@ struct ContentView: View {
         // nothing.
         .onReceive(NotificationCenter.default.publisher(for: .punktfunkOpenDeepLink)) { note in
             guard let link = note.object as? NSURL else { return }
-            #if os(macOS)
-            // Every window hears it: the front one takes it now, another only if none did.
-            let wait: TimeInterval = controlActiveState == .key ? 0 : 0.25
-            DispatchQueue.main.asyncAfter(deadline: .now() + wait) {
+            @MainActor func run() {
                 guard DeepLinkInbox.take(link) else { return }
                 handleDeepLink(link as URL)
             }
-            #else
-            guard DeepLinkInbox.take(link) else { return }
-            handleDeepLink(link as URL)
-            #endif
+            // Every window hears it; the first to take it from the inbox runs it.
+            switch LinkArbiter.decide(
+                kind: .link(.current), isBusy: !linkSession.isIdle, isFront: isFrontWindow)
+            {
+            case .runHere: run()
+            case .retryAfter(let wait):
+                DispatchQueue.main.asyncAfter(deadline: .now() + wait) { run() }
+            case .leave: break
+            }
         }
         .onChange(of: model.phase) { _, phase in
+            // A parked dial that streamed, failed or was cancelled has nothing left to wait for.
+            if awaitingApproval?.viaDial == true, phase != .connecting { awaitingApproval = nil }
             switch phase {
             case .streaming:
                 #if os(iOS) || os(visionOS)
                 showTouchExit = true // the off-tier exit disc's 8 s window, per session start
                 #endif
                 ring.close()
-                ring.native = nil // this session's Welcome mode, captured at its first open
+                ring.native = model.connection.map { // the sheet's Native: this session's Welcome
+                    RingNav.Mode(width: $0.width, height: $0.height, hz: $0.refreshHz)
+                }
                 // Host-action slots are pre-fetched here, never when the ring opens (§3.1).
                 if let host = model.activeHost { HostPowerStore.shared.refresh(host) }
                 // The remote's short Back opens the ring in the middle of the stage; a pad's
@@ -497,6 +508,7 @@ struct ContentView: View {
         }
         .onDisappear { // window closed mid-session or mid-wake (Cmd+N spawns more)
             waker.cancel() // its onOnline would dial for a window that is gone
+            flowLife.close() // and so would the connect flow's deferred work
             model.disconnect()
         }
         // Expose the session to the Scene-level Stream menu (Disconnect ⌃⌥⇧D works even when
@@ -610,20 +622,22 @@ struct ContentView: View {
     }
 
     /// Run a host window's pending request here, unless another main window took it first. A
-    /// connect or a pairing needs an idle window: a busy one leaves it to an idle one, then opens
-    /// a window of its own for it.
+    /// window `LinkArbiter` sends away leaves it to an idle one, then opens a window of its own
+    /// for it.
     private func takeHostRequest() {
         guard let request = hostRouter.pending else { return }
-        switch request {
-        case .connect, .pair:
-            guard !model.isBusy else {
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
-                    if hostRouter.claimOpening(request) { openWindow(id: PunktfunkClientApp.mainSceneID) }
-                }
-                return
+        let kind: LinkArbiter.Kind =
+            switch request {
+            case .connect, .pair: .hostDial
+            case .browse, .wake: .hostOther
             }
-        case .browse, .wake:
-            break
+        let decision = LinkArbiter.decide(
+            kind: kind, isBusy: !linkSession.isIdle, isFront: isFrontWindow)
+        guard decision != .leave else {
+            DispatchQueue.main.asyncAfter(deadline: .now() + LinkArbiter.delay) {
+                if hostRouter.claimOpening(request) { openWindow(id: PunktfunkClientApp.mainSceneID) }
+            }
+            return
         }
         _ = hostRouter.take()
         func saved(_ id: StoredHost.ID) -> StoredHost? { store.hosts.first { $0.id == id } }
@@ -705,6 +719,44 @@ struct ContentView: View {
     }
     #endif
 
+    #if os(iOS) || os(visionOS) || os(tvOS)
+    /// Perform what `BackgroundPolicy` decides for this window's session.
+    private func applyBackgroundPolicy() {
+        switch BackgroundPolicy.decide(
+            phase: model.phase, keepAlive: backgroundKeepAlive, minutes: backgroundTimeoutMinutes)
+        {
+        case .hold(let minutes): model.enterBackground(timeoutMinutes: minutes)
+        case .end: model.disconnect(deliberate: false)
+        case .none: break
+        }
+    }
+    #endif
+
+    /// The key window on a Mac, a foreground-active scene elsewhere.
+    private var isFrontWindow: Bool {
+        #if os(macOS)
+        controlActiveState == .key
+        #else
+        scenePhase == .active
+        #endif
+    }
+
+    /// The wake wait that ends in a connect. A wake alone starts no session, so a link may.
+    private var wakeToConnect: HostWaker.Waking? {
+        waker.waking.flatMap { $0.connectsAfter ? $0 : nil }
+    }
+
+    /// What a link sees of this window: busy with its session, or with a redial, a wake or a
+    /// profile fetch on its way to one. The host a redial or a wake is for counts as the live one.
+    private var linkSession: DeepLinkRouter.SessionState {
+        DeepLinkRouter.SessionState(
+            isIdle: LinkIdle.isIdle(
+                phase: model.phase, redialPending: model.redial != nil,
+                waking: wakeToConnect != nil, preDialFetch: flowLife.fetching),
+            activeHostID: model.activeHost?.id ?? model.redial?.host.id ?? wakeToConnect?.hostID,
+            activeHostName: model.activeHost?.displayName)
+    }
+
     /// Route a `punktfunk://` deep link into the existing connect path — the whole §2 grammar
     /// (design/client-deep-links.md): a stable id, a unique host name or an `addr[:port]`, with
     /// `fp`/`host` recovery parameters and a one-off `preset`.
@@ -716,20 +768,6 @@ struct ContentView: View {
     /// live session (same host → focus, different host → say so; NEVER tear one down on a
     /// background tap), and carries only references — a preset it can't honor refuses with a
     /// notice rather than streaming with the wrong settings.
-    #if os(iOS) || os(visionOS) || os(tvOS)
-    /// Hold a streaming session under the opt-in keep-alive, or end it.
-    private func applyBackgroundPolicy() {
-        guard model.phase == .streaming else { return }
-        if backgroundKeepAlive {
-            model.enterBackground(timeoutMinutes: backgroundTimeoutMinutes)
-        } else {
-            // Not deliberate: the user may come straight back, so let the host linger the
-            // display for a fast reconnect instead of tearing it down.
-            model.disconnect(deliberate: false)
-        }
-    }
-    #endif
-
     private func handleDeepLink(_ url: URL) {
         // Explicit intent beats the start-screen policy, and the two race on a cold start:
         // `.onOpenURL` and `.onAppear` have no guaranteed order. Claiming the once-per-process
@@ -762,13 +800,9 @@ struct ContentView: View {
             deepLinkNotice = L10n.linkRouteUnsupported(route: "wake")
             return
         }
-        let session = DeepLinkRouter.SessionState(
-            isIdle: model.phase == .idle,
-            activeHostID: model.activeHost?.id,
-            activeHostName: model.activeHost?.displayName)
         switch DeepLinkRouter.resolve(
             link: link, hosts: store.hosts, catalog: presets.catalog,
-            session: session, browse: false
+            session: linkSession, browse: false
         ) {
         case .notice(let text):
             deepLinkNotice = text
@@ -794,13 +828,9 @@ struct ContentView: View {
     /// host can't be browsed — the library fetch rides the paired mTLS identity, so there is
     /// nothing to show before the host is saved (the notice says what to do instead).
     private func openLibrary(from link: DeepLink) {
-        let session = DeepLinkRouter.SessionState(
-            isIdle: model.phase == .idle,
-            activeHostID: model.activeHost?.id,
-            activeHostName: model.activeHost?.displayName)
         switch DeepLinkRouter.resolve(
             link: link, hosts: store.hosts, catalog: presets.catalog,
-            session: session, browse: true
+            session: linkSession, browse: true
         ) {
         case .notice(let text):
             deepLinkNotice = text
@@ -1079,7 +1109,7 @@ struct ContentView: View {
     private var flow: ConnectFlow {
         ConnectFlow(
             model: model, store: store, presets: presets, discovery: discovery, waker: waker,
-            autoWake: $autoWakeEnabled, approvalChoice: $approvalChoice,
+            life: flowLife, autoWake: $autoWakeEnabled, approvalChoice: $approvalChoice,
             awaitingApproval: $awaitingApproval, profileAsk: $profileAsk, seatWait: $seatWait,
             unlockAsk: $unlockAsk)
     }

@@ -749,10 +749,24 @@ public enum LibraryClient {
     public static func status(
         _ target: MgmtTarget
     ) async -> (games: [RunningGame], downloads: [HostDownload], grants: UInt32?) {
-        guard let response = try? await send("/api/v1/status", to: target),
-              response.status == 200,
+        await statusIfAnswered(target) ?? ([], [], nil)
+    }
+
+    /// ``status(_:)``, or nil when the host didn't answer it: a transport error, a status other
+    /// than 200, or a body that isn't a status. A screen that keeps state applies only an answer.
+    public static func statusIfAnswered(
+        _ target: MgmtTarget
+    ) async -> (games: [RunningGame], downloads: [HostDownload], grants: UInt32?)? {
+        statusAnswer(try? await send("/api/v1/status", to: target))
+    }
+
+    /// The status `response` carries, or nil for no response, a non-200 or an undecodable body.
+    static func statusAnswer(
+        _ response: HTTPResponse?
+    ) -> (games: [RunningGame], downloads: [HostDownload], grants: UInt32?)? {
+        guard let response, response.status == 200,
               let status = try? JSONDecoder().decode(HostStatus.self, from: response.body)
-        else { return ([], [], nil) }
+        else { return nil }
         return (status.games ?? [], status.downloads ?? [], status.grants)
     }
 

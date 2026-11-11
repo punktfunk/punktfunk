@@ -15,6 +15,15 @@ public enum SessionPhase: Equatable {
     case streaming
 }
 
+extension SessionPhase {
+    /// The pin a redial after a lost session carries. Only a session the player accepted
+    /// (`streaming`) vouches for the host's own fingerprint; one lost at the trust prompt keeps
+    /// the pin its dial had, so an unpinned host is never dialed again as trusted.
+    public func lossRedialPin(dialed: Data?, live: Data) -> Data? {
+        self == .streaming ? live : dialed
+    }
+}
+
 public struct ScreenOwner: Equatable {
     /// The console draws every prompt: connect, wake, pairing, the approval wait, a failed dial,
     /// its launch hold. The app's alerts, sheets and connect overlay stand down, or they would be

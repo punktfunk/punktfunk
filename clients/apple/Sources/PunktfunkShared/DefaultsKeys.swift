@@ -247,9 +247,9 @@ public enum DefaultsKey {
     /// a stream preset. Written by the library's sort/view bar and by the Collections screen.
     public static let librarySort = "punktfunk.librarySort"
     /// Which arrangement the console's library opens in — a `LibraryArrangement` stored value
-    /// (`"shelf"`, the default; `"grid"`). The cross-client `library_view` key;
-    /// unknown reads as shelf. Presentation only. One key, two surfaces: the library's bar and the
-    /// Interface settings row both write it.
+    /// (`"grid"`, the default; `"shelf"`). The cross-client `library_view` key;
+    /// unset and unknown read as grid. Presentation only. One key, two surfaces: the library's bar
+    /// and the Interface settings row both write it.
     public static let libraryView = "punktfunk.libraryView"
     /// Where a bare launch opens — a `StartIn` stored value (`"hosts"` the default, `"library"`,
     /// `"stream"`). The cross-client `start_in` key; unknown reads as hosts, and with no default

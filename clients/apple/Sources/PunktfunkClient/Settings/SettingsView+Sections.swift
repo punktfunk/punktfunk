@@ -62,7 +62,7 @@ extension SettingsView {
             #endif
             #if os(iOS) || os(visionOS)
             iosResolutionWheel
-            overrideMarker(OverlayField.resolution)
+            overrideMarker([OverlayField.resolution])
             iosRefreshRows
             Button(L10n.appleUseDisplayMode) { fillFromMainScreen() }
             #elseif os(macOS)
@@ -169,7 +169,7 @@ extension SettingsView {
                 }
                 .labelsHidden()
                 .pickerStyle(.segmented)
-                overrideMarker("refresh_hz")
+                overrideMarker(["refresh_hz"])
             }
         } else {
             // A device with a single supported rate (e.g. 60 Hz) has nothing to pick.
@@ -234,10 +234,6 @@ extension SettingsView {
             })
     }
 
-    /// Sentinel wheel tag for the "Custom…" row. Real tags are "WxH" (digits + "x"), so this can't
-    /// collide with a resolution.
-    private static let customResolutionTag = "custom"
-
     /// The family the wheel lists — see `SettingsOptions.family`.
     private var family: Int {
         SettingsOptions.family(width: effective.width, height: effective.height)
@@ -276,43 +272,37 @@ extension SettingsView {
     private var resolutionChoices: [(label: String, tag: String)] {
         SettingsOptions.resolutionModes(family: family)
             .map {
-                (label: SettingsOptions.modeLabel($0.kind, w: $0.w, h: $0.h), tag: "\($0.w)x\($0.h)")
+                (label: SettingsOptions.modeLabel($0.kind, w: $0.w, h: $0.h),
+                 tag: ResolutionPick.tag(width: $0.w, height: $0.h))
             }
-            + [(label: String(localized: L10n.playerResolutionCustom), tag: Self.customResolutionTag)]
+            + [(label: String(localized: L10n.playerResolutionCustom), tag: ResolutionPick.customTag)]
     }
 
     private var presetResolutionTags: Set<String> {
-        Set(SettingsOptions.resolutionModes(family: family).map { "\($0.w)x\($0.h)" })
+        Set(SettingsOptions.resolutionModes(family: family).map {
+            ResolutionPick.tag(width: $0.w, height: $0.h)
+        })
     }
 
-    /// True when the editable custom fields should show: the wheel is parked on "Custom…" (sticky),
-    /// or the effective size simply isn't one of the presets (e.g. a value synced from a Mac, or a
-    /// preset's own override) — so a non-preset mode stays editable without a persisted flag.
+    /// The typed fields show (`ResolutionPick.isCustom`).
     private var isCustomResolution: Bool {
-        customMode || !presetResolutionTags.contains("\(effective.width)x\(effective.height)")
+        ResolutionPick.isCustom(
+            customMode: customMode, width: effective.width, height: effective.height,
+            tags: presetResolutionTags)
     }
 
-    /// The list works in "WxH" tags so one selection drives both width and height; the custom
-    /// sentinel toggles `customMode`, starting the fields from 1080p when the size was Native.
+    /// One selection drives width and height (`ResolutionPick.apply`).
     private var resolutionSelection: Binding<String> {
         Binding(
             get: {
                 isCustomResolution
-                    ? Self.customResolutionTag
-                    : "\(effective.width)x\(effective.height)"
+                    ? ResolutionPick.customTag
+                    : ResolutionPick.tag(width: effective.width, height: effective.height)
             },
             set: { tag in
-                if tag == Self.customResolutionTag {
-                    customMode = true
-                    if effective.width == 0 {
-                        setResolution(width: 1920, height: 1080)
-                    }
-                    return
-                }
-                customMode = false
-                let parts = tag.split(separator: "x").compactMap { Int($0) }
-                guard parts.count == 2 else { return }
-                setResolution(width: parts[0], height: parts[1])
+                let pick = ResolutionPick.apply(tag: tag, currentWidth: effective.width)
+                customMode = pick.customMode
+                if let size = pick.size { setResolution(width: size.w, height: size.h) }
             })
     }
 
@@ -328,7 +318,7 @@ extension SettingsView {
     /// A TV picks size and rate together, as its own settings do: Native, the common modes, and
     /// whatever is stored today.
     private var tvStreamModeRow: some View {
-        described(L10n.playerResolutionHint, field: OverlayField.resolution) {
+        described(String(localized: L10n.playerResolutionHint), fields: ResolutionPick.modeFields) {
             TVSelectionRow(
                 title: String(localized: L10n.appleStreamMode), options: tvModeOptions,
                 selection: tvModeTag)
@@ -368,7 +358,7 @@ extension SettingsView {
 
     private var tvModeOptions: [(label: String, tag: String)] {
         let s = effective
-        let current = "\(s.width)x\(s.height)x\(s.refreshHz)"
+        let current = ResolutionPick.modeTag(width: s.width, height: s.height, hz: s.refreshHz)
         var options = Self.tvModes
         if !options.contains(where: { $0.tag == current }) {
             options.insert((Self.customModeLabel(s), current), at: 0)
@@ -396,12 +386,14 @@ extension SettingsView {
     /// Size and rate in one write, through the scoped setters, so a preset records both.
     private var tvModeTag: Binding<String> {
         Binding(
-            get: { "\(effective.width)x\(effective.height)x\(effective.refreshHz)" },
+            get: {
+                ResolutionPick.modeTag(
+                    width: effective.width, height: effective.height, hz: effective.refreshHz)
+            },
             set: { tag in
-                let parts = tag.split(separator: "x").compactMap { Int($0) }
-                guard parts.count == 3 else { return }
-                setResolution(width: parts[0], height: parts[1])
-                scoped(SettingsFields.refreshHz).wrappedValue = parts[2]
+                guard let mode = ResolutionPick.mode(tag: tag) else { return }
+                setResolution(width: mode.w, height: mode.h)
+                scoped(SettingsFields.refreshHz).wrappedValue = mode.hz
             })
     }
     #endif
@@ -473,7 +465,7 @@ extension SettingsView {
                     settingPicker(
                         L10n.playerSmoothBuffer,
                         options: SettingsOptions.smoothBuffers(
-                            refreshHz: Int(effective.streamMode(native: NativeDisplay.mode).hz)),
+                            refreshHz: Int(effective.streamMode(native: connectNative).hz)),
                         selection: scoped(SettingsFields.smoothBuffer))
                 }
             }
@@ -629,8 +621,7 @@ extension SettingsView {
         var text = String(localized: L10n.playerRenderScaleHint)
         let settings = effective
         if settings.renderScale != 1.0, !settings.matchWindow {
-            // Native resolves against this display, as the connect does.
-            let mode = settings.streamMode(native: NativeDisplay.mode)
+            let mode = settings.streamMode(native: connectNative)
             text += " " + L10n.appleRenderScaleHostSize(
                 width: String(Int(mode.width)), height: String(Int(mode.height)))
         }
@@ -717,13 +708,18 @@ extension SettingsView {
         effective.codec == "pyrowave" && MetalWaveletDecoder.supported
     }
 
-    /// The picture a connect would have the host encode (`streamPicture`). Native is an attached
-    /// monitor's on iPhone and iPad, else this display's.
-    private func connectPicture(_ s: EffectiveSettings) -> (width: UInt32, height: UInt32, hz: UInt32) {
+    /// Native as a connect resolves it: an attached monitor's on iPhone and iPad, else this
+    /// display's. Every caption that names a mode reads it.
+    private var connectNative: (width: Int, height: Int, hz: Int) {
         #if os(iOS)
-        if let native = ExternalDisplay.nativeMode { return s.streamPicture(native: native) }
+        if let native = ExternalDisplay.nativeMode { return native }
         #endif
-        return s.streamPicture(native: NativeDisplay.mode)
+        return NativeDisplay.mode
+    }
+
+    /// The picture a connect would have the host encode (`streamPicture`).
+    private func connectPicture(_ s: EffectiveSettings) -> (width: UInt32, height: UInt32, hz: UInt32) {
+        s.streamPicture(native: connectNative)
     }
 
     /// PyroWave quality in Bitrate's place: 0.5 to 2 by tenths, read as the rate it needs at the
@@ -805,21 +801,26 @@ extension SettingsView {
 
     // MARK: - Advanced
 
-    /// A category's advanced rows: their own section while Show advanced is on or the edited
-    /// preset overrides one of `fields`, otherwise one button naming how many hold a changed
-    /// value, which shows them. Nothing when none changed.
+    /// A category's advanced rows, as `AdvancedDisclosure` decides. `fields` are the rows'
+    /// overlay names.
     @ViewBuilder
     func advancedSection<Content: View>(
         changed: Int, fields: [String] = [], @ViewBuilder content: () -> Content
     ) -> some View {
-        if showAdvanced || fields.contains(where: isOverridden) {
+        switch AdvancedDisclosure.state(
+            showAdvanced: showAdvanced, overridden: fields.contains(where: isOverridden),
+            changed: changed, inPreset: inPresetScope)
+        {
+        case .rows:
             Section(L10n.prefsAdvanced) { content() }
-        } else if changed > 0, !inPresetScope {
+        case .countButton(let count):
             Section {
-                Button(L10n.prefsAdvancedChanged(count: changed)) {
+                Button(L10n.prefsAdvancedChanged(count: count)) {
                     showAdvanced = true
                 }
             }
+        case .hidden:
+            EmptyView()
         }
     }
 
@@ -990,9 +991,10 @@ extension SettingsView {
         SettingDefault.resetAll()
         // This tier's @AppStorage default was read at launch, from the value just removed.
         statsVerbosityRaw = SettingDefault.statsVerbosity
+        // The pad manager keeps its own copy of the pinned controller, read at launch.
+        gamepads.preferredID = ""
         #if os(iOS) || os(visionOS) || os(macOS)
-        customMode = false
-        customScaleMode = false
+        clearCustomFlags()
         #endif
     }
 
@@ -1020,6 +1022,8 @@ extension SettingsView {
                         options: StartIn.allCases.map { (label: $0.label, tag: $0.stored) },
                         selection: $startInRaw)
                 }
+                .onAppear { readStartInHost() }
+                .onChange(of: defaultHostID) { readStartInHost() }
             }
         }
     }
@@ -1027,11 +1031,17 @@ extension SettingsView {
     /// Names the host the setting resolves to, so the row explains itself — and says when it
     /// resolves to nothing, which is what every value does with no default host.
     private var startInFooter: String {
-        let hosts = StartScreen.savedHosts()
-        guard let host = StartScreen.defaultHost(id: defaultHostID, hosts: hosts).host else {
+        guard let name = startInHost else {
             return String(localized: L10n.playerStartInNoHostHint)
         }
-        return L10n.playerStartInHostHint(host: host.displayName)
+        return L10n.playerStartInHostHint(host: name)
+    }
+
+    /// Decodes the host store when the row appears and when the pick moves, not on every pass.
+    /// An appear runs before the first frame, so the caption never shows the empty case first.
+    private func readStartInHost() {
+        startInHost = StartScreen.defaultHost(id: defaultHostID, hosts: StartScreen.savedHosts())
+            .host?.displayName
     }
 
     // MARK: - Input
@@ -1138,8 +1148,13 @@ extension SettingsView {
             .buttonStyle(.plain)
             .sheet(isPresented: $showQuickActions) {
                 NavigationStack {
-                    QuickActionsEditor(blob: scoped(SettingsFields.overlayActions),
-                                       overridden: isOverridden("overlay_actions")) {
+                    QuickActionsEditor(
+                        blob: scoped(SettingsFields.overlayActions),
+                        overridden: isOverridden("overlay_actions"),
+                        bindings: scoped(SettingsFields.shortcuts),
+                        // Default settings hold their bindings; a preset only once it overrides.
+                        ownsBindings: !inPresetScope || isOverridden("shortcuts")
+                    ) {
                         if inPresetScope {
                             resetOverride("overlay_actions")
                         } else {
@@ -1424,7 +1439,8 @@ extension SettingsView {
             }
             described(L10n.playerGamepadHint, field: "gamepad") {
                 settingPicker(
-                    L10n.playerGamepad, options: SettingsOptions.padTypes,
+                    L10n.playerGamepad,
+                    options: SettingsOptions.padTypes(current: effective.gamepadType),
                     selection: scoped(SettingsFields.gamepadType))
                     .disabled(!effective.gamepadForwarding)
             }

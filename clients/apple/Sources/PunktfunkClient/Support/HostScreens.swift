@@ -12,24 +12,23 @@ private let log = ClientLog(category: "screens")
 final class HostScreenStore: ObservableObject {
     static let shared = HostScreenStore()
 
-    /// 20 s, as the Rust clients: `in_use_by` moves as other devices start and end streams.
-    private static let ttl: TimeInterval = 20
-
-    @Published private var byHost: [String: DisplayTargets] = [:]
-    private var askedAt: [String: Date] = [:]
+    /// Each host's answer, nil for one with no screens for this device. 20 s, as the Rust
+    /// clients: `in_use_by` moves as other devices start and end streams.
+    private var cache = TTLCache<DisplayTargets?>(ttl: 20)
 
     /// What `host` last answered; nil until it does, and for a host without the route.
-    func targets(for host: StoredHost) -> DisplayTargets? { byHost[host.id.uuidString] }
+    func targets(for host: StoredHost) -> DisplayTargets? { cache[host.id.uuidString] ?? nil }
 
     /// Ask again unless the last answer is fresh. A miss keeps the rows already shown.
     func refresh(_ host: StoredHost, port: UInt16? = nil) {
-        let key = host.id.uuidString
-        if let at = askedAt[key], Date().timeIntervalSince(at) < Self.ttl { return }
-        guard !DemoMode.isDemo(host), case .success(let target) = MgmtTarget.make(host: host, port: port)
+        guard !DemoMode.isDemo(host),
+              case .success(let target) = MgmtTarget.make(host: host, port: port),
+              let ticket = cache.ask(host.id.uuidString, now: Date())
         else { return }
-        askedAt[key] = Date()
         Task { @MainActor in
-            if let found = await LibraryClient.targets(target) { byHost[key] = found }
+            let found = await LibraryClient.targetsIfAnswered(target)
+            if found != nil { objectWillChange.send() }
+            cache.land(ticket, found)
         }
     }
 
@@ -39,7 +38,7 @@ final class HostScreenStore: ObservableObject {
         _ screen: DisplayTarget, label: String, on host: StoredHost, port: UInt16? = nil
     ) async -> String? {
         defer {
-            askedAt[host.id.uuidString] = nil
+            cache.invalidate(host.id.uuidString, keepValue: true)
             refresh(host, port: port)
         }
         do {

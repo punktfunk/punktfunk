@@ -34,6 +34,12 @@ struct QuickActionsEditor: View {
     /// The edited preset owns its own ring (the row's override marker says so; this says it
     /// under the ring).
     let overridden: Bool
+    /// The `shortcuts` blob the edited layer streams with: a new shortcut skips every id a
+    /// binding there names.
+    var bindings: Binding<String> = .constant("")
+    /// The edited layer holds that blob itself, so removing a shortcut drops its bindings there.
+    /// False where the layer inherits them: another layer's bindings are never written.
+    var ownsBindings = false
     /// Back to the platform ring: drops the override in preset scope, clears the global
     /// otherwise.
     let reset: () -> Void
@@ -73,8 +79,9 @@ struct QuickActionsEditor: View {
                         // button above it, so closing the ring here closed it on every pick.
                         DialCatcher(onDial: { ring.handle($0) }) { ring.sheet = false }
                         #endif
-                        RingOverlay(state: ring, cfg: cfg, actions: previewRingActions,
-                                    editing: RingEditing(pick: { picking = PickSlot(k: $0) }, swap: swap))
+                        RingOverlay(state: ring, cfg: cfg, actions: previewRingActions(cfg),
+                                    editing: RingEditing(pick: { picking = PickSlot(k: $0) },
+                                                         swap: { a, b in edit { $0.swap(a, b) } }))
                     }
                     .environment(\.colorScheme, .dark)
                     .onAppear {
@@ -149,7 +156,9 @@ struct QuickActionsEditor: View {
                 }
                 #endif
                 Button {
-                    editingShortcut = ShortcutDraft(id: cfg.nextShortcutID, label: "", keys: [], isNew: true)
+                    editingShortcut = ShortcutDraft(
+                        id: cfg.nextShortcutID(bindings: Shortcuts.parse(bindings.wrappedValue)),
+                        label: "", keys: [], isNew: true)
                 } label: {
                     Label(L10n.ringShortcutAdd, systemImage: "plus")
                 }
@@ -171,7 +180,7 @@ struct QuickActionsEditor: View {
         .navigationTitle(L10n.ringEditorTitle)
         .sheet(item: $picking) { p in
             SlotPicker(groups: groups, current: cfg.ring[p.k]?.id ?? "") { id in
-                set(p.k, id)
+                edit { $0.assign(p.k, id: id) }
                 picking = nil
             }
             // A macOS sheet sizes to its content, and a List's content is no size at all.
@@ -197,34 +206,26 @@ struct QuickActionsEditor: View {
 
     private var groups: [SlotGroup] { slotGroups(for: cfg) }
 
-    private func set(_ k: Int, _ id: String) {
+    /// Writes the blob as `change` leaves the config.
+    private func edit(_ change: (inout OverlayConfig) -> Void) {
         var c = cfg
-        c.ring[k] = SlotId.parse(id)
+        change(&c)
         blob = c.toJSON()
     }
 
     private func setPad(_ change: (inout PadConfig) -> Void) {
-        var c = cfg
-        change(&c.pad)
-        blob = c.toJSON()
-    }
-
-    private func swap(_ a: Int, _ b: Int) {
-        var c = cfg
-        c.ring.swapAt(a, b)
-        blob = c.toJSON()
+        edit { change(&$0.pad) }
     }
 
     private func save(_ d: ShortcutDraft) {
-        var c = cfg
-        c.saveShortcut(OverlayShortcut(id: d.id, label: d.label, keys: d.keys))
-        blob = c.toJSON()
+        edit { $0.saveShortcut(OverlayShortcut(id: d.id, label: d.label, keys: d.keys)) }
     }
 
     private func remove(_ id: String) {
-        var c = cfg
-        c.removeShortcut(id)
-        blob = c.toJSON()
+        var sent = Shortcuts.parse(bindings.wrappedValue)
+        let before = sent
+        edit { $0.removeShortcut(id, bindings: &sent) }
+        if ownsBindings, sent != before { bindings.wrappedValue = sent.toJSON() }
     }
 }
 
@@ -317,8 +318,7 @@ private struct ShortcutEditor: View {
     let delete: () -> Void
     @Environment(\.dismiss) private var dismiss
 
-    private var mods: [String] { draft.keys.filter { modifierKeys.contains($0) } }
-    private var key: String? { draft.keys.first { !modifierKeys.contains($0) } }
+    private var chord: Chord { Chord.parse(keys: draft.keys) }
 
     var body: some View {
         NavigationStack {
@@ -341,8 +341,8 @@ private struct ShortcutEditor: View {
                 }
                 Section(String(localized: L10n.ringShortcutModifiers)) {
                     HStack(spacing: 8) {
-                        ForEach(modifierKeys, id: \.self) { m in
-                            let on = mods.contains(m)
+                        ForEach(Chord.modifiers, id: \.self) { m in
+                            let on = chord.mods.contains(m)
                             Button(keyLegend(m)) { toggle(m) }
                                 .buttonStyle(.bordered)
                                 .tint(on ? Color.brand : Color.secondary)
@@ -351,14 +351,14 @@ private struct ShortcutEditor: View {
                         }
                     }
                 }
-                ForEach(keyGroups, id: \.id) { group in
+                ForEach(Chord.keyGroups, id: \.id) { group in
                     Section(group.title) {
                         // Word keys (Backspace, PgDn, PrtSc) get wider cells; every cap keeps
                         // one line at one height and shrinks its text rather than growing.
                         let wide = group.keys.contains { keyLegend($0).count > 2 }
                         LazyVGrid(columns: [GridItem(.adaptive(minimum: wide ? 80 : 44), spacing: 6)], spacing: 6) {
                             ForEach(group.keys, id: \.self) { k in
-                                let on = key == k
+                                let on = chord.key == k
                                 Button {
                                     pick(k)
                                 } label: {
@@ -394,7 +394,10 @@ private struct ShortcutEditor: View {
                 ToolbarItem(placement: .cancellationAction) { Button(L10n.commonCancel) { dismiss() } }
                 ToolbarItem(placement: .confirmationAction) {
                     Button(draft.isNew ? L10n.commonAdd : L10n.commonSave) {
-                        save(draft)
+                        // A name of spaces is no name: the row then shows the chord.
+                        var named = draft
+                        named.label = draft.label.trimmingCharacters(in: .whitespaces)
+                        save(named)
                         dismiss()
                     }
                     // A modifier alone is a combination: Win opens the host's Start menu.
@@ -404,19 +407,16 @@ private struct ShortcutEditor: View {
         }
     }
 
-    /// Modifiers first in keyboard order, then the key — the order the chord is sent.
-    private func rebuild(mods: [String], key: String?) {
-        draft.keys = modifierKeys.filter { mods.contains($0) } + (key.map { [$0] } ?? [])
-    }
-
     private func toggle(_ m: String) {
-        var next = mods
-        if let i = next.firstIndex(of: m) { next.remove(at: i) } else { next.append(m) }
-        rebuild(mods: next, key: key)
+        var c = chord
+        c.toggle(m)
+        draft.keys = c.keys
     }
 
     private func pick(_ k: String) {
-        rebuild(mods: mods, key: k)
+        var c = chord
+        c.key = k
+        draft.keys = c.keys
     }
 }
 #endif

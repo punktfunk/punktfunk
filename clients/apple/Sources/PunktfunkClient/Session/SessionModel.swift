@@ -78,28 +78,6 @@ struct LaunchHoldTarget: Equatable {
     let seq: Int
 }
 
-/// The entry behind a `connect(launchID:)`, handed over out of band: the shelf's launch callbacks
-/// carry only the id (five call sites, three tile views), and the launch hold needs the title, art
-/// and tile rect. Keyed by id on the way out, so a stale entry can never dress a different launch.
-enum LaunchedEntry {
-    private static var last: (entry: GameEntry, rect: CGRect?)?
-
-    static func remember(_ entry: GameEntry?, from rect: CGRect?) {
-        last = entry.map { ($0, rect) }
-    }
-
-    /// The remembered entry for `id`, left for `take`.
-    static func peek(_ id: String) -> GameEntry? {
-        last?.entry.id == id ? last?.entry : nil
-    }
-
-    static func take(_ id: String, seq: Int) -> LaunchHoldTarget? {
-        defer { last = nil }
-        guard let last, last.entry.id == id else { return nil }
-        return LaunchHoldTarget(entry: last.entry, sourceRect: last.rect, seq: seq)
-    }
-}
-
 /// The values the views read for one session, each documented on its `SessionModel` property.
 /// `disconnect` assigns a fresh one, so the next session starts with no hold, hint or mute.
 struct SessionUI {
@@ -292,6 +270,9 @@ final class SessionModel: ObservableObject {
     var onRingNav: ((RingNav) -> Void)?
     /// A connect the host parked for its operator: the view shows the approval wait.
     var onAwaitingApproval: ((StoredHost) -> Void)?
+    /// The saved record for a host as it is now, which a redial dials. Unset, a redial dials the
+    /// copy its first dial took.
+    var currentRecord: (@MainActor (StoredHost.ID) -> StoredHost?)?
 
     /// The ring is up: the pad belongs to it (flushed on the host, edges become navigation).
     func setRingOpen(_ open: Bool) {
@@ -437,6 +418,9 @@ final class SessionModel: ObservableObject {
                  autoWake: Bool = false,
                  /// When the host first refused as still waking; nil on a first dial.
                  wakeSince: ContinuousClock.Instant? = nil,
+                 /// A wake redial's launch hold, still up from the dial it repeats. nil raises
+                 /// the launch's own from `LaunchedEntry`.
+                 hold: LaunchHoldTarget? = nil,
                  /// The host refused `profileID` as unknown. Return true to re-dial: the error
                  /// is then not shown.
                  onProfileUnknown: (@MainActor () -> Bool)? = nil,
@@ -451,6 +435,8 @@ final class SessionModel: ObservableObject {
         guard phase == .idle else { return }
         guard !Self.activeHosts.contains(where: { $0.key != ObjectIdentifier(self) && $0.value == host.id })
         else {
+            // A redial refused here has no next attempt: the connect overlay must not wait on one.
+            redial = nil
             errorMessage = L10n.appleDialAlreadyStreamingHere(host: host.displayName)
             return
         }
@@ -466,8 +452,10 @@ final class SessionModel: ObservableObject {
         launchedShelf = shelf
         // The host never tracks a launcher tile, so there is nothing to wait for.
         launchSeq += 1
-        launchHold = launchID.flatMap { LaunchedEntry.take($0, seq: launchSeq) }
-            .flatMap { $0.entry.isLauncher ? nil : $0 }
+        launchHold = hold ?? launchID.flatMap(LaunchedEntry.take).flatMap {
+            $0.entry.isLauncher
+                ? nil : LaunchHoldTarget(entry: $0.entry, sourceRect: $0.rect, seq: launchSeq)
+        }
         launchWindowWait = false
         launchDownload = nil
         errorMessage = nil
@@ -593,35 +581,50 @@ final class SessionModel: ObservableObject {
                         "connect \(host.displayName, privacy: .public) failed: \(String(describing: error), privacy: .public)")
                     self.phase = .idle
                     self.activeHost = nil
-                    // The launch hold is an OPAQUE cover; only `revealStream` drops it, and
-                    // otherwise nothing here does. It would sit over the home screen until the
-                    // next session, and on tvOS it makes the host grid unfocusable behind it.
-                    self.revealStream()
-                    // true: the caller re-dials and says what it ends in.
-                    if case PunktfunkClientError.rejected(.profileUnknown, _) = error,
-                       onProfileUnknown?() == true {
-                        return
-                    }
-                    if case PunktfunkClientError.rejected(.profileLocked, let said) = error,
-                       onProfileLocked?(said) == true {
-                        return
-                    }
-                    let wake = PunktfunkConnection.wakeRedialDelay(
-                        after: error, autoWake: self.lastDial?.autoWake ?? false,
-                        sinceFirst: self.sinceFirstWake)
-                    if self.redialWhileWaking(self.lastDial, after: wake) { return }
-                    if let message = ConnectOffer.failureMessage(
-                        error, hostName: host.displayName, pinned: pin != nil,
+                    let recovery = DialRecovery.decide(
+                        error,
+                        wakeDelay: self.lastDial.flatMap {
+                            PunktfunkConnection.wakeRedialDelay(
+                                after: error, autoWake: $0.autoWake,
+                                sinceFirst: self.sinceFirstWake)
+                        },
+                        hostName: host.displayName, pinned: pin != nil,
                         requestAccess: requestAccess, callerRecovers: onUnreachable != nil)
-                    {
-                        self.redial = nil
-                        self.errorMessage = message
-                    } else {
-                        // The caller owns recovery (wake-and-retry); its overlay explains it.
-                        onUnreachable?()
-                    }
+                    // The launch hold is an opaque cover only `revealStream` drops. Left up, it
+                    // sits over the home screen, and on tvOS the host grid can't take focus.
+                    if !recovery.keepsLaunchHold { self.revealStream() }
+                    self.recover(
+                        recovery, onProfileUnknown: onProfileUnknown,
+                        onProfileLocked: onProfileLocked, onUnreachable: onUnreachable)
                 }
             }
+        }
+    }
+
+    /// Perform a failed dial's recovery. A profile handler returns true when it takes the failure
+    /// over (it dials again or prompts); otherwise the recovery after it runs.
+    private func recover(
+        _ recovery: DialRecovery,
+        onProfileUnknown: (@MainActor () -> Bool)?,
+        onProfileLocked: (@MainActor (String?) -> Bool)?,
+        onUnreachable: (@MainActor () -> Void)?
+    ) {
+        switch recovery {
+        case .profileUnknown(let otherwise):
+            guard onProfileUnknown?() != true else { return }
+            recover(
+                otherwise, onProfileUnknown: nil, onProfileLocked: nil, onUnreachable: onUnreachable)
+        case .profileLocked(let said, let otherwise):
+            guard onProfileLocked?(said) != true else { return }
+            recover(
+                otherwise, onProfileUnknown: nil, onProfileLocked: nil, onUnreachable: onUnreachable)
+        case .wakeRedial(let wait):
+            if let plan = lastDial { redialWhileWaking(plan, after: wait) }
+        case .alert(let message):
+            redial = nil
+            errorMessage = message
+        case .handBack:
+            onUnreachable?()
         }
     }
 
@@ -671,12 +674,13 @@ final class SessionModel: ObservableObject {
         isBackgrounded = true
         conn.setVideoDropped(true)
         applyMicMute() // now muted for privacy — on top of the user's own mute, not instead of it
-        // Non-deliberate on fire (keep the host linger) so a user who returns late reconnects fast,
-        // exactly like today's network-drop path. min 1 minute guards a nonsense setting.
+        // Non-deliberate on fire (the host lingers), so a late return reconnects fast. At least a
+        // minute. On the wall clock, as the Live Activity's countdown: the mach clock stops while
+        // the device sleeps.
         let minutes = max(1, timeoutMinutes)
         backgroundDeadline = Date().addingTimeInterval(TimeInterval(minutes * 60))
         let timer = DispatchSource.makeTimerSource(queue: .main)
-        timer.schedule(deadline: .now() + .seconds(minutes * 60))
+        timer.schedule(wallDeadline: .now() + .seconds(minutes * 60))
         timer.setEventHandler { [weak self] in
             // The timer fires on `.main`, so the actor's executor is the main thread here.
             MainActor.assumeIsolated { self?.disconnect(deliberate: false) }
@@ -710,24 +714,12 @@ final class SessionModel: ObservableObject {
 
     // MARK: - Microphone mute (in-stream, per session)
 
-    /// Whether this session has a mic uplink there is any point in muting: the mic must be on in
-    /// the session's RESOLVED settings (a preset can turn it on or off), the platform must have
-    /// an app-accessible input at all, and the OS must not have refused us one. Drives whether the
-    /// mute control is offered — a live-looking mute button over a session that sends no
-    /// microphone would be a lie. Same three conditions `SessionAudio` starts an uplink on
-    /// (`.notDetermined` counts: the prompt is pending and a grant starts the uplink mid-session).
+    /// Whether this session has a mic uplink there is any point in muting (`SessionMic`): drives
+    /// whether the mute control is offered.
     var micAvailable: Bool {
-        #if os(tvOS)
-        return false // no app-accessible microphone — SessionAudio never opens an uplink either
-        #else
-        // The session's grants must include MIC (per-client access §7 — hide the mic UI when
-        // ungranted; a mute button over a mic the host drops would be a lie twice over).
-        guard settings.micEnabled, connection?.canUseMic != false else { return false }
-        switch AVCaptureDevice.authorizationStatus(for: .audio) {
-        case .authorized, .notDetermined: return true
-        default: return false // denied / restricted — there is no uplink to mute
-        }
-        #endif
+        SessionMic.available(
+            enabled: settings.micEnabled, granted: connection?.canUseMic != false,
+            authorization: AVCaptureDevice.authorizationStatus(for: .audio))
     }
 
     /// Flip the user's mute. The in-stream surfaces (HUD button, Stream menu, ⌃⌥⇧A while
@@ -841,13 +833,10 @@ final class SessionModel: ObservableObject {
         }
     }
 
-    /// Push the EFFECTIVE mute — the user's choice OR the background keep-alive's privacy mute —
-    /// onto the audio engine. The two reasons are composed here and nowhere else: whichever one
-    /// changed, the other still holds, so returning from the background can't un-mute a user who
-    /// muted mid-stream, and a user unmuting while backgrounded (Live Activity, another window)
-    /// doesn't open the mic behind their back.
+    /// Push the effective mute (`SessionMic.muted`) onto the audio engine, whichever of its two
+    /// reasons changed.
     private func applyMicMute() {
-        audio?.setMicMuted(micMuted || isBackgrounded)
+        audio?.setMicMuted(SessionMic.muted(user: micMuted, backgrounded: isBackgrounded))
     }
 
     // MARK: - Per-client access (chip state + expiry warnings)
@@ -856,7 +845,8 @@ final class SessionModel: ObservableObject {
     /// called by the 1 Hz stats tick, which is also what makes a mid-session `AccessUpdate`
     /// (a console edit) reach the chip and the capture gates within a second. Every write is
     /// guarded: `notices` publishes on any assignment, and a full-and-permanent session (every
-    /// old host) must publish nothing.
+    /// old host) must publish nothing. The capture release and the T−5 m / T−1 m toasts (§7)
+    /// are `AccessWarning`'s; engaging a capture is gated at the stream views.
     private func updateAccessState() {
         guard let conn = connection else { return }
         let grants = conn.accessGrants
@@ -866,36 +856,19 @@ final class SessionModel: ObservableObject {
         if notices.accessRemainingSecs != remaining { notices.accessRemainingSecs = remaining }
         let limited = level != .fullControl || remaining != 0
         if notices.accessLimited != limited { notices.accessLimited = limited }
-        // A mid-session edit that removed BOTH input classes releases an engaged capture:
-        // holding a frozen cursor and swallowed keys over input the host now drops is
-        // exactly the "keyboard does nothing and nobody says why" failure §7 exists to
-        // prevent. (Engage is gated at the stream views; this is the live-revoke half.)
-        if mouseCaptured,
-           grants & (PunktfunkConnection.grantPointer | PunktfunkConnection.grantKeyboard) == 0 {
+        if AccessWarning.releasesCapture(captured: mouseCaptured, grants: grants) {
             NotificationCenter.default.post(name: .punktfunkReleaseCapture, object: nil)
         }
-        // The T−5 m / T−1 m warning toasts (§7). Derived from the countdown CROSSING the
-        // marks rather than from the AccessUpdate messages alone: the host's warnings
-        // re-anchor the same countdown, so this shows them when they arrive AND still fires
-        // on plain clock progress if a warning datagram never lands. One shot each; an edit
-        // that extends the deadline back above a mark re-arms it.
-        guard remaining != 0 else { return }
-        if remaining > 300 {
-            // The 1 m latch never stands without the 5 m one.
-            if notices.accessWarned5m {
-                notices.accessWarned5m = false
-                notices.accessWarned1m = false
-            }
-        } else if remaining > 60 {
-            if notices.accessWarned1m { notices.accessWarned1m = false }
-            if !notices.accessWarned5m {
-                notices.accessWarned5m = true
-                flash(\.accessWarning, L10n.grantEndsIn(time: Self.accessCountdown(remaining)))
-            }
-        } else if !notices.accessWarned1m {
-            notices.accessWarned1m = true
-            notices.accessWarned5m = true
-            flash(\.accessWarning, String(localized: L10n.grantEndsSoon))
+        let (warned, toast) = AccessWarning.step(
+            remaining: remaining,
+            warned: AccessWarning(fiveMinutes: notices.accessWarned5m, oneMinute: notices.accessWarned1m))
+        if notices.accessWarned5m != warned.fiveMinutes { notices.accessWarned5m = warned.fiveMinutes }
+        if notices.accessWarned1m != warned.oneMinute { notices.accessWarned1m = warned.oneMinute }
+        switch toast {
+        case .endsIn(let secs)?:
+            flash(\.accessWarning, L10n.grantEndsIn(time: Self.accessCountdown(secs)))
+        case .endsSoon?: flash(\.accessWarning, String(localized: L10n.grantEndsSoon))
+        case nil: break
         }
     }
 
@@ -1010,73 +983,48 @@ final class SessionModel: ObservableObject {
         pictureText = ""
     }
 
-    /// Called (via the main actor) when the pump hits end-of-session.
+    /// Called (via the main actor) when the pump hits end-of-session: reads why off the ended
+    /// connection, tears the session down, then takes the `SessionEndRoute` those facts name.
     func sessionEnded() {
         guard let conn = connection else { return }
         let name = activeHost?.displayName ?? "host"
         // WHY it ended, asked while the connection is still up — `disconnect` tears it down.
         let reason = conn.sessionEndReason
-        // A typed mid-session rejection outranks the coarse reason: an access-expiry close
-        // (per-client access §4) files under `.hostError` there, and "ended with an error"
-        // is the wrong sentence for "your access expired".
         let rejection = conn.endRejection
-        // The host's own words when it sent any: it can name the monitor it was told to
-        // capture and no longer has, which our generic line cannot.
-        let said = conn.endRejectionMessage
-        // Where a game exit sends us: back into the library this session started from, so the
-        // next title is a tap away. A plain desktop connect has no shelf, and so no way back.
-        let host = activeHost
-        // The SHELF is what says this came from the library, not the launch id: a Resume off a
-        // shelf launches nothing and still has somewhere to go back to.
-        let shelf = launchedShelf
         let endLine = "session ended by \(name) reason=\(reason) "
             + "rejection=\(rejection.map { String(describing: $0) } ?? "-")"
         sessionLog.info("\(endLine, privacy: .public)")
-        // The streamed session proved the host's identity, so its redial is pinned to it.
-        let lostDial = lastDial.map { plan -> Redial in
-            var plan = plan
-            plan.host.pinnedSHA256 = conn.hostFingerprint
-            return plan
-        }
-        let wake = conn.wakeRedialDelay(
-            autoWake: lastDial?.autoWake ?? false, sinceFirst: sinceFirstWake)
+        // The shelf, not the launch id, says this came from the library: a Resume launches nothing.
+        let shelf = activeHost == nil ? nil : launchedShelf
+        let hold = launchHold
+        let route = SessionEndRoute.decide(
+            phase: phase, reason: reason, rejection: rejection, said: conn.endRejectionMessage,
+            wakeDelay: conn.wakeRedialDelay(
+                autoWake: lastDial?.autoWake ?? false, sinceFirst: sinceFirstWake),
+            dialed: lastDial?.host, live: conn.hostFingerprint, shelf: shelf != nil)
         disconnect(deliberate: false) // host/network ended it — keep the linger for a reconnect
-        if redialWhileWaking(lastDial, after: wake) { return }
-        if reason == .lost, rejection == nil, let lostDial {
-            redialAfterLoss(lostDial)
-            return
-        }
-        if let rejection {
-            // The host's sentence, else the shared typed-rejection wording
-            // ("Your access to this host has expired…").
-            errorMessage = L10n.dialHostReason(host: name, reason: said ?? rejection.userMessage)
-            return
-        }
-        switch reason {
-        case .gameExited:
-            // The player quit their own game. Not a failure, and they are probably after the next
-            // title — so no banner, and back to the library it came from.
-            if host != nil, let shelf {
-                returnToLibrary = shelf
-            }
-        case .hostEnded, .local:
-            // Someone asked for this: an operator "End" on the host, or our own close racing in.
-            // Say it plainly, without the error framing.
-            errorMessage = L10n.appleEndedByHost(host: name)
-        case .hostError:
-            errorMessage = L10n.appleEndedHostError(host: name)
-        case .lost:
-            errorMessage = L10n.appleEndedLost(host: name)
+        switch route {
+        case .wakeRedial(let wait):
+            // `disconnect` dropped the hold; a wake redial keeps it up to the game.
+            launchHold = hold
+            if let plan = lastDial { redialWhileWaking(plan, after: wait) }
+        case .lossRedial(let pin):
+            guard var plan = lastDial else { return }
+            plan.host.pinnedSHA256 = pin
+            redialAfterLoss(plan)
+        case .message(let message):
+            errorMessage = message.text(host: name)
+        case .library:
+            returnToLibrary = shelf
         case .none:
-            // No verdict (an older core, or the close raced the read): keep the wording this path
-            // has always used rather than inventing one.
-            errorMessage = L10n.appleEndedUnknown(host: name)
+            break
         }
     }
 
-    /// Dial a lost session again on the schedule every client shares, with the dial that started
-    /// it; the host resumes the session it still holds. A redial that can't reach the host is the
-    /// next attempt, and a spent schedule says the connection is lost.
+    /// Dial a lost session again on the schedule every client shares: the dial that started it,
+    /// to the host's record as it is now, pinned as the session proved. The host resumes the
+    /// session it still holds. A redial that can't reach the host is the next attempt, and a
+    /// spent schedule says the connection is lost.
     private func redialAfterLoss(_ plan: Redial) {
         guard let wait = PunktfunkConnection.SessionEndReason.lost.redialDelay(attempt: plan.attempt)
         else {
@@ -1092,7 +1040,9 @@ final class SessionModel: ObservableObject {
             try? await Task.sleep(for: wait)
             guard let self, self.redial?.attempt == next.attempt, self.phase == .idle else { return }
             self.connect(
-                to: next.host, effective: next.effective, gamepad: next.gamepad,
+                to: next.host.redialed(
+                    current: self.currentRecord?(next.host.id), pin: next.host.pinnedSHA256),
+                effective: next.effective, gamepad: next.gamepad,
                 overrides: next.overrides, launchID: next.launchID, profileID: next.profileID,
                 shelf: next.shelf,
                 onUnreachable: { [weak self] in self?.redialAfterLoss(next) })
@@ -1102,11 +1052,12 @@ final class SessionModel: ObservableObject {
     /// Time since the host this dial is for first refused as a host still waking.
     private var sinceFirstWake: Duration? { lastDial?.wakeSince.map { ContinuousClock.Instant.now - $0 } }
 
-    /// Dial `plan` again after `wait`, the core's answer for a woken host that answered before
-    /// it could stream. True when that redial is on its way; the connect overlay stays up for it,
-    /// and Cancel ends it. A refusal past the window shows as it always has.
-    private func redialWhileWaking(_ plan: Redial?, after wait: Duration?) -> Bool {
-        guard let wait, var next = plan else { return false }
+    /// Dial `plan` again after `wait`, to the host's record as it is now: the core's answer for
+    /// a woken host that answered before it could stream. The connect overlay stays up for the
+    /// redial, and Cancel ends it. The launch hold still up rides into the redial; one the player
+    /// dismissed stays down.
+    private func redialWhileWaking(_ plan: Redial, after wait: Duration) {
+        var next = plan
         next.wakeSince = next.wakeSince ?? .now
         redial = next
         let seq = connectSeq
@@ -1116,12 +1067,13 @@ final class SessionModel: ObservableObject {
             guard let self, self.connectSeq == seq, self.redial != nil, self.phase == .idle
             else { return }
             self.connect(
-                to: next.host, effective: next.effective, gamepad: next.gamepad,
+                to: next.host.redialed(current: self.currentRecord?(next.host.id)),
+                effective: next.effective, gamepad: next.gamepad,
                 overrides: next.overrides, launchID: next.launchID, profileID: next.profileID,
                 shelf: next.shelf,
-                allowTofu: next.allowTofu, autoWake: next.autoWake, wakeSince: next.wakeSince)
+                allowTofu: next.allowTofu, autoWake: next.autoWake, wakeSince: next.wakeSince,
+                hold: self.launchHold)
         }
-        return true
     }
 
     /// Resize overlay START (main actor — from the Match-window follower's `onResizeTarget`): the
@@ -1151,26 +1103,31 @@ final class SessionModel: ObservableObject {
     /// ring's End game. Read from `/status` when the stream starts and when the ring opens.
     private(set) var streamedGame: RunningGame? { get { ui.streamedGame } set { ui.streamedGame = newValue } }
 
-    /// Ask the host what this stream plays. Best-effort: a failed read keeps the last answer.
+    /// Ask the host what this stream plays. Best-effort: a failed read keeps the last answer, and
+    /// an answer lands only in the session it was asked for.
     func refreshStreamedGame() {
         guard let host = activeHost, !DemoMode.isDemo(host),
               case .success(let target) = MgmtTarget.make(host: host, port: connection?.hostMgmtPort)
         else { return }
+        let seq = connectSeq
         Task { [weak self] in
             let games = await LibraryClient.running(target)
-            guard let self, self.activeHost?.id == host.id, self.phase == .streaming else { return }
+            guard let self, self.connectSeq == seq, self.activeHost?.id == host.id,
+                  self.phase == .streaming else { return }
             self.streamedGame = games.first(where: \.streamedHere)
         }
     }
 
     /// End the streamed game on the host, then the stream. A refusal keeps the stream and says why.
+    /// The answer acts only on the session it was asked from, never a newer one to the same host.
     func endStreamedGame() {
         guard let game = streamedGame, let appID = game.appID, let host = activeHost,
               case .success(let target) = MgmtTarget.make(host: host, port: connection?.hostMgmtPort)
         else { return }
+        let seq = connectSeq
         Task { [weak self] in
             let outcome = await LibraryClient.endGame(appID: appID, on: target)
-            guard let self, self.activeHost?.id == host.id else { return }
+            guard let self, self.connectSeq == seq, self.activeHost?.id == host.id else { return }
             if outcome.gameGone {
                 self.disconnect()
             } else {
@@ -1188,8 +1145,8 @@ final class SessionModel: ObservableObject {
         launchDownload = nil
     }
 
-    /// Poll the host once a second for the launched title's state, and reveal when it has
-    /// answered — or when it never will. Same lane and identity as the shelf's Resume badge.
+    /// Poll the host once a second for the launched title's state and take `LaunchHoldRule`'s
+    /// step. Same lane and identity as the shelf's Resume badge.
     private func watchLaunch() {
         guard let hold = launchHold?.entry, let host = activeHost else { return }
         // The demo host has no `/status` and its title is up at once; hold as a real start would,
@@ -1211,40 +1168,27 @@ final class SessionModel: ObservableObject {
         launchWatch = Task { [weak self] in
             var began = Date()
             while !Task.isCancelled {
-                let status = await LibraryClient.status(target)
-                let game = status.games.first { $0.appID == hold.id }
-                let state = game?.state
-                let download = status.downloads.first { $0.appID == hold.id }
-                // The host fetches the title's files before it starts it: no cap while they come,
-                // and the clocks start over once they are in.
-                if let download, download.live {
+                let answer = await LibraryClient.statusIfAnswered(target)
+                // A cancelled read comes back as a miss.
+                guard !Task.isCancelled else { return }
+                let title = answer.map {
+                    LaunchHoldRule.Title(of: hold, games: $0.games, downloads: $0.downloads)
+                }
+                let step = LaunchHoldRule.step(
+                    title, elapsed: Date().timeIntervalSince(began), cap: launchHoldMax,
+                    noLease: launchNoLease)
+                switch step {
+                case .keep(let windowWait, let download):
+                    if step.restartsClock { began = Date() }
                     if self?.launchDownload != download { self?.launchDownload = download }
-                    began = Date()
-                    try? await Task.sleep(nanoseconds: NSEC_PER_SEC)
-                    continue
-                }
-                if self?.launchDownload != nil { self?.launchDownload = nil }
-                // A download that stopped: nothing will start. The host's notice says why.
-                if download?.stopped(title: hold.title) != nil, state == nil || state == "launching" {
+                    if self?.launchWindowWait != windowWait { self?.launchWindowWait = windowWait }
+                case .unchanged:
+                    break
+                case .reveal:
+                    // A stopped download reveals too: the host's notice says why.
                     self?.revealStream()
                     return
                 }
-                let elapsed = Date().timeIntervalSince(began)
-                let windowWait = state == "running" && game?.awaitingWindow == true
-                let done: Bool
-                switch state {
-                case "launching": done = elapsed >= launchHoldMax
-                // A Proton prefix or a splash can sit behind a running process for a minute.
-                case "running" where windowWait: done = elapsed >= launchHoldMax
-                // window, running, exited, untracked, grace: the host has said all it will.
-                case .some: done = true
-                case nil: done = elapsed >= launchNoLease
-                }
-                if done {
-                    self?.revealStream()
-                    return
-                }
-                if self?.launchWindowWait != windowWait { self?.launchWindowWait = windowWait }
                 try? await Task.sleep(nanoseconds: NSEC_PER_SEC)
             }
         }

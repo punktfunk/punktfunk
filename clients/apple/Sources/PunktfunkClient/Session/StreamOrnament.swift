@@ -52,6 +52,8 @@ struct StreamOrnament: View {
         .task(id: wakes) {
             resting = false
             try? await Task.sleep(for: .seconds(wakes == 0 ? 6 : 3))
+            // A wake cancels this sleep; only the newest one may rest the pill.
+            guard !Task.isCancelled else { return }
             resting = true
         }
     }

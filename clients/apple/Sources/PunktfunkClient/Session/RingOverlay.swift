@@ -12,52 +12,68 @@
 // the way tvOS dims its own: the mouse and the real keyboard already do that work.
 
 #if os(iOS) || os(visionOS) || os(tvOS) || os(macOS)
+import Combine
 import PunktfunkKit
 import PunktfunkShared
 import SwiftUI
 
-/// The ring's open/closed state and what it is showing. One per session; the overlay reads it.
+/// The change signal of `RingState`'s drawing fields, which only the overlay watches.
+final class RingFrame: ObservableObject {
+    let objectWillChange = ObservableObjectPublisher()
+}
+
+/// The ring's open/closed state and what it is showing. One per session. Opening and closing
+/// publish here, for the stream scene and the root view; every field that changes while the
+/// ring is up notifies `frame` instead, so a twist or a pad step redraws only the overlay.
 @MainActor
 final class RingState: ObservableObject {
-    /// 0 closed … 1 open — driven by the twist until `committed`.
-    @Published var progress: CGFloat = 0
+    let frame = RingFrame()
     @Published var committed = false
     /// The wind-in after a close: the overlay stays mounted while the discs ease back.
     @Published var closing = false
-    @Published var clockwise = true
+    /// 0 closed … 1 open — driven by the twist until `committed`. Leaving or reaching 0 flips
+    /// `visible`, so that edge publishes here too.
+    var progress: CGFloat = 0 {
+        willSet {
+            frame.objectWillChange.send()
+            if (newValue > 0) != (progress > 0) { objectWillChange.send() }
+        }
+    }
+    var clockwise = true { willSet { frame.objectWillChange.send() } }
     /// Stream-view points; the ring is centred here, clamped so it stays on screen.
-    @Published var centre = CGPoint.zero
+    var centre = CGPoint.zero { willSet { frame.objectWillChange.send() } }
     /// Opened with no point of its own (a chord, a menu item): the overlay puts it in the middle
     /// of the stage instead, so it never depends on a pointer that may be locked or off-window.
-    @Published var centred = false
-    @Published var sheet = false
+    var centred = false { willSet { frame.objectWillChange.send() } }
+    var sheet = false { willSet { frame.objectWillChange.send() } }
     /// A destructive slot awaiting its second press (the slot id).
-    @Published var armed: String?
+    var armed: String? { willSet { frame.objectWillChange.send() } }
     /// The label under the ring: a slot's name, why it is unavailable, or "tap again".
-    @Published var hint: String?
-    @Published var lastTouch = Date()
-    /// The mode the Welcome carried, captured at first open — the Resolution row's first chip.
-    var native: (w: UInt32, h: UInt32, hz: UInt32)?
+    var hint: String? { willSet { frame.objectWillChange.send() } }
+    var lastTouch = Date() { willSet { frame.objectWillChange.send() } }
+    /// The mode this session's Welcome carried, set as it starts streaming: the Resolution row's
+    /// Native. Nil in the editor, which takes the live mode.
+    var native: RingNav.Mode?
+    /// The sheet's last mode request, which the next one steps on from until the host switches.
+    /// Kept until the ring closes.
+    var asked: RingNav.ModeAsk?
     /// The wire pad whose `Select+A` opened the ring; `nil` for any other open.
     var opener: UInt32?
     /// The pad's highlight: a slot 0…5, or 6 for the centre (the initial one — `Select+A`
     /// then A opens the sheet in two presses). `nil` until a pad moves it.
-    @Published var highlight: Int?
+    var highlight: Int? { willSet { frame.objectWillChange.send() } }
     /// The sheet row the pad is on.
-    @Published var sheetCursor = 0
+    var sheetCursor = 0 { willSet { frame.objectWillChange.send() } }
     /// The in-flight wind-in, so a second close cannot clear `closing` under the first.
     private var closeTask: Task<Void, Never>?
-    /// Pad presses awaiting the overlay (`RingOverlay` drains them); `navSeq` makes each an event.
-    ///
-    /// A QUEUE, not a slot: capture emits several of these from one poll — a stick crossing a
-    /// sector boundary in the same frame as an A press — and SwiftUI coalesces the `navSeq` bumps
-    /// into one update, so a single slot delivered only the last of them. The dropped ones were
-    /// the presses: the highlight moved and nothing fired, and the same race ate B, so the ring
-    /// refused to close.
+    /// Pad presses awaiting the overlay, which drains them on each `navSeq` change. A queue: one
+    /// capture poll can carry a stick sector and an A press, and SwiftUI folds their two bumps
+    /// into one update. Only an open ring queues; `close` drops what is left.
     var pendingNav: [RingNav] = []
-    @Published var navSeq = 0
+    var navSeq = 0 { willSet { frame.objectWillChange.send() } }
 
     func nav(_ n: RingNav) {
+        guard committed else { return }
         pendingNav.append(n)
         navSeq &+= 1
     }
@@ -65,19 +81,25 @@ final class RingState: ObservableObject {
     // Haptic triggers: `.sensoryFeedback` fires on change, so each is a counter. The vocabulary
     // is one tick when the twist arms, a thump at commit, a tap per press, a firm "no" on a
     // dimmed button, and a warning when a destructive slot arms.
-    @Published var armTick = 0
-    @Published var commitTick = 0
-    @Published var pressTick = 0
-    @Published var refuseTick = 0
-    @Published var warnTick = 0
+    var armTick = 0 { willSet { frame.objectWillChange.send() } }
+    var commitTick = 0 { willSet { frame.objectWillChange.send() } }
+    var pressTick = 0 { willSet { frame.objectWillChange.send() } }
+    var refuseTick = 0 { willSet { frame.objectWillChange.send() } }
+    var warnTick = 0 { willSet { frame.objectWillChange.send() } }
     private var twistArmed = false
 
     var visible: Bool { committed || progress > 0 || closing }
 
+    /// The stream under the ring takes input; false under a trust card or the console's hold,
+    /// where nothing mounts the overlay. The ring then stays shut, and an open one closes.
+    var takesInput = true {
+        didSet { if !takesInput { close() } }
+    }
+
     func handle(_ event: DialEvent) {
         switch event {
         case .turn(let p, let cw, let at):
-            guard !committed else { return }
+            guard !committed, takesInput else { return }
             if !twistArmed {
                 twistArmed = true
                 armTick &+= 1
@@ -96,7 +118,9 @@ final class RingState: ObservableObject {
         }
     }
 
+    /// Every open lands here: the twist's, a disc's, a chord's, a menu's.
     func commit() {
+        guard takesInput else { return }
         committed = true
         progress = 1
         commitTick &+= 1
@@ -158,9 +182,22 @@ final class RingState: ObservableObject {
         highlight = nil
         twistArmed = false
         opener = nil
+        asked = nil
+        pendingNav = []
     }
 
     func touch() { lastTouch = Date() }
+
+    /// The pad's part of this state, as `RingNav.step` reads and leaves it.
+    var navState: RingNav.State {
+        get { RingNav.State(highlight: highlight, sheet: sheet, cursor: sheetCursor, armed: armed) }
+        set {
+            highlight = newValue.highlight
+            sheet = newValue.sheet
+            sheetCursor = newValue.cursor
+            armed = newValue.armed
+        }
+    }
 }
 
 /// What the ring can do this session — the shell's live state and commands behind each slot.
@@ -388,7 +425,9 @@ func spec(_ slot: SlotId, _ cfg: OverlayConfig, _ a: RingActions) -> SlotSpec {
         case "power.shutdown": icon = "power"
         default: icon = "bolt.fill"
         }
-        return SlotSpec(id: "host:\(id)", label: act?.label ?? id, icon: icon,
+        // One the host doesn't list keeps this app's word for it, as a listed one does.
+        let label = act?.label ?? SlotId.hostWord(id).map { String(localized: $0) } ?? id
+        return SlotSpec(id: "host:\(id)", label: label, icon: icon,
                         enabled: act?.available == true,
                         reason: act?.unavailableReason ?? String(localized: L10n.ringHostNotOffered),
                         armed: act?.danger ?? true)
@@ -465,10 +504,20 @@ private let slotLag: CGFloat = 0.06
 /// The ring and its sheet. Sits above the stream view; a tap on the scrim outside closes it.
 struct RingOverlay: View {
     @ObservedObject var state: RingState
+    /// `state`'s drawing fields, which publish here and not on `state`.
+    @ObservedObject private var frame: RingFrame
     let cfg: OverlayConfig
     let actions: RingActions
     /// Set by the settings editor; nil in-stream.
-    var editing: RingEditing? = nil
+    var editing: RingEditing?
+
+    init(state: RingState, cfg: OverlayConfig, actions: RingActions, editing: RingEditing? = nil) {
+        self.state = state
+        frame = state.frame
+        self.cfg = cfg
+        self.actions = actions
+        self.editing = editing
+    }
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     #if os(visionOS)
     /// On the Vision Pro's screen the ring is an attachment over the picture, with no scrim.
@@ -573,8 +622,8 @@ struct RingOverlay: View {
                                highlighted: state.highlight == k) {
                         if let editing {
                             editing.pick(k)
-                        } else if let slot, let s {
-                            fire(s, slot)
+                        } else if slot != nil {
+                            fire(k)
                         }
                     }
                     .offset(drag?.k == k ? drag?.offset ?? .zero : .zero)
@@ -615,7 +664,7 @@ struct RingOverlay: View {
                         .position(x: cx, y: cy + ringRadius + slotSize)
                 }
                 if state.sheet {
-                    RingSheet(state: state, rows: sheetRows())
+                    RingSheet(state: state, frame: state.frame, rows: sheetRows())
                         .frame(maxHeight: geo.size.height * 0.6)
                         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
                         .padding(.bottom, 16)
@@ -625,14 +674,12 @@ struct RingOverlay: View {
             .environment(\.colorScheme, .dark) // reads over any frame
         }
         .ignoresSafeArea()
-        .onAppear {
-            appeared = true
-            if state.native == nil { state.native = actions.currentMode() }
-        }
+        .onAppear { appeared = true }
+        // A press that closes the ring drops the rest of its batch with it.
         .onChange(of: state.navSeq) { _, _ in
             let pending = state.pendingNav
             state.pendingNav = []
-            for n in pending { handleNav(n) }
+            for n in pending where state.committed { handleNav(n) }
         }
         .animation(reduceMotion ? .easeOut(duration: 0.12) : .smooth(duration: 0.25), value: state.sheet)
         // Idle: the exit disc's 8 s rule, for the same latency reason — unless the sheet is up.
@@ -659,85 +706,55 @@ struct RingOverlay: View {
         #endif
     }
 
-    /// The pad (design §2.6): the left stick AIMS — its sector is the highlight, so the ring
-    /// follows the thumb — while the D-pad steps, Right clockwise, Left anticlockwise, Up to 12
-    /// o'clock, Down to 6; Y returns the highlight to the centre, A fires it (the centre opens
-    /// the sheet), B closes. In the sheet, Up/Down walk the rows and Left/Right adjust one.
+    /// A pad or remote press (design §2.6), decided by `RingNav.step` over the discs, or the
+    /// sheet's rows while it is up.
     private func handleNav(_ n: RingNav) {
         state.touch()
-        if state.sheet {
-            let rows = sheetRows()
-            switch n {
-            // A sheet is a list, not a dial: the six sectors fold onto its four directions.
-            case .sector(let k):
-                if let k { handleNav(k == 0 ? .up : k == 3 ? .down : k < 3 ? .right : .left) }
-            case .up: state.sheetCursor = max(state.sheetCursor - 1, 0); state.pressTick &+= 1
-            case .down: state.sheetCursor = min(state.sheetCursor + 1, max(rows.count - 1, 0)); state.pressTick &+= 1
-            case .left, .right:
-                if let adjust = rows[safe: state.sheetCursor]?.adjust {
-                    adjust(n == .left ? -1 : 1)
-                    state.pressTick &+= 1
-                } else {
-                    state.refuseTick &+= 1
-                }
-            case .confirm:
-                if let row = rows[safe: state.sheetCursor] {
-                    if row.enabled { state.pressTick &+= 1 } else { state.refuseTick &+= 1 }
-                    row.tap()
-                }
-            case .back: state.sheet = false; state.pressTick &+= 1
-            case .centre: break
+        let rows = state.sheet ? sheetRows() : []
+        let facts = state.sheet ? rows.map(\.nav) : ringRows()
+        apply(RingNav.step(state: state.navState, event: n, rows: facts), rows)
+    }
+
+    /// A finger on disc `k`: the pad's A on that disc.
+    private func fire(_ k: Int) {
+        state.touch()
+        apply(RingNav.fire(state: state.navState, slot: k, rows: ringRows()), [])
+    }
+
+    /// The six discs as `RingNav` reads them; nil for an empty slot.
+    private func ringRows() -> [RingNav.Row?] {
+        cfg.ring.map { slot in
+            slot.map {
+                let s = spec($0, cfg, actions)
+                return RingNav.Row(id: s.id, enabled: s.enabled, twoPress: s.armed)
             }
-            return
-        }
-        let h = state.highlight ?? 6
-        switch n {
-        // The weapon-wheel idiom: the thumb's sector is the slot, neutral is the centre.
-        case .sector(let k):
-            let next = k ?? 6
-            guard state.highlight != next else { return }
-            state.highlight = next
-            state.pressTick &+= 1
-        case .right: state.highlight = h >= 6 ? 0 : (h + 1) % 6; state.pressTick &+= 1
-        case .left: state.highlight = h >= 6 ? 5 : (h + 5) % 6; state.pressTick &+= 1
-        case .up: state.highlight = 0; state.pressTick &+= 1
-        case .down: state.highlight = 3; state.pressTick &+= 1
-        case .centre: state.highlight = 6; state.pressTick &+= 1
-        case .confirm:
-            if h >= 6 {
-                state.pressTick &+= 1
-                state.sheetCursor = 0
-                state.sheet = true
-            } else if let slot = cfg.ring[h] {
-                fire(spec(slot, cfg, actions), slot)
-            } else {
-                state.refuseTick &+= 1
-            }
-        case .back: state.close()
         }
     }
 
-    private func fire(_ s: SlotSpec, _ slot: SlotId) {
-        state.touch()
-        guard s.enabled else {
-            state.refuseTick &+= 1
-            state.armed = nil
-            state.hint = s.reason
-            return
-        }
-        if s.armed, state.armed != s.id {
-            state.warnTick &+= 1
-            state.armed = s.id
-            state.hint = confirmHint(s)
-            return
-        }
-        state.pressTick &+= 1
-        state.armed = nil
-        state.hint = nil
-        perform(slot, cfg, actions, state)
-        if s.toggle {
-            let after = spec(slot, cfg, actions)
-            state.hint = "\(after.label): \(after.state)"
+    /// Takes a step's state, then performs its effects in order. A toggle that ran leaves the
+    /// ring open with its new state as the hint.
+    private func apply(_ step: (state: RingNav.State, effects: [RingNav.Effect]), _ rows: [SheetRowSpec]) {
+        state.navState = step.state
+        for effect in step.effects {
+            switch effect {
+            case .haptic(.press): state.pressTick &+= 1
+            case .haptic(.refuse): state.refuseTick &+= 1
+            case .haptic(.warn): state.warnTick &+= 1
+            case .explain(let k): state.hint = cfg.ring[k].map { spec($0, cfg, actions).reason }
+            case .ask(let k): state.hint = cfg.ring[k].map { confirmHint(spec($0, cfg, actions)) }
+            case .fire(let k):
+                guard let slot = cfg.ring[k] else { break }
+                state.hint = nil
+                let toggle = spec(slot, cfg, actions).toggle
+                perform(slot, cfg, actions, state)
+                if toggle {
+                    let after = spec(slot, cfg, actions)
+                    state.hint = "\(after.label): \(after.state)"
+                }
+            case .adjust(let dir): rows[safe: state.sheetCursor]?.adjust?(dir)
+            case .tap: rows[safe: state.sheetCursor]?.tap()
+            case .close: state.close()
+            }
         }
     }
 
@@ -873,6 +890,8 @@ private struct SheetRowSpec {
     var adjust: ((Int) -> Void)? = nil
     var tap: () -> Void
 
+    var nav: RingNav.Row { RingNav.Row(enabled: enabled, adjustable: adjust != nil) }
+
     static func scrollInversion(_ actions: RingActions) -> SheetRowSpec {
         let granted = actions.pointerGranted()
         return SheetRowSpec(label: String(localized: L10n.ringSheetInvertScroll),
@@ -886,39 +905,32 @@ private struct SheetRowSpec {
     }
 }
 
-private let resPresets: [(String, UInt32, UInt32)] = [("1440p", 2560, 1440), ("1080p", 1920, 1080), ("720p", 1280, 720)]
-private let hzPresets: [UInt32] = [120, 60]
-
 extension Collection {
     fileprivate subscript(safe i: Index) -> Element? { indices.contains(i) ? self[i] : nil }
 }
 
 extension RingOverlay {
-    /// Depth two: the complete catalogue in a fixed order (D2).
+    /// Depth two: the complete catalogue in a fixed order (D2). The mode rows step through
+    /// `RingNav.nextMode` and `.nextRefresh`.
     fileprivate func sheetRows() -> [SheetRowSpec] {
         let a = actions
-        let mode = a.currentMode()
+        let live = a.currentMode()
+        let mode = RingNav.Mode(width: live.w, height: live.h, hz: live.hz)
         let native = state.native ?? mode
         let resLabel: String = {
-            if mode.w == native.w && mode.h == native.h {
-                return L10n.ringSheetNative(width: String(mode.w), height: String(mode.h))
+            if mode.width == native.width && mode.height == native.height {
+                return L10n.ringSheetNative(width: String(mode.width), height: String(mode.height))
             }
-            return resPresets.first { $0.1 == mode.w && $0.2 == mode.h }?.0 ?? "\(mode.w)×\(mode.h)"
+            return RingNav.resolutions.first { $0.width == mode.width && $0.height == mode.height }?.name
+                ?? "\(mode.width)×\(mode.height)"
         }()
-        func adjustRes(_ dir: Int) {
-            let options = [(native.w, native.h)] + resPresets.map { ($0.1, $0.2) }
-            let i = options.firstIndex { $0 == (mode.w, mode.h) } ?? 0
-            let n = options.count
-            let next = options[((i + dir) % n + n) % n]
-            a.requestMode(next.0, next.1, mode.hz)
+        func request(_ next: (RingNav.Mode) -> RingNav.Mode) {
+            let target = next(RingNav.origin(live: mode, asked: state.asked))
+            state.asked = RingNav.ModeAsk(from: mode, to: target)
+            a.requestMode(target.width, target.height, target.hz)
         }
-        func adjustHz(_ dir: Int) {
-            var options = [native.hz]
-            for hz in hzPresets where !options.contains(hz) { options.append(hz) }
-            let i = options.firstIndex(of: mode.hz) ?? 0
-            let n = options.count
-            a.requestMode(mode.w, mode.h, options[((i + dir) % n + n) % n])
-        }
+        func adjustRes(_ dir: Int) { request { RingNav.nextMode(mode: $0, native: native, dir: dir) } }
+        func adjustHz(_ dir: Int) { request { RingNav.nextRefresh(mode: $0, native: native, dir: dir) } }
         var rows: [SheetRowSpec] = []
         rows.append(SheetRowSpec(header: String(localized: L10n.ringGroupSession),
                                  label: String(localized: L10n.ringEndStream),
@@ -1010,6 +1022,8 @@ extension RingOverlay {
 /// The sheet as a scrollable glass panel; the pad's cursor row is tinted.
 private struct RingSheet: View {
     @ObservedObject var state: RingState
+    /// Publishes the cursor's moves.
+    @ObservedObject var frame: RingFrame
     let rows: [SheetRowSpec]
 
     var body: some View {

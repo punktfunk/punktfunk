@@ -37,16 +37,8 @@ enum ProfileFetch {
             }
         }
         guard let seconds else { return await ask() }
-        return await withTaskGroup(of: ProfileAnswer.self) { group in
-            group.addTask(operation: ask)
-            group.addTask {
-                try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
-                return .failed
-            }
-            let first = await group.next() ?? .failed
-            group.cancelAll()
-            return first
-        }
+        // The transport does not stop on a cancel, so the cap must not wait for it.
+        return await Deadline.first(within: seconds, fallback: .failed, ask)
     }
 }
 

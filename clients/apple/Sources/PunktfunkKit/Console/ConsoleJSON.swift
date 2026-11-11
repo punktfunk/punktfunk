@@ -21,6 +21,43 @@ public enum ConsoleJSON {
         host.pinnedSHA256.map { $0.map { String(format: "%02x", $0) }.joined() } ?? ""
     }
 
+    /// The saved host a console command names. The fingerprint keys it: the record that pins
+    /// `fp`, else the unpaired one at `addr:port`, never a record pinned to another
+    /// fingerprint, which is the other system of a dual-boot box. With no `fp` the address
+    /// is all there is.
+    public static func host(
+        in hosts: [StoredHost], fp: String, addr: String, port: UInt16
+    ) -> StoredHost? {
+        if !fp.isEmpty, let pinned = hosts.first(where: { fingerprint($0) == fp }) {
+            return pinned
+        }
+        return hosts.first {
+            $0.address == addr && $0.port == port && (fp.isEmpty || $0.pinnedSHA256 == nil)
+        }
+    }
+
+    /// The saved host behind a row key: the fingerprint or `addr:port`, with a pinned card's
+    /// preset id behind a NUL. The port sits behind the last colon, as an IPv6 address has
+    /// its own; an empty key names no host.
+    public static func host(in hosts: [StoredHost], key: String) -> StoredHost? {
+        let base = key.split(separator: "\u{0}", omittingEmptySubsequences: false)
+            .first.map(String.init) ?? key
+        guard !base.isEmpty else { return nil }
+        if let host = hosts.first(where: { fingerprint($0) == base }) { return host }
+        guard let colon = base.lastIndex(of: ":"),
+              let port = UInt16(base[base.index(after: colon)...])
+        else { return nil }
+        let address = String(base[..<colon])
+        return hosts.first { $0.address == address && $0.port == port }
+    }
+
+    /// The preset a pinned card's row key carries behind its NUL; nil for a host's own row.
+    public static func preset(ofKey key: String) -> String? {
+        guard let nul = key.firstIndex(of: "\u{0}") else { return nil }
+        let id = key[key.index(after: nul)...]
+        return id.isEmpty ? nil : String(id)
+    }
+
     /// `HostRow.key` — the pinned fingerprint when there is one, else `addr:port`.
     public static func rowKey(_ fingerprint: String, _ address: String, _ port: UInt16) -> String {
         fingerprint.isEmpty ? "\(address):\(port)" : fingerprint

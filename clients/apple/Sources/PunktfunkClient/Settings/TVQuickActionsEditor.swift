@@ -15,10 +15,14 @@ struct TVQuickActionsEditor: View {
     @Binding var blob: String
     /// The edited preset owns its own dial.
     let overridden: Bool
-    /// The Shortcuts page of the same layer, a push away.
+    /// The Shortcuts page of the same layer, a push away. A new shortcut skips every id its
+    /// bindings name.
     let shortcuts: ShortcutsEditor
     /// The pad chord that opens the dial, from the live shortcuts; nil when none does.
     let padOpener: String?
+    /// The edited layer holds the Shortcuts page's blob itself, so removing a shortcut drops
+    /// its bindings there. False where the layer inherits them: another layer is never written.
+    var ownsBindings = false
     /// Back to the TV dial: drops the override in preset scope, clears the global otherwise.
     let reset: () -> Void
     @State private var picking: Int?
@@ -109,7 +113,7 @@ struct TVQuickActionsEditor: View {
     }
 
     private func disc(_ k: Int) -> some View {
-        let s = cfg.ring[k].map { spec($0, cfg, previewRingActions) }
+        let s = cfg.ring[k].map { spec($0, cfg, previewRingActions(cfg)) }
         return Button {
             if let from = moving {
                 swapSlots(from, k)
@@ -144,7 +148,8 @@ struct TVQuickActionsEditor: View {
                 }
             }
             Button {
-                shortcut = ShortcutDraft(id: cfg.nextShortcutID, label: "", keys: [], isNew: true)
+                shortcut = ShortcutDraft(id: cfg.nextShortcutID(bindings: Shortcuts.parse(shortcuts.blob)),
+                                         label: "", keys: [], isNew: true)
             } label: {
                 Label(L10n.ringShortcutAdd, systemImage: "plus")
             }
@@ -156,7 +161,7 @@ struct TVQuickActionsEditor: View {
     }
 
     private func label(_ k: Int) -> String {
-        cfg.ring[k].map { spec($0, cfg, previewRingActions).label } ?? String(localized: L10n.ringSlotEmpty)
+        cfg.ring[k].map { spec($0, cfg, previewRingActions(cfg)).label } ?? String(localized: L10n.ringSlotEmpty)
     }
 
     private var detailTitle: String {
@@ -169,34 +174,37 @@ struct TVQuickActionsEditor: View {
         guard let k = focused, let slot = cfg.ring[k] else {
             return String(localized: L10n.appleTvRingPickHint)
         }
-        let s = spec(slot, cfg, previewRingActions)
+        let s = spec(slot, cfg, previewRingActions(cfg))
         return s.enabled ? String(localized: L10n.appleTvRingSlotHint) : s.reason
     }
 
-    private func set(_ k: Int, _ id: String) {
+    /// Writes the blob as `change` leaves the config.
+    private func edit(_ change: (inout OverlayConfig) -> Void) {
         var c = cfg
-        c.ring[k] = SlotId.parse(id)
+        change(&c)
         blob = c.toJSON()
     }
 
+    private func set(_ k: Int, _ id: String) {
+        edit { $0.assign(k, id: id) }
+    }
+
+    /// Puts the lifted disc down on slot `b`; on its own slot it changes nothing.
     private func swapSlots(_ a: Int, _ b: Int) {
         moving = nil
         guard a != b else { return }
-        var c = cfg
-        c.ring.swapAt(a, b)
-        blob = c.toJSON()
+        edit { $0.swap(a, b) }
     }
 
     private func save(_ d: ShortcutDraft) {
-        var c = cfg
-        c.saveShortcut(OverlayShortcut(id: d.id, label: d.label, keys: d.keys))
-        blob = c.toJSON()
+        edit { $0.saveShortcut(OverlayShortcut(id: d.id, label: d.label, keys: d.keys)) }
     }
 
     private func remove(_ id: String) {
-        var c = cfg
-        c.removeShortcut(id)
-        blob = c.toJSON()
+        var sent = Shortcuts.parse(shortcuts.blob)
+        let before = sent
+        edit { $0.removeShortcut(id, bindings: &sent) }
+        if ownsBindings, sent != before { shortcuts.blob = sent.toJSON() }
     }
 }
 
@@ -282,8 +290,7 @@ private struct TVShortcutEditor: View {
     @Environment(\.dismiss) private var dismiss
     @State private var editingName = false
 
-    private var mods: [String] { draft.keys.filter { modifierKeys.contains($0) } }
-    private var key: String? { draft.keys.first { !modifierKeys.contains($0) } }
+    private var chord: Chord { Chord.parse(keys: draft.keys) }
 
     var body: some View {
         ScrollView {
@@ -296,12 +303,12 @@ private struct TVShortcutEditor: View {
                 ) { editingName = true }
                 heading(String(localized: L10n.ringShortcutModifiers))
                 HStack(spacing: 24) {
-                    ForEach(modifierKeys, id: \.self) { m in
-                        chip(keyLegend(m), on: mods.contains(m)) { toggle(m) }
+                    ForEach(Chord.modifiers, id: \.self) { m in
+                        chip(keyLegend(m), on: chord.mods.contains(m)) { toggle(m) }
                     }
                 }
                 .focusSection()
-                ForEach(keyGroups, id: \.id) { group in
+                ForEach(Chord.keyGroups, id: \.id) { group in
                     heading(group.title)
                     let wide = group.keys.contains { keyLegend($0).count > 2 }
                     LazyVGrid(
@@ -309,7 +316,7 @@ private struct TVShortcutEditor: View {
                         alignment: .leading, spacing: 20
                     ) {
                         ForEach(group.keys, id: \.self) { k in
-                            chip(keyLegend(k), on: key == k) { pick(k) }
+                            chip(keyLegend(k), on: chord.key == k) { pick(k) }
                         }
                     }
                     .focusSection()
@@ -335,7 +342,7 @@ private struct TVShortcutEditor: View {
         }
         .fullScreenCover(isPresented: $editingName) {
             TVTextEntry(title: String(localized: L10n.ringShortcutName), text: draft.label) { typed in
-                draft.label = typed
+                draft.label = typed.trimmingCharacters(in: .whitespaces)
                 editingName = false
             }
         }
@@ -363,19 +370,16 @@ private struct TVShortcutEditor: View {
         }
     }
 
-    /// Modifiers first in keyboard order, then the key — the order the chord is sent.
-    private func rebuild(mods: [String], key: String?) {
-        draft.keys = modifierKeys.filter { mods.contains($0) } + (key.map { [$0] } ?? [])
-    }
-
     private func toggle(_ m: String) {
-        var next = mods
-        if let i = next.firstIndex(of: m) { next.remove(at: i) } else { next.append(m) }
-        rebuild(mods: next, key: key)
+        var c = chord
+        c.toggle(m)
+        draft.keys = c.keys
     }
 
     private func pick(_ k: String) {
-        rebuild(mods: mods, key: k)
+        var c = chord
+        c.key = k
+        draft.keys = c.keys
     }
 }
 #endif

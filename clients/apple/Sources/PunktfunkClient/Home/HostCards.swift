@@ -172,37 +172,33 @@ struct HostActionSurface {
 }
 
 extension HostActions {
-    /// What `host` offers, gated in one place for the grid and the Mac's host window. A pinned
-    /// card connects and browses with ITS preset and carries no host acts: it is a shortcut, not
-    /// a second host. `screens` is the host's answer for this device, the pick it streams.
+    /// What `host` offers (`HostOffers.resolve`), run on `surface`. A pinned card connects and
+    /// browses with ITS preset. `screens` is the host's answer for this device, the pick it
+    /// streams.
     @MainActor init(
         host: StoredHost, pinned: StreamPreset?, online: Bool, store: HostStore,
         presets: [StreamPreset], power: [HostAction], screens: DisplayTargets?,
         surface: HostActionSurface
     ) {
         let selection: PresetSelection = pinned.map { .preset($0.id) } ?? .inherit
-        // Library, speed test and logs dial with the pinned identity, and an unpinned host would
-        // accept any certificate. So they wait for a pairing. The demo host has neither a speed
-        // test nor a log inbox.
-        let paired = host.pinnedSHA256 != nil
-        let measurable = paired && !DemoMode.isDemo(host)
-        let wakeable = pinned == nil && !online && WakePolicy.canWake(host.wakeMacs)
+        let offers = HostOffers.resolve(
+            host: host, pinned: pinned != nil, online: online, isDemo: DemoMode.isDemo(host),
+            canWake: WakePolicy.canWake(host.wakeMacs))
         self.init(
             connect: { surface.connect(selection) },
             pair: surface.pair,
             forget: { store.forgetIdentity(host) },
             remove: { store.remove(host) },
-            browseLibrary: paired ? { surface.browse(selection) } : nil,
-            speedTest: measurable ? surface.speedTest : nil,
-            sendLogs: measurable ? surface.sendLogs : nil,
-            wake: wakeable ? surface.wake : nil,
-            switchProfile: pinned == nil && paired && host.pickedProfile != nil
-                && !DemoMode.isDemo(host) ? surface.switchProfile : nil,
+            browseLibrary: offers.contains(.browse) ? { surface.browse(selection) } : nil,
+            speedTest: offers.contains(.speedTest) ? surface.speedTest : nil,
+            sendLogs: offers.contains(.sendLogs) ? surface.sendLogs : nil,
+            wake: offers.contains(.wake) ? surface.wake : nil,
+            switchProfile: offers.contains(.switchProfile) ? surface.switchProfile : nil,
             copyLink: LinkClipboard.isAvailable
                 ? { LinkClipboard.copy(DeepLink.forHost(host, preset: pinned?.id).urlString) }
                 : nil,
-            showDetails: pinned == nil ? surface.showDetails : nil,
-            power: pinned == nil ? power : [],
+            showDetails: offers.contains(.details) ? surface.showDetails : nil,
+            power: offers.contains(.power) ? power : [],
             runPower: surface.runPower,
             presets: HostPresetMenu(
                 presets: presets,

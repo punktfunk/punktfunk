@@ -328,7 +328,7 @@ pub struct Settings {
     /// `"platform"`, or `"store"`. Presentation only; unknown → default shelf.
     #[serde(default)]
     pub library_sort: String,
-    /// Library arrangement: `"shelf"` (default, and unknown values) or `"grid"`.
+    /// Library arrangement: `"grid"` (default, and unknown values) or `"shelf"`.
     #[serde(default)]
     pub library_view: String,
     /// The Games tab's sections, in order: ids comma-separated, a leading `-` on a section
