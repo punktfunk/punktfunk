@@ -54,4 +54,27 @@ public enum ConnectPlan {
         guard d.picker, let rows else { return .settle(id: d.send, remember: d.remember) }
         return .pick(rows, saved: rows.first { $0.id == saved?.id }?.id, gone: d.gone)
     }
+
+    /// One read of the list while a picked profile's seat comes up.
+    public enum SeatStep: Equatable {
+        /// The seat is up, or the list dropped the profile and the host refuses it: dial.
+        case dial
+        /// The seat can't play; the line says why.
+        case refuse(String)
+        /// Read again, with `detail` under the title.
+        case keepWaiting(detail: String?)
+        /// The read failed: read again, the sheet as it is.
+        case retry
+    }
+
+    /// `rows` and `failed` as `afterProfiles` takes them; `id` is the profile being waited for.
+    public static func seatStep(rows: [ListedProfile]?, failed: Bool, id: String) -> SeatStep {
+        if failed { return .retry }
+        switch rows?.first(where: { $0.id == id }).map(HostProfiles.seatGate) ?? .dial {
+        case .dial: return .dial
+        case .refuse(let line): return .refuse(line)
+        case .wait(let line): return .keepWaiting(detail: line)
+        case .wake: return .keepWaiting(detail: nil)
+        }
+    }
 }

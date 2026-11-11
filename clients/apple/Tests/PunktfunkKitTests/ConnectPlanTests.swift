@@ -112,4 +112,39 @@ final class ConnectPlanTests: XCTestCase {
             after([anna, ben], saved: annaPick, link: "zoe"),
             .pick([anna, ben], saved: "anna", gone: nil))
     }
+
+    private func seated(_ state: SeatState, detail: String? = nil) -> [ListedProfile] {
+        [ben, ListedProfile(
+            id: "anna", displayName: "Anna", seat: ProfileSeat(state: state, detail: detail))]
+    }
+
+    private func step(_ rows: [ListedProfile]?, failed: Bool = false) -> ConnectPlan.SeatStep {
+        ConnectPlan.seatStep(rows: rows, failed: failed, id: "anna")
+    }
+
+    /// A seat that is up dials; a profile the list dropped dials too, for the host to refuse.
+    func testASeatThatIsUpOrGoneDials() {
+        XCTAssertEqual(step(seated(.ready)), .dial)
+        XCTAssertEqual(step(seated(.occupied)), .dial)
+        XCTAssertEqual(step([ben]), .dial)
+        XCTAssertEqual(step(nil), .dial)
+    }
+
+    /// A seat that can't play ends the wait with its line.
+    func testAnUnavailableSeatRefusesWithItsLine() {
+        XCTAssertEqual(step(seated(.unavailable, detail: "No GPU")), .refuse("No GPU"))
+    }
+
+    /// A seat coming up shows its progress; one that stopped again clears it and is not woken.
+    func testAStartingSeatKeepsWaiting() {
+        XCTAssertEqual(step(seated(.starting, detail: "Steam")), .keepWaiting(detail: "Steam"))
+        XCTAssertEqual(step(seated(.starting)), .keepWaiting(detail: nil))
+        XCTAssertEqual(step(seated(.stopped)), .keepWaiting(detail: nil))
+    }
+
+    /// A failed read leaves the sheet as it is and reads again.
+    func testAFailedReadRetries() {
+        XCTAssertEqual(step(seated(.ready), failed: true), .retry)
+        XCTAssertEqual(step(nil, failed: true), .retry)
+    }
 }

@@ -252,8 +252,8 @@ struct ConnectFlow {
         }
     }
 
-    /// The sheet while a seat comes up: wake it when stopped, then read the list every 2 s.
-    /// Closing the sheet cancels; there is no timeout.
+    /// The sheet while a seat comes up: wake it when stopped, then read the list every 2 s, each
+    /// read stepped by `ConnectPlan.seatStep`. Closing the sheet cancels; there is no timeout.
     private func waitForSeat(
         _ host: StoredHost, _ first: ListedProfile, wake: Bool,
         go: @escaping @MainActor (String?) -> Void
@@ -279,10 +279,7 @@ struct ConnectFlow {
                 let answer = await ProfileFetch.list(host, within: ProfileFetch.wait)
                 // The sheet closed meanwhile: that is Cancel.
                 guard !Task.isCancelled, seatWait === wait else { return }
-                // A failed read keeps waiting. A profile the list dropped is the host's to refuse.
-                guard case .listed(let rows) = answer else { continue }
-                let row = rows?.first { $0.id == first.id }
-                switch row.map(HostProfiles.seatGate) ?? .dial {
+                switch ConnectPlan.seatStep(rows: answer.rows, failed: answer.failed, id: first.id) {
                 case .dial:
                     seatWait = nil
                     go(first.id)
@@ -291,8 +288,8 @@ struct ConnectFlow {
                     seatWait = nil
                     model.errorMessage = line
                     return
-                case .wait(let line): wait.detail = line
-                case .wake: wait.detail = nil
+                case .keepWaiting(let detail): wait.detail = detail
+                case .retry: continue
                 }
             }
         }
