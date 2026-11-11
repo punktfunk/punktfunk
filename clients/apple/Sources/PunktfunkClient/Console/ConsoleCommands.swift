@@ -276,6 +276,7 @@ extension ConsoleModel {
         if builtIn {
             bridge.push(.libraryRunning, ConsoleJSON.runningGames([]))
             if refreshOnly { return }
+            artShown = []
             bridge.push(.libraryBegin, "{}")
             bridge.push(.libraryGames, ConsoleJSON.libraryGames(req, DemoMode.games))
             bridge.push(.libraryPhase, ConsoleJSON.libraryPhase(req, "Ready"))
