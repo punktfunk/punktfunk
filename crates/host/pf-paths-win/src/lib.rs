@@ -3,8 +3,9 @@
 //! `%ProgramData%` grants Users add-subdirectory + CREATOR OWNER, so anything created there
 //! before the first elevated run belongs to whoever created it. These readers answer who owns
 //! a path and whether anyone unprivileged can write to a directory; the callers decide what a
-//! plant means for them. Ask BEFORE `pf_paths::create_private_dir`: its first pass re-owns the
-//! contents and erases the evidence.
+//! plant means for them, or [`quarantine_planted_tree`] moves a whole tree's plants aside. Ask
+//! BEFORE `pf_paths::create_private_dir`: its first pass re-owns the contents and erases the
+//! evidence.
 
 #![cfg(windows)]
 
@@ -32,6 +33,43 @@ pub fn rename_aside(path: &Path) -> Result<PathBuf> {
     let _ = std::fs::remove_file(&aside);
     std::fs::rename(path, &aside)?;
     Ok(aside)
+}
+
+/// Rename `path` aside when it is a reparse point or its owner is not SYSTEM, Administrators
+/// or TrustedInstaller, an unreadable owner included. `true` when it went.
+pub fn set_aside_if_planted(path: &Path) -> Result<bool> {
+    use std::os::windows::fs::MetadataExt;
+    const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
+    let md = std::fs::symlink_metadata(path)
+        .map_err(|e| other(format!("read {}: {e}", path.display())))?;
+    if md.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT == 0
+        && is_admin_owned(path) == Some(true)
+    {
+        return Ok(false);
+    }
+    let aside =
+        rename_aside(path).map_err(|e| other(format!("rename {} aside: {e}", path.display())))?;
+    tracing::warn!(
+        path = %path.display(), aside = %aside.display(),
+        "entry owned by a non-admin account renamed aside"
+    );
+    Ok(true)
+}
+
+/// Every entry below `dir` through [`set_aside_if_planted`]: a plant goes aside whole and is
+/// never entered, an admin-owned directory is walked. Lock `dir` first, or what lands during
+/// the walk is missed. `Err` names the entry that stayed; harden nothing it could not move.
+pub fn quarantine_planted_tree(dir: &Path) -> Result<()> {
+    // Listed in full first: a listing still open could hand back the name just renamed.
+    let entries = std::fs::read_dir(dir)
+        .and_then(|it| it.map(|e| e.map(|e| e.path())).collect::<Result<Vec<_>>>())
+        .map_err(|e| other(format!("list {}: {e}", dir.display())))?;
+    for entry in entries {
+        if !set_aside_if_planted(&entry)? && entry.is_dir() {
+            quarantine_planted_tree(&entry)?;
+        }
+    }
+    Ok(())
 }
 
 /// Refuse a staging directory anyone but SYSTEM/Administrators/TrustedInstaller can write.
@@ -419,6 +457,27 @@ pub fn kill_on_close_job(
         )
     }?;
     Ok(job)
+}
+
+#[cfg(test)]
+mod planted_tree_tests {
+    /// A folder this process made moves aside whole when a non-admin owns it (an unelevated
+    /// run) and stays, walked, when an admin does (an elevated one).
+    #[test]
+    fn a_folder_moves_aside_exactly_when_a_non_admin_owns_it() {
+        let root = std::env::temp_dir().join(format!("pf-planted-tree-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("sub")).unwrap();
+        std::fs::write(root.join("sub").join("host.env"), "x").unwrap();
+        let planted = super::is_admin_owned(&root.join("sub")) != Some(true);
+        super::quarantine_planted_tree(&root).unwrap();
+        assert_eq!(root.join("sub").join("host.env").exists(), !planted);
+        assert_eq!(
+            root.join("sub.untrusted").join("host.env").exists(),
+            planted
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
 }
 
 #[cfg(test)]

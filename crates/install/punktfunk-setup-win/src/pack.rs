@@ -190,6 +190,23 @@ pub fn deploy_tree(from: &Path, to: &Path, deferred: &mut Vec<PathBuf>) -> Resul
     Ok(count)
 }
 
+/// Whether the host's app dir `dest` needs a DACL of its own: anywhere but below
+/// `program_files`, whose ACL already lets only administrators write. A `.` or `..` component
+/// counts as outside. Any case, either slash.
+pub fn needs_own_acl(dest: &str, program_files: Option<&str>) -> bool {
+    let parts = |p: &str| -> Vec<String> {
+        p.split(['\\', '/'])
+            .filter(|c| !c.is_empty())
+            .map(str::to_lowercase)
+            .collect()
+    };
+    let dest = parts(dest);
+    let below = program_files
+        .map(parts)
+        .is_some_and(|root| !root.is_empty() && dest.len() > root.len() && dest.starts_with(&root));
+    !below || dest.iter().any(|c| c == "." || c == "..")
+}
+
 pub fn copy_tree(from: &Path, to: &Path) -> Result<usize, String> {
     std::fs::create_dir_all(to).map_err(|e| format!("{}: {e}", to.display()))?;
     let mut count = 0;
@@ -335,5 +352,24 @@ mod tests {
         .map(|s| s.to_string())
         .collect();
         assert!(run(&args).unwrap_err().contains("--app"));
+    }
+
+    /// Program Files and below keep the ACL they inherit; any other dir, a look-alike or a
+    /// path that climbs out gets its own.
+    #[test]
+    fn only_a_dir_below_program_files_keeps_its_inherited_acl() {
+        let pf = Some(r"C:\Program Files");
+        assert!(!needs_own_acl(r"C:\Program Files\punktfunk", pf));
+        assert!(!needs_own_acl(r"c:\program files\Games\Punktfunk\", pf));
+        for own in [
+            r"C:\Program Files",
+            r"C:\Program Files\..\punktfunk",
+            r"C:\Program FilesX\punktfunk",
+            r"C:\punktfunk",
+            r"D:\Games\Punktfunk",
+        ] {
+            assert!(needs_own_acl(own, pf), "{own}");
+        }
+        assert!(needs_own_acl(r"C:\Program Files\punktfunk", None));
     }
 }
