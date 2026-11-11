@@ -281,6 +281,8 @@ pub enum Preset {
     Hotdesk,
     /// Multi-monitor: manual arrangement, per-client identity, exclusive.
     Workstation,
+    /// `Default` where a second device shares the live screen.
+    PlayTogether,
 }
 
 /// File + mgmt GET/PUT shape. When [`preset`](Self::preset) is not
@@ -816,6 +818,13 @@ pub fn preset_fields(preset: Preset) -> Option<EffectivePolicy> {
             ModeConflict::Separate,
             Identity::PerClient,
             LayoutMode::Manual,
+        ),
+        Preset::PlayTogether => base(
+            KeepAlive::Duration { seconds: 10 },
+            Topology::Auto,
+            ModeConflict::Join,
+            Identity::PerClient,
+            LayoutMode::AutoRow,
         ),
     })
 }
@@ -1844,6 +1853,7 @@ mod tests {
             Preset::SharedDesktop,
             Preset::Hotdesk,
             Preset::Workstation,
+            Preset::PlayTogether,
         ] {
             assert!(preset_fields(preset).is_some(), "{preset:?} must expand");
         }

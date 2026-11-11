@@ -254,9 +254,10 @@
 	"host_conflicts_help": "Another server holds Punktfunk's ports, so whichever started first answers. Stop it, then restart.",
 	"display_preset_default": "Default",
 	"display_preset_gaming_rig": "Headless box",
-	"display_preset_shared_desktop": "Shared desktop",
+	"display_preset_shared_desktop": "Desk PC",
 	"display_preset_hotdesk": "Hot-desk",
 	"display_preset_workstation": "Workstation",
+	"display_preset_play_together": "Play together",
 	"display_keep_alive_seconds": "seconds",
 	"display_release_all": "Release all kept",
 	"display_game_session": "Dedicated game sessions",
@@ -1789,5 +1790,6 @@
 	"display_preset_gaming_rig_hint": "For a host with no monitor: the game keeps running when you leave, and whoever connects next takes over.",
 	"display_preset_hotdesk_hint": "One person at a time, with instant reconnects between your devices; anyone else is told it's busy.",
 	"display_preset_shared_desktop_hint": "For a host you also use in person: your monitors stay on, and extra viewers get their own screen.",
-	"display_preset_workstation_hint": "Your multi-monitor daily driver: displays return where you put them, and the desktop is yours alone."
+	"display_preset_workstation_hint": "Your multi-monitor daily driver: displays return where you put them, and the desktop is yours alone.",
+	"display_preset_play_together_hint": "For playing or watching with friends: everyone who connects sees the same screen and can use it."
 }

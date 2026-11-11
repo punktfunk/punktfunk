@@ -19,7 +19,8 @@ Click one under **When a device connects**; hover a preset to preview it on the 
 | Preset | For | After a device disconnects | Your monitors | A second device |
 |---|---|---|---|---|
 | **Default** | Most setups | Kept 10 s | Automatic | Gets its own screen |
-| **Shared desktop** | A PC you also use in person | Removed at once | Stay on | Gets its own screen |
+| **Play together** | Friends playing or watching one screen | Kept 10 s | Automatic | Shares the screen |
+| **Desk PC** | A PC you also use in person | Removed at once | Stay on | Gets its own screen |
 | **Hot-desk** | One person, roaming between their devices | Kept 5 min | Turn off | Is told it's busy |
 | **Workstation** | A multi-monitor daily driver, arranged by you | Kept 5 min | Turn off | Gets its own screen |
 | **Headless box** | A machine with no monitor | Kept until released | Turn off | Takes over |
@@ -53,7 +54,7 @@ unless a device reconnects first. **Keep until released** ignores sleep.
 On gamescope the game keeps running as long as its screen does.
 
 > **Keeping a screen with Turn off keeps your monitors dark after you disconnect**, until the
-> window ends or you release it. On a PC you also use in person, pick **Shared desktop**.
+> window ends or you release it. On a PC you also use in person, pick **Desk PC**.
 
 ### Your monitors while streaming [#topology]
 
@@ -250,7 +251,7 @@ Set scaling once while streaming and each device gets it back on the next connec
 ### My monitors stayed off after I disconnected
 
 The screen is kept with **Turn off**. Click **Release** on its row in **Displays** → **Screens**,
-or pick **Shared desktop**.
+or pick **Desk PC**.
 
 ### The streamed screen shows only my wallpaper
 

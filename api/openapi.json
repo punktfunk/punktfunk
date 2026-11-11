@@ -16292,7 +16292,8 @@
           "gaming-rig",
           "shared-desktop",
           "hotdesk",
-          "workstation"
+          "workstation",
+          "play-together"
         ]
       },
       "PresetInfo": {
@@ -16310,7 +16311,7 @@
           },
           "id": {
             "type": "string",
-            "description": "`default` | `gaming-rig` | `shared-desktop` | `hotdesk` | `workstation`."
+            "description": "`default` | `gaming-rig` | `shared-desktop` | `hotdesk` | `workstation` | `play-together`."
           },
           "summary": {
             "type": "string"

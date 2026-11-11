@@ -1,4 +1,4 @@
-// The five built-in presets say what they do in the console's words, not the host's line.
+// The built-in presets say what they do in the console's words, not the host's line.
 import { expect, test } from "bun:test";
 import { baseLocale, overwriteGetLocale } from "@/paraglide/runtime";
 import { presetSummary } from "./Behaviour";
@@ -11,6 +11,7 @@ const IDS = [
 	"shared-desktop",
 	"hotdesk",
 	"workstation",
+	"play-together",
 ];
 
 test("each built-in preset replaces the host's summary", () => {

@@ -569,6 +569,12 @@ export const displayPresets: {
 		fields: policyFields(),
 	},
 	{
+		id: "play-together",
+		summary:
+			"For playing or watching with friends. Everyone who connects sees the same screen and can use it.",
+		fields: policyFields({ mode_conflict: "join" }),
+	},
+	{
 		id: "shared-desktop",
 		summary:
 			"Every client sees the same desktop — no extra displays are created.",

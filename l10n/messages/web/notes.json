@@ -200,6 +200,7 @@
 	"display_preset_shared_desktop": "Name of a preset card on the Displays page, for a host that is also used in person.",
 	"display_preset_hotdesk": "Name of a preset card on the Displays page: one person at a time, moving between their devices.",
 	"display_preset_workstation": "Name of a preset card on the Displays page, for a host used daily with several monitors.",
+	"display_preset_play_together": "Name of a preset card on the Displays page: friends connect and all see and use the same screen.",
 	"display_keep_alive_seconds": "Unit beside a number field, and that field's screen-reader label: a duration in seconds. Used in Customise and Host settings.",
 	"display_release_all": "Menu item at the top of the Displays page. Removes every virtual screen kept after its device disconnected.",
 	"display_game_session": "Question label in Customise on the Displays page: whether a game opens in its own session. Options: 'Auto', 'Dedicated'.",
@@ -1435,6 +1436,7 @@
 	"display_preset_default_hint": "Line under the 'Default' preset card.",
 	"display_preset_gaming_rig_hint": "Line under the 'Headless box' preset card. Host has no monitor; whoever connects next takes over.",
 	"display_preset_hotdesk_hint": "Line under the 'Hot-desk' preset card.",
-	"display_preset_shared_desktop_hint": "Line under the 'Shared desktop' preset card.",
-	"display_preset_workstation_hint": "Line under the 'Workstation' preset card."
+	"display_preset_shared_desktop_hint": "Line under the 'Desk PC' preset card.",
+	"display_preset_workstation_hint": "Line under the 'Workstation' preset card.",
+	"display_preset_play_together_hint": "Line under the 'Play together' preset card."
 }

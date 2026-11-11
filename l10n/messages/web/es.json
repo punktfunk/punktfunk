@@ -230,9 +230,10 @@
 	"host_conflicts_help": "Otro servidor está ocupando los puertos de Punktfunk, por lo que responderá el que se haya iniciado primero. Deténlo y reinicia.",
 	"display_preset_default": "Predeterminado",
 	"display_preset_gaming_rig": "Equipo sin pantalla (Headless)",
-	"display_preset_shared_desktop": "Escritorio compartido",
+	"display_preset_shared_desktop": "PC de escritorio",
 	"display_preset_hotdesk": "Puesto compartido (Hot-desk)",
 	"display_preset_workstation": "Estación de trabajo",
+	"display_preset_play_together": "Jugar juntos",
 	"display_keep_alive_seconds": "segundos",
 	"display_release_all": "Liberar todas las pantallas retenidas",
 	"display_game_session": "Sesiones de juego dedicadas",
@@ -1646,5 +1647,6 @@
 	"display_preset_gaming_rig_hint": "Para un host sin monitor: el juego sigue al salir y quien se conecte después toma el relevo.",
 	"display_preset_hotdesk_hint": "Una persona a la vez, con reconexión inmediata entre tus dispositivos; a los demás se les avisa de que está ocupado.",
 	"display_preset_shared_desktop_hint": "Para un host que también usas en persona: tus monitores siguen encendidos y cada espectador extra tiene su pantalla.",
-	"display_preset_workstation_hint": "Tu equipo multimonitor de cada día: las pantallas vuelven a donde las pusiste y el escritorio es solo tuyo."
+	"display_preset_workstation_hint": "Tu equipo multimonitor de cada día: las pantallas vuelven a donde las pusiste y el escritorio es solo tuyo.",
+	"display_preset_play_together_hint": "Para jugar o mirar con amigos: todos los que se conectan ven la misma pantalla y pueden usarla."
 }
