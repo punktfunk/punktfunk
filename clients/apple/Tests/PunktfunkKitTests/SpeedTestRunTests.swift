@@ -42,6 +42,26 @@ final class SpeedTestRunTests: XCTestCase {
         XCTAssertEqual(after([.start, .stop, .unreachable("gone")]).phase, .idle)
     }
 
+    /// R4-2: Stop can't abort the probe, so a Start before it returns starts nothing.
+    func testStartWaitsForAStoppedProbeToReturn() {
+        XCTAssertEqual(after([.start, .stop, .start]).phase, .idle)
+        XCTAssertEqual(after([.start, .stop, .start, .connected]).phase, .idle)
+        XCTAssertEqual(after([.start, .stop, .checked(Self.report), .start]).phase, .connecting)
+        XCTAssertEqual(after([.start, .stop, .unreachable("gone"), .start]).phase, .connecting)
+        XCTAssertFalse(after([.start, .stop]).canStart)
+        XCTAssertTrue(after([.start, .stop, .checked(nil)]).canStart)
+    }
+
+    /// A page opened while another page's probe is out waits for it, and drops its word.
+    func testAPageWaitsForAnotherPagesProbe() {
+        let waiting = after([.busy])
+        XCTAssertFalse(waiting.canStart)
+        XCTAssertEqual(after([.start], from: waiting), waiting)
+        XCTAssertEqual(after([.checked(Self.report)], from: waiting), Run.State())
+        let shown = after([.start, .checked(Self.report)])
+        XCTAssertEqual(after([.busy, .checked(nil)], from: shown), shown)
+    }
+
     func testRunAgainClearsTheLastReport() {
         let again = after([.start, .connected, .checked(Self.report), .start])
         XCTAssertEqual(again.phase, .connecting)

@@ -8,13 +8,6 @@ import Foundation
 import PunktfunkKit
 import SwiftUI
 
-/// One Start's claim on the page. Stop and leaving the page cancel it, so its probe's late word is
-/// dropped; the core call itself runs on until it returns. A single Bool, so a torn read between
-/// the probe and the main actor is harmless.
-private final class ProbeToken: @unchecked Sendable {
-    var cancelled = false
-}
-
 /// What the host is asked to burst: far more than any link carries (it clamps to ≤ 10 Gbit/s), so the
 /// measurement finds where delivery falls off rather than an artificial cap. Five seconds lets the
 /// host's send and this device's receive settle; a short probe swings wildly on the same link.
@@ -36,9 +29,12 @@ struct SpeedTestView: View {
     /// The phase and the check's report behind `.done` (`SpeedTestRun`).
     @State private var state = SpeedTestRun.State()
     @State private var trace = PunktfunkConnection.ProbeTrace()
-    @State private var token = ProbeToken()
     /// What the last Apply changed, said under the buttons.
     @State private var applied: String?
+
+    /// The probe that has not returned, from this page or one closed while it ran. App-wide: the
+    /// core call can't be aborted, and a second probe would share the link it measures.
+    @MainActor private static var probe: Task<SpeedTestRun.Event, Never>?
 
     #if os(tvOS)
     private let chartHeight: CGFloat = 360
@@ -79,9 +75,12 @@ struct SpeedTestView: View {
                 return
             }
             #endif
-            if startsOnAppear, phase == .idle { run() }
+            if !state.inFlight, let out = Self.probe {
+                follow(out)
+            } else if startsOnAppear, phase == .idle {
+                run()
+            }
         }
-        .onDisappear { token.cancelled = true }
     }
 
     private var phase: SpeedTestPhase { state.phase }
@@ -306,6 +305,7 @@ struct SpeedTestView: View {
             case .idle:
                 Button(L10n.appleSpeedtestStart, systemImage: "gauge.with.needle") { run() }
                     .glassProminentButtonStyle()
+                    .disabled(!state.canStart)
             case .connecting, .probing:
                 Button(L10n.appleSpeedtestStop, role: .cancel) { stop() }
             case .done(let result):
@@ -313,9 +313,11 @@ struct SpeedTestView: View {
                     applyButtons(recommended)
                 }
                 Button(L10n.appleSpeedtestRunAgain) { run() }
+                    .disabled(!state.canStart)
             case .failed:
                 Button(L10n.appleSpeedtestTryAgain) { run() }
                     .glassProminentButtonStyle()
+                    .disabled(!state.canStart)
             }
         }
         if let applied {
@@ -385,15 +387,19 @@ struct SpeedTestView: View {
     }
 
     private func stop() {
-        token.cancelled = true
         send(.stop)
     }
 
+    /// Waits out a probe another page started; its last word frees Start here.
+    private func follow(_ out: Task<SpeedTestRun.Event, Never>) {
+        send(.busy)
+        Task { send(await out.value) }
+    }
+
+    /// Starts a probe, unless one is still out (`SpeedTestRun`).
     private func run() {
-        // A fresh token per attempt, so abandoning one attempt cannot silence the next.
-        token.cancelled = true
-        token = ProbeToken()
-        let token = token
+        if !state.inFlight, let out = Self.probe { follow(out) }
+        guard state.canStart else { return }
         send(.start)
         trace = PunktfunkConnection.ProbeTrace()
         applied = nil
@@ -404,7 +410,7 @@ struct SpeedTestView: View {
         // path, so it should be the streaming path's mode.
         let (w, h, fps) = EffectiveSettings.resolve(host: host, catalog: presets.catalog)
             .streamMode(native: NativeDisplay.mode)
-        Task.detached(priority: .userInitiated) {
+        let probe = Task.detached(priority: .userInitiated) { () -> SpeedTestRun.Event in
             // Same identity and trust as a session, but a TOFU result is not persisted from here.
             let identity = (try? ClientIdentityStore.shared.load())?.identity
             let conn: PunktfunkConnection
@@ -415,20 +421,21 @@ struct SpeedTestView: View {
                     pinSHA256: pin, identity: identity,
                     deliveryFlags: PunktfunkConnection.deliveryProbeOnly)
             } catch {
-                await MainActor.run {
-                    guard !token.cancelled else { return }
-                    send(.unreachable(L10n.appleSpeedtestUnreachableBody(address: address)))
-                }
-                return
+                return .unreachable(L10n.appleSpeedtestUnreachableBody(address: address))
             }
             defer { conn.close() }
 
-            await MainActor.run { if !token.cancelled { send(.connected) } }
+            await MainActor.run { send(.connected) }
             // The whole check, reported once: the ceiling the bring-up ramp proved, a clean round
             // at half of it, two shaped legs, both ends' facts, and the findings. It blocks this
             // detached task for ten to twenty seconds.
-            let checked = conn.networkCheck()
-            await MainActor.run { if !token.cancelled { send(.checked(checked)) } }
+            return .checked(conn.networkCheck())
+        }
+        Self.probe = probe
+        Task {
+            let end = await probe.value
+            Self.probe = nil
+            send(end)
         }
     }
 }
