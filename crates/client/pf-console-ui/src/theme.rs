@@ -280,9 +280,10 @@ impl Ink {
 }
 
 /// What one frame draws with: the palette's ink, whether motion and the interface are reduced,
-/// the safe area's left inset, and the element layer's focus ledger. The shell builds one a
-/// frame with [`Frame::next`] and hands it down in [`crate::screens::Ctx`]; whatever draws
-/// takes it as `ui`. A host drawing the kit on its own makes one with [`Frame::new`].
+/// the safe area's left inset, the element layer's focus ledger, and the text an input method
+/// is composing. The shell builds one a frame with [`Frame::next`] and hands it down in
+/// [`crate::screens::Ctx`]; whatever draws takes it as `ui`. A host drawing the kit on its own
+/// makes one with [`Frame::new`].
 pub struct Frame {
     pub ink: Ink,
     /// Travel suppressed this frame. Callers keep the state change and drop the glide.
@@ -297,6 +298,9 @@ pub struct Frame {
     /// see that layer, so a band drawn inside it would blur the field behind.
     pub(crate) in_layer: Cell<bool>,
     pub el: crate::el::Ledger,
+    /// An input method's text in progress. The field being typed into draws it at its caret,
+    /// underlined; it is not in the field's value until the input method commits it.
+    pub(crate) preedit: String,
 }
 
 impl Default for Frame {
@@ -315,6 +319,7 @@ impl Frame {
             side_inset,
             in_layer: Cell::new(false),
             el: crate::el::Ledger::default(),
+            preedit: String::new(),
         }
     }
 

@@ -237,6 +237,12 @@ impl Console {
         self.shell.text_input(text);
     }
 
+    /// An input method's text in progress for the open field, replacing the last; empty ends
+    /// it. The field draws it at the caret, and [`Self::text`] commits it.
+    pub fn preedit(&mut self, text: &str) {
+        self.shell.preedit(text);
+    }
+
     /// Nothing to back out of: focus is on a tab. A Back here asks to exit, and a TV hands
     /// the press to the system, which is why a host asks BEFORE it binds that button.
     pub fn at_root(&self) -> bool {

@@ -317,6 +317,10 @@ impl Overlay for SkiaOverlay {
                 shell.text_input(text);
                 true
             }
+            sdl3::event::Event::TextEditing { text, .. } => {
+                shell.preedit(text);
+                true
+            }
             _ => false,
         }
     }

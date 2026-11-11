@@ -1175,6 +1175,39 @@ fn a_hardware_space_types_one_space() {
     assert_eq!(typed.as_deref(), Some("hollow knight"));
 }
 
+/// An input method's text in progress reaches the field's frame but not its value. The commit
+/// replaces it, an empty edit ends it, and the keys it takes meanwhile never edit the field.
+#[test]
+fn text_in_progress_stays_out_of_the_value() {
+    use crate::input::Key;
+    let fonts = crate::theme::build_fonts().unwrap();
+    let mut surface = skia_safe::surfaces::raster_n32_premul((1280, 800)).unwrap();
+    let host = hosts().remove(0);
+    let search = crate::screens::search::SearchScreen::new(&host, &Default::default());
+    let (mut s, _console, _library) = shell(vec![
+        Screen::Home(HomeScreen::new()),
+        Screen::Search(search),
+    ]);
+    let typed = |s: &Shell| s.edit_field().map(|f| f.text).unwrap_or_default();
+    s.text_input("ff");
+    s.preedit("にほん");
+    assert_eq!(typed(&s), "ff");
+    s.render(surface.canvas(), 1280, 800, &fonts, None, None, &[]);
+    assert_eq!(s.ui.preedit, "にほん", "the field draws it");
+    for key in [Key::Backspace, Key::Left, Key::Return, Key::Escape] {
+        assert!(s.key(key, false, false), "{key:?} is the input method's");
+    }
+    assert!(s.editing());
+    assert_eq!(typed(&s), "ff");
+    s.text_input("日本");
+    assert_eq!(typed(&s), "ff日本");
+    assert!(s.preedit.is_empty(), "the commit replaced it");
+    s.preedit("ご");
+    s.preedit("");
+    s.key(Key::Backspace, false, false);
+    assert_eq!(typed(&s), "ff日", "an empty edit ended it");
+}
+
 #[test]
 fn every_settings_tab_rasters() {
     let fonts = crate::theme::build_fonts().unwrap();
