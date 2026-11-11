@@ -56,7 +56,8 @@ const DEFAULTS: &str = "seat-defaults.json";
 
 const LIST: &str = "libraryfolders.vdf";
 const LIST_TEMP: &str = "libraryfolders.vdf.punktfunk";
-const MAX_LIST_BYTES: u64 = 8 * 1024 * 1024;
+/// A real list is a few kilobytes. Root tokenises a seat's whole, at about 40 bytes a byte.
+const MAX_LIST_BYTES: u64 = 1024 * 1024;
 
 /// One of the owner's libraries a seat sees.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -1710,6 +1711,28 @@ mod tests {
         register(Path::new("/b"), &id(), &seat, &[]);
         let text = std::fs::read_to_string(steam_file(&home, "steamapps")).unwrap();
         assert_eq!(steam::library_paths(&text), [own.as_str(), games]);
+    }
+
+    /// A list past the cap is left as it is, and the seat's other list still follows.
+    #[test]
+    fn an_oversized_seat_list_is_skipped() {
+        let temp = tempfile::tempdir().unwrap();
+        let home = temp.path().to_path_buf();
+        let own = home
+            .join(".local/share/Steam")
+            .to_string_lossy()
+            .into_owned();
+        let list = steam::library_folders_vdf(std::slice::from_ref(&own));
+        let padded = format!("{list}{}", " ".repeat(1024 * 1024));
+        for (dir, text) in [("steamapps", &padded), ("config", &list)] {
+            std::fs::create_dir_all(steam_file(&home, dir).parent().unwrap()).unwrap();
+            std::fs::write(steam_file(&home, dir), text).unwrap();
+        }
+        register(Path::new("/b"), &id(), &me(&home), &[]);
+        let read = |dir: &str| std::fs::read_to_string(steam_file(&home, dir)).unwrap();
+        assert_eq!(read("steamapps"), padded);
+        let games = "/run/media/punktfunk/games";
+        assert_eq!(steam::library_paths(&read("config")), [own.as_str(), games]);
     }
 
     /// Root never follows a link the seat planted on the way to its lists.
