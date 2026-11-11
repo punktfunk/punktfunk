@@ -108,10 +108,10 @@ public struct HostFormDraft: Equatable, Sendable {
         return macs.isEmpty ? nil : macs
     }
 
-    /// Split a trailing `:port` off an address. Bare IPv6 (more than one colon, unbracketed) is
-    /// returned whole.
+    /// Split a trailing `:port` off an address, after mapping what a CJK keyboard types (full-width
+    /// forms, `。`) to ASCII. Bare IPv6 (more than one colon, unbracketed) is returned whole.
     static func split(_ raw: String) -> (host: String, port: UInt16?) {
-        let text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        let text = raw.withASCIIAddress.trimmingCharacters(in: .whitespacesAndNewlines)
         guard let colon = text.lastIndex(of: ":") else { return (text, nil) }
         let head = String(text[text.startIndex..<colon])
         let tail = String(text[text.index(after: colon)...])

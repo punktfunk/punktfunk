@@ -31,6 +31,25 @@ final class HostFormDraftTests: XCTestCase {
         XCTAssertEqual(HostFormDraft(address: "nuc.local", port: "９７a").problem, .badPort)
     }
 
+    func testFullWidthAddressIsStoredAsAscii() {
+        let draft = HostFormDraft(address: "　１９２．１６８．１．５：４７９８９　")
+        XCTAssertEqual(draft.trimmedAddress, "192.168.1.5")
+        XCTAssertEqual(draft.resolvedPort, 47989)
+        XCTAssertTrue(draft.canSave)
+        var host = StoredHost(name: "", address: "")
+        draft.apply(to: &host)
+        XCTAssertEqual(host.address, "192.168.1.5")
+        XCTAssertEqual(host.port, 47989)
+        XCTAssertEqual(HostFormDraft(address: "192。168。1。5").trimmedAddress, "192.168.1.5")
+        XCTAssertEqual(HostFormDraft(address: "［ｆｄ７ａ：：１］：９７７７").trimmedAddress, "[fd7a::1]")
+    }
+
+    func testIdnHostAndNameAreNotMapped() {
+        XCTAssertEqual(HostFormDraft(address: "bücher.example:9777").trimmedAddress, "bücher.example")
+        XCTAssertEqual(HostFormDraft(address: "日本語.jp").trimmedAddress, "日本語.jp")
+        XCTAssertEqual(HostFormDraft(name: " Ｄｅｓｋ ", address: "10.0.0.2").trimmedName, "Ｄｅｓｋ")
+    }
+
     func testPortInsideTheAddressIsSplitOut() {
         // What the host cards render, so it is what a user pastes back in.
         let draft = HostFormDraft(address: " 192.168.1.5:47989 ")
