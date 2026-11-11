@@ -334,6 +334,7 @@ struct ContentView: View {
         }
         .animation(.easeInOut(duration: 0.3), value: model.launchHold)
         .onAppear {
+            flowLife.open()
             // A plain connect the host parked for its operator gets the request-access wait.
             let approval = $awaitingApproval
             model.onAwaitingApproval = { host in

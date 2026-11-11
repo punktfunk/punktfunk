@@ -41,12 +41,14 @@ struct ConnectFlow {
     /// What this window's flow keeps between taps, since a `ConnectFlow` lives for one use.
     @MainActor
     final class Life {
-        /// False once the window closed: work begun before then never dials for its model.
+        /// False while the window is gone: work begun before then never dials for its model.
         private(set) var isOpen = true
         /// A tap's profile fetch is running: another tap does nothing until it answers.
         var fetching = false
 
         func close() { isOpen = false }
+        /// The root view is back with the same state: its taps must work again.
+        func open() { isOpen = true }
     }
 
     /// Which profile a connect plays as.
