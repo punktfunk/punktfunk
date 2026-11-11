@@ -80,10 +80,6 @@ pub(crate) enum Code {
     CredentialVerify,
     /// An adopted account's stored password no longer signs in.
     CredentialChanged,
-    CredentialWrong,
-    CredentialMustChange,
-    AccountLocked,
-    AccountSignedIn,
     HostMissing,
     RdpPinMissing,
     RdpPinInvalid,
@@ -107,10 +103,6 @@ impl Code {
             "credential_invalid" => Self::CredentialInvalid,
             "credential_verify" => Self::CredentialVerify,
             "credential_changed" => Self::CredentialChanged,
-            "credential_wrong" => Self::CredentialWrong,
-            "credential_must_change" => Self::CredentialMustChange,
-            "account_locked" => Self::AccountLocked,
-            "account_signed_in" => Self::AccountSignedIn,
             "host_missing" => Self::HostMissing,
             "rdp_pin_missing" => Self::RdpPinMissing,
             "rdp_pin_invalid" => Self::RdpPinInvalid,
@@ -135,10 +127,6 @@ impl Code {
             | Self::CredentialInvalid
             | Self::CredentialVerify
             | Self::CredentialChanged
-            | Self::CredentialWrong
-            | Self::CredentialMustChange
-            | Self::AccountLocked
-            | Self::AccountSignedIn
             | Self::HostMissing
             | Self::RdpPinMissing
             | Self::RdpPinInvalid
@@ -190,10 +178,6 @@ impl Fault {
             | Code::CredentialInvalid
             | Code::CredentialVerify
             | Code::CredentialChanged
-            | Code::CredentialWrong
-            | Code::CredentialMustChange
-            | Code::AccountLocked
-            | Code::AccountSignedIn
             | Code::HostMissing
             | Code::RdpPinMissing
             | Code::RdpPinInvalid
@@ -836,7 +820,7 @@ mod tests {
     const MESSAGE: &str = "the operator's message";
 
     /// Code, whether a retry is pointless, and how the console's sentence starts.
-    const CODES: [(&str, bool, &str); 33] = [
+    const CODES: [(&str, bool, &str); 29] = [
         ("wts_timeout", false, SIGN_IN),
         ("rdp_keeper_exited", false, SIGN_IN),
         ("quality_failed", true, SCREEN),
@@ -857,10 +841,6 @@ mod tests {
         ("credential_invalid", true, MESSAGE),
         ("credential_verify", true, MESSAGE),
         ("credential_changed", true, MESSAGE),
-        ("credential_wrong", true, MESSAGE),
-        ("credential_must_change", true, MESSAGE),
-        ("account_locked", true, MESSAGE),
-        ("account_signed_in", true, MESSAGE),
         ("host_missing", true, MESSAGE),
         ("rdp_pin_missing", true, MESSAGE),
         ("rdp_pin_invalid", true, MESSAGE),
