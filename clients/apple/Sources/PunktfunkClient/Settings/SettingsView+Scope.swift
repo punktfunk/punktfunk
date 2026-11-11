@@ -234,15 +234,22 @@ extension SettingsView {
         Binding(
             get: { effective[keyPath: field.effective] },
             set: { newValue in
-                switch SettingsScope.route(scope: scope, field: field) {
+                switch SettingsScope.route(scope: scope, catalog: presets.catalog, field: field) {
                 case .defaults(let key):
                     // @AppStorage observes this key, so the write re-renders the whole surface.
                     UserDefaults.standard.set(newValue, forKey: key)
                 case .override(let id):
                     presets.setOverride(id, field.overlay, newValue)
+                case .gone:
+                    // The screen already shows Default settings: the write and the scope follow.
+                    scope = .defaults
+                    UserDefaults.standard.set(newValue, forKey: field.key)
                 }
             })
     }
+
+    /// The layer the screen shows: Default settings once the edited preset left the catalog.
+    var shownScope: SettingsScope { inPresetScope ? scope : .defaults }
 
     /// The resolution row's tri-state, written as one act: a single control drives width, height
     /// and (where it exists) match-window, so all of them move together and one reset clears all
@@ -510,10 +517,10 @@ extension SettingsView {
         return parts.joined(separator: " ")
     }
 
-    /// Switching scope is a plain state change — the rows are built by one code path and simply
-    /// read the other layer, so there is nothing to commit on the way out.
+    /// Switching scope is a plain state change: the rows read the other layer, so there is
+    /// nothing to commit on the way out. The menu checks the layer the screen shows.
     private var scopeSelection: Binding<SettingsScope> {
-        Binding(get: { scope }, set: { scope = $0 })
+        Binding(get: { shownScope }, set: { scope = $0 })
     }
 
     /// "Game copy", "Game copy 2", … — the first name that isn't taken, so Duplicate never opens

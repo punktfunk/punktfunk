@@ -53,11 +53,24 @@ final class SettingsScopeTests: XCTestCase {
 
     func testDefaultsWriteTheFieldsKey() {
         XCTAssertEqual(
-            SettingsScope.route(scope: .defaults, field: bitrate),
+            SettingsScope.route(scope: .defaults, catalog: catalog(game()), field: bitrate),
             .defaults(DefaultsKey.bitrateKbps))
     }
 
     func testAPresetWritesAnOverride() {
-        XCTAssertEqual(SettingsScope.route(scope: .preset("game"), field: bitrate), .override("game"))
+        XCTAssertEqual(
+            SettingsScope.route(scope: .preset("game"), catalog: catalog(game()), field: bitrate),
+            .override("game"))
+    }
+
+    /// R6-4: a preset deleted in another window left the screen on the globals, and every write
+    /// went to the missing preset and was dropped.
+    func testAWriteToAGonePresetFollowsTheScreenToDefaults() {
+        XCTAssertEqual(
+            SettingsScope.route(scope: .preset("deleted"), catalog: catalog(game()), field: bitrate),
+            .gone)
+        XCTAssertEqual(
+            SettingsScope.route(scope: .preset("deleted"), catalog: catalog(), field: bitrate),
+            .gone)
     }
 }

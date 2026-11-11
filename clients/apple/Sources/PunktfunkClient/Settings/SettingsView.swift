@@ -643,7 +643,7 @@ struct SettingsView: View {
                 if let detail {
                     Text(detail).foregroundStyle(.secondary)
                 }
-                if scope == layer {
+                if shownScope == layer {
                     Image(systemName: "checkmark")
                 }
             }

@@ -28,6 +28,8 @@ public enum SettingsScope: Equatable, Hashable, Sendable {
         case defaults(String)
         /// An override in this preset.
         case override(String)
+        /// The scope names a preset that left the catalog.
+        case gone
     }
 
     /// What every row displays: `globals` with the edited preset's overrides on top, so a row the
@@ -40,10 +42,14 @@ public enum SettingsScope: Equatable, Hashable, Sendable {
     }
 
     /// Where a write to `field` goes. A write always records: it never compares the value with
-    /// the global, so a value equal to it is a pin the preset keeps when the global moves.
-    public static func route<Value>(scope: SettingsScope, field: SettingsField<Value>) -> Route {
+    /// the global, so a value equal to it is a pin the preset keeps when the global moves. A
+    /// preset deleted elsewhere is `.gone`: the screen shows the globals, and the caller writes
+    /// there and falls back to `.defaults`.
+    public static func route<Value>(
+        scope: SettingsScope, catalog: PresetCatalog, field: SettingsField<Value>
+    ) -> Route {
         guard let id = scope.presetID else { return .defaults(field.key) }
-        return .override(id)
+        return catalog.preset(id: id) == nil ? .gone : .override(id)
     }
 }
 
