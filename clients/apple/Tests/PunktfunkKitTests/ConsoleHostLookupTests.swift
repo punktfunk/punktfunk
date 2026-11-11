@@ -33,6 +33,15 @@ final class ConsoleHostLookupTests: XCTestCase {
         XCTAssertEqual(found?.name, "fresh")
     }
 
+    /// A pairing lands on the record pinned to its certificate, else the unpaired one at the
+    /// address, else a new one: never the other system of a dual-boot box.
+    func testAPairingLandsOnItsOwnSystemsRecord() {
+        let hosts = dualBoot + [host("fresh", "10.0.0.5", pin: nil)]
+        XCTAssertEqual(ConsoleJSON.host(in: hosts, fp: "bb", addr: "10.0.0.5", port: 9777)?.name, "linux")
+        XCTAssertEqual(ConsoleJSON.host(in: hosts, fp: "cc", addr: "10.0.0.5", port: 9777)?.name, "fresh")
+        XCTAssertNil(ConsoleJSON.host(in: dualBoot, fp: "cc", addr: "10.0.0.5", port: 9777))
+    }
+
     /// With no fingerprint the address is all there is.
     func testNoFingerprintMatchesByAddress() {
         let found = ConsoleJSON.host(in: dualBoot, fp: "", addr: "10.0.0.5", port: 9777)

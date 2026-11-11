@@ -537,13 +537,12 @@ extension ConsoleModel {
         }
     }
 
-    /// Pin `cert` and tell the Pair screen that sent `req`. The record is the one pinned to
-    /// `cert`, else the unpinned one at `addr:port`, else the advert there, saved as a tap on it
-    /// would. A record pinned to another fingerprint is the other OS of a dual-boot box.
+    /// Pin `cert` and tell the Pair screen that sent `req`. The record is the one a command
+    /// naming `cert` at `addr:port` means (`ConsoleJSON.host`), else the advert there, saved as
+    /// a tap on it would.
     private func paired(addr: String, port: UInt16, cert: Data, req: Any) {
         let fp = cert.map { String(format: "%02x", $0) }.joined()
-        let host = store.hosts.first { $0.pinnedSHA256 == cert }
-            ?? store.hosts.first { $0.pinnedSHA256 == nil && $0.address == addr && $0.port == port }
+        let host = self.host(fp: fp, addr: addr, port: port)
             ?? saveAdvert(addr: addr, port: port, fp: fp)
         store.pin(host.id, fingerprint: cert)
         actions.paired(host, cert)
