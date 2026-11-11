@@ -114,17 +114,6 @@ pub fn account_at(port: u16) -> Option<String> {
     read_row(Path::new(MAP), port).map(|(account, _)| account)
 }
 
-/// Detaches `port` while it still holds socket `recorded`: a device an older supervisor
-/// attached for a seat that served it itself. Its row goes at the next prune.
-pub fn drop_unserved(port: u16, recorded: RawFd) {
-    let _held = lock();
-    if usbip::vhci_port_holds(port, recorded)
-        && let Err(error) = usbip::vhci_detach(port)
-    {
-        tracing::warn!(error = %format!("{error:#}"), port, "seat USB device not detached");
-    }
-}
-
 /// udev's program for a device under a vhci hub; `false` when `devpath` is not one. Prints the
 /// seat's lines when the port is a seat's, on every event. On an interface's `add` only, it
 /// authorizes and probes its device's interfaces ([`authorize`]): a seat's only as
