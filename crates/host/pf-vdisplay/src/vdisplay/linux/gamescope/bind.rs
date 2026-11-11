@@ -143,11 +143,17 @@ fn plan_bind(
 /// tracker rewrites Game Mode to plasma. Bind a 0700 `$XDG_RUNTIME_DIR` dir read-write over it.
 /// The XFixes reader is never spawned on this bind (patch paints the pointer); attach never arms
 /// it. x11rb 0.14 dropped the abstract socket, so the filesystem path is the only one.
+///
+/// The same namespace drops pkexec's setuid, so Steam's Switch to Desktop could not point the
+/// display manager at the desktop. [`PKEXEC_PATH`] is bound to a shim that runs pkexec through
+/// the user manager, outside the namespace, as it runs in a unit without the bind.
 pub(super) struct SessionBind {
     wrapper: std::path::PathBuf,
     /// The user-owned directory bound over [`X11_SOCKET_DIR`], or `None` when the real one is
     /// already ours and needs no replacing.
     x11_dir: Option<std::path::PathBuf>,
+    /// The shim bound over [`PKEXEC_PATH`], or `None` when the box has no pkexec there.
+    pkexec_shim: Option<std::path::PathBuf>,
 }
 
 impl SessionBind {
@@ -161,6 +167,12 @@ impl SessionBind {
         if let Some(dir) = &self.x11_dir {
             // Read-WRITE: Xwayland creates its socket in here.
             props.push(format!("BindPaths={}:{X11_SOCKET_DIR}", dir.display()));
+        }
+        if let Some(shim) = &self.pkexec_shim {
+            props.push(format!(
+                "BindReadOnlyPaths={}:{PKEXEC_PATH}",
+                shim.display()
+            ));
         }
         props
     }
@@ -179,6 +191,42 @@ impl SessionBind {
             .into_iter()
             .map(|p| format!("{p}\n"))
             .collect()
+    }
+}
+
+/// The setuid pkexec a bound unit cannot elevate through.
+const PKEXEC_PATH: &str = "/usr/bin/pkexec";
+
+/// Runs the real pkexec in a transient unit of the user manager, whose namespace maps root, and
+/// hands back its output and exit status.
+fn pkexec_shim_script() -> String {
+    format!(
+        "#!/bin/sh\nexec /usr/bin/systemd-run --user --wait --pipe --quiet --collect -- \
+         {PKEXEC_PATH} \"$@\"\n"
+    )
+}
+
+/// Writes the pkexec shim next to the wrapper. `None` when the box has no pkexec, or the write
+/// fails: the unit then binds none, and pkexec inside it stays unprivileged.
+fn write_pkexec_shim() -> Option<std::path::PathBuf> {
+    if !std::path::Path::new(PKEXEC_PATH).exists() {
+        return None;
+    }
+    let path = std::path::Path::new(&crate::session::runtime_dir()).join("punktfunk-pkexec");
+    let written = std::fs::write(&path, pkexec_shim_script()).and_then(|()| {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755))
+    });
+    match written {
+        Ok(()) => Some(path),
+        Err(e) => {
+            tracing::warn!(
+                error = %e,
+                path = %path.display(),
+                "gamescope: pkexec shim not written — pkexec stays unprivileged in the session"
+            );
+            None
+        }
     }
 }
 
@@ -396,8 +444,9 @@ fn tail_of(path: &std::path::Path, max: u64) -> Option<String> {
     Some(String::from_utf8_lossy(&buf).into_owned())
 }
 
-/// Resolve [`plan_bind`] against the live box, log the outcome, and return the armed bind.
-/// `None` means the unit gets no mount namespace — the state every non-hardcoding distro stays in.
+/// Resolve [`plan_bind`] against the live box, write the files the bind names, log the outcome,
+/// and return it. `None` means the unit gets no mount namespace — the state every non-hardcoding
+/// distro stays in.
 pub(super) fn arm_session_bind(wrapper: &std::path::Path) -> Option<SessionBind> {
     let plan = plan_bind(
         gamescope_bin(),
@@ -476,6 +525,7 @@ pub(super) fn arm_session_bind(wrapper: &std::path::Path) -> Option<SessionBind>
     let bind = SessionBind {
         wrapper: wrapper.to_path_buf(),
         x11_dir,
+        pkexec_shim: write_pkexec_shim(),
     };
     // Everything above is a decision about what SHOULD work. This is the one check that asks the
     // box, and it is the last gate before a unit whose failure costs the user their session.
@@ -640,12 +690,13 @@ mod tests {
 
     /// The two renderers must spell the same settings — the transient unit takes them as
     /// `systemd-run --property=`, the box's own unit as drop-in lines. A session that got only half
-    /// of them is the crash this mechanism is guarding.
+    /// of them is the crash this mechanism is guarding, or a Switch to Desktop that never lands.
     #[test]
-    fn both_bind_renderers_carry_the_socket_directory() {
+    fn both_bind_renderers_carry_the_socket_directory_and_the_pkexec_shim() {
         let bind = SessionBind {
             wrapper: std::path::PathBuf::from("/run/user/1000/punktfunk-gamescope-bin"),
             x11_dir: Some(std::path::PathBuf::from("/run/user/1000/punktfunk-x11")),
+            pkexec_shim: Some(std::path::PathBuf::from("/run/user/1000/punktfunk-pkexec")),
         };
         assert_eq!(
             bind.run_args(),
@@ -654,15 +705,19 @@ mod tests {
                     "--property=BindReadOnlyPaths=/run/user/1000/punktfunk-gamescope-bin:{DISTRO_GAMESCOPE_PATH}"
                 ),
                 format!("--property=BindPaths=/run/user/1000/punktfunk-x11:{X11_SOCKET_DIR}"),
+                format!("--property=BindReadOnlyPaths=/run/user/1000/punktfunk-pkexec:{PKEXEC_PATH}"),
             ]
         );
         assert_eq!(
             bind.unit_lines(),
             format!(
                 "BindReadOnlyPaths=/run/user/1000/punktfunk-gamescope-bin:{DISTRO_GAMESCOPE_PATH}\n\
-                 BindPaths=/run/user/1000/punktfunk-x11:{X11_SOCKET_DIR}\n"
+                 BindPaths=/run/user/1000/punktfunk-x11:{X11_SOCKET_DIR}\n\
+                 BindReadOnlyPaths=/run/user/1000/punktfunk-pkexec:{PKEXEC_PATH}\n"
             )
         );
+        // The shim leaves the namespace by absolute path and passes every argument on.
+        assert!(pkexec_shim_script().ends_with(&format!("-- {PKEXEC_PATH} \"$@\"\n")));
         // The socket-directory bind must be read-WRITE (Xwayland creates its socket in there); a
         // read-only one would fail exactly as loudly as no bind at all.
         assert!(bind.unit_lines().contains("BindPaths="));
@@ -672,6 +727,7 @@ mod tests {
         let plain = SessionBind {
             wrapper: std::path::PathBuf::from("/run/user/1000/punktfunk-gamescope-bin"),
             x11_dir: None,
+            pkexec_shim: None,
         };
         assert_eq!(plain.run_args().len(), 1);
         assert!(plain.unit_lines().ends_with('\n'));
