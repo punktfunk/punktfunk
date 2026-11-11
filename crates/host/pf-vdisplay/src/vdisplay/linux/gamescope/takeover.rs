@@ -1068,7 +1068,8 @@ fn sentinel_advanced(baseline: Baseline, now: Option<std::time::SystemTime>) -> 
 }
 
 /// Hand the box back and follow the desktop. Caller refuses managed relaunch for
-/// [`SWITCH_HONOR_GRACE`] so re-detection follows the desktop instead of racing it.
+/// [`SWITCH_HONOR_GRACE`] so re-detection follows the desktop instead of racing it. The Game Mode
+/// run it stops is the host's, and never counts toward Game Mode's crash reset.
 pub(super) fn honor_session_select_switch(adopted_dm: Option<String>) {
     tracing::info!(
         adopted_dm = ?adopted_dm,
@@ -1149,7 +1150,7 @@ fn replay_switch_under_restored_dm(dm: &str) {
                 let deadline = Instant::now() + Duration::from_secs(15);
                 loop {
                     if let Some(unit) = running_autologin_gamescope_unit() {
-                        systemctl_user(&["stop", &unit]);
+                        host_session_verb("stop", &unit);
                         tracing::info!(
                             %unit,
                             "gamescope: desktop selected — stopped the game-mode session so the \
@@ -1533,9 +1534,17 @@ impl<'a> Site<'a> {
 /// Run `site`'s verb and log how it went. Timeout is StillRunning, not Failed: a `restart` of
 /// `gamescope-session.target` blocks on Steam tearing a game down, which routinely exceeds
 /// [`UNIT_VERB_BUDGET`]. The bound stays — shutdown grace is 20 s, and an unbounded verb costs
-/// the DM restore that follows.
+/// the DM restore that follows. A unit verb is the host's: Game Mode's crash counters are cleared
+/// on both sides, as [`super::host_session_verb`] does.
 fn restore_verb(site: Site<'_>) -> RestoreVerb {
+    let session = !matches!(site, Site::ScreenEnv | Site::Unmask(_));
+    if session {
+        forget_host_short_sessions();
+    }
     let verb = issue_verb_within(&site.args(), UNIT_VERB_BUDGET);
+    if session {
+        forget_host_short_sessions();
+    }
     report(site, &verb);
     verb
 }
@@ -1940,10 +1949,7 @@ fn hand_back_steamos(verify: bool) -> bool {
         t.settle(|s| matches!(s, TakeoverStep::RestoreSteamos));
         return true;
     }
-    // Our headless Steam may be under 60 s old; its stop must not count as a failure.
-    forget_host_short_sessions();
     let restarted = restore_verb(Site::SteamosTarget);
-    forget_host_short_sessions();
     // A restart still running has yet to stop gamescope; its kill-signal drop-in stays until the
     // next takeover or hand-back, or the runtime dir goes.
     if matches!(restarted, RestoreVerb::Done) && remove_steamos_dropin() {
@@ -2827,6 +2833,38 @@ mod tests {
             for child in [&mut idle, &mut real] {
                 let _ = child.kill();
                 let _ = child.wait();
+            }
+        });
+        let _ = std::fs::remove_dir_all(&fake);
+    }
+
+    /// A unit verb the host runs never counts toward Game Mode's crash reset: five lines re-unpack
+    /// Steam's bootstrap, whose stock `config.vdf` signs the user out. `systemctl` is a fake on the
+    /// child's PATH; the tracker is the real `/tmp` file the session script reads.
+    #[test]
+    fn a_host_verb_never_counts_toward_the_crash_reset() {
+        let name = "a_host_verb_never_counts_toward_the_crash_reset";
+        let (fake, path) = crate::gamescope::tests::fake_systemctl(name);
+        crate::fake::in_child(module_path!(), name, &[("PATH", &path)], || {
+            let home = std::path::PathBuf::from(std::env::var_os("HOME").expect("HOME"));
+            std::fs::write(home.join("systemctl-exit"), "0").unwrap();
+            let tracker = crate::gamescope::SHORT_SESSION_TRACKERS[0];
+            let verbs: [(&str, fn()); 3] = [
+                ("restore_verb", || {
+                    restore_verb(Site::Autologin(UNIT));
+                }),
+                ("kill_unit", || crate::gamescope::kill_unit(UNIT)),
+                ("host_session_verb", || {
+                    crate::gamescope::host_session_verb("restart", UNIT)
+                }),
+            ];
+            for (verb, run) in verbs {
+                std::fs::write(tracker, "steam failed\n".repeat(4)).unwrap();
+                run();
+                assert!(
+                    !std::path::Path::new(tracker).exists(),
+                    "{verb} kept the count"
+                );
             }
         });
         let _ = std::fs::remove_dir_all(&fake);
