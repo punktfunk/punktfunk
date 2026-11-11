@@ -67,57 +67,48 @@ struct ConnectFlow {
     /// `preset=`). `.inherit` — the default, and what a plain card tap passes — falls through to
     /// the host's binding. A one-off NEVER rebinds the host: rebinding is always an explicit act
     /// in the edit sheet (design §5.2). `fromLink`: a pairing on the way resumes this connect.
+    /// `ConnectPlan.door` picks the way in.
     func connect(
         _ host: StoredHost, launchID: String? = nil,
         preset: PresetSelection = .inherit, allowTofu: Bool? = nil,
         fromLibrary: Bool = false, profile: ProfileChoice = .ask(), fromLink: Bool = false
     ) {
-        // A pinned host dials on its stored fingerprint. An unpinned one may TOFU only when the
-        // caller says so, or when its live advert says `pair=optional` (rule 3a); any other gets
-        // the approval choice instead of a silent trust prompt (rules 3b + 4).
-        if host.pinnedSHA256 == nil {
-            let tofuOK = allowTofu ?? discovery.hosts.contains {
-                host.matches($0) && $0.allowsTofu
-            }
-            if !tofuOK {
-                // pair=required / unknown policy / manual entry (rule 3b): never a silent
-                // connect — offer no-PIN delegated approval or the PIN ceremony.
-                var then: (@MainActor (StoredHost) -> Void)?
-                if fromLink {
-                    let flow = self
-                    then = { pinned in
-                        flow.connect(
-                            pinned, launchID: launchID, preset: preset,
-                            fromLibrary: fromLibrary, profile: profile)
-                    }
+        let door = ConnectPlan.door(
+            pinned: host.pinnedSHA256 != nil, allowTofu: allowTofu,
+            advertsTofu: discovery.hosts.contains { host.matches($0) && $0.allowsTofu },
+            advertisedFingerprint: advertisedFingerprint(for: host), fromLink: fromLink,
+            isDemo: DemoMode.isDemo(host))
+        switch door {
+        case .approvalChoice(let fingerprint, let resumes):
+            var then: (@MainActor (StoredHost) -> Void)?
+            if resumes {
+                let flow = self
+                then = { pinned in
+                    flow.connect(
+                        pinned, launchID: launchID, preset: preset,
+                        fromLibrary: fromLibrary, profile: profile)
                 }
-                approvalChoice = ApprovalRequest(
-                    host: host, advertisedFingerprint: advertisedFingerprint(for: host),
-                    thenConnect: then)
-                return
             }
-        }
-        let allowTofu = host.pinnedSHA256 == nil
-        switch profile {
-        case .send(let id, let unlock, let console):
-            // The console asks for the password itself. Only a pinned host is sent one.
-            startSession(
-                host, launchID: launchID, preset: preset, allowTofu: allowTofu,
-                fromLibrary: fromLibrary,
-                profile: ProfileDial(id: id, unlock: allowTofu ? nil : unlock, console: console))
-        case .ask(let link):
-            // An unpinned host can't be asked (no paired identity), and the demo host has no
-            // management API.
-            guard !allowTofu, !DemoMode.isDemo(host) else {
+            approvalChoice = ApprovalRequest(
+                host: host, advertisedFingerprint: fingerprint, thenConnect: then)
+        case .dial(let allowTofu, let asksProfile):
+            switch profile {
+            case .send(let id, let unlock, let console):
+                // The console asks for the password itself. Only a pinned host is sent one.
+                startSession(
+                    host, launchID: launchID, preset: preset, allowTofu: allowTofu,
+                    fromLibrary: fromLibrary,
+                    profile: ProfileDial(id: id, unlock: allowTofu ? nil : unlock, console: console))
+            case .ask(let link) where asksProfile:
+                askProfile(host, link: link) { profile in
+                    startSession(
+                        host, launchID: launchID, preset: preset, allowTofu: allowTofu,
+                        fromLibrary: fromLibrary, profile: profile)
+                }
+            case .ask:
                 startSession(
                     host, launchID: launchID, preset: preset, allowTofu: allowTofu,
                     fromLibrary: fromLibrary)
-                return
-            }
-            askProfile(host, link: link) { profile in
-                startSession(
-                    host, launchID: launchID, preset: preset, allowTofu: false,
-                    fromLibrary: fromLibrary, profile: profile)
             }
         }
     }
