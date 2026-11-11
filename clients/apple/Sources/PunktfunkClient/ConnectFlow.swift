@@ -108,23 +108,17 @@ struct ConnectFlow {
         case .dial(let allowTofu, let asksProfile):
             // Before the profile list, so a sleeping host boots while it is asked.
             sendAutoWake(host)
+            let dial: @MainActor (ProfileDial) -> Void = { profile in
+                startSession(
+                    host, launchID: launchID, preset: preset, allowTofu: allowTofu,
+                    fromLibrary: fromLibrary, profile: profile)
+            }
             switch profile {
             case .send(let id, let unlock, let console):
                 // The console asks for the password itself. Only a pinned host is sent one.
-                startSession(
-                    host, launchID: launchID, preset: preset, allowTofu: allowTofu,
-                    fromLibrary: fromLibrary,
-                    profile: ProfileDial(id: id, unlock: allowTofu ? nil : unlock, console: console))
-            case .ask(let link) where asksProfile:
-                askProfile(host, link: link) { profile in
-                    startSession(
-                        host, launchID: launchID, preset: preset, allowTofu: allowTofu,
-                        fromLibrary: fromLibrary, profile: profile)
-                }
-            case .ask:
-                startSession(
-                    host, launchID: launchID, preset: preset, allowTofu: allowTofu,
-                    fromLibrary: fromLibrary)
+                dial(ProfileDial(id: id, unlock: allowTofu ? nil : unlock, console: console))
+            case .ask(let link) where asksProfile: askProfile(host, link: link, go: dial)
+            case .ask: dial(ProfileDial())
             }
         }
     }
