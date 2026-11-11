@@ -498,15 +498,20 @@ pub fn is_confined(require_pairing: bool, origins: &[String]) -> bool {
 }
 
 /// One browser session: check the origin, then hand the connection to [`session::run`], which
-/// takes the session slot. `unadmitted` is held until then. A debug build keeps Phase 1's `/echo`
-/// for the measurement pages.
+/// takes the session slot. `unadmitted` is held until then; the session request and its answer
+/// share one [`session::HANDSHAKE_TIMEOUT`]. A debug build keeps Phase 1's `/echo` for the
+/// measurement pages.
 async fn session(
     incoming: wtransport::endpoint::IncomingSession,
     serving: &Arc<Serving>,
     sem: Arc<tokio::sync::Semaphore>,
     unadmitted: UnadmittedSlot,
 ) -> Result<()> {
-    let request = incoming.await.context("await session request")?;
+    let deadline = tokio::time::Instant::now() + session::HANDSHAKE_TIMEOUT;
+    let request = tokio::time::timeout_at(deadline, incoming)
+        .await
+        .context("session request: handshake timeout")?
+        .context("await session request")?;
     // The peer picks `:path` and nothing upstream value-checks it, so control characters would
     // reach the log ring verbatim and let an unauthenticated peer forge log lines.
     let path: String = request
@@ -530,14 +535,17 @@ async fn session(
             .map(String::as_str),
     );
     if !origin_allowed(origin.as_deref(), &serving.plane.origins) {
-        request.forbidden().await;
+        let _ = tokio::time::timeout_at(deadline, request.forbidden()).await;
         tracing::warn!(
             origin = origin.as_deref().unwrap_or("<none>"),
             "WebTransport session refused: origin not in PUNKTFUNK_WEBTRANSPORT_ORIGINS"
         );
         return Ok(());
     }
-    let connection = request.accept().await.context("accept session")?;
+    let connection = tokio::time::timeout_at(deadline, request.accept())
+        .await
+        .context("accept session: handshake timeout")?
+        .context("accept session")?;
     tracing::info!(
         path = %path,
         origin = origin.as_deref().unwrap_or("<none>"),
