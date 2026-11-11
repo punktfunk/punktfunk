@@ -212,9 +212,9 @@ struct SettingsView: View {
         // Settings app.
         tvBody
         #elseif os(macOS)
-        macBody
+        macBody.onChange(of: scope) { clearCustomFlags() }
         #else
-        iosBody
+        iosBody.onChange(of: scope) { clearCustomFlags() }
         #endif
     }
 

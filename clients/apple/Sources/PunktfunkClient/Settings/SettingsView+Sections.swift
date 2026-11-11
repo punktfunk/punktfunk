@@ -985,8 +985,7 @@ extension SettingsView {
         // The pad manager keeps its own copy of the pinned controller, read at launch.
         gamepads.preferredID = ""
         #if os(iOS) || os(visionOS) || os(macOS)
-        customMode = false
-        customScaleMode = false
+        clearCustomFlags()
         #endif
     }
 

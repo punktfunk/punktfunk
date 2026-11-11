@@ -271,11 +271,24 @@ extension SettingsView {
     }
 
     /// Put a row back to inheriting. The ONLY way an override is removed — the model never infers
-    /// "not overridden" from a value comparison.
+    /// "not overridden" from a value comparison. The row's sticky Custom… goes with it, so the
+    /// picker shows the inherited value.
     func resetOverride(_ name: String) {
         guard let id = scope.presetID else { return }
         presets.clearOverride(id, field: name)
+        #if os(iOS) || os(visionOS) || os(macOS)
+        if name == OverlayField.resolution { customMode = false }
+        if name == SettingsFields.renderScale.name { customScaleMode = false }
+        #endif
     }
+
+    #if os(iOS) || os(visionOS) || os(macOS)
+    /// The sticky Custom… flags belong to the layer they were set in.
+    func clearCustomFlags() {
+        customMode = false
+        customScaleMode = false
+    }
+    #endif
 
     /// The accent dot + Reset affordance a row carries while it overrides any of `names`.
     /// Rendered inside `described`'s caption line, so it sits with the row it belongs to; Reset
