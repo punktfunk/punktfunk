@@ -194,8 +194,8 @@ impl ControlTask {
                             );
                         }
                         let delivered = anchor.lock().unwrap_or_else(|e| e.into_inner()).config(cfg);
-                        if let Some(mode) = delivered {
-                            super::anchor::apply(mode_slot, &events, mode);
+                        if let Some(delivery) = delivered {
+                            super::anchor::apply(mode_slot, &events, delivery);
                         }
                     } else if let Ok(result) = decode::<ProbeResult>(ty, &body) {
                         let mut p = probe.lock().unwrap();

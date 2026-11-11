@@ -399,6 +399,8 @@ public final class PunktfunkConnection: @unchecked Sendable {
     public let settings: EffectiveSettings
     /// The caller opens a window per screen: the session may show more than one picture.
     public let showsScreens: Bool
+    /// The view the connect asked for beside its mode; nil shows the mode itself.
+    public let connectView: (width: UInt32, height: UInt32)?
 
     /// Negotiated session mode (host-confirmed).
     public private(set) var width: UInt32 = 0
@@ -1178,6 +1180,7 @@ public final class PunktfunkConnection: @unchecked Sendable {
         defer { unlock?.secret.wipe() }
         self.settings = settings
         self.showsScreens = showsScreens
+        self.connectView = view
         _ = Self.abiVersionGate // version-equality guard — fail loudly before the first C call
         if let pin = pinSHA256, pin.count != 32 { throw PunktfunkClientError.invalidPin }
         if unlock != nil, pinSHA256 == nil { throw PunktfunkClientError.invalidPin }
@@ -1517,11 +1520,18 @@ public final class PunktfunkConnection: @unchecked Sendable {
     /// reconnect. Non-blocking; on acceptance the stream continues at the new mode (the
     /// first new-mode AU is an IDR with fresh parameter sets — `AnnexB.formatDescription`
     /// refresh-on-IDR already handles it) and `currentMode()` reflects the switch.
-    /// `view` is the size the picture is shown at when smaller (`RenderScale.view`). nil at a new
-    /// size asks the host to encode the mode; at the size last asked it keeps that view.
+    /// At the live size the host keeps the view it scales to, so a rate pick leaves its scale.
+    public func requestMode(width: UInt32, height: UInt32, refreshHz: UInt32) {
+        withLiveHandle(or: ()) { h in
+            _ = punktfunk_connection_request_mode(h, width, height, refreshHz)
+        }
+    }
+
+    /// `requestMode` shown at `view`, the size the picture is shown at when smaller
+    /// (`RenderScale.view`). nil asks for the mode itself and clears a view the host keeps.
     public func requestMode(
         width: UInt32, height: UInt32, refreshHz: UInt32,
-        view: (width: UInt32, height: UInt32)? = nil
+        view: (width: UInt32, height: UInt32)?
     ) {
         withLiveHandle(or: ()) { h in
             _ = punktfunk_connection_request_mode_view(
@@ -1641,14 +1651,16 @@ public final class PunktfunkConnection: @unchecked Sendable {
             }
         }
 
-        /// `lines` led by the size the picture decodes at when that is not the host's `mode`:
-        /// `1920×1080@60 · host renders 3840×2160`. Only a line opening with the mode changes, so
-        /// Compact, which names no size, stays as it is.
+        /// `lines` led by the size the picture decodes at when the host scaled `mode` down to it:
+        /// `1920×1080@60 · host renders 3840×2160`. A decoder's padded output is no such picture.
+        /// Only a line opening with the mode changes, so Compact, which names no size, stays as it is.
         public static func naming(
             picture: (width: UInt32, height: UInt32)?,
             mode: (width: UInt32, height: UInt32, refreshHz: UInt32), in lines: [HudLine]
         ) -> [HudLine] {
-            guard let p = picture, (p.width, p.height) != (mode.width, mode.height) else { return lines }
+            guard let p = picture, p.width <= mode.width, p.height <= mode.height,
+                (p.width, p.height) != (mode.width, mode.height)
+            else { return lines }
             let lead = "\(mode.width)×\(mode.height)@\(mode.refreshHz)"
             return lines.map { line in
                 guard line.text == lead || line.text.hasPrefix(lead + " · ") else { return line }

@@ -308,6 +308,7 @@ async fn serve(
         // A demo has one desktop: whatever profile the client asks for is the one it gets.
         profile: client.profile.clone(),
         screen: None,
+        picture: None,
     };
     v2io::send(&mut send, &server).await?;
     let (ty, body) = recv.read_frame().await?;

@@ -374,6 +374,11 @@ pub(crate) fn picture(
     }
 }
 
+/// The `picture` field a client prices its bitrate on: `None` at `mode`'s own size.
+pub(crate) fn picture_field(mode: punktfunk_core::Mode, picture: (u32, u32)) -> Option<(u32, u32)> {
+    (picture != (mode.width, mode.height)).then_some(picture)
+}
+
 pub(crate) fn resolve_topology(capture: CaptureBackend) -> SessionTopology {
     if capture == CaptureBackend::Wgc {
         SessionTopology::CaptureWorker
@@ -567,7 +572,8 @@ impl SessionPlan {
 /// Open the encoder for a `captured` picture through `open(framing)`, which opens at
 /// `framing.out`, and return it with the framing it encodes. `reframe_to` frames the picture
 /// for its view; a `mirrored` head larger than the client's `negotiated` picture fits inside
-/// it. Either crops and scales on ingest; a backend whose caps cannot is reopened unframed.
+/// it. Either crops and scales on ingest; a backend whose caps cannot, or whose framed open
+/// fails, is reopened unframed.
 pub(crate) fn open_encoder_fitted(
     captured: (u32, u32),
     negotiated: (u32, u32),
@@ -590,7 +596,18 @@ pub(crate) fn open_encoder_fitted(
     if framed.is_full() {
         return Ok((open(full)?, full));
     }
-    let mut enc = open(framed)?;
+    let mut enc = match open(framed) {
+        Ok(enc) => enc,
+        Err(e) => {
+            tracing::warn!(
+                ?captured,
+                wanted = ?framed.out,
+                error = %format!("{e:#}"),
+                "framed encoder did not open — encoding the captured size for the client to scale"
+            );
+            return Ok((open(full)?, full));
+        }
+    };
     let caps = enc.caps();
     let scaled = framed.out != (framed.crop[2], framed.crop[3]);
     let armed = if (scaled && !caps.downscales_input) || (framed.is_cropped() && !caps.crops_input)
@@ -682,7 +699,8 @@ mod tests {
     }
 
     /// A view smaller than the capture opens the encoder at the view and arms the whole source
-    /// as the crop; a backend without the caps is reopened at the captured size.
+    /// as the crop; a backend without the caps, or one that fails to open framed, is reopened at
+    /// the captured size.
     #[test]
     fn a_view_frames_on_ingest_or_falls_back_to_the_capture() {
         use punktfunk_core::video_fit::VideoFit;
@@ -704,6 +722,19 @@ mod tests {
                 assert!(framed.is_full() && framed.out == (2048, 1152));
             }
         }
+        // A framed open that fails is tried once more unframed.
+        let mut opens = Vec::new();
+        let (_, framed) = open_encoder_fitted((2048, 1152), (2048, 1152), view, false, |r| {
+            opens.push(r.out);
+            if r.is_full() {
+                Ok(Box::new(Frames(true, Default::default())))
+            } else {
+                Err(anyhow::anyhow!("no scale pass"))
+            }
+        })
+        .expect("an encoder");
+        assert_eq!(opens, [(1366, 768), (2048, 1152)]);
+        assert!(framed.is_full());
         // No view and no mirror: the capture as it is, opened once.
         let mut opens = Vec::new();
         let (_, framed) = open_encoder_fitted((2048, 1152), (1366, 768), None, false, |r| {

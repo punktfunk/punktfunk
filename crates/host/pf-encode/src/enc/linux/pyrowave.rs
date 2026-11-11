@@ -1951,21 +1951,21 @@ impl Encoder for PyroWaveEncoder {
             self.width,
             self.height
         );
-        // SAFETY: waiting out every submission first means no queued command reads the old
-        // stage; the new one is fresh handles on this encoder's live device, released here or
-        // in `Drop`.
+        // SAFETY: the new stage is fresh handles on this encoder's live device, released here or
+        // in `Drop`; waiting out every submission before the old one goes means no queued
+        // command reads it. A stage that fails to build leaves the old one in place.
         unsafe {
-            if let Some(mut old) = self.reframe.take() {
-                self.device.device_wait_idle()?;
-                old.destroy(&self.device);
-            }
-            self.reframe = Some(Reframe::new(
+            let fresh = Reframe::new(
                 &self.device,
                 &self.mem_props,
                 rect,
                 (self.width, self.height),
                 self.slots.len(),
-            )?);
+            )?;
+            if let Some(mut old) = self.reframe.replace(fresh) {
+                self.device.device_wait_idle()?;
+                old.destroy(&self.device);
+            }
         }
         tracing::info!(
             crop = ?rect,

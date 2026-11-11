@@ -1766,6 +1766,10 @@ fn spawn_control(
             host_link_mbps: host_link.link_mbps,
             host_sndbuf_kb: host_link.sndbuf_kb,
             host_forced_shape: host_link.forced_shape,
+            picture: crate::session_plan::picture_field(welcome.mode, {
+                let p = n.picture();
+                (p.width, p.height)
+            }),
         },
         anchored: features.has(punktfunk_core::quic::v2::registry::FEATURE_STREAM_CONFIG),
         codec,

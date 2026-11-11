@@ -198,6 +198,9 @@ public final class StreamViewController: StreamViewControllerBase {
     /// rotation, a fold or the upright half of a half-open one renegotiates the host mode 1:1.
     /// tvOS drives display modes through AVDisplayManager instead.
     private var matchFollower: MatchWindowFollower?
+    /// The view the last surface ask sent beside its mode; nil before one, when the connect's
+    /// stands.
+    private var surfaceView: (width: UInt32, height: UInt32)??
     /// The picture's surface on an attached monitor (see `ExternalDisplay`), and whether the
     /// stream presents there now. Input and the HUD stay on the phone either way.
     #if os(iOS)
@@ -1171,7 +1174,7 @@ public final class StreamViewController: StreamViewControllerBase {
 
     /// Ask the host for the session's mode where the picture is, with its view above 1x: Native is
     /// the monitor's pixels at its top refresh, or the phone's back on the phone. Skipped when it
-    /// already streams that.
+    /// already streams that mode at that view.
     private func requestSurfaceMode() {
         guard let connection else { return }
         let settings = connection.settings
@@ -1181,13 +1184,16 @@ public final class StreamViewController: StreamViewControllerBase {
         let native = NativeDisplay.mode
         #endif
         let target = settings.streamMode(native: native)
+        let view = settings.streamView(native: native, mode: target)
         let live = connection.currentMode()
+        let liveView = surfaceView ?? connection.connectView
         guard live.width != target.width || live.height != target.height
             || live.refreshHz != target.hz
+            || MatchWindow.Ask((0, 0), view: view) != MatchWindow.Ask((0, 0), view: liveView)
         else { return }
         connection.requestMode(
-            width: target.width, height: target.height, refreshHz: target.hz,
-            view: settings.streamView(native: native, mode: target))
+            width: target.width, height: target.height, refreshHz: target.hz, view: view)
+        surfaceView = .some(view)
     }
 
     /// `fromClick` marks a click-driven engage (the released-state pointer click that re-captures):

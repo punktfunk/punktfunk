@@ -908,7 +908,10 @@ fn server_hello(n: &Negotiation<'_>, t: &Terms, welcome: Welcome) -> ServerHello
     {
         offered = offered.with(punktfunk_core::quic::v2::registry::FEATURE_SCREENS);
     }
+    // The picture the Welcome's rate was priced at.
+    let picture = crate::session_plan::picture(t.hello.mode, t.view.or(joined_view(&t.joined)));
     ServerHello {
+        picture: crate::session_plan::picture_field(welcome.mode, (picture.width, picture.height)),
         welcome,
         session_id: session.session_id,
         clock_origin_ns: session.clock.origin_ns(),

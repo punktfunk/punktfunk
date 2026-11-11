@@ -473,10 +473,10 @@ impl StreamState {
         trace: Option<&Trace>,
     ) -> Result<Built> {
         if let (true, Some(t)) = (plan.in_place, trace) {
-            if let Some(next) = self.in_place(plan, t) {
+            if let Some((next, rate_kbps)) = self.in_place(plan, t) {
                 return Ok(Built {
                     next,
-                    rate_kbps: plan.rate_kbps,
+                    rate_kbps,
                     vd: None,
                 });
             }
@@ -577,16 +577,29 @@ impl StreamState {
         rebuild_after_capture_loss(self, keepalive, &budget)
     }
 
-    /// The Windows in-place mode set ([`Self::resize`]) for `plan`. `None` = the full build runs.
+    /// The Windows in-place mode set ([`Self::resize`]) for `plan`, and the rate its encoder
+    /// opened at, priced at the picture it encodes as [`Self::build_encoder`] prices it. `None` =
+    /// the full build runs.
     #[cfg(target_os = "windows")]
-    fn in_place(&mut self, plan: &RebuildPlan, trace: &Trace) -> Option<Next> {
+    fn in_place(&mut self, plan: &RebuildPlan, trace: &Trace) -> Option<(Next, u32)> {
         let recover_ring = plan.reason == super::swap::SwapReason::TopologyReassert;
-        self.resize(plan.mode, plan.rate_kbps, trace, recover_ring)
+        let (session, priced) = (self.plan, self.plan.picture(plan.mode));
+        let (auto, cap) = (self.facts.bitrate_auto, self.facts.knobs.pyrowave_max_kbps);
+        let kbps_for = move |w, h| match plan.epilogue.rate {
+            Rate::Built => rate_at_encoded(plan.rate_kbps, auto, priced, (w, h), &session, cap),
+            Rate::Applied => plan.rate_kbps,
+        };
+        let next = self.resize(plan.mode, kbps_for, trace, recover_ring)?;
+        let rate_kbps = match &next {
+            Next::Encoder { reframe, .. } => kbps_for(reframe.out.0, reframe.out.1),
+            _ => plan.rate_kbps,
+        };
+        Some((next, rate_kbps))
     }
 
     /// Only a Windows IDD-push display is mode-set in place.
     #[cfg(not(target_os = "windows"))]
-    fn in_place(&mut self, _plan: &RebuildPlan, _trace: &Trace) -> Option<Next> {
+    fn in_place(&mut self, _plan: &RebuildPlan, _trace: &Trace) -> Option<(Next, u32)> {
         None
     }
 
