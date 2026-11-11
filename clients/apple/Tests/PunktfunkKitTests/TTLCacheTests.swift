@@ -38,6 +38,30 @@ final class TTLCacheTests: XCTestCase {
         XCTAssertNotNil(cache.ask("a", now: at(310)))
     }
 
+    /// R3-5: an answer asked before an invalidate is about a host that has moved on.
+    func testAnAnswerAskedBeforeAnInvalidateIsDropped() {
+        var cache = TTLCache<[String]>(ttl: 300)
+        let stale = cache.ask("a", now: at(0))!
+        cache.invalidate("a")
+        cache.land(stale, ["power.sleep"])
+        XCTAssertNil(cache["a"])
+
+        let fresh = cache.ask("a", now: at(1))!
+        cache.land(stale, nil)
+        XCTAssertNil(cache.ask("a", now: at(2)), "a dropped miss leaves the new ask's stamp")
+        cache.land(fresh, [])
+        XCTAssertEqual(cache["a"], [])
+    }
+
+    func testAKeptValueOutlivesTheAnswerAskedBeforeItsInvalidate() {
+        var cache = TTLCache<String>(ttl: 20)
+        cache.land(cache.ask("a", now: at(0))!, "old pick")
+        let stale = cache.ask("a", now: at(20))!
+        cache.invalidate("a", keepValue: true)
+        cache.land(stale, "older pick")
+        XCTAssertEqual(cache["a"], "old pick")
+    }
+
     func testAStoredAnswerIsFresh() {
         var cache = TTLCache<String>(ttl: 20)
         cache.store("Dota 2", for: "a", now: at(0))
