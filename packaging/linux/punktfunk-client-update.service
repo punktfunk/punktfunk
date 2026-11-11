@@ -4,7 +4,8 @@
 # --apply-update`, and so the Decky plugin's one-tap update, runs), authorised by the polkit
 # rule (49-punktfunk-client-update.rules) for members of the `punktfunk-update` group. systemd
 # gives us single-flight (a second start while active fails) and journal capture for free; the
-# helper writes its machine-readable outcome to /var/lib/punktfunk/client-update-result.json.
+# helper writes its machine-readable outcome to
+# /var/lib/punktfunk-update/client-update-result.json, in a directory only root writes.
 #
 # This is a SEPARATE unit from punktfunk-update.service, not a duplicate of it: the client and
 # the host are separate packages, and no packaging format we ship lets two packages own one
@@ -19,5 +20,7 @@ After=network-online.target
 [Service]
 Type=oneshot
 ExecStart=/usr/libexec/punktfunk/pf-update apply-client
+# /var/lib/punktfunk-update, root's, 0755 so the client reads the result.
+StateDirectory=punktfunk-update
 # The helper drives the distro package manager, which needs the real system — no sandboxing
 # directives here on purpose; the constraint is the FIXED ExecStart (no parameters exist).
