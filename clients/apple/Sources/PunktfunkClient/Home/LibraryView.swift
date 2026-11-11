@@ -335,31 +335,13 @@ struct LibraryView: View {
         }
     }
 
-    /// A catalog collated by the shared rules: launchers lead (design D4), then one section per
-    /// group under the chosen grouping (none = one section of games), each in the chosen sort.
-    private func sections(of items: [GameEntry]) -> [(label: String, games: [GameEntry])] {
-        let groupBy: LibraryGroupBy?
-        switch groupByRaw {
-        case "platform": groupBy = .platform
-        case "store": groupBy = .store
-        default: groupBy = nil
-        }
-        return LibraryCollation.collate(items, sort: LibrarySortKey(stored: sortRaw), groupBy: groupBy)
-            .map { group in
-                // The ungrouped bucket names itself "All"; on this grid it has always been "Games".
-                let label = (groupBy == nil && group.key != .launchers)
-                    ? String(localized: L10n.libSectionGames) : group.label
-                return (label, group.indices.map { items[$0] })
-            }
-    }
+    private var sort: LibrarySortKey { LibrarySortKey(stored: sortRaw) }
+    private var groupBy: LibraryGroupBy? { LibraryGroupBy(stored: groupByRaw) }
 
-    /// The plain grid's sections. Headers only when there is more than one.
-    private var sections: [(label: String, games: [GameEntry])] {
-        sections(of: ordered)
-    }
-
+    /// The plain grid, launchers included. Headers only when there is more than one section.
     private var grid: some View {
-        let sections = self.sections
+        let sections = LibraryShelf.grid(
+            games, sort: sort, groupBy: groupBy, running: Set(running.keys))
         return ScrollViewReader { proxy in
             keyNavigation(sections: sections, proxy: proxy) {
                 ScrollView {
@@ -374,8 +356,7 @@ struct LibraryView: View {
     /// cursor. Leaving a stream re-presents this view, so the last title opened from this shelf
     /// is scrolled back to once, without animation.
     private func gridBlock(
-        _ sections: [(label: String, games: [GameEntry])], showsHeaders: Bool,
-        proxy: ScrollViewProxy
+        _ sections: [LibraryShelf.Section], showsHeaders: Bool, proxy: ScrollViewProxy
     ) -> some View {
         VStack(alignment: .leading, spacing: 18) {
             ForEach(Array(sections.enumerated()), id: \.offset) { _, section in
@@ -407,7 +388,7 @@ struct LibraryView: View {
     /// Arrow keys pick a title in the grid and Return launches it: an iPad on a Magic Keyboard
     /// with no pad sees this grid.
     @ViewBuilder private func keyNavigation(
-        sections: [(label: String, games: [GameEntry])], proxy: ScrollViewProxy,
+        sections: [LibraryShelf.Section], proxy: ScrollViewProxy,
         @ViewBuilder content: () -> some View
     ) -> some View {
         #if os(iOS) || os(visionOS) || os(macOS)
@@ -432,10 +413,13 @@ struct LibraryView: View {
     // MARK: - The Library tab
 
     /// The Library tab: the stored sections in order, each hidden while it has nothing to show.
+    /// The rows are computed once here, over the titles the search leaves.
     private var tabBody: some View {
-        let groups = gameSections
+        let rows = LibraryShelf.rows(
+            games, sort: sort, groupBy: groupBy, running: Set(running.keys),
+            favorites: Set(favoriteIDs), search: search)
         return ScrollViewReader { proxy in
-            keyNavigation(sections: groups, proxy: proxy) {
+            keyNavigation(sections: rows.games, proxy: proxy) {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 26) {
                         #if os(tvOS)
@@ -444,7 +428,7 @@ struct LibraryView: View {
                         tabHeader
                         staleNote
                         ForEach(sectionLayout.visible) { section in
-                            tabSection(section, groups: groups, proxy: proxy)
+                            tabSection(section, rows: rows, proxy: proxy)
                         }
                         shelfState
                     }
@@ -455,8 +439,7 @@ struct LibraryView: View {
     }
 
     @ViewBuilder private func tabSection(
-        _ section: LibrarySection, groups: [(label: String, games: [GameEntry])],
-        proxy: ScrollViewProxy
+        _ section: LibrarySection, rows: LibraryShelf.Rows, proxy: ScrollViewProxy
     ) -> some View {
         switch section {
         case .desktops:
@@ -472,36 +455,33 @@ struct LibraryView: View {
                 }
             }
         case .recent:
-            let played = recentTitles
-            if !played.isEmpty {
+            if !rows.recent.isEmpty {
                 row(section) {
-                    ForEach(played) { game in
+                    ForEach(rows.recent) { game in
                         tile(game, caption: PlayStatsText.lastPlayed(game.stats), scope: "recent")
                             .frame(width: rowTileWidth)
                     }
                 }
             }
         case .favorites:
-            let marked = favoriteTitles
-            if !marked.isEmpty {
+            if !rows.favorites.isEmpty {
                 row(section) {
-                    ForEach(marked) { game in
+                    ForEach(rows.favorites) { game in
                         tile(game, scope: "favorites").frame(width: rowTileWidth)
                     }
                 }
             }
         case .launchers:
-            let launchers = shelfGames.filter(\.isLauncher)
-            if !launchers.isEmpty {
+            if !rows.launchers.isEmpty {
                 row(section) {
-                    ForEach(launchers) { game in
+                    ForEach(rows.launchers) { game in
                         tile(game, scope: "launchers").frame(width: rowTileWidth)
                     }
                 }
             }
         case .games:
-            if !groups.isEmpty {
-                gridBlock(groups, showsHeaders: true, proxy: proxy)
+            if !rows.games.isEmpty {
+                gridBlock(rows.games, showsHeaders: true, proxy: proxy)
             }
         }
     }
@@ -571,45 +551,11 @@ struct LibraryView: View {
     private static let gridSpacing: CGFloat = 18
     #endif
 
-    /// The shelf the search leaves, launchers included, in the host's order.
-    private var shelfGames: [GameEntry] {
-        guard !search.isEmpty else { return games }
-        return games.filter { $0.title.localizedStandardContains(search) }
-    }
-
-    /// The Games section: the searched shelf without its launchers, which have their own row;
-    /// anything running leads, as on the plain grid.
-    private var gameSections: [(label: String, games: [GameEntry])] {
-        let titles = shelfGames.filter { !$0.isLauncher }
-        return sections(of: running.isEmpty ? titles : LibraryOrder.display(titles, running: Set(running.keys)))
-    }
-
-    /// Played titles, newest first, at most twelve: the shared Recent order, cut at the first
-    /// title never played.
-    private var recentTitles: [GameEntry] {
-        // Filtered first: the sort then runs over the played titles, not the shelf.
-        let titles = shelfGames.filter {
-            !$0.isLauncher && ($0.stats?.lastPlayedUnixMs ?? 0) > 0
-        }
-        let order = LibraryCollation.collate(titles, sort: .recent, groupBy: nil).first?.indices ?? []
-        return Array(order.map { titles[$0] }.prefix(12))
-    }
-
     private var favoriteIDs: [String] {
         #if DEBUG
         if let shotFavorites { return shotFavorites }
         #endif
         return favorites.ids(for: host.id.uuidString)
-    }
-
-    /// Favorited titles, in the shelf's current sort.
-    private var favoriteTitles: [GameEntry] {
-        let marked = Set(favoriteIDs)
-        guard !marked.isEmpty else { return [] }
-        // Filtered first: the sort then runs over the favorites, not the shelf.
-        let titles = shelfGames.filter { marked.contains($0.id) }
-        return LibraryCollation.collate(titles, sort: LibrarySortKey(stored: sortRaw), groupBy: nil)
-            .flatMap(\.indices).map { titles[$0] }
     }
 
     #if os(visionOS)
@@ -862,7 +808,7 @@ struct LibraryView: View {
     /// What a tile says under its title for the active sort (design P6): when it was last
     /// played under Recent, how long under Most played, nothing otherwise.
     private func sortCaption(_ game: GameEntry) -> String? {
-        switch LibrarySortKey(stored: sortRaw) {
+        switch sort {
         // Blank, not nil, for a title with nothing recorded: its tile keeps the caption line.
         case .recent: return PlayStatsText.lastPlayed(game.stats) ?? ""
         case .playTime: return PlayStatsText.playTime(game.stats) ?? ""
@@ -1135,26 +1081,6 @@ struct LibraryView: View {
     /// `host`, or `host · preset` for a pinned card's shelf — the desktop's title shape.
     private var shelfTitle: String {
         target.title(in: presets)
-    }
-
-    /// The catalog in display order — `LibraryOrder.display`, the desktop's `order()`: launcher
-    /// entries lead, and anything already running leads WITHIN its band, so getting back into it
-    /// is the first thing on the screen rather than something to scroll for.
-    private var ordered: [GameEntry] {
-        // …and the desktop tile leads all of it, so streaming the host itself is one press
-        // rather than a menu — and a host with no plugins still has something to press.
-        // Only where a launch is possible: browse-only mode has nothing to connect with.
-        let all = onConnect == nil ? games : [desktopTile] + games
-        guard !running.isEmpty else { return all }
-        return LibraryOrder.display(all, running: Set(running.keys))
-    }
-
-    /// The tile names what the press does, so it does not read "Desktop" while pressing it
-    /// resumes a game the host already has up.
-    private var desktopTile: GameEntry {
-        let playing = nowPlayingStore.title(for: host)
-        return LibraryCollation.desktopEntry(
-            title: playing.map { L10n.libResumeTitle(title: $0) } ?? String(localized: L10n.libDesktop))
     }
 
     /// Whether the titles on screen are remembered rather than observed, and what the host is
