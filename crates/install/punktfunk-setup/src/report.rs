@@ -12,13 +12,14 @@
 //! replace them, so they stay English literals, but for the bind label. The rest reaches the
 //! screens too and reads `pf_l10n`.
 
+use console::measure_text_width;
 use pf_l10n::tools as t;
 
 use crate::choices::{Action, Choices, Why, LAN_BIND, LOOPBACK_BIND};
 use crate::exec::{Opts, Outcome};
 use crate::facts::{Facts, Family, Nvidia, DOCS};
 use crate::seam::CommandRunner;
-use crate::ui::Reporter;
+use crate::ui::{columns, Reporter};
 
 /// Printing the password is one command, and it is the same one in the step that offers to
 /// generate it, in the outro, and in the docs. It prints until the first sign-in only: the
@@ -111,7 +112,10 @@ fn bind_label(choices: &Choices) -> String {
 /// What `--uninstall` deliberately left behind, so a reinstall picks it up.
 pub fn uninstall_outro(ui: &dyn Reporter) {
     ui.blank();
-    for line in wrap(t::setup_uninstall_outro(), OUTRO_COLUMNS - INDENT.len()) {
+    for line in columns::wrap(
+        t::setup_uninstall_outro(),
+        OUTRO_COLUMNS - measure_text_width(INDENT),
+    ) {
         ui.line(&format!("{INDENT}{line}"));
     }
     ui.line(&format!(
@@ -125,25 +129,6 @@ const INDENT: &str = "  ";
 
 /// Where a long outro sentence breaks, indent included.
 const OUTRO_COLUMNS: usize = 100;
-
-/// Greedy word wrap: a line holds as many words as fit in `width` columns.
-fn wrap(text: &str, width: usize) -> Vec<String> {
-    let mut lines = Vec::new();
-    let mut cur = String::new();
-    for word in text.split_whitespace() {
-        if !cur.is_empty() && cur.chars().count() + 1 + word.chars().count() > width {
-            lines.push(std::mem::take(&mut cur));
-        }
-        if !cur.is_empty() {
-            cur.push(' ');
-        }
-        cur.push_str(word);
-    }
-    if !cur.is_empty() {
-        lines.push(cur);
-    }
-    lines
-}
 
 pub fn verify(
     ui: &dyn Reporter,

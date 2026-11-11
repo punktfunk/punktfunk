@@ -20,6 +20,7 @@ use pf_l10n::tools as t;
 
 use crate::choices::{Action, LAN_BIND, LOOPBACK_BIND};
 use crate::facts::Channel;
+use crate::ui::columns;
 use crate::ui::logo::{self, Intro, MARK_TEXT_ROWS};
 use crate::ui::summary::{Field, Item, Key as UiKey, Screen, Step};
 use crate::ui::term::{Key, Terminal};
@@ -158,7 +159,7 @@ impl<'a> Tui<'a> {
         self.dim(BAR)
     }
 
-    /// Truncate to terminal width in printable columns.
+    /// Truncate to terminal width in display columns, cutting between characters.
     ///
     /// `clear_last_lines` counts physical rows; a wrap makes rewind short and
     /// leftovers pile up. Truncating keeps the two counts equal.
@@ -180,12 +181,13 @@ impl<'a> Tui<'a> {
                     }
                     continue;
                 }
-                if cols == width {
+                let wide = columns::of_char(c);
+                if cols + wide > width {
                     cut = true;
                     break;
                 }
                 out.push(c);
-                cols += 1;
+                cols += wide;
             }
             if cut {
                 out.push_str(&self.caps.reset());
@@ -199,22 +201,7 @@ impl<'a> Tui<'a> {
     ///
     /// Row values are truncated instead: a wrapped column stops lining up.
     fn wrap(&self, text: &str) -> Vec<String> {
-        let width = usize::from(self.caps.width).saturating_sub(3).max(24);
-        let mut lines = Vec::new();
-        let mut cur = String::new();
-        for word in text.split_whitespace() {
-            if !cur.is_empty() && cur.chars().count() + 1 + word.chars().count() > width {
-                lines.push(std::mem::take(&mut cur));
-            }
-            if !cur.is_empty() {
-                cur.push(' ');
-            }
-            cur.push_str(word);
-        }
-        if !cur.is_empty() {
-            lines.push(cur);
-        }
-        lines
+        columns::wrap(text, usize::from(self.caps.width).saturating_sub(3).max(24))
     }
 
     fn marked(&self) -> bool {
@@ -313,7 +300,7 @@ impl<'a> Tui<'a> {
             let mark = if on { self.accent(CURSOR) } else { " ".into() };
             match item {
                 Item::Row(field) => {
-                    let label = format!("{:<width$}", Screen::label(*field), width = label_width);
+                    let label = columns::pad(Screen::label(*field), label_width);
                     let value = screen.value(*field);
                     let text = if on {
                         format!("{}{}", self.highlight(&label), value)
@@ -700,5 +687,69 @@ pub fn action_of(step: Step) -> Option<Action> {
     match step {
         Step::Run(action) => Some(action),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ui::term::ScriptedTerm;
+
+    fn caps(colors: Colors, width: u16) -> Caps {
+        Caps {
+            tty: true,
+            colors,
+            width,
+        }
+    }
+
+    fn fit(colors: Colors, width: u16, text: &str) -> String {
+        let mut term = ScriptedTerm::new(&[]);
+        Tui::new(&mut term, caps(colors, width), 0).fit(text)
+    }
+
+    fn wrap(width: u16, text: &str) -> Vec<String> {
+        let mut term = ScriptedTerm::new(&[]);
+        Tui::new(&mut term, caps(Colors::None, width), 0).wrap(text)
+    }
+
+    #[test]
+    fn fit_leaves_a_line_that_fits_alone() {
+        assert_eq!(fit(Colors::None, 40, "one\ntwo"), "one\ntwo\n");
+    }
+
+    #[test]
+    fn fit_cuts_ascii_at_the_width_and_closes_the_colour() {
+        let line = format!("\x1b[2m{}\x1b[0m", "x".repeat(30));
+        let cut = format!("\x1b[2m{}\x1b[0m\n", "x".repeat(20));
+        assert_eq!(fit(Colors::Ansi256, 20, &line), cut);
+        assert_eq!(
+            fit(Colors::None, 20, &"x".repeat(30)),
+            "x".repeat(20) + "\n"
+        );
+    }
+
+    #[test]
+    fn fit_cuts_mixed_text_on_a_character_boundary() {
+        let line = format!("abc{}def", "田".repeat(10));
+        let cut = format!("abc{}\n", "田".repeat(8));
+        assert_eq!(fit(Colors::None, 20, &line), cut);
+        let exact = "田".repeat(10);
+        assert_eq!(fit(Colors::None, 20, &exact), exact + "\n");
+    }
+
+    #[test]
+    fn wrap_breaks_ascii_prose_between_words() {
+        assert_eq!(
+            wrap(
+                30,
+                "the quick brown fox jumps over the lazy dog again and again"
+            ),
+            [
+                "the quick brown fox jumps",
+                "over the lazy dog again and",
+                "again"
+            ]
+        );
     }
 }

@@ -6,8 +6,10 @@
 //! screens, hand-rolled over `term` (see `term`'s header for why).
 //!
 //! `summary` is the settings screen as pure state, `theme` the brand colour and
-//! capability ladder, `logo` the animated lens mark.
+//! capability ladder, `logo` the animated lens mark, `columns` the display-width
+//! measuring, padding and wrapping every screen shares.
 
+pub mod columns;
 pub mod logo;
 pub mod plain;
 pub mod summary;
