@@ -192,7 +192,7 @@ pub(crate) fn parse_serve_args(args: &[String]) -> Result<ServeArgs> {
 ///
 /// The token exists before the endpoint file names it, and the config-dir ACLs converge before
 /// any runner grant. A first mint of the runner's token, or a moved endpoint, marks the runner
-/// for a restart.
+/// for a restart. A moved endpoint also restarts a running console, which reads it only at start.
 pub(crate) fn prepare_serve(args: ServeArgs) -> Result<(mgmt::Options, native::NativeServe, bool)> {
     let mut opts = mgmt::Options {
         bind: args.mgmt_bind,
@@ -249,10 +249,14 @@ pub(crate) fn prepare_serve(args: ServeArgs) -> Result<(mgmt::Options, native::N
         crate::plugins::converge_runner_acls(&runner);
         crate::plugins::converge_seat_denies();
     }
-    // Same function as the token persist so the console unit sees both. A race falls back to
-    // 47990; `Restart=always` retries. A runner up before a port move still dials the old one.
+    // A runner or console up before a port move still dials the old one, and a refused hop
+    // never ends the console. Only a plain host has a console beside it.
     let moved = mgmt::publish_endpoint(opts.bind);
     opts.restart_runner |= moved && runner.installed && mints && may_restart;
+    #[cfg(target_os = "linux")]
+    if moved && role == HostRole::Plain {
+        restart_console();
+    }
     // A flag outranks env and the console's value; pinning it lets the console show why.
     if args.gamestream {
         pf_host_config::pin("gamestream", "--gamestream", serde_json::Value::Bool(true));
@@ -280,6 +284,22 @@ pub(crate) fn prepare_serve(args: ServeArgs) -> Result<(mgmt::Options, native::N
         ..args.native
     };
     Ok((opts, native, gamestream))
+}
+
+/// Restarts the console unit if it runs, so it reads the endpoint just published. `--no-block`:
+/// the console is ordered after this host.
+#[cfg(target_os = "linux")]
+fn restart_console() {
+    let mut systemctl = std::process::Command::new("systemctl");
+    systemctl.args([
+        "--user",
+        "--no-block",
+        "try-restart",
+        "punktfunk-web.service",
+    ]);
+    if let Err(error) = pf_host_config::session::export_to(&mut systemctl).status() {
+        tracing::warn!(%error, "console not restarted after the mgmt port moved");
+    }
 }
 
 /// Where the browser plane listens. A seat host's is the browser port beside its native port, and
