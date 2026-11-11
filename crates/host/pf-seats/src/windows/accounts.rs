@@ -232,14 +232,8 @@ impl AccountManager {
             .said("account_policy")
             .param("account", account));
         }
-        // A seat start logs the account's other sessions off, so none may be live now.
         if wts::has_session(account)? {
-            return Err(backend_error(
-                "account_signed_in",
-                format!("{account} is signed in on this PC. Sign {account} out first."),
-            )
-            .said("account_signed_in")
-            .param("account", account));
+            return Err(signed_in(account));
         }
         let credential = typed_credential(password)?;
         verify_password(account, &credential, |error| {
@@ -525,6 +519,17 @@ fn changed_fault(account: &str) -> BackendError {
         ),
     )
     .said("credential_changed")
+    .param("account", account)
+}
+
+/// The sentence for an adopted account its person is signed in to. The seat signs the account in
+/// itself, so neither adopt nor a seat start goes ahead beside the person's session.
+pub(super) fn signed_in(account: &str) -> BackendError {
+    backend_error(
+        "account_signed_in",
+        format!("{account} is signed in on this PC. Sign {account} out first."),
+    )
+    .said("account_signed_in")
     .param("account", account)
 }
 
