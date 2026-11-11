@@ -66,6 +66,13 @@ A message in an other-only language has one arm, `n=*`.
 
 A language without a rule in `src/plural.rs` cannot ship.
 
+## Length
+
+`rules.json` gives each role a budget, and a translation `translation_slack` times it. `check`
+counts width, not characters: an East Asian Wide or Fullwidth character (Han, kana, Hangul,
+CJK punctuation, fullwidth forms) counts 2, every other character 1. Latin, Greek and Cyrillic
+text counts as its characters.
+
 ## TypeScript-only parts
 
 The parts `rules.json` lists under `typescript_only` (`web`, `browser`, `decky`) are read by
