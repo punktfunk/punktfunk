@@ -718,15 +718,18 @@ impl LinuxBackend {
     }
 
     /// Waits for the unit to be active and the host's management port to answer. A unit that
-    /// ends first, a stop or a timeout stops the seat and fails the start. `login`: the unit runs
-    /// the login helper, whose end says why ([`unit_ended`]).
+    /// ends first, a state that can't be read, a stop or a timeout stops the seat and fails the
+    /// start. `login`: the unit runs the login helper, whose end says why ([`unit_ended`]).
     fn wait_ready(&self, seat: &Seat, asked: u64, login: bool) -> Result<(), BackendError> {
         let deadline = Instant::now() + START_TIMEOUT;
         let failure = loop {
             if let Err(stopped) = self.stopped_since(asked) {
                 break stopped;
             }
-            let state = session::state(&seat.account)?;
+            let state = match session::state(&seat.account) {
+                Ok(state) => state,
+                Err(error) => break error,
+            };
             match state.active.as_str() {
                 "active" if self.is_ready(seat) => return Ok(()),
                 "failed" | "inactive" => break unit_ended(seat, &state, login),

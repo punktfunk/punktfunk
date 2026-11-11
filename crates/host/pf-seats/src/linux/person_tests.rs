@@ -149,6 +149,23 @@ fn stopping_or_deleting_a_person_row_touches_only_its_own_unit_and_files() {
     assert_eq!(tree(&rig.home), before, "their home is as they left it");
 }
 
+/// A unit whose state can't be read while the start waits is stopped, and the start fails with
+/// the read's error.
+#[test]
+fn a_start_that_loses_the_unit_s_state_stops_the_unit() {
+    let rig = rig();
+    let shows = std::cell::Cell::new(0);
+    let base = machine(&rig.home, 1500, "activating", false);
+    let _machine = fake::install(move |program, args| match (program, args) {
+        ("systemctl", ["show", ..]) if shows.replace(shows.get() + 1) == 0 => (1, String::new()),
+        _ => base(program, args),
+    });
+    let asked = rig.backend.inner.stops.load(Ordering::SeqCst);
+    let failed = rig.backend.wait_ready(&rig.seat, asked, false).unwrap_err();
+    assert_eq!(failed.code, "systemctl_failed");
+    assert_eq!(fake::calls(), [SHOW, SHOW, STOP, RESET]);
+}
+
 /// With them at the machine a start is refused before anything is made, with a sentence for
 /// the console.
 #[test]
