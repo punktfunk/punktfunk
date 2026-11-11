@@ -319,16 +319,17 @@ private struct ShortcutSheet: View {
     }
 }
 
-/// Records a trigger by pressing it: a controller's buttons through GameController, taken when
-/// the first one lifts, or a key with the modifiers held. Every pad's own handler is put back
-/// when it stops.
+/// Records a trigger by pressing it: a controller's buttons, taken when the first one lifts, or
+/// a key with the modifiers held. Pads are polled, so a stream in another window keeps its pad
+/// handlers.
 @MainActor
 private final class ShortcutRecorder: ObservableObject {
     @Published private(set) var active = false
     /// The buttons pressed so far, in press order.
     @Published private(set) var held: [UInt32] = []
     private var take: ((Shortcuts.Trigger) -> Void)?
-    private var saved: [(GCExtendedGamepad, GCExtendedGamepadValueChangedHandler?)] = []
+    private var poll: Timer?
+    /// Each pad's buttons at the last poll.
     private var last: [ObjectIdentifier: UInt32] = [:]
     #if os(macOS)
     private var monitor: Any?
@@ -343,13 +344,12 @@ private final class ShortcutRecorder: ObservableObject {
         stop()
         self.take = take
         active = true
-        for controller in GCController.controllers() {
-            guard let ext = controller.extendedGamepad else { continue }
-            saved.append((ext, ext.valueChangedHandler))
-            ext.valueChangedHandler = { [weak self] g, _ in
-                MainActor.assumeIsolated { self?.pad(g) }
-            }
+        let timer = Timer(timeInterval: 1.0 / 60.0, repeats: true) { [weak self] timer in
+            guard let self else { return timer.invalidate() }
+            MainActor.assumeIsolated { self.pollPads() }
         }
+        RunLoop.main.add(timer, forMode: .common)
+        poll = timer
         #if os(macOS)
         monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
             guard let self, let vk = InputCapture.vk(keyCode: event.keyCode) else { return event }
@@ -362,9 +362,10 @@ private final class ShortcutRecorder: ObservableObject {
         #endif
     }
 
+    /// Safe to call again: the second call finds nothing to undo.
     func stop() {
-        for (ext, handler) in saved { ext.valueChangedHandler = handler }
-        saved = []
+        poll?.invalidate()
+        poll = nil
         last = [:]
         held = []
         active = false
@@ -375,10 +376,20 @@ private final class ShortcutRecorder: ObservableObject {
         #endif
     }
 
-    private func pad(_ g: GCExtendedGamepad) {
+    private func pollPads() {
+        for controller in GCController.controllers() where active {
+            if let g = controller.extendedGamepad { pad(g, id: ObjectIdentifier(controller)) }
+        }
+    }
+
+    /// A pad's first poll only notes what it holds: the press that started recording is no part
+    /// of the trigger.
+    private func pad(_ g: GCExtendedGamepad, id: ObjectIdentifier) {
         let now = GamepadCapture.heldButtons(g)
-        let id = ObjectIdentifier(g)
-        let was = last[id] ?? 0
+        guard let was = last[id] else {
+            last[id] = now
+            return
+        }
         last[id] = now
         for bit in GamepadWire.allButtons where now & ~was & bit != 0 && held.count < 4 && !held.contains(bit) {
             held.append(bit)
