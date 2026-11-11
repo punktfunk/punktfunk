@@ -16,29 +16,23 @@ import PunktfunkKit
 final class NowPlayingStore: ObservableObject {
     static let shared = NowPlayingStore()
 
-    /// How long an answer stays fresh. Short on purpose (see the file note); the surfaces that
-    /// call `refresh` already tick about this often for reachability.
-    private static let ttl: TimeInterval = 20
-
-    @Published private var byHost: [String: String] = [:]
-    private var askedAt: [String: Date] = [:]
+    /// Each host's title, "" for nothing up. 20 s, short on purpose (see the file note); the
+    /// surfaces that call `refresh` already tick about this often for reachability.
+    private var cache = TTLCache<String>(ttl: 20)
 
     /// The title `host` last said it has up, or nil for nothing running, an unpaired or
     /// unreachable host, and one nobody has asked yet — all of which a card draws the same way.
     func title(for host: StoredHost) -> String? {
-        byHost[host.id.uuidString].flatMap { $0.isEmpty ? nil : $0 }
+        cache[host.id.uuidString].flatMap { $0.isEmpty ? nil : $0 }
     }
 
     /// Ask again unless the cached answer is still fresh. Cheap and idempotent — call it from
     /// whatever refresh tick a surface already runs.
     func refresh(_ host: StoredHost) {
-        let key = host.id.uuidString
-        // Stamp BEFORE the request, so a slow or hanging host cannot make every pass ask again.
-        if let at = askedAt[key], Date().timeIntervalSince(at) < Self.ttl { return }
         // The demo host serves no management API.
-        guard !DemoMode.isDemo(host), case .success(let target) = MgmtTarget.make(host: host)
+        guard !DemoMode.isDemo(host), case .success(let target) = MgmtTarget.make(host: host),
+              cache.ask(host.id.uuidString, now: Date()) != nil
         else { return }
-        askedAt[key] = Date()
         Task { @MainActor in
             let games = await LibraryClient.running(target)
             adopt(games, for: host)
@@ -52,16 +46,16 @@ final class NowPlayingStore: ObservableObject {
     /// The first entry that is up and has a title to show, so a launch the host cannot track
     /// (no catalog id, hence no badge on any shelf) still names itself on the card.
     func adopt(_ games: [RunningGame], for host: StoredHost) {
-        let key = host.id.uuidString
-        byHost[key] = games.first { $0.isUp && !$0.title.isEmpty }?.title ?? ""
-        askedAt[key] = Date()
+        objectWillChange.send()
+        cache.store(
+            games.first { $0.isUp && !$0.title.isEmpty }?.title ?? "", for: host.id.uuidString,
+            now: Date())
     }
 
     /// Forget what this host said — the caller just ended a session on it, so the answer is
     /// about to change and the next tick must ask rather than wait out the TTL.
     func invalidate(_ host: StoredHost) {
-        let key = host.id.uuidString
-        byHost[key] = nil
-        askedAt[key] = nil
+        objectWillChange.send()
+        cache.invalidate(host.id.uuidString)
     }
 }
