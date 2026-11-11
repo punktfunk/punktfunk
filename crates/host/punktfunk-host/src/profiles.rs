@@ -395,9 +395,11 @@ impl Profiles {
         default_profile(&self.lock().file).map(|p| p.id.clone())
     }
 
-    /// The name [`create`](Self::create) would take `input` under, or what it would refuse. The
-    /// caller asks before it makes a seat's account for the profile.
+    /// The name [`create`](Self::create) would take `input` under, or what it would refuse, a
+    /// store it can't write included. The caller asks before it makes a seat's account for the
+    /// profile.
     pub fn vet_create(&self, input: &ProfileCreate) -> Result<String, EditError> {
+        self.writable().map_err(EditError::Store)?;
         let name = clean_name(&input.display_name).ok_or(EditError::NameMissing)?;
         if let Some(accent) = &input.accent {
             valid_accent(accent.clone())?;
@@ -917,12 +919,6 @@ impl Profiles {
     fn mutate(&self, change: impl FnOnce(&mut ProfilesFile) -> Result<()>) -> Result<()> {
         self.writable()?;
         let mut state = self.lock();
-        if state.unparsed.is_some() {
-            bail!(
-                "{} did not parse; fix or remove it before changing profiles",
-                state.path.display()
-            );
-        }
         let mut next = state.file.clone();
         change(&mut next)?;
         next.version = PROFILES_SCHEMA_VERSION;
@@ -934,10 +930,17 @@ impl Profiles {
         Ok(())
     }
 
-    /// The box's own host writes profiles; a seat's copy is read only.
+    /// The box's own host writes profiles while its file parses; a seat's copy is read only.
     fn writable(&self) -> Result<()> {
-        if self.lock().read_only {
+        let state = self.lock();
+        if state.read_only {
             bail!("profiles are the box's; a seat host never edits them");
+        }
+        if state.unparsed.is_some() {
+            bail!(
+                "{} did not parse; fix or remove it before changing profiles",
+                state.path.display()
+            );
         }
         Ok(())
     }

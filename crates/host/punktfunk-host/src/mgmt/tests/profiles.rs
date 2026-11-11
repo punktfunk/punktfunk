@@ -699,3 +699,106 @@ mod person {
         assert!(sup.called().is_empty(), "{:?}", sup.called());
     }
 }
+
+mod seat_profiles {
+    //! Making and removing a profile with a desktop of its own, on a door whose supervisor is a
+    //! fake.
+
+    use super::*;
+    use crate::native::unlock::fake::{refused, Fake};
+    use crate::profiles::{OsAccount, Profiles};
+    use pf_seats::ipc::{Command, CommandResult};
+
+    const MADE: &str = "c0ffee00c0ffee00c0ffee00c0ffee00";
+
+    /// The row the supervisor makes for a seat called `name`.
+    fn made(name: &str) -> pf_seats::Seat {
+        serde_json::from_value(serde_json::json!({
+            "id": MADE, "name": name, "account": "pf-seat-1", "display_slot": 12,
+            "native_port": 9778, "mgmt_port": 47991, "runtime": { "state": "stopped" },
+        }))
+        .unwrap()
+    }
+
+    /// A door over `store`, asking `sup`.
+    fn door(store: Arc<Profiles>, sup: Arc<Fake>) -> Router {
+        let state = test_state();
+        let _ = state.profiles.set(store);
+        test_app_door(state, None, sup)
+    }
+
+    fn create(name: &str) -> axum::http::Request<Body> {
+        let body = serde_json::json!({ "display_name": name });
+        with_bearer(
+            json_req(Method::POST, "/api/v1/profiles", body),
+            "test-secret",
+        )
+    }
+
+    /// A profile the store refuses after its seat was made takes the seat back. A seat that won't
+    /// go is logged, and the answer is still the store's.
+    #[tokio::test]
+    async fn a_profile_the_store_refuses_takes_its_seat_back() {
+        let dir = crate::test_support::scratch();
+        // The store's parent is a file: it reads as empty and every save fails.
+        std::fs::write(dir.join("blocker"), b"").unwrap();
+        let path = dir.join("blocker").join("profiles.json");
+        let store = Arc::new(Profiles::load_with(Some(path), None));
+        let sup = Arc::new(Fake::new(Vec::new(), |c| match c {
+            Command::Create(seat) => Ok(CommandResult::Created {
+                seat: made(&seat.name),
+            }),
+            _ => Err(refused("account_signed_in", "Someone is signed in there.")),
+        }));
+        let (status, body) = send(&door(store, sup.clone()), create("Kid")).await;
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{body}");
+        let id = pf_seats::SeatId::parse(MADE).unwrap();
+        let asked = sup.asked();
+        assert!(matches!(asked[0], Command::Create(_)), "{asked:?}");
+        assert_eq!(
+            asked[1..],
+            [Command::Stop { id: id.clone() }, Command::Delete { id }]
+        );
+    }
+
+    /// A console that stops waiting while the seat is made still gets the profile written beside
+    /// it.
+    #[tokio::test]
+    async fn a_create_the_caller_stopped_waiting_for_still_writes_the_profile() {
+        let path = crate::test_support::scratch().join("profiles.json");
+        let store = Arc::new(Profiles::load_with(Some(path), None));
+        let began = Arc::new(tokio::sync::Notify::new());
+        let ask = began.clone();
+        let sup = Arc::new(Fake::new(Vec::new(), move |c| match c {
+            Command::Create(seat) => {
+                ask.notify_one();
+                std::thread::sleep(std::time::Duration::from_millis(300));
+                Ok(CommandResult::Created {
+                    seat: made(&seat.name),
+                })
+            }
+            _ => Err(refused("x", "y")),
+        }));
+        let call = door(store.clone(), sup.clone()).oneshot(create("Kid"));
+        tokio::select! {
+            _ = call => panic!("answered before the seat was made"),
+            _ = began.notified() => {}
+        }
+        let mut kid = None;
+        for _ in 0..50 {
+            kid = store.list().into_iter().find(|p| p.display_name == "Kid");
+            if kid.is_some() {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        }
+        let kid = kid.expect("the profile is written");
+        assert_eq!(
+            kid.os_account,
+            OsAccount::Seat {
+                seat: Some(MADE.into())
+            }
+        );
+        assert_eq!(sup.asked().len(), 1, "{:?}", sup.asked());
+    }
+}
