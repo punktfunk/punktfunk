@@ -192,7 +192,8 @@ enum SettingsOptions {
     /// A typed rate in whole Mbit/s as kbps, capped at the slider's 3 Gbit/s top. nil for empty or
     /// `0`, which leave the stored rate alone — Automatic is a list entry, not a number.
     static func customBitrateKbps(_ text: String) -> Int? {
-        guard let mbps = Int(text.prefix(4)), mbps > 0 else { return nil }
+        // Nine digits always fit an Int: a longer entry is past the cap anyway.
+        guard let mbps = Int(text.prefix(9)), mbps > 0 else { return nil }
         return min(mbps, 3_000) * 1_000
     }
 
