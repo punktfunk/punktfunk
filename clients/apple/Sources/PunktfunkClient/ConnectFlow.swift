@@ -489,10 +489,9 @@ struct ConnectFlow {
         }
     }
 
-    /// Auto-wake fires a packet before the dial, unless the last probe reached the host.
     private func wakesFirst(_ host: StoredHost) -> Bool {
-        WakePolicy.autoWakes(host.wakeMacs, autoWake: autoWake)
-            && !store.probedOnline.contains(host.id)
+        WakePolicy.wakesFirst(
+            host.wakeMacs, autoWake: autoWake, probedOnline: store.probedOnline.contains(host.id))
     }
 
     /// The no-PIN delegated-approval flow: ask the host, which parks the request until the
