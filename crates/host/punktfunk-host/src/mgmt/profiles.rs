@@ -1437,7 +1437,7 @@ pub(crate) async fn delete_profile(
     Path(id): Path<String>,
     Query(q): Query<DeleteQuery>,
 ) -> Response {
-    let Some(profiles) = st.app.profiles.get() else {
+    let Some(profiles) = st.app.profiles.get().cloned() else {
         return no_profiles();
     };
     if let Some(OsAccount::Seat {
@@ -1466,9 +1466,11 @@ pub(crate) async fn delete_profile(
             Err(resp) => return resp,
         }
     }
-    match profiles.delete(&id, q.erase) {
-        Ok(_) => StatusCode::NO_CONTENT.into_response(),
-        Err(e) => edit_error(e),
+    // `erase` can remove a Steam home of hundreds of GB.
+    match blocking("profile_store", move || profiles.delete(&id, q.erase)).await {
+        Ok(Ok(_)) => StatusCode::NO_CONTENT.into_response(),
+        Ok(Err(e)) => edit_error(e),
+        Err(resp) => resp,
     }
 }
 
