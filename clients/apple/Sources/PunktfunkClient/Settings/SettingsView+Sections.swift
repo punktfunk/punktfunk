@@ -465,7 +465,7 @@ extension SettingsView {
                     settingPicker(
                         L10n.playerSmoothBuffer,
                         options: SettingsOptions.smoothBuffers(
-                            refreshHz: Int(effective.streamMode(native: NativeDisplay.mode).hz)),
+                            refreshHz: Int(effective.streamMode(native: connectNative).hz)),
                         selection: scoped(SettingsFields.smoothBuffer))
                 }
             }
@@ -621,8 +621,7 @@ extension SettingsView {
         var text = String(localized: L10n.playerRenderScaleHint)
         let settings = effective
         if settings.renderScale != 1.0, !settings.matchWindow {
-            // Native resolves against this display, as the connect does.
-            let mode = settings.streamMode(native: NativeDisplay.mode)
+            let mode = settings.streamMode(native: connectNative)
             text += " " + L10n.appleRenderScaleHostSize(
                 width: String(Int(mode.width)), height: String(Int(mode.height)))
         }
@@ -709,13 +708,18 @@ extension SettingsView {
         effective.codec == "pyrowave" && MetalWaveletDecoder.supported
     }
 
-    /// The picture a connect would have the host encode (`streamPicture`). Native is an attached
-    /// monitor's on iPhone and iPad, else this display's.
-    private func connectPicture(_ s: EffectiveSettings) -> (width: UInt32, height: UInt32, hz: UInt32) {
+    /// Native as a connect resolves it: an attached monitor's on iPhone and iPad, else this
+    /// display's. Every caption that names a mode reads it.
+    private var connectNative: (width: Int, height: Int, hz: Int) {
         #if os(iOS)
-        if let native = ExternalDisplay.nativeMode { return s.streamPicture(native: native) }
+        if let native = ExternalDisplay.nativeMode { return native }
         #endif
-        return s.streamPicture(native: NativeDisplay.mode)
+        return NativeDisplay.mode
+    }
+
+    /// The picture a connect would have the host encode (`streamPicture`).
+    private func connectPicture(_ s: EffectiveSettings) -> (width: UInt32, height: UInt32, hz: UInt32) {
+        s.streamPicture(native: connectNative)
     }
 
     /// PyroWave quality in Bitrate's place: 0.5 to 2 by tenths, read as the rate it needs at the
