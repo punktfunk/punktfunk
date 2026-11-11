@@ -92,6 +92,8 @@ struct ConnectFlow {
             approvalChoice = ApprovalRequest(
                 host: host, advertisedFingerprint: fingerprint, thenConnect: then)
         case .dial(let allowTofu, let asksProfile):
+            // Before the profile list, so a sleeping host boots while it is asked.
+            sendAutoWake(host)
             switch profile {
             case .send(let id, let unlock, let console):
                 // The console asks for the password itself. Only a pinned host is sent one.
@@ -315,8 +317,8 @@ struct ConnectFlow {
                 fromLibrary: fromLibrary, profile: redial)
         }
         // A host the probe calls down still gets the dial first: a routed host (VPN, another
-        // subnet) answers without advertising. `prepareWake` already sent the magic packet, so
-        // only a failed dial falls into the visible "Waking…" wait, which redials once it answers.
+        // subnet) answers without advertising. The tap already sent the magic packet, so only a
+        // failed dial falls into the visible "Waking…" wait, which redials once it answers.
         if wakesFirst(host) {
             discovery.start() // so the wake-wait can pick up a host that moved address
             startSessionDirect(
@@ -336,9 +338,8 @@ struct ConnectFlow {
         }
     }
 
-    /// The actual dial — reached directly when the host is awake, or from the waker once a woken
-    /// host is back online. `prepareWake` still runs here to LEARN/refresh the MAC now that the host
-    /// is advertising (and is a harmless no-op otherwise). `onUnreachable` hands a plain connect
+    /// The actual dial, reached directly or from the waker once a woken host answers. It first
+    /// learns what a live advert of the host publishes. `onUnreachable` hands a plain connect
     /// failure back to the caller (the wake-wait fallback) instead of the error alert. A dial the
     /// console issued hands a `ProfileLocked` close and an unlock's wait back to the console.
     private func startSessionDirect(
@@ -349,7 +350,7 @@ struct ConnectFlow {
         onUnreachable: (@MainActor () -> Void)? = nil
     ) {
         let profileID = profile.id
-        prepareWake(for: host)
+        learnAdvert(of: host)
         launchOverrides(host, launchID) { overrides in
             // THE resolution point (design §4.4): the globals plus this connect's preset, once,
             // here, then the host's overrides for the game. The model latches the result for the
@@ -442,26 +443,23 @@ struct ConnectFlow {
         }
     }
 
-    /// Learn-while-awake, wake-while-asleep — run just before every connect:
-    ///  • an advert matches this host → refresh the MAC(s), OS chain and mgmt port it publishes, so
-    ///    a later wake has an up-to-date target and the library keeps working once this device can
-    ///    no longer see the advert (VPN, routed subnet, multicast-dead Wi-Fi);
-    ///  • the probe did NOT reach it and we have MAC(s) → fire a magic packet first. The two are
-    ///    independent: a sleeping host keeps advertising for up to 75 minutes, so a live advert is
-    ///    no reason to withhold the packet. Best-effort and non-blocking (the send is off-main).
-    private func prepareWake(for host: StoredHost) {
-        if let live = discovery.hosts.first(where: { host.matches($0) }) {
-            store.updateMacs(host.id, macs: live.macAddresses) // learn — on every platform
-            store.updateOsChain(host.id, chain: live.osChain) // ditto for the card's OS mark
-            store.updateMgmtPort(host.id, port: live.mgmtPort)
-        }
-        // Auto-wake only. With it off, connects go straight through (no packet).
-        if wakesFirst(host) {
-            let macs = host.wakeMacs
-            let ip = host.address
-            DispatchQueue.global(qos: .userInitiated).async {
-                PunktfunkConnection.wakeOnLAN(macs: macs, lastKnownIP: ip)
-            }
+    /// Before every dial: refresh the MACs, OS chain and management port a live advert of `host`
+    /// publishes, so a later wake has a target and the library keeps working once this device no
+    /// longer sees the advert (VPN, routed subnet, multicast-dead Wi-Fi).
+    private func learnAdvert(of host: StoredHost) {
+        guard let live = discovery.hosts.first(where: { host.matches($0) }) else { return }
+        store.updateMacs(host.id, macs: live.macAddresses)
+        store.updateOsChain(host.id, chain: live.osChain)
+        store.updateMgmtPort(host.id, port: live.mgmtPort)
+    }
+
+    /// Auto-wake's magic packet, once per tap. A live advert is no reason to hold it back: a
+    /// sleeping host keeps advertising for up to 75 minutes. The send blocks, so it runs off-main.
+    private func sendAutoWake(_ host: StoredHost) {
+        guard wakesFirst(host) else { return }
+        let (macs, ip) = (host.wakeMacs, host.address)
+        DispatchQueue.global(qos: .userInitiated).async {
+            PunktfunkConnection.wakeOnLAN(macs: macs, lastKnownIP: ip)
         }
     }
 
