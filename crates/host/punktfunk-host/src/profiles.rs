@@ -488,8 +488,8 @@ impl Profiles {
         out.ok_or(EditError::NotFound)
     }
 
-    /// Removes `id`. `erase` also deletes its Steam home and picture; without it the home stays
-    /// for the console to list. Sessions playing as it hear [`removed`].
+    /// Removes `id`. `erase` also deletes its Steam home and picture ([`Self::erase`]); without it
+    /// the home stays for the console to list. Sessions playing as it hear [`removed`].
     pub fn delete(&self, id: &str, erase: bool) -> Result<Profile, EditError> {
         let mut gone = None;
         self.edit(|file| {
@@ -514,18 +514,39 @@ impl Profiles {
             Ok(())
         })?;
         let gone = gone.ok_or(EditError::NotFound)?;
-        if erase && safe_id(id) {
-            let state = self.lock();
-            remove_avatar_files(&state.path.with_file_name("profiles"), id, None);
-            drop(state);
-            #[cfg(target_os = "linux")]
-            {
-                let _ = std::fs::remove_dir_all(pf_paths::seat_home(id));
-                let _ = std::fs::remove_file(pf_paths::seat_record(id));
-            }
+        if erase {
+            self.erase(id);
         }
         announce_removed(id);
         Ok(gone)
+    }
+
+    /// Deletes the Steam home and picture of `id`, which the store no longer holds.
+    pub fn erase(&self, id: &str) {
+        if !safe_id(id) {
+            return;
+        }
+        let state = self.lock();
+        remove_avatar_files(&state.path.with_file_name("profiles"), id, None);
+        drop(state);
+        #[cfg(target_os = "linux")]
+        {
+            let _ = std::fs::remove_dir_all(pf_paths::seat_home(id));
+            let _ = std::fs::remove_file(pf_paths::seat_record(id));
+        }
+    }
+
+    /// Puts back `p`, which [`Self::delete`] took out, when what had to follow failed. `default`
+    /// makes it the default again.
+    pub fn restore(&self, p: Profile, default: bool) -> Result<(), EditError> {
+        self.edit(|file| {
+            refuse_new(file, &p.display_name)?;
+            if default {
+                file.default_profile_id = Some(p.id.clone());
+            }
+            file.profiles.push(p);
+            Ok(())
+        })
     }
 
     /// A seat host's copy follows the box's file, so a profile the box deletes never runs

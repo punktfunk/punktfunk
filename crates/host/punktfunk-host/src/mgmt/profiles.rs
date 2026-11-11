@@ -1470,39 +1470,71 @@ pub(crate) async fn delete_profile(
     let Some(profiles) = st.app.profiles.get().cloned() else {
         return no_profiles();
     };
-    if let Some(OsAccount::Seat {
+    let Some(OsAccount::Seat {
         seat: Some(seat), ..
     }) = profiles.get(&id).map(|p| p.os_account)
-    {
-        if !q.erase {
-            let adopted = seats_now(&st)
-                .await
-                .seat(&seat)
-                .is_some_and(|(row, _)| row.adopted());
-            return api_error(
-                StatusCode::CONFLICT,
-                if adopted {
-                    "Removing this profile releases its account; the account and its files stay. Confirm with erase."
-                } else if cfg!(windows) {
-                    "Removing this profile also removes its Windows account. Confirm with erase."
-                } else {
-                    "Removing this profile also removes its user account and files. Confirm with erase."
-                },
-            );
-        }
-        let sup = seats_of(&st);
-        match blocking("seat_supervisor", move || drop_seat(&*sup, &seat)).await {
-            Ok(Ok(())) => {}
-            Ok(Err(refusal)) => return refused(refusal),
-            Err(resp) => return resp,
-        }
+    else {
+        // `erase` can remove a Steam home of hundreds of GB.
+        return match blocking("profile_store", move || profiles.delete(&id, q.erase)).await {
+            Ok(Ok(_)) => StatusCode::NO_CONTENT.into_response(),
+            Ok(Err(e)) => edit_error(e),
+            Err(resp) => resp,
+        };
+    };
+    if !q.erase {
+        let adopted = seats_now(&st)
+            .await
+            .seat(&seat)
+            .is_some_and(|(row, _)| row.adopted());
+        return api_error(
+            StatusCode::CONFLICT,
+            if adopted {
+                "Removing this profile releases its account; the account and its files stay. Confirm with erase."
+            } else if cfg!(windows) {
+                "Removing this profile also removes its Windows account. Confirm with erase."
+            } else {
+                "Removing this profile also removes its user account and files. Confirm with erase."
+            },
+        );
     }
-    // `erase` can remove a Steam home of hundreds of GB.
-    match blocking("profile_store", move || profiles.delete(&id, q.erase)).await {
-        Ok(Ok(_)) => StatusCode::NO_CONTENT.into_response(),
-        Ok(Err(e)) => edit_error(e),
-        Err(resp) => resp,
+    let sup = seats_of(&st);
+    let removed = blocking("seat_supervisor", move || {
+        remove_seat_profile(&*sup, &profiles, &id, &seat)
+    });
+    match removed.await {
+        Ok(resp) | Err(resp) => resp,
     }
+}
+
+/// How long a seat's sessions get to close as removed: its host reads the box's profiles once a
+/// second, on Linux from a copy the supervisor refreshes every 2 s.
+const CLOSE_GRACE: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// Takes `id` out of the store before its seat stops, so the seat's host closes each session as
+/// removed. A seat that won't go puts the profile back for another try; its home and picture go
+/// only once the seat has. Blocking.
+fn remove_seat_profile(sup: &dyn Seats, profiles: &Profiles, id: &str, seat: &str) -> Response {
+    let default = profiles.default_profile_id().as_deref() == Some(id);
+    let gone = match profiles.delete(id, false) {
+        Ok(gone) => gone,
+        Err(e) => return edit_error(e),
+    };
+    let by = std::time::Instant::now() + CLOSE_GRACE;
+    while std::time::Instant::now() < by {
+        crate::seats::invalidate();
+        if sup.snapshot().occupants.get(seat).is_none_or(Vec::is_empty) {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(500));
+    }
+    if let Err(refusal) = drop_seat(sup, seat) {
+        if let Err(e) = profiles.restore(gone, default) {
+            tracing::error!(%seat, error = %e, "seat left with no profile");
+        }
+        return refused(refusal);
+    }
+    profiles.erase(id);
+    StatusCode::NO_CONTENT.into_response()
 }
 
 /// Set a profile's picture

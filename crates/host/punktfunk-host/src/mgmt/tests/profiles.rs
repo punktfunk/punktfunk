@@ -826,4 +826,48 @@ mod seat_profiles {
         let (status, body) = send(&app, create("Jane")).await;
         assert_eq!(status, StatusCode::CREATED, "{body}");
     }
+
+    /// A seat profile leaves the box's file before its seat stops: the seat's host reads that
+    /// file and closes each session as removed. A seat that won't go puts the profile back as
+    /// it was, and the next try removes both.
+    #[tokio::test]
+    async fn a_seat_profile_leaves_the_store_before_its_seat_stops() {
+        const KID: &str = "9a3f1c2b7e40";
+        let path = crate::test_support::scratch().join("profiles.json");
+        let file = serde_json::json!({"version": 1, "default_profile_id": KID, "profiles": [
+            {"id": "4f1c3a9b0e27", "display_name": "Enrico", "os_account": {"kind": "operator"}},
+            {"id": KID, "display_name": "Kid", "os_account": {"kind": "seat", "seat": MADE}},
+        ]});
+        std::fs::write(&path, file.to_string()).unwrap();
+        let store = Arc::new(Profiles::load_with(Some(path.clone()), None));
+        let listed_at_stop = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let seen = listed_at_stop.clone();
+        let deletes = std::sync::atomic::AtomicUsize::new(0);
+        let sup = Arc::new(Fake::new(vec![made("Kid")], move |c| match c {
+            Command::Stop { .. } => {
+                let on_disk = std::fs::read_to_string(&path).unwrap();
+                seen.lock().unwrap().push(on_disk.contains(KID));
+                Ok(CommandResult::Stopped { seat: made("Kid") })
+            }
+            Command::Delete { .. } if deletes.fetch_add(1, Ordering::SeqCst) == 0 => {
+                Err(refused("account_signed_in", "Someone is signed in there."))
+            }
+            Command::Delete { id } => Ok(CommandResult::Deleted { id: id.clone() }),
+            _ => Err(refused("x", "y")),
+        }));
+        let app = door(store.clone(), sup);
+        let remove = || {
+            axum::http::Request::delete(format!("/api/v1/profiles/{KID}?erase=true"))
+                .body(Body::empty())
+                .unwrap()
+        };
+        let (status, body) = send(&app, remove()).await;
+        assert_eq!(status, StatusCode::CONFLICT, "{body}");
+        assert!(store.get(KID).is_some(), "put back");
+        assert_eq!(store.default_profile_id().as_deref(), Some(KID));
+        let (status, body) = send(&app, remove()).await;
+        assert_eq!(status, StatusCode::NO_CONTENT, "{body}");
+        assert!(store.get(KID).is_none());
+        assert_eq!(*listed_at_stop.lock().unwrap(), [false, false]);
+    }
 }
