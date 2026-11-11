@@ -336,7 +336,8 @@ struct ContentView: View {
             let approval = $awaitingApproval
             model.onAwaitingApproval = { host in
                 if approval.wrappedValue == nil {
-                    approval.wrappedValue = ApprovalRequest(host: host, advertisedFingerprint: nil)
+                    approval.wrappedValue = ApprovalRequest(
+                        host: host, advertisedFingerprint: nil, viaDial: true)
                 }
             }
             DemoMode.resume(in: store)
@@ -462,6 +463,8 @@ struct ContentView: View {
             #endif
         }
         .onChange(of: model.phase) { _, phase in
+            // A parked dial that streamed, failed or was cancelled has nothing left to wait for.
+            if awaitingApproval?.viaDial == true, phase != .connecting { awaitingApproval = nil }
             switch phase {
             case .streaming:
                 #if os(iOS) || os(visionOS)

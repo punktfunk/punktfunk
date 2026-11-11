@@ -9,6 +9,8 @@ struct ApprovalRequest {
     let advertisedFingerprint: Data?
     /// Tells this request's answer from a later one's.
     var token = UUID()
+    /// The dial itself raised this wait: the host parked a plain connect. It ends with that dial.
+    var viaDial = false
     /// A link's connect, run with the newly pinned host once pairing lands. Nil for every other
     /// way in: pairing alone never streams.
     var thenConnect: (@MainActor (StoredHost) -> Void)?
