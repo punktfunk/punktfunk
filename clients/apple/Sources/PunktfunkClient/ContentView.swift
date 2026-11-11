@@ -728,6 +728,14 @@ struct ContentView: View {
     }
     #endif
 
+    /// What a link sees of this window's session.
+    private var linkSession: DeepLinkRouter.SessionState {
+        DeepLinkRouter.SessionState(
+            isIdle: LinkIdle.isIdle(phase: model.phase),
+            activeHostID: model.activeHost?.id,
+            activeHostName: model.activeHost?.displayName)
+    }
+
     /// Route a `punktfunk://` deep link into the existing connect path — the whole §2 grammar
     /// (design/client-deep-links.md): a stable id, a unique host name or an `addr[:port]`, with
     /// `fp`/`host` recovery parameters and a one-off `preset`.
@@ -771,13 +779,9 @@ struct ContentView: View {
             deepLinkNotice = L10n.linkRouteUnsupported(route: "wake")
             return
         }
-        let session = DeepLinkRouter.SessionState(
-            isIdle: model.phase == .idle,
-            activeHostID: model.activeHost?.id,
-            activeHostName: model.activeHost?.displayName)
         switch DeepLinkRouter.resolve(
             link: link, hosts: store.hosts, catalog: presets.catalog,
-            session: session, browse: false
+            session: linkSession, browse: false
         ) {
         case .notice(let text):
             deepLinkNotice = text
@@ -803,13 +807,9 @@ struct ContentView: View {
     /// host can't be browsed — the library fetch rides the paired mTLS identity, so there is
     /// nothing to show before the host is saved (the notice says what to do instead).
     private func openLibrary(from link: DeepLink) {
-        let session = DeepLinkRouter.SessionState(
-            isIdle: model.phase == .idle,
-            activeHostID: model.activeHost?.id,
-            activeHostName: model.activeHost?.displayName)
         switch DeepLinkRouter.resolve(
             link: link, hosts: store.hosts, catalog: presets.catalog,
-            session: session, browse: true
+            session: linkSession, browse: true
         ) {
         case .notice(let text):
             deepLinkNotice = text
