@@ -51,7 +51,8 @@ pub(crate) fn here(account: &crate::profiles::OsAccount) -> bool {
 /// A door streams nothing itself, so it places every profile: the owner and a profile that
 /// shares the owner's desktop on the owner's row, a full seat on its own. A profile no row
 /// serves, because the box has no owner row yet, is refused rather than played here. Only the
-/// profile's own seat host is asked: a hung host of another seat costs this connect nothing.
+/// profile's own seat host is asked, and never under [`RESERVED`]: a hung seat host costs this
+/// connect alone.
 pub(crate) fn place(
     profile: &crate::profiles::Resolved,
     asker: &Asker,
@@ -60,11 +61,15 @@ pub(crate) fn place(
     let Some(seat_id) = snap.row_of(&profile.os_account) else {
         return Placement::Refuse(RejectReason::SeatUnavailable);
     };
-    let occupants = snap
+    let running = snap
         .seat(seat_id)
-        .filter(|(seat, _)| seat.runtime.state == RuntimeState::Running)
+        .filter(|(seat, _)| seat.runtime.state == RuntimeState::Running);
+    let occupants = running
         .and_then(|(seat, _)| super::occupants(seat))
         .unwrap_or_default();
+    let plane = running
+        .filter(|_| asker.browser)
+        .and_then(|(seat, _)| browser_plane(seat));
     let mut held = RESERVED.lock().unwrap_or_else(|e| e.into_inner());
     held.retain(|_, (_, until)| *until > Instant::now());
     let held_by = held.get(seat_id).map(|(fp, _)| fp.as_str());
@@ -76,9 +81,9 @@ pub(crate) fn place(
         &occupants,
         held_by,
     );
-    let placed = match (placed, snap.seat(seat_id)) {
-        (Placement::Redirect(to), Some((seat, _))) if asker.browser => with_browser_plane(to, seat),
-        (placed, _) => placed,
+    let placed = match placed {
+        Placement::Redirect(to) if asker.browser => with_browser_plane(to, plane),
+        placed => placed,
     };
     if matches!(placed, Placement::Redirect(_)) {
         PLACED
@@ -95,17 +100,19 @@ pub(crate) fn place(
     placed
 }
 
-/// `to` with the certificate hash `seat`'s browser plane serves under, which the browser pins
-/// and binds its credential to. A seat whose plane doesn't answer on the port the redirect names,
-/// as one started before the box streamed to browsers, is unavailable.
-fn with_browser_plane(mut to: Redirect, seat: &Seat) -> Placement {
+/// `seat`'s browser plane as its host's `/webtransport` answers, `None` when it doesn't. Blocking.
+fn browser_plane(seat: &Seat) -> Option<serde_json::Value> {
     let call = crate::mgmt::owner::Forwarded::get("webtransport".into());
-    let plane = match super::forward(seat, call) {
-        Some(crate::mgmt::owner::Answer::Reply(200, _, body)) => {
-            serde_json::from_slice::<serde_json::Value>(&body).ok()
-        }
+    match super::forward(seat, call) {
+        Some(crate::mgmt::owner::Answer::Reply(200, _, body)) => serde_json::from_slice(&body).ok(),
         _ => None,
-    };
+    }
+}
+
+/// `to` with the certificate hash its seat's browser `plane` serves under, which the browser
+/// pins and binds its credential to. A plane that didn't answer on the port the redirect names,
+/// as one started before the box streamed to browsers, is unavailable.
+fn with_browser_plane(mut to: Redirect, plane: Option<serde_json::Value>) -> Placement {
     let hash = plane
         .filter(|p| p["port"].as_u64() == Some(u64::from(to.port)))
         .and_then(|p| p["cert_hash_sha256"].as_str().map(str::to_ascii_lowercase));
@@ -328,6 +335,25 @@ mod tests {
             decide("kid", &browser, true, on(&s), &[], None),
             Placement::Refuse(RejectReason::SeatUnavailable)
         );
+    }
+
+    /// The browser pins the hash its seat's plane serves on the redirect's port; a plane on
+    /// another port, or none, leaves the seat unavailable.
+    #[test]
+    fn a_browser_redirect_carries_its_plane_s_hash() {
+        let s = seat(RuntimeState::Running);
+        let Placement::Redirect(to) = decide("kid", &asker(true, false), true, on(&s), &[], None)
+        else {
+            panic!("a running seat is redirected to");
+        };
+        let plane = |port: u16| Some(serde_json::json!({"port": port, "cert_hash_sha256": "AB12"}));
+        let Placement::Redirect(r) = with_browser_plane(to.clone(), plane(9778)) else {
+            panic!("the plane answers on the redirect's port");
+        };
+        assert_eq!(r.cert_hash, "ab12");
+        let refused = Placement::Refuse(RejectReason::SeatUnavailable);
+        assert_eq!(with_browser_plane(to.clone(), plane(9784)), refused);
+        assert_eq!(with_browser_plane(to, None), refused);
     }
 
     fn on(seat: &Seat) -> Option<(&Seat, u8)> {
