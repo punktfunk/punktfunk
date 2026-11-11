@@ -205,8 +205,8 @@ fn build_fec_rtp(
 }
 
 /// Spawn the audio thread. `aes_key` is present only when the client negotiated
-/// AES-CBC audio; `rikeyid` seeds its per-packet IV. The thread is tracked on `media`, for
-/// `/resume` and the next PLAY to wait on.
+/// AES-CBC audio; `rikeyid` seeds its per-packet IV. `tap_from` is a joined owner's sink
+/// slot. The thread is tracked on `media`, for `/resume` and the next PLAY to wait on.
 #[allow(clippy::too_many_arguments)] // one construction site (RTSP PLAY)
 pub fn start(
     running: Arc<AtomicBool>,
@@ -218,6 +218,7 @@ pub fn start(
     owner_ip: Option<std::net::IpAddr>,
     // Other half of the endpoint guard beside `owner_ip`.
     av_ping: [u8; super::AV_PING_LEN],
+    tap_from: Option<Arc<std::sync::Mutex<Option<String>>>>,
     media: &crate::host::MediaThreads,
 ) {
     match std::thread::Builder::new()
@@ -233,6 +234,7 @@ pub fn start(
                 &on_lost,
                 owner_ip,
                 &av_ping,
+                tap_from,
             ) {
                 tracing::error!(error = %format!("{e:#}"), "audio stream failed");
             }
@@ -254,6 +256,7 @@ fn run(
     on_lost: &super::OnSessionLost,
     owner_ip: Option<std::net::IpAddr>,
     av_ping: &[u8; super::AV_PING_LEN],
+    tap_from: Option<Arc<std::sync::Mutex<Option<String>>>>,
 ) -> Result<()> {
     let sock = UdpSocket::bind(("0.0.0.0", AUDIO_PORT)).context("bind audio UDP")?;
     punktfunk_core::transport::grow_socket_buffers(&sock);
@@ -278,7 +281,13 @@ fn run(
         .then(crate::audio::capture_policy::keep_host_audio_guard);
     // Always 48 kHz: GameStream Opus has no rate field, and libopus tops out here.
     // Hi-res `0xD3` is native-only (`design/hi-res-audio.md`).
-    let mut lease = audio::CaptureLease::new(want, SAMPLE_RATE, Default::default());
+    // A joiner taps the owner's sink: a second default-sink claim would take the owner's audio.
+    let route = audio::CaptureRoute {
+        tap: tap_from.is_some(),
+        tap_from,
+        ..Default::default()
+    };
+    let mut lease = audio::CaptureLease::new(want, SAMPLE_RATE, route);
     lease.open(audio_cap, || !running.load(Ordering::SeqCst));
     let result = audio_body(
         &mut lease, &sock, aes_key, rikeyid, params, running, on_lost,

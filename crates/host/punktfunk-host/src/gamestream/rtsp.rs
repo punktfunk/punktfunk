@@ -285,10 +285,20 @@ fn handle_request(req: &Request, state: &Arc<AppState>, peer: Option<SocketAddr>
                     st.end_session("client unreachable");
                 })
             };
+            // A launch that joined a native session shares its screen: it launches no app of its
+            // own, and its audio taps the owner's sink.
+            let joined = state
+                .gs
+                .joined
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .clone();
             match cfg {
-                Some(cfg) if !state.streaming.swap(true, Ordering::SeqCst) => {
-                    let app = super::apps::by_id(ls.appid);
-                    tracing::info!(app = ?app.as_ref().map(|a| &a.title), "RTSP PLAY — starting video stream");
+                Some(mut cfg) if !state.streaming.swap(true, Ordering::SeqCst) => {
+                    cfg.joined = joined.clone();
+                    let app = super::apps::by_id(ls.appid).filter(|_| joined.is_none());
+                    tracing::info!(app = ?app.as_ref().map(|a| &a.title), joined = joined.is_some(),
+                        "RTSP PLAY — starting video stream");
                     // Rikey reaches the video plane only when `SS_ENC_VIDEO` was negotiated.
                     let video_key = cfg.encrypt_video.then_some(ls.gcm_key);
                     stream::start(
@@ -348,6 +358,7 @@ fn handle_request(req: &Request, state: &Arc<AppState>, peer: Option<SocketAddr>
                     ls.peer_ip,
                     // Same ping payload: first datagram from that address is this client.
                     state.av_ping_payload(),
+                    joined.map(|(_, display)| display.audio_sink),
                     &state.media,
                 );
             }
@@ -785,6 +796,7 @@ fn stream_config(
         studio_asked,
         encoder,
         mirrored: false,
+        joined: None,
     })
 }
 
