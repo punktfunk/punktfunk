@@ -53,4 +53,13 @@ final class ConsoleHostLookupTests: XCTestCase {
         XCTAssertEqual(ConsoleJSON.host(in: hosts, key: "10.0.0.9:9777")?.name, "v4")
         XCTAssertEqual(ConsoleJSON.host(in: dualBoot, key: "bb\u{0}preset")?.name, "linux")
     }
+
+    /// R5-5: a pinned card's key names its preset, so a wake from that card connects with it.
+    func testAPinnedCardsKeyNamesItsPreset() {
+        XCTAssertEqual(ConsoleJSON.preset(ofKey: "bb\u{0}p1"), "p1")
+        XCTAssertEqual(ConsoleJSON.preset(ofKey: "fe80::1:9777\u{0}p1"), "p1")
+        XCTAssertNil(ConsoleJSON.preset(ofKey: "bb"))
+        XCTAssertNil(ConsoleJSON.preset(ofKey: "bb\u{0}"))
+        XCTAssertNil(ConsoleJSON.preset(ofKey: ""))
+    }
 }

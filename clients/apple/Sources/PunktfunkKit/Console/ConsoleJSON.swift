@@ -51,6 +51,13 @@ public enum ConsoleJSON {
         return hosts.first { $0.address == address && $0.port == port }
     }
 
+    /// The preset a pinned card's row key carries behind its NUL; nil for a host's own row.
+    public static func preset(ofKey key: String) -> String? {
+        guard let nul = key.firstIndex(of: "\u{0}") else { return nil }
+        let id = key[key.index(after: nul)...]
+        return id.isEmpty ? nil : String(id)
+    }
+
     /// `HostRow.key` — the pinned fingerprint when there is one, else `addr:port`.
     public static func rowKey(_ fingerprint: String, _ address: String, _ port: UInt16) -> String {
         fingerprint.isEmpty ? "\(address):\(port)" : fingerprint
