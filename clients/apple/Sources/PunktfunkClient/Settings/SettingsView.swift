@@ -570,7 +570,8 @@ struct SettingsView: View {
             blob: scoped(SettingsFields.overlayActions),
             overridden: isOverridden("overlay_actions"),
             shortcuts: shortcutsEditor,
-            padOpener: editedShortcuts.hint(.ring, device: .pad)
+            padOpener: editedShortcuts.hint(.ring, device: .pad),
+            ownsBindings: !inPresetScope || isOverridden("shortcuts")
         ) {
             if inPresetScope {
                 resetOverride("overlay_actions")

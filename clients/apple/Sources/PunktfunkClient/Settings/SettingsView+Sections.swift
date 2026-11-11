@@ -1148,8 +1148,13 @@ extension SettingsView {
             .buttonStyle(.plain)
             .sheet(isPresented: $showQuickActions) {
                 NavigationStack {
-                    QuickActionsEditor(blob: scoped(SettingsFields.overlayActions),
-                                       overridden: isOverridden("overlay_actions")) {
+                    QuickActionsEditor(
+                        blob: scoped(SettingsFields.overlayActions),
+                        overridden: isOverridden("overlay_actions"),
+                        bindings: scoped(SettingsFields.shortcuts),
+                        // Default settings hold their bindings; a preset only once it overrides.
+                        ownsBindings: !inPresetScope || isOverridden("shortcuts")
+                    ) {
                         if inPresetScope {
                             resetOverride("overlay_actions")
                         } else {
