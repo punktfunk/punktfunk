@@ -523,10 +523,7 @@ fun RingOverlay(
 
     val fire = { s: SlotSpec, slot: SlotId -> fireSlot(s, slot, state, cfg, actions, haptics, ctx) { state.textDialog = true } }
 
-    // The pad (design §2.6): the left stick AIMS — its sector is the highlight, so the ring
-    // follows the thumb — while the D-pad steps, Right clockwise, Left anticlockwise, Up to 12
-    // o'clock, Down to 6; Y returns the highlight to the centre, A fires it (the centre opens
-    // the sheet), B closes. In the sheet, Up/Down walk the rows and Left/Right adjust one.
+    // A pad's or remote's press, as [navigate] reads it.
     LaunchedEffect(state.navSeq) {
         val n = state.pendingNav ?: return@LaunchedEffect
         state.pendingNav = null
@@ -605,7 +602,7 @@ fun RingOverlay(
                 highlighted = state.highlight == 6,
                 modifier = Modifier.offset { IntOffset((cx - centreHalf).roundToInt(), (cy - centreHalf).roundToInt()) },
                 inert = editing != null,
-                onTap = { state.touch(); haptics.tick(); state.sheet = true },
+                onTap = { state.touch(); haptics.tick(); state.sheetCursor = 0; state.sheet = true },
             )
         }
         // The label under the ring: a hint, else the highlighted slot's name.
