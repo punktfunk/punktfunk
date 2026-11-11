@@ -326,6 +326,49 @@ fn shipped_rules(shipped: &[String]) -> Vec<String> {
         .collect()
 }
 
+const WEB_SETTINGS: &str = "web/project.inlang/settings.json";
+
+/// The web console compiles the languages its inlang project lists, so that list is
+/// `locales.json`'s source and shipped languages, no more and no fewer.
+fn web_locales(shipped: &[String], settings: &str) -> Vec<String> {
+    let listed = match json::parse(settings) {
+        Ok(v) => v.get("locales").and_then(Json::as_strs),
+        Err(e) => return vec![format!("{WEB_SETTINGS}: {e}")],
+    };
+    let Some(listed) = listed else {
+        return vec![format!("{WEB_SETTINGS}: needs locales, a list of tags")];
+    };
+    let only = |a: &[String], b: &[String]| a.iter().filter(|l| !b.contains(l)).cloned().collect();
+    let (lacks, extra): (Vec<String>, Vec<String>) =
+        (only(shipped, &listed), only(&listed, shipped));
+    let mut out = Vec::new();
+    if !lacks.is_empty() {
+        out.push(format!(
+            "{WEB_SETTINGS}: locales lacks {}, which locales.json ships",
+            lacks.join(", ")
+        ));
+    }
+    if !extra.is_empty() {
+        out.push(format!(
+            "{WEB_SETTINGS}: locales lists {}, which locales.json does not ship",
+            extra.join(", ")
+        ));
+    }
+    out
+}
+
+/// [`web_locales`] for the web console beside `root`. A tree without a `web/` directory, such as
+/// a test fixture, has nothing to check.
+fn web_settings(root: &Path, shipped: &[String]) -> Vec<String> {
+    let Some(repo) = root.parent().filter(|r| r.join("web").is_dir()) else {
+        return Vec::new();
+    };
+    match std::fs::read_to_string(repo.join(WEB_SETTINGS)) {
+        Ok(text) => web_locales(shipped, &text),
+        Err(e) => vec![format!("{WEB_SETTINGS}: {e}")],
+    }
+}
+
 fn stale_debt(rules: &Rules, parts: &[Part]) -> Vec<String> {
     rules
         .debt
@@ -509,6 +552,7 @@ pub fn run(root: &Path) -> Report {
     let (cat, mut problems) = catalog::load(root, true);
     problems.extend(glossary(root));
     problems.extend(shipped_rules(&cat.shipped));
+    problems.extend(web_settings(root, &cat.shipped));
     problems.extend(duplicates(&cat.parts));
     let rules = match Rules::from_json(&cat.rules) {
         Ok(rules) => Some(rules),
@@ -858,6 +902,29 @@ mod tests {
             shipped_rules(&["ar".into()]),
             ["locales.json: ar ships without a plural rule in src/plural.rs"]
         );
+    }
+
+    #[test]
+    fn web_lists_the_shipped_languages() {
+        let shipped = ["en", "de", "fr"].map(String::from);
+        let settings = |locales: &str| format!(r#"{{"baseLocale": "en", "locales": {locales}}}"#);
+        assert!(web_locales(&shipped, &settings(r#"["fr", "en", "de"]"#)).is_empty());
+        assert_eq!(
+            web_locales(&shipped, &settings(r#"["en", "de", "es"]"#)),
+            [
+                "web/project.inlang/settings.json: locales lacks fr, which locales.json ships",
+                "web/project.inlang/settings.json: locales lists es, which locales.json does not ship"
+            ]
+        );
+        assert_eq!(web_locales(&shipped, "{}").len(), 1);
+        assert_eq!(web_locales(&shipped, "{").len(), 1);
+    }
+
+    #[test]
+    fn web_settings_follow_the_repository() {
+        let l10n = Path::new(env!("CARGO_MANIFEST_DIR"));
+        assert!(web_settings(&l10n.join("tests/fixture"), &["xx".into()]).is_empty());
+        assert_eq!(web_settings(l10n, &["xx".into()]).len(), 2);
     }
 
     #[test]
