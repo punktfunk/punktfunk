@@ -390,6 +390,25 @@ async fn host_settings_show_the_owner_s_rows_beside_the_door_s() {
     assert_eq!(body["env_file"], "/home/me/.config/punktfunk/host.env");
 }
 
+/// A door row the door won't take refuses the whole patch before the owner's host stores any.
+#[tokio::test]
+async fn a_bad_door_row_stores_none_of_the_owner_s() {
+    let seats = FakeSeats::new(box_snapshot(None)).answering(
+        "host/settings",
+        200,
+        serde_json::json!({"settings": [], "restart_pending": []}),
+    );
+    let app = admin_door(seats.clone());
+    let patch = json_req(
+        Method::PATCH,
+        "/api/v1/host/settings",
+        serde_json::json!({"encoder": "nvenc", "mdns": "bogus"}),
+    );
+    let (status, _) = send(&app, patch).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert!(seats.calls().is_empty(), "the owner's host was not asked");
+}
+
 /// A tail from the owner's host reaches the console as it arrives, not as one buffered answer.
 #[tokio::test]
 async fn a_tail_streams_through_the_door() {
