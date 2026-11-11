@@ -694,12 +694,13 @@ final class SessionModel: ObservableObject {
         isBackgrounded = true
         conn.setVideoDropped(true)
         applyMicMute() // now muted for privacy — on top of the user's own mute, not instead of it
-        // Non-deliberate on fire (keep the host linger) so a user who returns late reconnects fast,
-        // exactly like today's network-drop path. min 1 minute guards a nonsense setting.
+        // Non-deliberate on fire (the host lingers), so a late return reconnects fast. At least a
+        // minute. On the wall clock, as the Live Activity's countdown: the mach clock stops while
+        // the device sleeps.
         let minutes = max(1, timeoutMinutes)
         backgroundDeadline = Date().addingTimeInterval(TimeInterval(minutes * 60))
         let timer = DispatchSource.makeTimerSource(queue: .main)
-        timer.schedule(deadline: .now() + .seconds(minutes * 60))
+        timer.schedule(wallDeadline: .now() + .seconds(minutes * 60))
         timer.setEventHandler { [weak self] in
             // The timer fires on `.main`, so the actor's executor is the main thread here.
             MainActor.assumeIsolated { self?.disconnect(deliberate: false) }
