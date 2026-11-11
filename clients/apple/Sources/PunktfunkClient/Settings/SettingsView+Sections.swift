@@ -797,21 +797,26 @@ extension SettingsView {
 
     // MARK: - Advanced
 
-    /// A category's advanced rows: their own section while Show advanced is on or the edited
-    /// preset overrides one of `fields`, otherwise one button naming how many hold a changed
-    /// value, which shows them. Nothing when none changed.
+    /// A category's advanced rows, as `AdvancedDisclosure` decides. `fields` are the rows'
+    /// overlay names.
     @ViewBuilder
     func advancedSection<Content: View>(
         changed: Int, fields: [String] = [], @ViewBuilder content: () -> Content
     ) -> some View {
-        if showAdvanced || fields.contains(where: isOverridden) {
+        switch AdvancedDisclosure.state(
+            showAdvanced: showAdvanced, overridden: fields.contains(where: isOverridden),
+            changed: changed, inPreset: inPresetScope)
+        {
+        case .rows:
             Section(L10n.prefsAdvanced) { content() }
-        } else if changed > 0, !inPresetScope {
+        case .countButton(let count):
             Section {
-                Button(L10n.prefsAdvancedChanged(count: changed)) {
+                Button(L10n.prefsAdvancedChanged(count: count)) {
                     showAdvanced = true
                 }
             }
+        case .hidden:
+            EmptyView()
         }
     }
 
