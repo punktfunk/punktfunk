@@ -230,6 +230,7 @@ struct StreamScene: View {
                     .overFlatPicture()
             }
         }
+        .onChange(of: captureEnabled, initial: true) { _, on in ring.takesInput = on }
         .onChange(of: ring.committed) { _, open in
             model.setRingOpen(open)
             #if os(macOS) || os(iOS)

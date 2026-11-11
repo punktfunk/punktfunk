@@ -79,10 +79,16 @@ final class RingState: ObservableObject {
 
     var visible: Bool { committed || progress > 0 || closing }
 
+    /// The stream under the ring takes input; false under a trust card or the console's hold,
+    /// where nothing mounts the overlay. The ring then stays shut, and an open one closes.
+    var takesInput = true {
+        didSet { if !takesInput { close() } }
+    }
+
     func handle(_ event: DialEvent) {
         switch event {
         case .turn(let p, let cw, let at):
-            guard !committed else { return }
+            guard !committed, takesInput else { return }
             if !twistArmed {
                 twistArmed = true
                 armTick &+= 1
@@ -101,7 +107,9 @@ final class RingState: ObservableObject {
         }
     }
 
+    /// Every open lands here: the twist's, a disc's, a chord's, a menu's.
     func commit() {
+        guard takesInput else { return }
         committed = true
         progress = 1
         commitTick &+= 1
