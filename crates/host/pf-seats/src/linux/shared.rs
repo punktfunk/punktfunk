@@ -861,7 +861,8 @@ fn put_file(dst: &OwnedFd, name: &str, bytes: &[u8], reader: Reader) -> std::io:
 
 /// Brings the box's library level with the owner's own in `home`, for `reader`, the door's
 /// group. Returns whether anything changed. A config folder that isn't there, as in a home not
-/// mounted yet, leaves the copy as it is: the door keeps serving the last library it had.
+/// mounted yet, leaves the copy as it is: the door keeps serving the last library it had. The
+/// display policy follows even when a library file can't; the first failure is the answer.
 pub(super) fn refresh_box_library(
     home: &Path,
     state: &Path,
@@ -877,11 +878,11 @@ pub(super) fn refresh_box_library(
     };
     let dst =
         open_copy(&box_library_dir(state), reader).map_err(|e| io("open the library copy", e))?;
-    let mut changed =
-        sync_library(Some(&src), &dst, reader).map_err(|e| io("copy the owner's library", e))?;
-    changed |= sync_file(Some(&src), &dst, OWNER_POLICY, reader, MAX_TRUST_BYTES)
-        .map_err(|e| io("copy the owner's display policy", e))?;
-    Ok(changed)
+    let library =
+        sync_library(Some(&src), &dst, reader).map_err(|e| io("copy the owner's library", e));
+    let policy = sync_file(Some(&src), &dst, OWNER_POLICY, reader, MAX_TRUST_BYTES)
+        .map_err(|e| io("copy the owner's display policy", e));
+    Ok(library? | policy?)
 }
 
 /// Brings the box's library in a seat's trust copy level with [`box_library_dir`]: the seat's
@@ -906,19 +907,28 @@ pub(super) fn remove_box_library(state: &Path) -> std::io::Result<()> {
 }
 
 /// The library files, the metadata folder, the plugins' grants and the firmware they staged,
-/// from `src` into `dst`, for `reader`.
+/// from `src` into `dst`, for `reader`. An item that can't be copied keeps its last good copy
+/// and the rest still follow; the first failure is the answer.
 fn sync_library(src: Option<&OwnedFd>, dst: &OwnedFd, reader: Reader) -> std::io::Result<bool> {
-    let mut changed = false;
+    let (mut changed, mut first) = (false, None);
+    let mut note = |copied: std::io::Result<bool>| match copied {
+        Ok(did) => changed |= did,
+        Err(e) => {
+            first.get_or_insert(e);
+        }
+    };
     for name in LIBRARY_FILES {
-        changed |= sync_file(src, dst, name, reader, MAX_LIBRARY_BYTES)?;
+        note(sync_file(src, dst, name, reader, MAX_LIBRARY_BYTES));
     }
-    changed |= sync_flat_dir(src, dst, LIBRARY_METADATA, reader, MAX_LIBRARY_BYTES)?;
-    let run = sub(src, PLUGIN_RUN)?;
-    changed |= sync_dir(run.as_ref(), dst, PLUGIN_RUN, reader, &|run, copy| {
-        sync_file(run, copy, PLUGIN_GRANTS, reader, MAX_TRUST_BYTES)
-    })?;
-    changed |= sync_firmware(src, dst, reader)?;
-    Ok(changed)
+    let metadata = sync_flat_dir(src, dst, LIBRARY_METADATA, reader, MAX_LIBRARY_BYTES);
+    note(metadata);
+    note(sub(src, PLUGIN_RUN).and_then(|run| {
+        sync_dir(run.as_ref(), dst, PLUGIN_RUN, reader, &|run, copy| {
+            sync_file(run, copy, PLUGIN_GRANTS, reader, MAX_TRUST_BYTES)
+        })
+    }));
+    note(sync_firmware(src, dst, reader));
+    first.map_or(Ok(changed), Err)
 }
 
 /// `plugin-state/<provider>/firmware/<platform>/<file>` from `src` into `dst`: what a plugin
@@ -1905,6 +1915,36 @@ mod tests {
             std::fs::read_to_string(box_library_dir(&state).join("library.json")).unwrap(),
             "root only"
         );
+    }
+
+    /// A library file the copy refuses keeps its last good copy and stops none after it: the
+    /// later files, the plugins' grants and the display policy still follow.
+    #[test]
+    fn a_bad_library_file_keeps_its_copy_and_the_rest_follow() {
+        let temp = tempfile::tempdir().unwrap();
+        let (home, state) = (temp.path().join("home"), temp.path().join("state"));
+        let config = home.join(".config/punktfunk");
+        let run = config.join("plugin-run");
+        std::fs::create_dir_all(&run).unwrap();
+        std::fs::create_dir(&state).unwrap();
+        std::fs::write(config.join("library.json"), "{}").unwrap();
+        std::fs::write(run.join("plugin-grants.json"), "[1]").unwrap();
+        let reader = Reader::group(own_gid(&home));
+        assert!(refresh_box_library(&home, &state, reader).unwrap());
+
+        // A second link makes the first library file unreadable to the copy.
+        std::fs::hard_link(config.join("library.json"), temp.path().join("backup")).unwrap();
+        std::fs::write(config.join("library-picks.json"), "[]").unwrap();
+        std::fs::write(run.join("plugin-grants.json"), "{}").unwrap();
+        std::fs::write(config.join("display-settings.json"), "{}").unwrap();
+        let error = refresh_box_library(&home, &state, reader).unwrap_err();
+        assert_eq!(error.code, "box_library");
+        let copy = box_library_dir(&state);
+        let read = |name: &str| std::fs::read_to_string(copy.join(name)).unwrap();
+        assert_eq!(read("library.json"), "{}");
+        assert_eq!(read("library-picks.json"), "[]");
+        assert_eq!(read("plugin-run/plugin-grants.json"), "{}");
+        assert_eq!(read("display-settings.json"), "{}");
     }
 
     /// A file the copy refuses leaves its last good copy and doesn't stop the others; a box
