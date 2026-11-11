@@ -42,6 +42,7 @@ public enum ResolutionPick {
         return (parts[0], parts[1], parts[2])
     }
 
-    /// The overrides the stream-mode row's marker shows and its Reset clears.
-    public static let modeFields = [OverlayField.resolution]
+    /// The overrides the stream-mode row's marker shows and its Reset clears: the size and the
+    /// rate it writes together. A TV has no other refresh row to clear the rate from.
+    public static let modeFields = [OverlayField.resolution, "refresh_hz"]
 }
