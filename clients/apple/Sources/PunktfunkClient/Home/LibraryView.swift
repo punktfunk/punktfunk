@@ -949,8 +949,8 @@ struct LibraryView: View {
             shelf = LibraryShelf.reduce(shelf, event, autoWake: autoWake, canWake: canWake)
             switch event {
             case .cached, .fetched: Self.shown[hostID] = shelf.games
-            case .status(let up, _, _): nowPlayingStore.adopt(up, for: current)
-            case .waking, .failed: break
+            case .status(let answer?): nowPlayingStore.adopt(answer.games, for: current)
+            case .waking, .failed, .status(nil): break
             }
         }
     }

@@ -15,8 +15,9 @@ public enum LibraryLoadEvent: Sendable {
     case fetched([GameEntry])
     /// The catalog fetch gave up. `hadCache`: a cached catalog is up and stays.
     case failed(LibraryError, hadCache: Bool)
-    /// What the host runs and downloads, and this device's grants there. Always the last event.
-    case status(games: [RunningGame], downloads: [HostDownload], grants: UInt32?)
+    /// What the host runs and downloads, and this device's grants there; nil when the host
+    /// didn't answer, which changes nothing on screen. Always the last event.
+    case status((games: [RunningGame], downloads: [HostDownload], grants: UInt32?)?)
 }
 
 /// The load's sequence over its host. `run` builds one for a real host; a test fakes the calls.
@@ -29,7 +30,7 @@ public struct LibraryLoad {
     /// Sends the wake; nil asks the host once.
     var wake: (() -> Void)?
     var fetch: () async throws -> [GameEntry]
-    var status: () async -> (games: [RunningGame], downloads: [HostDownload], grants: UInt32?)
+    var status: () async -> (games: [RunningGame], downloads: [HostDownload], grants: UInt32?)?
     var retryEvery: UInt64 = 5 * NSEC_PER_SEC
 
     /// The line a screen with no headline of its own shows for a failed load.
@@ -56,7 +57,7 @@ public struct LibraryLoad {
         let load = LibraryLoad(
             hostID: hostID, cache: LibraryCache.shared, wake: wake,
             fetch: { try await LibraryClient.fetch(target) },
-            status: { await LibraryClient.status(target) })
+            status: { await LibraryClient.statusIfAnswered(target) })
         return AsyncStream { continuation in
             let task = Task {
                 await load.events { continuation.yield($0) }
@@ -98,7 +99,6 @@ public struct LibraryLoad {
             }
         }
         if Task.isCancelled { return }
-        let answer = await status()
-        emit(.status(games: answer.games, downloads: answer.downloads, grants: answer.grants))
+        emit(.status(await status()))
     }
 }

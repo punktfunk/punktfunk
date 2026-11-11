@@ -133,7 +133,7 @@ final class LibraryShelfTests: XCTestCase {
         XCTAssertEqual(waking.servedFromCacheAt, Date(timeIntervalSince1970: 9))
         XCTAssertEqual(waking.staleness, .waking)
 
-        let fetched = reduce(waking, [.fetched([entry("b", "Bravo")]), .status(games: [], downloads: [], grants: nil)])
+        let fetched = reduce(waking, [.fetched([entry("b", "Bravo")]), .status(([], [], nil))])
         XCTAssertEqual(ids(fetched.games), ["b"])
         XCTAssertEqual(fetched.staleness, .none)
         XCTAssertFalse(fetched.loading)
@@ -143,7 +143,7 @@ final class LibraryShelfTests: XCTestCase {
         let cached = CachedLibrary(games: [entry("a", "Alpha")], fetchedAt: Date())
         let state = reduce(loading, [
             .cached(cached), .failed(.unreachable("timed out"), hadCache: true),
-            .status(games: [], downloads: [], grants: nil),
+            .status(([], [], nil)),
         ])
         XCTAssertEqual(ids(state.games), ["a"])
         XCTAssertNil(state.errorText)
@@ -158,7 +158,7 @@ final class LibraryShelfTests: XCTestCase {
         let fetched = reduce(waking, [.fetched([entry("a", "Alpha")])])
         XCTAssertEqual(fetched.artRound, 1)
         let reloaded = reduce(fetched, [
-            .status(games: [], downloads: [], grants: nil), .cached(cached),
+            .status(([], [], nil)), .cached(cached),
             .failed(.unreachable("timed out"), hadCache: true),
         ])
         XCTAssertEqual(reloaded.artRound, 1)
@@ -181,12 +181,12 @@ final class LibraryShelfTests: XCTestCase {
     }
 
     func testTheStatusEndsTheLoadAndKeysWhatRuns() {
-        let state = reduce(loading, [.status(
+        let state = reduce(loading, [.status((
             games: [
                 running("a"), running("a", endable: true), running("b", state: "exited"),
                 running("c", state: "grace"),
             ],
-            downloads: [HostDownload(appID: "d", state: "downloading")], grants: 5)])
+            downloads: [HostDownload(appID: "d", state: "downloading")], grants: 5))])
         XCTAssertFalse(state.loading)
         XCTAssertEqual(Set(state.running.keys), ["a", "c"])
         XCTAssertEqual(state.running["a"]?.endable, true)

@@ -331,8 +331,8 @@ extension ConsoleModel {
                         ConsoleJSON.libraryError(
                             req, title: String(localized: L10n.libLoadFailed),
                             body: error.errorDescription ?? "", canRetry: true))
-                case .status(let games, let downloads, let grants):
-                    pushStatus((games, downloads, grants), serial: serial, fp: fp)
+                case .status(let answer):
+                    pushStatus(answer, serial: serial, fp: fp)
                 }
             }
         }

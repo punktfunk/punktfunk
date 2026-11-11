@@ -128,8 +128,8 @@ public enum LibraryShelf {
             // Titles on screen outrank the error; the staleness note carries the situation.
             if next.games.isEmpty { next.errorText = LibraryLoad.failure(error) }
             if case .unreachable = error, !autoWake, canWake { next.wakeOffered = true }
-        case .status(let games, let downloads, let grants):
-            next = next.applying((games, downloads, grants))
+        case .status(let answer):
+            next = next.applying(answer)
             next.loading = false
         }
         return next
