@@ -29,9 +29,24 @@ public struct Chord: Equatable, Sendable {
         self.key = key
     }
 
-    /// Read stored keys: the modifiers among them, and the first key that is not one.
+    /// Read stored keys as `keyVk` reads names, any case: modifier aliases (`control`, `option`,
+    /// `cmd`, `super`, `meta`) fold onto their toggle, and the last grid key wins. No grid key
+    /// leaves `key` empty.
     public static func parse(keys: [String]) -> Chord {
-        Chord(mods: Set(keys.filter(modifiers.contains)), key: keys.first { !modifiers.contains($0) })
+        let names = keys.map { $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }
+        let grid = keyGroups.flatMap(\.keys)
+        return Chord(mods: Set(names.compactMap(modifier)), key: names.last(where: grid.contains))
+    }
+
+    /// The toggle a modifier name sets; nil for any other key.
+    static func modifier(_ name: String) -> String? {
+        switch name {
+        case "ctrl", "control": "ctrl"
+        case "alt", "option": "alt"
+        case "shift": "shift"
+        case "win", "cmd", "super", "meta": "win"
+        default: nil
+        }
     }
 
     /// Host send order: the held modifiers, then the key.
