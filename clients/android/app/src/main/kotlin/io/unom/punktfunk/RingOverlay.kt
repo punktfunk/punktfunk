@@ -787,7 +787,8 @@ private fun confirmText(ctx: Context, slot: SlotId, label: String): String {
 /**
  * The pad (design §2.6): the left stick AIMS — its sector is the highlight, so the ring follows
  * the thumb — while the D-pad steps, Right clockwise, Left anticlockwise, Up to 12 o'clock, Down
- * to 6; Y returns the highlight to the centre, A fires it (the centre opens the sheet), B closes.
+ * to 6, and Up again from 12 or Down again from 6 into the centre; Y also returns the highlight
+ * to the centre, A fires it (the centre opens the sheet), B closes.
  * In the sheet, Up/Down walk the rows and Left/Right adjust one.
  */
 private fun navigate(
@@ -822,8 +823,10 @@ private fun navigate(
         }
         RingNav.Right -> { state.highlight = if (h >= 6) 0 else (h + 1) % 6; haptics.tick() }
         RingNav.Left -> { state.highlight = if (h >= 6) 5 else (h + 5) % 6; haptics.tick() }
-        RingNav.Up -> { state.highlight = 0; haptics.tick() }
-        RingNav.Down -> { state.highlight = 3; haptics.tick() }
+        // A remote has no Y, so a second Up or Down is its only way into the centre. The shared
+        // console's ring (ring.rs, MenuEvent::Move) follows the same rule.
+        RingNav.Up -> { state.highlight = if (h == 0) 6 else 0; haptics.tick() }
+        RingNav.Down -> { state.highlight = if (h == 3) 6 else 3; haptics.tick() }
         RingNav.Centre -> { state.highlight = 6; haptics.tick() }
         RingNav.Confirm -> if (h >= 6) { haptics.tick(); state.sheetCursor = 0; state.sheet = true } else {
             cfg.ring[h]?.let { fire(spec(it, cfg, actions, ctx), it) } ?: haptics.boundary()
