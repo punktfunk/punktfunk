@@ -66,13 +66,20 @@ impl CaptureLease {
 
     /// The sink to open: the isolated one, else the owner's once published. A joiner spawned
     /// inside the owner's first second waits for it — minting its own sink here would claim
-    /// the default from under the owner. `stopped` ends the wait.
+    /// the default from under the owner. Where no session mints a sink (Windows, Linux monitor
+    /// mode) no name is coming and nothing is claimed, so it takes one already there and goes
+    /// on. `stopped` ends the wait.
     fn resolve(&self, stopped: impl Fn() -> bool) -> Option<String> {
         if self.route.sink.is_some() {
             return self.route.sink.clone();
         }
         let slot = self.route.tap_from.as_ref()?;
-        let deadline = Instant::now() + Self::JOIN_SINK_WAIT;
+        let wait = if crate::per_session_sink_possible() {
+            Self::JOIN_SINK_WAIT
+        } else {
+            Duration::ZERO
+        };
+        let deadline = Instant::now() + wait;
         loop {
             if let Some(name) = slot.lock().unwrap().clone() {
                 return Some(name);
@@ -246,5 +253,25 @@ mod tests {
         assert!(lease.next_chunk(None).is_none());
         assert!(!lease.is_live());
         assert!(matches!(lease.ready(|| false), Ready::Down));
+    }
+
+    /// A joiner waits for the owner's sink name only where a session mints one, and takes a
+    /// published name everywhere.
+    #[test]
+    fn a_joiner_waits_for_a_sink_name_only_where_one_can_come() {
+        let lease = |name: Option<&str>| {
+            let route = CaptureRoute {
+                tap: true,
+                tap_from: Some(Arc::new(Mutex::new(name.map(str::to_owned)))),
+                ..Default::default()
+            };
+            CaptureLease::new(2, 48_000, route)
+        };
+        let t0 = Instant::now();
+        let bound = Duration::from_millis(500);
+        assert_eq!(lease(None).resolve(|| t0.elapsed() > bound), None);
+        assert_eq!(t0.elapsed() < bound, !crate::per_session_sink_possible());
+        let owner = lease(Some("punktfunk-speaker-1")).resolve(|| true);
+        assert_eq!(owner.as_deref(), Some("punktfunk-speaker-1"));
     }
 }
