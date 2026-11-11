@@ -86,12 +86,17 @@ pub(crate) fn bind_exclusive(addr: SocketAddr) -> std::io::Result<std::net::TcpL
 /// 256 / 32 is generous: a console browser holds a handful, a paired client a few.
 const MAX_CONNS: usize = 256;
 const MAX_CONNS_PER_IP: usize = 32;
+/// Slots a LAN peer never takes: two full per-IP buckets (127.0.0.1, ::1) stay free for the
+/// console, `ctl`, the tray and the plugin runner.
+const LOOPBACK_RESERVE: usize = 2 * MAX_CONNS_PER_IP;
 /// A LAN handshake completes in milliseconds; a peer still negotiating after
 /// this is holding a slot, not pairing.
 const TLS_HANDSHAKE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
-/// Bounds reading each request's header block (slowloris). Response streaming
-/// is unaffected; hyper re-arms this per request on a keep-alive connection.
+/// Bounds a connection's first request head on any protocol, and every later HTTP/1 head
+/// (slowloris). Response streaming is unaffected.
 const HEADER_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+/// A quiet HTTP/2 peer is pinged after this, and dropped when the ack misses the same window.
+const H2_PING: std::time::Duration = std::time::Duration::from_secs(30);
 /// Requests in flight on one HTTP/2 connection. A client past it queues on that connection
 /// rather than opening another, so a library's worth of covers stays one of `MAX_CONNS_PER_IP`.
 const MAX_H2_STREAMS: u32 = 32;
@@ -191,9 +196,17 @@ async fn serve_listener(
         // Drop rather than queue when a ceiling is hit: a well-behaved client retries,
         // and queuing is the unbounded buildup the ceiling exists to prevent.
         // Both guards travel into the task so every exit path releases them.
-        let Ok(permit) = conns.clone().try_acquire_owned() else {
-            tracing::warn!(%peer, "HTTP(S) connection ceiling reached — dropping new connection");
-            continue;
+        let floor = if peer.ip().to_canonical().is_loopback() {
+            0
+        } else {
+            LOOPBACK_RESERVE
+        };
+        let permit = match conns.clone().try_acquire_owned() {
+            Ok(permit) if conns.available_permits() >= floor => permit,
+            _ => {
+                tracing::warn!(%peer, "HTTP(S) connection ceiling reached — dropping new connection");
+                continue;
+            }
         };
         let ip_guard = {
             let mut m = per_ip.lock().unwrap();
@@ -294,12 +307,15 @@ fn connection_builder() -> hyper_util::server::conn::auto::Builder<hyper_util::r
     builder
         .http2()
         .timer(hyper_util::rt::TokioTimer::new())
-        .max_concurrent_streams(MAX_H2_STREAMS);
+        .max_concurrent_streams(MAX_H2_STREAMS)
+        .keep_alive_interval(H2_PING)
+        .keep_alive_timeout(H2_PING);
     builder
 }
 
 /// Drive one accepted stream — a socket, a TLS stream or a pipe — through `app`, with the
-/// peer facts the handlers read as request extensions.
+/// peer facts the handlers read as request extensions. A peer that has not sent a whole
+/// request head within [`HEADER_READ_TIMEOUT`] is dropped.
 pub(crate) async fn serve_conn<S>(
     stream: S,
     app: Router,
@@ -310,8 +326,36 @@ pub(crate) async fn serve_conn<S>(
 ) where
     S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
 {
+    serve_conn_within(
+        HEADER_READ_TIMEOUT,
+        stream,
+        app,
+        fp,
+        addr,
+        local,
+        pipe_plugin,
+    )
+    .await
+}
+
+/// [`serve_conn`] with the first-request deadline as an argument. Version detection and a
+/// silent HTTP/2 peer have no timer of hyper's own; after the first request, hyper's timers govern.
+async fn serve_conn_within<S>(
+    first_request: std::time::Duration,
+    stream: S,
+    app: Router,
+    fp: PeerCertFingerprint,
+    addr: PeerAddr,
+    local: Option<LocalAddr>,
+    pipe_plugin: Option<PipePlugin>,
+) where
+    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
+{
     use tower::ServiceExt;
+    let arrived = Arc::new(tokio::sync::Notify::new());
+    let seen = arrived.clone();
     let svc = hyper::service::service_fn(move |req: hyper::Request<hyper::body::Incoming>| {
+        seen.notify_one();
         let app = app.clone();
         let fp = fp.clone();
         let pipe_plugin = pipe_plugin.clone();
@@ -329,9 +373,15 @@ pub(crate) async fn serve_conn<S>(
         }
     });
     let io = hyper_util::rt::TokioIo::new(stream);
-    let _ = connection_builder()
-        .serve_connection_with_upgrades(io, svc)
-        .await;
+    let builder = connection_builder();
+    let conn = builder.serve_connection_with_upgrades(io, svc);
+    tokio::pin!(conn);
+    tokio::select! {
+        _ = &mut conn => return,
+        _ = arrived.notified() => {}
+        _ = tokio::time::sleep(first_request) => return,
+    }
+    let _ = conn.await;
 }
 
 #[cfg(test)]
@@ -483,6 +533,52 @@ mod governed_tests {
         .unwrap();
         served.await.unwrap();
         assert!(String::from_utf8_lossy(&response).contains("200 OK"));
+    }
+
+    /// A peer that never sends a request is dropped at the deadline; an answer that takes
+    /// longer than the deadline still arrives.
+    #[tokio::test]
+    async fn a_silent_connection_is_dropped_but_a_slow_answer_is_not() {
+        let limit = std::time::Duration::from_millis(200);
+        let app = Router::new().route(
+            "/",
+            get(move || async move {
+                tokio::time::sleep(limit * 3).await;
+                "late"
+            }),
+        );
+        let serve = |io| {
+            let peer = PeerAddr("127.0.0.1:1".parse().unwrap());
+            tokio::spawn(serve_conn_within(
+                limit,
+                io,
+                app.clone(),
+                PeerCertFingerprint(None),
+                peer,
+                None,
+                None,
+            ))
+        };
+
+        let (mut silent, server) = tokio::io::duplex(4096);
+        let served = serve(server);
+        let mut out = Vec::new();
+        tokio::time::timeout(limit * 5, silent.read_to_end(&mut out))
+            .await
+            .expect("a silent peer is dropped")
+            .unwrap();
+        assert!(out.is_empty());
+        served.await.unwrap();
+
+        let (mut client, server) = tokio::io::duplex(4096);
+        let _served = serve(server);
+        client
+            .write_all(b"GET / HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")
+            .await
+            .unwrap();
+        let mut response = Vec::new();
+        client.read_to_end(&mut response).await.unwrap();
+        assert!(String::from_utf8_lossy(&response).ends_with("late"));
     }
 }
 
