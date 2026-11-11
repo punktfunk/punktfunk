@@ -1,5 +1,6 @@
 // The connect, trust and wake flow behind every host tap, link and shelf. ContentView builds one
-// per use over its model, stores and prompts; the prompts' state stays in the view.
+// per use over its model, stores and prompts; the prompts' state and the window's `Life` stay in
+// the view.
 //
 // Ways to establish trust on first contact: the TOFU prompt (host fingerprint over the
 // live-but-blurred stream, compared with the host's log; only for a host advertising pair=optional),
@@ -19,6 +20,7 @@ struct ConnectFlow {
     let presets: PresetStore
     let discovery: HostDiscovery
     let waker: HostWaker
+    let life: Life
     /// Auto-wake on connect (Settings → General). On: a dial to an offline saved host fires
     /// Wake-on-LAN up front and falls into the "Waking…" wait if the dial fails. The explicit
     /// "Wake Host" action is unaffected either way.
@@ -35,6 +37,13 @@ struct ConnectFlow {
     @Binding var seatWait: SeatWait?
     /// The password prompt of a profile on a person's own account.
     @Binding var unlockAsk: UnlockAsk?
+
+    /// What this window's flow keeps between taps, since a `ConnectFlow` lives for one use.
+    @MainActor
+    final class Life {
+        /// A tap's profile fetch is running: another tap does nothing until it answers.
+        var fetching = false
+    }
 
     /// Which profile a connect plays as.
     enum ProfileChoice {
@@ -73,6 +82,7 @@ struct ConnectFlow {
         preset: PresetSelection = .inherit, allowTofu: Bool? = nil,
         fromLibrary: Bool = false, profile: ProfileChoice = .ask(), fromLink: Bool = false
     ) {
+        guard !life.fetching else { return }
         let door = ConnectPlan.door(
             pinned: host.pinnedSHA256 != nil, allowTofu: allowTofu,
             advertsTofu: discovery.hosts.contains { host.matches($0) && $0.allowsTofu },
@@ -121,8 +131,10 @@ struct ConnectFlow {
         _ host: StoredHost, link: String?, go: @escaping @MainActor (ProfileDial) -> Void
     ) {
         let saved = (store.hosts.first { $0.id == host.id } ?? host).pickedProfile
+        life.fetching = true
         Task { @MainActor in
             let answer = await ProfileFetch.list(host, within: ProfileFetch.wait)
+            life.fetching = false
             let rows = answer.rows
             let unlocked: @MainActor (String?) -> Void = { id in
                 guard let row = rows?.first(where: { $0.id == id }) else {
@@ -520,7 +532,7 @@ struct ConnectFlow {
     /// (request access / pair with PIN) (rule 3b). (A pinned discovered host connects silently
     /// inside `connect`.)
     func connectDiscovered(_ d: DiscoveredHost) {
-        guard !model.isBusy else { return }
+        guard !model.isBusy, !life.fetching else { return }
         let host = save(d)
         if d.allowsTofu {
             connect(host, allowTofu: true)

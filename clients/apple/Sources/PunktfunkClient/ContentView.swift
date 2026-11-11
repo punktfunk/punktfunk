@@ -100,6 +100,8 @@ struct ContentView: View {
     @State private var seatWait: SeatWait?
     /// The password prompt of a profile on a person's own account, before the dial.
     @State private var unlockAsk: UnlockAsk?
+    /// What this window's connect flow keeps between taps.
+    @State private var flowLife = ConnectFlow.Life()
     @State private var speedTestTarget: StoredHost?
     @State private var libraryTarget: LibraryTarget?
     #if os(iOS) || os(visionOS) || os(tvOS)
@@ -1083,7 +1085,7 @@ struct ContentView: View {
     private var flow: ConnectFlow {
         ConnectFlow(
             model: model, store: store, presets: presets, discovery: discovery, waker: waker,
-            autoWake: $autoWakeEnabled, approvalChoice: $approvalChoice,
+            life: flowLife, autoWake: $autoWakeEnabled, approvalChoice: $approvalChoice,
             awaitingApproval: $awaitingApproval, profileAsk: $profileAsk, seatWait: $seatWait,
             unlockAsk: $unlockAsk)
     }
