@@ -277,16 +277,16 @@ extension SettingsView {
         presets.clearOverride(id, field: name)
     }
 
-    /// The accent dot + Reset affordance a row carries while it overrides the defaults. Rendered
-    /// inside `described`'s caption line, so it sits with the row it belongs to instead of in some
-    /// separate list of exceptions.
+    /// The accent dot + Reset affordance a row carries while it overrides any of `names`.
+    /// Rendered inside `described`'s caption line, so it sits with the row it belongs to; Reset
+    /// clears every one of `names`.
     ///
     /// Reset is a BORDERED control pushed to the far edge, not tinted text next to the label: as a
     /// plain button it read as a third word of the notice, and the one action that can undo an
     /// override must not look like prose.
     @ViewBuilder
-    func overrideMarker(_ name: String) -> some View {
-        if isOverridden(name) {
+    func overrideMarker(_ names: [String]) -> some View {
+        if names.contains(where: isOverridden) {
             HStack(spacing: 5) {
                 Circle()
                     .fill(Color.brand)
@@ -298,7 +298,7 @@ extension SettingsView {
                     .foregroundStyle(Color.brand)
                 Spacer(minLength: 12)
                 Button {
-                    resetOverride(name)
+                    names.forEach(resetOverride)
                 } label: {
                     Label(L10n.commonReset, systemImage: "arrow.uturn.backward")
                         .font(.geist(11, .medium, relativeTo: .caption2))

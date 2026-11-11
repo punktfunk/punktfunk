@@ -62,18 +62,25 @@ extension SettingsView {
     func described<Content: View>(
         _ caption: String, field: String? = nil, @ViewBuilder content: () -> Content
     ) -> some View {
+        described(caption, fields: field.map { [$0] } ?? [], content: content)
+    }
+
+    /// `described` for a row that writes several overrides: its marker shows while any of
+    /// `fields` is overridden, and its Reset clears them all.
+    func described<Content: View>(
+        _ caption: String, fields: [String], @ViewBuilder content: () -> Content
+    ) -> some View {
         // A name the overlay does not model silently loses both the marker and its Reset, with no
-        // compile error to say so — the one-way door the marker exists to prevent. Caught here in
-        // debug rather than by noticing a missing badge.
-        assert(field.map { OverlayField.isModelled($0) } ?? true,
-               "described(field:) got \(field ?? "") — not a field SettingsOverlay models")
+        // compile error to say so. Caught here in debug rather than by a missing badge.
+        assert(fields.allSatisfy(OverlayField.isModelled),
+               "described(fields:) got \(fields) — not all fields SettingsOverlay models")
         #if os(tvOS)
         // A TV row carries no caption of its own: its focus names the one the pane's band shows,
         // and an overridden row wears a dot and resets from its context menu.
-        let overridden = field.map(isOverridden) ?? false
+        let overridden = fields.contains(where: isOverridden)
         return content()
             .modifier(TVOverrideMark(overridden: overridden) {
-                if let field { resetOverride(field) }
+                fields.forEach(resetOverride)
             })
             .focused($tvCaption, equals: SettingsCaption(text: caption, overridden: overridden))
         #else
@@ -85,12 +92,9 @@ extension SettingsView {
                 // Wrap, never truncate, in Form cells.
                 .fixedSize(horizontal: false, vertical: true)
                 .modifier(CaptionWidth())
-            if let field {
-                // Full cell width, deliberately: the marker's Reset is a CONTROL, and it belongs
-                // on the same trailing edge as the row's own control above it. Sharing the
-                // caption's reserved column left it stranded mid-row.
-                overrideMarker(field)
-            }
+            // Full cell width, deliberately: the marker's Reset is a CONTROL, and it belongs on
+            // the same trailing edge as the row's own control above it.
+            overrideMarker(fields)
         }
         .padding(.vertical, 2)
         #endif
