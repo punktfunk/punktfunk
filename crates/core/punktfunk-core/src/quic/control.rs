@@ -21,8 +21,9 @@ pub struct Reconfigure {
     pub mode: Mode,
     pub exclude_codecs: u8,
     /// The size the client shows the picture at, when smaller than `mode`: the host builds the
-    /// display at `mode` and scales the picture to `view` before encoding. `None` encodes
-    /// `mode`, so a client back at 1x clears it.
+    /// display at `mode` and scales the picture to `view` before encoding. `None` keeps the
+    /// view in force while the size stays, else encodes `mode`; a view the size of `mode`
+    /// clears it.
     pub view: Option<(u32, u32)>,
 }
 

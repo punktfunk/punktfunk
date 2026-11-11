@@ -82,22 +82,27 @@ impl ControlTask {
         }
     }
 
-    /// A `Reconfigure` as [`reconfigure_ask`] reads it: a codec ask goes on as one; a mode
-    /// switch is acked at once with the mode the client now holds, then handed to the stream
-    /// thread with its view. A refused switch hands nothing on.
+    /// A `Reconfigure`, its view filled by [`asked_view`], as [`reconfigure_ask`] reads it: a
+    /// codec ask goes on as one; a mode switch is acked at once with the mode the client now
+    /// holds, then handed to the stream thread with its view. A refused switch hands nothing on.
     async fn on_reconfigure(&mut self, req: Reconfigure) -> Step {
         let now = std::time::Instant::now();
         let too_soon = self
             .last_accepted_switch
             .is_some_and(|t| now.duration_since(t) < MIN_SWITCH_INTERVAL);
+        let req = Reconfigure {
+            view: asked_view(&req, self.active, self.active_view),
+            ..req
+        };
         let t = &self.task;
         let accepted = match reconfigure_ask(&req, t.codec, t.live_reconfig_ok, too_soon) {
             Ask::Codec(exclude) => return self.on_codec_ask(exclude).await,
             Ask::Mode(asked) => Some(asked),
             Ask::Refused => None,
         };
-        if accepted.is_some() {
+        if let Some((_, view)) = accepted {
             self.active = req.mode;
+            self.active_view = view;
             self.last_accepted_switch = Some(now);
         }
         let ack = Reconfigured {
@@ -306,6 +311,17 @@ enum Ask {
     Refused,
 }
 
+/// The view `req` asks for: its own, else `view` while it keeps the `active` size. A rate
+/// pick does not know the view; a view the size of the mode clears it in [`reconfigure_ask`].
+fn asked_view(
+    req: &Reconfigure,
+    active: punktfunk_core::Mode,
+    view: Option<(u32, u32)>,
+) -> Option<(u32, u32)> {
+    let same_size = (req.mode.width, req.mode.height) == (active.width, active.height);
+    req.view.or(view.filter(|_| same_size))
+}
+
 /// What `req` asks for a session encoding `codec`. A mode switch is refused when the backend
 /// cannot `live_reconfig`, the mode cannot land, or the last switch was `too_soon`
 /// ([`MIN_SWITCH_INTERVAL`]).
@@ -345,6 +361,36 @@ fn reconfigure_ask(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A rate pick keeps the view in force; a new size, or a view of its own, does not.
+    #[test]
+    fn a_rate_pick_keeps_the_view() {
+        let mode = |width, height, refresh_hz| punktfunk_core::Mode {
+            width,
+            height,
+            refresh_hz,
+        };
+        let ask = |m, view| Reconfigure {
+            mode: m,
+            exclude_codecs: 0,
+            view,
+        };
+        let (live, kept) = (mode(3840, 2160, 60), Some((1920, 1080)));
+        let rate = ask(mode(3840, 2160, 120), None);
+        assert_eq!(asked_view(&rate, live, kept), kept);
+        assert_eq!(
+            asked_view(&ask(mode(2560, 1440, 60), None), live, kept),
+            None
+        );
+        let own = Some((1280, 720));
+        assert_eq!(asked_view(&ask(live, own), live, kept), own);
+        let cleared = asked_view(&ask(live, Some((3840, 2160))), live, kept);
+        assert_eq!(
+            cleared,
+            Some((3840, 2160)),
+            "reconfigure_ask keeps none of it"
+        );
+    }
 
     /// A mode ask hands on its view only while its mode can be scaled to it; a codec ask
     /// leaves the mode and view alone; a refused switch hands nothing on.

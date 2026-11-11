@@ -3809,7 +3809,8 @@ PunktfunkStatus punktfunk_connection_clock_offset_now_ns(const PunktfunkConnecti
 
 #if defined(PUNKTFUNK_FEATURE_QUIC)
 // Request a live mode switch. On accept, the first new-mode AU is an IDR with
-// in-band parameter sets — rebuild the decoder from it.
+// in-band parameter sets — rebuild the decoder from it. At the live size the host keeps the
+// view it scales to, so a rate change alone leaves its scale in place.
 //
 // # Safety
 // `c` is a valid connection handle.
@@ -3822,8 +3823,8 @@ PunktfunkStatus punktfunk_connection_request_mode(const PunktfunkConnection *c,
 #if defined(PUNKTFUNK_FEATURE_QUIC)
 // [`punktfunk_connection_request_mode`] with the size this caller shows the picture at, when
 // smaller than the mode: the host scales the picture to it before encoding. `0` on either
-// view axis names none: a new size is then encoded as it is, which is how a caller back at 1x
-// clears the view, and the size last asked keeps its view, so a rate change leaves the scale.
+// view axis names none: the mode is encoded as it is, which is how a caller back at 1x
+// clears the view.
 //
 // # Safety
 // `c` is a valid connection handle.

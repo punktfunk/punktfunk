@@ -1517,11 +1517,18 @@ public final class PunktfunkConnection: @unchecked Sendable {
     /// reconnect. Non-blocking; on acceptance the stream continues at the new mode (the
     /// first new-mode AU is an IDR with fresh parameter sets — `AnnexB.formatDescription`
     /// refresh-on-IDR already handles it) and `currentMode()` reflects the switch.
-    /// `view` is the size the picture is shown at when smaller (`RenderScale.view`). nil at a new
-    /// size asks the host to encode the mode; at the size last asked it keeps that view.
+    /// At the live size the host keeps the view it scales to, so a rate pick leaves its scale.
+    public func requestMode(width: UInt32, height: UInt32, refreshHz: UInt32) {
+        withLiveHandle(or: ()) { h in
+            _ = punktfunk_connection_request_mode(h, width, height, refreshHz)
+        }
+    }
+
+    /// `requestMode` shown at `view`, the size the picture is shown at when smaller
+    /// (`RenderScale.view`). nil asks for the mode itself and clears a view the host keeps.
     public func requestMode(
         width: UInt32, height: UInt32, refreshHz: UInt32,
-        view: (width: UInt32, height: UInt32)? = nil
+        view: (width: UInt32, height: UInt32)?
     ) {
         withLiveHandle(or: ()) { h in
             _ = punktfunk_connection_request_mode_view(

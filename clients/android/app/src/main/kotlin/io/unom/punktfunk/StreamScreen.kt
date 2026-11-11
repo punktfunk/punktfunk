@@ -417,10 +417,12 @@ fun StreamScreen(
     // measure against it, so none of them knows a fold happened.
     var padSize by remember { mutableStateOf(IntSize.Zero) }
     val split = fold?.takeIf { hingeCompanion || (padShown && !companionUp) }
-    // A live mode switch, shown at [view] when the mode is larger: the asked-for mode shows at
-    // once, the host's answer half a second later. No view at a new size clears the one asked before.
-    fun switchMode(w: Int, h: Int, hz: Int, view: Pair<Int, Int>? = null) {
-        if (NativeBridge.nativeRequestMode(handle, w, h, hz, view?.first ?: 0, view?.second ?: 0)) {
+    // A live mode switch, shown at [view] when the mode is larger, none clearing it; [keepView]
+    // keeps the host's own instead. The asked-for mode shows at once, the host's answer half a
+    // second later.
+    fun switchMode(w: Int, h: Int, hz: Int, view: Pair<Int, Int>?, keepView: Boolean = false) {
+        val (vw, vh) = if (keepView) -1 to -1 else (view?.first ?: 0) to (view?.second ?: 0)
+        if (NativeBridge.nativeRequestMode(handle, w, h, hz, vw, vh)) {
             requestedMode = intArrayOf(w, h, hz)
             scope.launch {
                 delay(500)
@@ -546,7 +548,7 @@ fun StreamScreen(
         // the view.
         requestMode = { w, h, hz ->
             modePicked = true
-            switchMode(w, h, hz)
+            switchMode(w, h, hz, null, keepView = true)
         },
         screenLayouts = { layoutsOffered },
         screenLayout = { layout },

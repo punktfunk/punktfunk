@@ -410,6 +410,8 @@ struct ControlTask {
     /// The mode the client holds: every `Reconfigured` this task sends carries it, and
     /// adaptive FEC sizes a frame at its refresh.
     active: punktfunk_core::Mode,
+    /// The view the last accepted switch, else the handshake, scales `active` to.
+    active_view: Option<(u32, u32)>,
     /// What the client holds; `None` for a client that takes no configs.
     held_config: Option<v2msg::StreamConfig>,
     pyrowave_pin: rate::PyroWavePin,
@@ -538,6 +540,10 @@ impl ControlTask {
             closed: Closed::default(),
             denied: crate::session_status::GrantDrops::new(task.plane),
             active: task.initial_mode,
+            active_view: crate::session_plan::picture_field(
+                task.initial_mode,
+                (task.initial_picture.width, task.initial_picture.height),
+            ),
             held_config: task.anchored.then_some(task.stream_config),
             pyrowave_pin,
             last_accepted_switch: None,
