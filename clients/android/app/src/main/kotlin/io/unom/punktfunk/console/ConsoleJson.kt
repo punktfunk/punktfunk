@@ -19,6 +19,7 @@ import io.unom.punktfunk.kit.library.Download
 import io.unom.punktfunk.kit.library.GameEntry
 import io.unom.punktfunk.kit.library.RunningGame
 import io.unom.punktfunk.kit.library.TitleInstall
+import io.unom.punktfunk.kit.nameOrder
 import io.unom.punktfunk.kit.security.KnownHost
 import io.unom.punktfunk.deviceDetail
 import io.unom.punktfunk.matches
@@ -152,7 +153,7 @@ internal object ConsoleJson {
             }
         }
         val extra = discovered.filter { d -> saved.none { it.matches(d) } }
-            .sortedBy { it.name.lowercase() }
+            .sortedWith(nameOrder { it.name })
         for (d in extra) {
             val fp = d.fingerprint.orEmpty()
             out.put(
