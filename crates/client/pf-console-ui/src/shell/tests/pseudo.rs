@@ -63,7 +63,7 @@ type Rule = (&'static str, fn(&str) -> bool);
 const LITERAL: &[Rule] = &[
     ("a number, port or version the code formats", is_number),
     (
-        "a name the scene's data brings: host, title, device, profile, controller",
+        "a name the scene's data brings, or its initials: host, title, device, profile, controller",
         is_data,
     ),
     (
@@ -131,7 +131,9 @@ const DATA: &[&str] = &[
 ];
 
 fn is_data(t: &str) -> bool {
-    DATA.contains(&t) || t.parse::<std::net::IpAddr>().is_ok()
+    DATA.contains(&t)
+        || DATA.iter().any(|d| crate::library::initials(d) == t)
+        || t.parse::<std::net::IpAddr>().is_ok()
 }
 
 fn is_key(t: &str) -> bool {

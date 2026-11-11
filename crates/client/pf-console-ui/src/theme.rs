@@ -16,7 +16,7 @@ use skia_safe::textlayout::{
 };
 use skia_safe::{
     gradient, Canvas, Color4f, Data, Font, FontMgr, FontStyle, MaskFilter, Paint, PathEffect,
-    Point, RRect, Rect, TileMode, Typeface,
+    Point, RRect, Rect, TileMode, Typeface, Unichar,
 };
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
@@ -582,20 +582,92 @@ pub enum W {
     Bold,
 }
 
-/// Embedded Geist plus a paragraph collection with system fallback. Titles can be
-/// CJK, and `draw_str` cannot shape those.
+/// Embedded Geist, the faces that draw what it lacks, and a paragraph collection over both.
+/// Geist has Latin and Cyrillic only; a title or a host name can be Han, kana or Hangul.
 pub struct Fonts {
     regular: Typeface,
     medium: Typeface,
     semibold: Typeface,
     bold: Typeface,
     collection: FontCollection,
+    /// The host's own faces ([`build_fonts_with`]), tried before the system's.
+    extra: Vec<Typeface>,
+    /// A paragraph's families: Geist, then [`Self::extra`] under their aliases.
+    families: Vec<String>,
+    fallback: RefCell<Fallback>,
     /// Shaped paragraphs keyed by [`ParaKey`]. Position is not in the key (`paint`
     /// takes it) so a scrolling shelf reuses the same layout. `RefCell`: every draw
     /// path is `&self` and the shell is one render thread.
     paragraphs: RefCell<HashMap<ParaKey, Cached>>,
     /// Liveness clock, bumped by [`Fonts::begin_frame`].
     frame: Cell<u64>,
+}
+
+/// Faces found for chars Geist lacks, under one UI language: the language picks among the
+/// Han faces, so a change empties it.
+#[derive(Default)]
+struct Fallback {
+    lang: &'static str,
+    /// By char and weight; `None` when no face has the char.
+    chars: HashMap<(char, W), Option<Typeface>>,
+    /// The last system face found per 256-codepoint page and weight, tried before asking the
+    /// system again. A page is one script's neighbourhood: kana never borrows a Hangul face.
+    pages: HashMap<(u32, W), Typeface>,
+}
+
+/// The language hint a font manager reads. Android's fallback list tags Chinese by script,
+/// fontconfig by region; each spelling picks the other's wrong Han face.
+fn font_lang(lang: &'static str) -> &'static str {
+    const CHINESE: [(&str, &str); 3] = [
+        ("zh-Hans", "zh-CN"),
+        ("zh-Hant", "zh-TW"),
+        ("zh-Hant", "zh-HK"),
+    ];
+    let android = cfg!(target_os = "android");
+    for (script, region) in CHINESE {
+        let (from, to) = if android {
+            (region, script)
+        } else {
+            (script, region)
+        };
+        if lang.eq_ignore_ascii_case(from) {
+            return to;
+        }
+    }
+    lang
+}
+
+/// Whether `face` has a glyph for `c`.
+fn has(face: &Typeface, c: char) -> bool {
+    face.unichar_to_glyph(c as Unichar) != 0
+}
+
+/// Whether `face` has every char of `text`: one lookup for a line of up to 64 chars. A call
+/// per char costs more than the `measure_str` it guards.
+fn covers(face: &Typeface, text: &str) -> bool {
+    let mut glyphs = [0; 64];
+    let n = face.str_to_glyphs(text, &mut glyphs);
+    match glyphs.get(..n) {
+        Some(found) => found.iter().all(|&g| g != 0),
+        None => text.chars().all(|c| has(face, c)),
+    }
+}
+
+/// `face` at `size`, positioned to the subpixel like every run the kit draws.
+fn sized(face: &Typeface, size: f64) -> Font {
+    let mut f = Font::new(face.clone(), size as f32);
+    f.set_subpixel(true);
+    f
+}
+
+fn font_style(w: W) -> FontStyle {
+    use skia_safe::font_style::{Slant, Weight, Width};
+    match w {
+        W::Regular => FontStyle::normal(),
+        W::Medium => FontStyle::new(Weight::MEDIUM, Width::NORMAL, Slant::Upright),
+        W::SemiBold => FontStyle::new(Weight::SEMI_BOLD, Width::NORMAL, Slant::Upright),
+        W::Bold => FontStyle::bold(),
+    }
 }
 
 /// Paragraph shape. A tag, not a loose `(TextAlign, Option<usize>)` pair: those two
@@ -632,6 +704,8 @@ struct ParaKey {
     max_w: u32,
     /// ARGB, as `[a, r, g, b]`.
     color: [u8; 4],
+    /// The UI language: it picks the Han face.
+    lang: &'static str,
 }
 
 struct Cached {
@@ -645,7 +719,7 @@ const PARA_CACHE_MAX: usize = 512;
 
 /// Shape one paragraph. Free function: the cache hands a `&ParaKey` borrowed from
 /// the map being inserted into, which rules out `&self` across the call.
-fn shape(collection: &FontCollection, key: &ParaKey) -> Paragraph {
+fn shape(collection: &FontCollection, families: &[String], key: &ParaKey) -> Paragraph {
     let (align, clamp) = key.kind.style();
     let mut style = ParagraphStyle::new();
     style.set_text_align(align);
@@ -654,24 +728,12 @@ fn shape(collection: &FontCollection, key: &ParaKey) -> Paragraph {
         style.set_ellipsis("\u{2026}");
     }
     let mut ts = TextStyle::new();
-    ts.set_font_families(&["Geist"]);
+    ts.set_font_families(families);
+    ts.set_locale(font_lang(key.lang));
     ts.set_font_size(f64::from_bits(key.size) as f32);
     let [a, r, g, b] = key.color;
     ts.set_color(skia_safe::Color::from_argb(a, r, g, b));
-    ts.set_font_style(match key.weight {
-        W::Regular => FontStyle::normal(),
-        W::Medium => FontStyle::new(
-            skia_safe::font_style::Weight::MEDIUM,
-            skia_safe::font_style::Width::NORMAL,
-            skia_safe::font_style::Slant::Upright,
-        ),
-        W::SemiBold => FontStyle::new(
-            skia_safe::font_style::Weight::SEMI_BOLD,
-            skia_safe::font_style::Width::NORMAL,
-            skia_safe::font_style::Slant::Upright,
-        ),
-        W::Bold => FontStyle::bold(),
-    });
+    ts.set_font_style(font_style(key.weight));
     style.set_text_style(&ts);
     let mut builder = ParagraphBuilder::new(&style, collection.clone());
     builder.add_text(&key.text);
@@ -687,52 +749,164 @@ const GEIST_MEDIUM: &[u8] = include_bytes!("../assets/fonts/Geist-Medium.otf");
 const GEIST_SEMIBOLD: &[u8] = include_bytes!("../assets/fonts/Geist-SemiBold.otf");
 const GEIST_BOLD: &[u8] = include_bytes!("../assets/fonts/Geist-Bold.otf");
 
+/// [`build_fonts_with`] and no faces of the host's own.
 pub fn build_fonts() -> Result<Fonts> {
+    build_fonts_with(&[])
+}
+
+/// Geist, then `fallback`'s faces for the chars it lacks, then the system's. A host with no
+/// system fonts (a console, the browser) hands a CJK face here, or every Han, kana and Hangul
+/// char draws as a box. Each blob is one face; of a collection, its first.
+pub fn build_fonts_with(fallback: &[&[u8]]) -> Result<Fonts> {
+    build(fallback, FontMgr::new())
+}
+
+/// Fonts with no system faces: what a test draws does not hang on the machine's fonts.
+#[cfg(test)]
+pub(crate) fn test_fonts(fallback: &[&[u8]]) -> Fonts {
+    build(fallback, FontMgr::empty()).expect("faces load")
+}
+
+/// A face for chars Geist lacks: Lucide's icons, at private-use codepoints from U+E000.
+#[cfg(test)]
+pub(crate) const TEST_FALLBACK: &[u8] = include_bytes!("../../../../assets/lucide/font/lucide.ttf");
+
+fn build(fallback: &[&[u8]], system: FontMgr) -> Result<Fonts> {
     let mgr = FontMgr::new();
-    let load = |bytes: &[u8], which: &str| {
-        mgr.new_from_data(Data::new_copy(bytes), None)
-            .ok_or_else(|| anyhow!("embedded Geist face rejected: {which}"))
+    let load = |bytes: &[u8]| mgr.new_from_data(Data::new_copy(bytes), None);
+    let geist = |bytes, which: &str| {
+        load(bytes).ok_or_else(|| anyhow!("embedded Geist face rejected: {which}"))
     };
-    let regular = load(GEIST_REGULAR, "Regular")?;
-    let medium = load(GEIST_MEDIUM, "Medium")?;
-    let semibold = load(GEIST_SEMIBOLD, "SemiBold")?;
-    let bold = load(GEIST_BOLD, "Bold")?;
+    let regular = geist(GEIST_REGULAR, "Regular")?;
+    let medium = geist(GEIST_MEDIUM, "Medium")?;
+    let semibold = geist(GEIST_SEMIBOLD, "SemiBold")?;
+    let bold = geist(GEIST_BOLD, "Bold")?;
+    let extra = (fallback.iter().enumerate())
+        .map(|(i, bytes)| load(bytes).ok_or_else(|| anyhow!("fallback face rejected: {i}")))
+        .collect::<Result<Vec<_>>>()?;
 
     // Asset provider first: all four weights under one "Geist" alias so style matching
-    // picks the face; system manager is fallback.
+    // picks the face, the host's faces each under their own; system manager is fallback.
     let mut provider = TypefaceFontProvider::new();
     for tf in [&regular, &medium, &semibold, &bold] {
         provider.register_typeface(tf.clone(), Some("Geist"));
     }
+    let mut families = vec!["Geist".to_owned()];
+    for (i, tf) in extra.iter().enumerate() {
+        families.push(format!("pf-fallback-{i}"));
+        provider.register_typeface(tf.clone(), Some(families[i + 1].as_str()));
+    }
     let mut collection = FontCollection::new();
     collection.set_asset_font_manager(Some(provider.into()));
-    collection.set_default_font_manager(FontMgr::new(), None);
+    collection.set_default_font_manager(system, None);
     Ok(Fonts {
         regular,
         medium,
         semibold,
         bold,
         collection,
+        extra,
+        families,
+        fallback: RefCell::default(),
         paragraphs: RefCell::new(HashMap::new()),
         frame: Cell::new(0),
     })
 }
 
 impl Fonts {
-    pub fn font(&self, w: W, size: f64) -> Font {
-        let tf = match w {
+    fn face(&self, w: W) -> &Typeface {
+        match w {
             W::Regular => &self.regular,
             W::Medium => &self.medium,
             W::SemiBold => &self.semibold,
             W::Bold => &self.bold,
-        };
-        let mut f = Font::new(tf.clone(), size as f32);
-        f.set_subpixel(true);
-        f
+        }
     }
 
+    /// Geist alone. Text goes through [`measure`](Self::measure) and [`draw`](Self::draw),
+    /// which reach past Geist for a char it lacks.
+    pub fn font(&self, w: W, size: f64) -> Font {
+        sized(self.face(w), size)
+    }
+
+    /// The face that draws `c`: Geist when it has the glyph, else [`Self::fallback`], else
+    /// Geist's missing-glyph box. ASCII is always Geist, as [`Self::runs`] takes it.
+    fn face_for(&self, c: char, w: W) -> Typeface {
+        let geist = self.face(w);
+        if c.is_ascii() || has(geist, c) {
+            return geist.clone();
+        }
+        self.fallback(c, w).unwrap_or_else(|| geist.clone())
+    }
+
+    /// The face for `c`, which Geist lacks: the host's, else the system's for the UI language.
+    /// `None` when no face has it.
+    fn fallback(&self, c: char, w: W) -> Option<Typeface> {
+        let lang = pf_l10n::language();
+        let mut fb = self.fallback.borrow_mut();
+        if fb.lang != lang {
+            *fb = Fallback {
+                lang,
+                ..Fallback::default()
+            };
+        }
+        if let Some(face) = fb.chars.get(&(c, w)) {
+            return face.clone();
+        }
+        let page = (u32::from(c) >> 8, w);
+        let mut face = self.extra.iter().find(|f| has(f, c)).cloned();
+        if face.is_none() {
+            face = fb.pages.get(&page).filter(|f| has(f, c)).cloned();
+        }
+        if face.is_none() {
+            // The paragraph path's own lookup, so a title and its card label share a face.
+            face = (self.collection.clone())
+                .default_fallback_char_and_families(
+                    c as Unichar,
+                    &["Geist"],
+                    font_style(w),
+                    font_lang(lang),
+                    None,
+                )
+                .filter(|f| has(f, c));
+            if let Some(f) = &face {
+                fb.pages.insert(page, f.clone());
+            }
+        }
+        fb.chars.insert((c, w), face.clone());
+        face
+    }
+
+    /// `text` cut where its face changes. `None` when Geist draws all of it, so the common
+    /// line stays one `draw_str` and pure ASCII costs one scan.
+    fn runs<'t>(&self, text: &'t str, w: W) -> Option<Vec<(&'t str, Typeface)>> {
+        let geist = self.face(w);
+        if text.is_ascii() || covers(geist, text) {
+            return None;
+        }
+        let mut runs = Vec::new();
+        let (mut start, mut face) = (0, geist.clone());
+        for (i, c) in text.char_indices() {
+            let next = self.face_for(c, w);
+            if next.unique_id() != face.unique_id() {
+                if i > start {
+                    runs.push((&text[start..i], face));
+                }
+                (start, face) = (i, next);
+            }
+        }
+        runs.push((&text[start..], face));
+        Some(runs)
+    }
+
+    /// The advance [`draw`](Self::draw) gives `text`.
     pub fn measure(&self, text: &str, w: W, size: f64) -> f32 {
-        self.font(w, size).measure_str(text, None).0
+        match self.runs(text, w) {
+            None => self.font(w, size).measure_str(text, None).0,
+            Some(runs) => (runs.iter())
+                .map(|(t, face)| sized(face, size).measure_str(t, None).0)
+                .sum(),
+        }
     }
 
     /// `draw_str` at a baseline, not a top edge. Returns the advance so callers can chain runs.
@@ -750,8 +924,8 @@ impl Fonts {
         self.put(canvas, text, x, baseline, w, size, color, None)
     }
 
-    /// [`draw`](Self::draw) for a run its caller gave `boxed` width. The text probe checks
-    /// the run against that box, else against the canvas clip.
+    /// [`draw`](Self::draw) for a run its caller gave `boxed` width. Each face's run sits on
+    /// the one baseline. The text probe checks the run against `boxed`, else the canvas clip.
     #[allow(clippy::too_many_arguments)]
     #[cfg_attr(not(test), allow(unused_variables))]
     fn put(
@@ -765,8 +939,24 @@ impl Fonts {
         color: Color4f,
         boxed: Option<f64>,
     ) -> f32 {
-        let font = self.font(w, size);
-        let advance = font.measure_str(text, None).0;
+        let paint = fill(color);
+        let runs = self.runs(text, w);
+        let advance = match &runs {
+            None => {
+                let font = self.font(w, size);
+                canvas.draw_str(text, Point::new(x as f32, baseline as f32), &font, &paint);
+                font.measure_str(text, None).0
+            }
+            Some(runs) => {
+                let mut pen = x as f32;
+                for (t, face) in runs {
+                    let font = sized(face, size);
+                    canvas.draw_str(t, Point::new(pen, baseline as f32), &font, &paint);
+                    pen += font.measure_str(t, None).0;
+                }
+                pen - x as f32
+            }
+        };
         #[cfg(test)]
         crate::textprobe::run(
             canvas,
@@ -777,12 +967,6 @@ impl Fonts {
                 (baseline + size * 0.25) as f32,
             ),
             boxed.map(|b| b as f32),
-        );
-        canvas.draw_str(
-            text,
-            Point::new(x as f32, baseline as f32),
-            &font,
-            &fill(color),
         );
         advance
     }
@@ -822,10 +1006,11 @@ impl Fonts {
                 let c = color.to_color();
                 [c.a(), c.r(), c.g(), c.b()]
             },
+            lang: pf_l10n::language(),
         };
         let mut cache = self.paragraphs.borrow_mut();
         let entry = cache.entry(key).or_insert_with_key(|k| Cached {
-            para: shape(&self.collection, k),
+            para: shape(&self.collection, &self.families, k),
             used: frame,
         });
         entry.used = frame;
@@ -940,6 +1125,7 @@ impl Fonts {
     }
 
     /// One line, ellipsized to `max_w`, at a baseline. For titles that exceed their tile.
+    /// Each char is measured in the face that draws it, so the cut fits what is drawn.
     #[allow(clippy::too_many_arguments)]
     pub fn draw_clipped(
         &self,
@@ -952,27 +1138,29 @@ impl Fonts {
         color: Color4f,
         max_w: f64,
     ) {
-        let font = self.font(w, size);
-        if font.measure_str(text, None).0 <= max_w as f32 {
+        if self.measure(text, w, size) <= max_w as f32 {
             self.put(canvas, text, x, baseline, w, size, color, Some(max_w));
             return;
         }
         let ell = "…";
-        let ell_w = font.measure_str(ell, None).0;
-        let mut fitted = String::new();
-        let mut used = 0.0f32;
+        let ell_w = self.measure(ell, w, size);
+        let runs = (self.runs(text, w)).unwrap_or_else(|| vec![(text, self.face(w).clone())]);
+        let (mut used, mut end) = (0.0f32, 0);
         // Measure from a stack buffer, not a `String` per character: this runs
         // every over-long title, every frame.
         let mut buf = [0u8; 4];
-        for ch in text.chars() {
-            let cw = font.measure_str(&*ch.encode_utf8(&mut buf), None).0;
-            if used + cw + ell_w > max_w as f32 {
-                break;
+        'fit: for (t, face) in &runs {
+            let font = sized(face, size);
+            for ch in t.chars() {
+                let cw = font.measure_str(&*ch.encode_utf8(&mut buf), None).0;
+                if used + cw + ell_w > max_w as f32 {
+                    break 'fit;
+                }
+                used += cw;
+                end += ch.len_utf8();
             }
-            fitted.push(ch);
-            used += cw;
         }
-        fitted.push_str(ell);
+        let fitted = format!("{}{ell}", &text[..end]);
         self.put(canvas, &fitted, x, baseline, w, size, color, Some(max_w));
     }
 }
@@ -1063,6 +1251,91 @@ mod tests {
             fonts.measure("Punktfunk", W::Bold, 16.0)
                 > fonts.measure("Punktfunk", W::Regular, 16.0)
         );
+    }
+
+    /// Latin and Cyrillic stay one Geist `draw_str`, at the width Geist alone gives.
+    #[test]
+    fn geist_text_takes_the_one_run_path() {
+        let fonts = test_fonts(&[TEST_FALLBACK]);
+        let ascii: String = (' '..='~').collect();
+        for text in [ascii.as_str(), "Einstellungen für Ŵéŕķ", "Настройки"] {
+            assert!(fonts.runs(text, W::Medium).is_none(), "{text:?} split");
+            let geist = fonts.font(W::Medium, 15.0).measure_str(text, None).0;
+            assert_eq!(fonts.measure(text, W::Medium, 15.0), geist, "{text:?}");
+        }
+        // The ASCII shortcut skips the glyph check: Geist has every printable one.
+        assert!(ascii.chars().all(|c| has(&fonts.medium, c)));
+    }
+
+    /// A char Geist lacks takes the fallback face's advance, and draw and measure agree.
+    #[test]
+    fn a_char_geist_lacks_draws_in_the_fallback_face() {
+        let (text, icon) = ("Play \u{e58a}", "\u{e58a}");
+        let fonts = test_fonts(&[TEST_FALLBACK]);
+        let runs = fonts
+            .runs(text, W::Regular)
+            .expect("the icon splits the line");
+        assert_eq!(
+            runs.iter().map(|r| r.0).collect::<Vec<_>>(),
+            ["Play ", icon]
+        );
+        let lucide = sized(&fonts.extra[0], 16.0).measure_str(icon, None).0;
+        assert!(lucide > 0.0);
+        let latin = fonts.measure("Play ", W::Regular, 16.0);
+        assert_eq!(fonts.measure(text, W::Regular, 16.0), latin + lucide);
+        // Without a fallback the box takes Geist's missing-glyph advance instead.
+        let bare = test_fonts(&[]).measure(text, W::Regular, 16.0);
+        assert_ne!(bare, latin + lucide);
+        let mut surface = skia_safe::surfaces::raster_n32_premul((200, 40)).unwrap();
+        let ink = Color4f::new(1.0, 1.0, 1.0, 1.0);
+        let drawn = fonts.draw(surface.canvas(), text, 0.0, 30.0, W::Regular, 16.0, ink);
+        assert_eq!(drawn, latin + lucide);
+    }
+
+    /// A long line of chars Geist lacks ellipsizes inside its box: Lucide icons always, and
+    /// Japanese where this machine has a CJK face.
+    #[test]
+    fn a_fallback_line_ellipsizes_inside_its_box() {
+        let icons: String = ('\u{e58a}'..='\u{e5a0}').collect();
+        let cases = [
+            (test_fonts(&[TEST_FALLBACK]), icons),
+            (
+                build_fonts().unwrap(),
+                "日本語のとても長いゲームのタイトル".repeat(3),
+            ),
+        ];
+        let mut surface = skia_safe::surfaces::raster_n32_premul((400, 60)).unwrap();
+        let ink = Color4f::new(1.0, 1.0, 1.0, 1.0);
+        for (fonts, text) in cases {
+            let first = text.chars().next().unwrap();
+            if !has(&fonts.face_for(first, W::Regular), first) {
+                eprintln!("skipped {first:?}: no face on this machine has it");
+                continue;
+            }
+            let max_w = 120.0;
+            assert!(fonts.measure(&text, W::Regular, 16.0) > max_w as f32);
+            crate::textprobe::begin();
+            let c = surface.canvas();
+            fonts.draw_clipped(c, &text, 10.0, 30.0, W::Regular, 16.0, ink, max_w);
+            let run = crate::textprobe::end().remove(0);
+            assert!(
+                run.text.ends_with('…') && run.text.chars().count() > 2,
+                "{run:?}"
+            );
+            assert!(run.x1 - run.x0 <= max_w as f32, "{run:?}");
+        }
+    }
+
+    /// Chinese reaches each font manager in the spelling its fallback list is tagged with.
+    #[test]
+    fn the_han_hint_matches_the_platform() {
+        assert_eq!(font_lang("ja"), "ja");
+        let (hans, hant) = (font_lang("zh-Hans"), font_lang("zh-TW"));
+        if cfg!(target_os = "android") {
+            assert_eq!((hans, hant), ("zh-Hans", "zh-Hant"));
+        } else {
+            assert_eq!((hans, hant), ("zh-CN", "zh-TW"));
+        }
     }
 
     /// Skia's 4×5 row-major apply, without the clamp, so a channel below zero is visible.

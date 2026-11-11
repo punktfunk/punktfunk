@@ -4,7 +4,7 @@
 use crate::grid::{GRID_H, GRID_W};
 use crate::library::{initials, store_label, LibraryGame};
 use crate::theme::{art_sampling, fill, Fonts, Frame, W};
-use skia_safe::{Canvas, Color4f, Data, Image, Point, Rect};
+use skia_safe::{Canvas, Color4f, Data, Image, Rect};
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -350,15 +350,15 @@ pub(crate) fn draw_poster_placeholder(
     } else {
         (initials(&game.title), f64::from(rect.height()) * 0.115)
     };
-    let font = fonts.font(W::Bold, size.max(9.0 * k));
-    let tw = font.measure_str(&glyph, None).0;
-    canvas.draw_str(
+    let px = size.max(9.0 * k);
+    let tw = fonts.measure(&glyph, W::Bold, px);
+    fonts.draw(
+        canvas,
         &glyph,
-        Point::new(
-            rect.left + (rect.width() - tw) / 2.0,
-            rect.center_y() + (size * 0.36) as f32,
-        ),
-        &font,
-        &fill(ink(0.85)),
+        f64::from(rect.left + (rect.width() - tw) / 2.0),
+        f64::from(rect.center_y()) + size * 0.36,
+        W::Bold,
+        px,
+        ink(0.85),
     );
 }
