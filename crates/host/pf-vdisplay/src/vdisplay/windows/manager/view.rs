@@ -78,6 +78,11 @@ impl View {
             .any(|c| matches!(c.life, lifecycle::State::Lingering { until } if now >= until))
     }
 
+    /// The monitor of `generation` has more than one hold.
+    pub(super) fn shared(&self, generation: u64) -> bool {
+        (self.0.iter()).any(|c| c.generation == generation && c.life.refs() > 1)
+    }
+
     /// `slot`'s committed life and its joined holds; `Idle` when it is not in the map.
     pub(super) fn life(&self, slot: u32) -> (lifecycle::State, u32) {
         self.0

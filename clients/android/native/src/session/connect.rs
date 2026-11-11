@@ -922,6 +922,22 @@ pub extern "system" fn Java_io_unom_punktfunk_kit_NativeBridge_nativeHostFingerp
         .resolve::<LogErrorAndDefault>()
 }
 
+/// Report whether the keyed session started on a screen another device opened and sized.
+/// Missing or concurrently closed keys, and a host that does not say, return `false`.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_io_unom_punktfunk_kit_NativeBridge_nativeSharesScreen(
+    _env: EnvUnowned,
+    _this: JObject,
+    handle: jlong,
+) -> jboolean {
+    use punktfunk_core::quic::v2::hello::ScreenEcho;
+    jni_guard(false, || {
+        SESSIONS
+            .get(handle)
+            .is_some_and(|session| session.client.screen() == Some(&ScreenEcho::Shared))
+    })
+}
+
 /// Report whether the keyed QUIC session has ended.
 ///
 /// The stream watchdog polls this to leave a frozen final frame after disconnect. Missing or

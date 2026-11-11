@@ -88,6 +88,8 @@ pub(crate) struct Script {
     /// The device this display serves, as `set_client_identity` names it to a pooled backend.
     /// `accepts_kept` answers by it, as those backends do.
     pub(crate) client_fp: Option<[u8; 32]>,
+    /// `join_live`; `join_cast` then casts the node it names.
+    pub(crate) join_live: bool,
 }
 
 struct Shared {
@@ -147,6 +149,7 @@ impl FakeDisplay {
                     cast_fails: false,
                     identity_slot: None,
                     client_fp: None,
+                    join_live: false,
                 },
                 calls: Vec::new(),
                 nodes: 0,
@@ -255,7 +258,11 @@ impl VirtualDisplay for FakeDisplay {
     #[cfg(target_os = "linux")]
     fn join_cast(&mut self, name: &str, node_id: u32) -> Result<Option<crate::SessionCastParts>> {
         self.log(Call::JoinCast(name.to_string(), node_id));
-        Ok(None)
+        let joins = self.answer(|s| s.join_live);
+        Ok(joins.then(|| {
+            let closed: Box<dyn Send> = Box::new(OnDrop(self.clone(), Call::CastClosed(node_id)));
+            (node_id, None, closed)
+        }))
     }
 
     fn set_launch_command(&mut self, cmd: Option<String>) {
@@ -280,6 +287,10 @@ impl VirtualDisplay for FakeDisplay {
 
     fn set_join_live(&mut self, on: bool) {
         self.log(Call::SetJoinLive(on));
+    }
+
+    fn join_live(&self) -> bool {
+        self.answer(|s| s.join_live)
     }
 
     fn set_quit_flag(&mut self, _quit: Arc<std::sync::atomic::AtomicBool>) {

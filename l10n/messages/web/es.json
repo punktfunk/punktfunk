@@ -1648,5 +1648,5 @@
 	"display_preset_hotdesk_hint": "Una persona a la vez, con reconexión inmediata entre tus dispositivos; a los demás se les avisa de que está ocupado.",
 	"display_preset_shared_desktop_hint": "Para un host que también usas en persona: tus monitores siguen encendidos y cada espectador extra tiene su pantalla.",
 	"display_preset_workstation_hint": "Tu equipo multimonitor de cada día: las pantallas vuelven a donde las pusiste y el escritorio es solo tuyo.",
-	"display_preset_play_together_hint": "Para jugar o mirar con amigos: todos los que se conectan ven la misma pantalla y pueden usarla."
+	"display_preset_play_together_hint": "Para jugar o mirar con amigos: todos ven y usan la misma pantalla, con el tamaño del primero que se conecte."
 }

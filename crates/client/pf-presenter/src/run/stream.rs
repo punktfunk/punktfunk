@@ -307,8 +307,9 @@ pub(super) fn resize_decision(
 /// * END — decode reports each frame's dimensions; when they reach either (`decoded`): a
 ///   host that reads the view encodes it, any other host the mode. The accepted-switch ack
 ///   alone cannot end it: the ack round-trips in milliseconds, ahead of the host's rebuild.
-/// * TIMEOUT — a switch that never delivers the exact target (reject, cap, or
-///   corrective ack); `tick` clears it after [`ResizeIndicator::TIMEOUT`].
+/// * REFUSED — the host refused a switch (`refusals`): no frame at the target is coming.
+/// * TIMEOUT — a switch that never delivers the exact target (cap, or corrective ack);
+///   `tick` clears it after [`ResizeIndicator::TIMEOUT`].
 ///
 /// Pure + clock-injected so the transition logic is unit-tested without a live session.
 #[derive(Default)]
@@ -318,6 +319,8 @@ pub(super) struct ResizeIndicator {
     target: Option<[(u32, u32); 2]>,
     /// When the current active span began — the timeout is measured from here.
     since: Option<Instant>,
+    /// The connector's refusal count as last read.
+    refused: u32,
 }
 
 impl ResizeIndicator {
@@ -342,6 +345,15 @@ impl ResizeIndicator {
     /// A decoded frame at `w`×`h`. Clears once it matches the steered mode or view.
     pub(super) fn decoded(&mut self, w: u32, h: u32) {
         if self.target.is_some_and(|t| t.contains(&(w, h))) {
+            self.target = None;
+            self.since = None;
+        }
+    }
+
+    /// The connector's [`mode_refusals`](NativeClient::mode_refusals): a new
+    /// refusal drops the scrim at once.
+    pub(super) fn refusals(&mut self, count: u32) {
+        if std::mem::replace(&mut self.refused, count) != count {
             self.target = None;
             self.since = None;
         }
@@ -900,6 +912,9 @@ impl Shell {
         }
         // A switch the host rejected/capped never delivers the exact target frame —
         // drop the scrim so it cannot linger.
+        if let Some(c) = &st.connector {
+            st.resize_overlay.refusals(c.mode_refusals());
+        }
         st.resize_overlay.tick(Instant::now());
         // Touch long-press: a still finger raises no SDL event, so the gesture engine
         // needs the clock — SDL ticks, the millisecond base the finger timestamps use.
@@ -1246,6 +1261,14 @@ mod tests {
         assert!(ind.active(), "still within the timeout window");
         ind.tick(t0 + ResizeIndicator::TIMEOUT);
         assert!(!ind.active(), "timeout lifts a switch that never delivered");
+
+        // A refusal lifts it at once; an unchanged count does not.
+        let mut ind = ResizeIndicator::default();
+        ind.steering((1000, 600), None, t0);
+        ind.refusals(0);
+        assert!(ind.active(), "no refusal yet");
+        ind.refusals(1);
+        assert!(!ind.active(), "the host refused the switch");
     }
 
     #[test]

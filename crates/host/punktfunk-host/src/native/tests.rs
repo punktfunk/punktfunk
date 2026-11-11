@@ -793,6 +793,28 @@ fn a_codec_ask_moves_the_stream_to_another_codec_on_a_new_epoch() {
     host.join().unwrap().unwrap();
 }
 
+/// A mode switch the host refuses moves the client's refusal count and leaves the mode.
+#[test]
+fn a_refused_mode_switch_is_counted() {
+    let _registry = crate::session_status::tests::registry_lock();
+    let _serial = SESSION_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    let (client, host) = synthetic_session(19792, Punktfunk1Source::Synthetic, |p| p);
+    let before = client.mode();
+    let odd = punktfunk_core::Mode {
+        width: 1281,
+        height: 721,
+        refresh_hz: 60,
+    };
+    client.request_mode(odd).unwrap();
+    assert!(
+        wait_for(|| client.mode_refusals() == 1),
+        "an odd size is refused"
+    );
+    assert_eq!(client.mode(), before);
+    drop(client);
+    host.join().unwrap().unwrap();
+}
+
 /// A keyframe ask leaves as a feedback datagram and the host answers it: the synthetic
 /// source's IDR is ten ordinary frames.
 #[test]

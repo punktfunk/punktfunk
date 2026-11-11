@@ -647,11 +647,13 @@ final class SessionModel: ObservableObject {
         if trusted {
             connection = conn
             noteTouchFallback(conn)
+            noteSharedScreen(conn)
             startStatsTimer()
             beginStreaming()
         } else if allowTofu {
             connection = conn
             noteTouchFallback(conn)
+            noteSharedScreen(conn)
             startStatsTimer()
             phase = .awaitingTrust(fingerprint: conn.hostFingerprint)
         } else {
@@ -747,6 +749,13 @@ final class SessionModel: ObservableObject {
         notices[keyPath: slot].show(value, for: seconds) { [weak self] in
             self?.notices[keyPath: slot].clear()
         }
+    }
+
+    /// Say once, at stream start, that this screen is another device's and sized by it. It
+    /// rides the launch line's slot: a joiner's dropped game is about the same screen.
+    private func noteSharedScreen(_ conn: PunktfunkConnection) {
+        guard conn.sharesScreen else { return }
+        flash(\.launch, String(localized: L10n.noticeSharedScreen), for: SessionNotices.launchSeconds)
     }
 
     /// Say so when the passthrough touch model meets a host without touch injection — the same

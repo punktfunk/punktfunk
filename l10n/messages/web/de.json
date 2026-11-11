@@ -1625,5 +1625,5 @@
 	"display_preset_hotdesk_hint": "Eine Person zur Zeit, mit sofortigem Wiederverbinden zwischen deinen Geräten; alle anderen erfahren, dass er belegt ist.",
 	"display_preset_shared_desktop_hint": "Für einen Host, an dem du auch selbst sitzt: Deine Monitore bleiben an, und weitere Zuschauer bekommen einen eigenen Bildschirm.",
 	"display_preset_workstation_hint": "Dein Alltagsrechner mit mehreren Monitoren: Anzeigen kehren an ihren Platz zurück, und der Desktop gehört dir allein.",
-	"display_preset_play_together_hint": "Zum gemeinsamen Spielen oder Zuschauen: Alle, die sich verbinden, sehen denselben Bildschirm und können ihn bedienen."
+	"display_preset_play_together_hint": "Zum gemeinsamen Spielen oder Zuschauen: Alle sehen und bedienen denselben Bildschirm, dessen Größe das erste Gerät festlegt."
 }

@@ -284,10 +284,11 @@ async fn launch_under(
     match launch(&st, &q) {
         Ok(mut session) => {
             let mode = (session.width, session.height, session.fps);
-            let (_reservation, joined) = match admit_native(&st, conflict, mode).await {
-                Ok(admitted) => admitted,
-                Err(busy) => return busy,
-            };
+            let (_reservation, joined) =
+                match admit_native(&st, conflict, mode, hdr_asked(&q)).await {
+                    Ok(admitted) => admitted,
+                    Err(busy) => return busy,
+                };
             if steal {
                 // A drop, not a quit — the same as a native steal victim. `launch` clears
                 // first, so the control tick tells the old client while its media stop.
@@ -331,13 +332,15 @@ async fn launch_under(
 }
 
 /// The launch against the native sessions in the display table, under the same policy: a
-/// refusal is the 503 to answer, a steal ends them first, a join returns the owner's display.
-/// The reservation holds this launch's place until it answers; this plane's own rows hold
-/// `gs.preempted`, so they never conflict.
+/// refusal is the 503 to answer, a steal ends them first, a join returns the owner's display,
+/// once a native connect still in bring-up streams. A join of an HDR display needs
+/// `hdr_asked`. The reservation holds this launch's place until it answers; this plane's own
+/// rows hold `gs.preempted`, so they never conflict.
 async fn admit_native(
     st: &AppState,
     conflict: crate::vdisplay::policy::ModeConflict,
     mode: (u32, u32, u32),
+    hdr_asked: bool,
 ) -> std::result::Result<
     (
         crate::vdisplay::admission::Reservation,
@@ -345,10 +348,26 @@ async fn admit_native(
     ),
     Response,
 > {
-    use crate::vdisplay::admission::{admit_under, all_gone, Admission};
-    let (native, reservation) = admit_under(conflict, None, mode, st.gs.preempted.clone());
+    use crate::vdisplay::admission::{admit_under, all_gone, joined_hdr, Admission};
+    // `join` may wait out a native connect's bring-up: off the runtime's workers.
+    let preempted = st.gs.preempted.clone();
+    let admitted =
+        tokio::task::spawn_blocking(move || admit_under(conflict, None, mode, preempted));
+    let Ok((native, reservation)) = admitted.await else {
+        tracing::warn!("GameStream launch REJECTED — the admission task did not finish");
+        return Err((StatusCode::SERVICE_UNAVAILABLE, xml(error_xml(BUSY))).into_response());
+    };
     match native {
         Admission::Separate => {}
+        Admission::Join(_, d)
+            if d.isolation.is_none() && joined_hdr(d.hdr, hdr_asked).is_none() =>
+        {
+            tracing::warn!(
+                "GameStream launch REJECTED — the display to share is HDR and this client asked for none"
+            );
+            let refusal = error_xml(crate::vdisplay::admission::JOIN_NEEDS_HDR);
+            return Err((StatusCode::SERVICE_UNAVAILABLE, xml(refusal)).into_response());
+        }
         // Moonlight input takes the shared injector, which an isolated owner does not read.
         Admission::Join(live, display) if display.isolation.is_none() => {
             tracing::info!(
@@ -592,6 +611,13 @@ fn host_audio(q: &HashMap<String, String>) -> Option<bool> {
     q.get("localAudioPlayMode")
         .and_then(|v| v.trim().parse::<i64>().ok())
         .map(|v| v != 0)
+}
+
+/// `/launch`'s `hdrMode`: the client streams HDR. ANNOUNCE's `dynamicRangeMode` confirms it.
+fn hdr_asked(q: &HashMap<String, String>) -> bool {
+    q.get("hdrMode")
+        .and_then(|v| v.trim().parse::<i64>().ok())
+        .is_some_and(|v| v != 0)
 }
 
 /// GameStream `mode`: `"WxHxFPS"`.
@@ -1392,6 +1418,46 @@ mod tests {
         assert!(!stop.load(SeqCst), "the native session keeps streaming");
         let joined = st.gs.joined.lock().unwrap().clone();
         assert_eq!(joined.map(|(mode, _)| mode), Some((2560, 1440, 120)));
+    }
+
+    /// An HDR display is shared only with a launch that asked for HDR.
+    #[tokio::test]
+    async fn a_launch_without_hdr_is_refused_an_hdr_display() {
+        use crate::vdisplay::admission::{register, LiveDisplay};
+        use crate::vdisplay::policy::ModeConflict;
+        let _registry = crate::session_status::tests::REGISTRY.lock().await;
+        let launch = |st: Arc<AppState>, hdr: &str| {
+            let q = HashMap::from([
+                ("rikey".to_string(), "22".repeat(16)),
+                ("rikeyid".to_string(), "9".to_string()),
+                ("mode".to_string(), "1920x1080x60".to_string()),
+                ("hdrMode".to_string(), hdr.to_string()),
+            ]);
+            let peer = Some(Extension(PeerCertFingerprint(Some(fp_of(b"gs-joiner")))));
+            launch_under(st, peer, None, q, ModeConflict::Join)
+        };
+        let hdr = LiveDisplay {
+            hdr: true,
+            ..LiveDisplay::default()
+        };
+        let _native = register(
+            Some([0x4f; 32]),
+            (2560, 1440, 120),
+            Arc::default(),
+            "native".into(),
+            hdr,
+            None,
+        );
+        let st = test_state();
+        let resp = launch(st.clone(), "0").await;
+        assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert!(
+            st.launch.lock().unwrap().is_none(),
+            "no session was created"
+        );
+        let st = test_state();
+        assert_eq!(launch(st.clone(), "1").await.status(), StatusCode::OK);
+        assert!(st.gs.joined.lock().unwrap().is_some());
     }
 
     /// A display stolen through admission ends the session on the control tick, as a drop,

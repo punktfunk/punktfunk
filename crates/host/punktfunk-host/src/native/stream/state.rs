@@ -559,10 +559,12 @@ impl StreamState {
 
     /// Bring the session up in phases. What the context settles comes first: the plan, the
     /// display and wire requests, a mode queued meanwhile, the facts and the shared handles.
-    /// Then the bring-up ramp, the display and its first pipeline, the launch and game lease,
-    /// the send thread, the registration, and the further screens on the assembled state. A
-    /// phase's result is a local until the struct is assembled, so one that fails drops what the
-    /// phases before it started: the lease, the pipeline, the display, the ramp.
+    /// Then the bring-up ramp, the display and its first pipeline, whose capture settles the
+    /// plan ([`SessionPlan::captured_by`](crate::session_plan::SessionPlan::captured_by)), the
+    /// launch and game lease, the send thread, the registration, and the further screens on the
+    /// assembled state. A phase's result is a local until the struct is assembled, so one that
+    /// fails drops what the phases before it started: the lease, the pipeline, the display, the
+    /// ramp.
     pub(super) fn new(ctx: SessionContext, prepared: Option<PreparedDisplay>) -> Result<Self> {
         let mut plan = session_plan(&ctx);
         let (cursor, vd_params) = display_request(&ctx, &plan);
@@ -589,6 +591,7 @@ impl StreamState {
             Some(pipe) => pipe,
             None => build_first(&mut display, &facts, plan, c.bit_depth, bitrate_kbps, &fec)?,
         };
+        plan = plan.captured_by(&*pipe.capturer);
         let live = first_live(
             pipe,
             &mut display,
@@ -1060,6 +1063,7 @@ fn shared_handles(ctx: &SessionContext) -> (Shared, FecState) {
         cadence_behind_score: s.cadence_behind_score.clone(),
         client_packets_received: s.client_packets_received.clone(),
         cursor_client_draws: s.cursor_client_draws.clone(),
+        joined_display: s.joined_display.clone(),
     };
     let fec = FecState {
         requested: s.fec_requested.clone(),
@@ -1162,7 +1166,8 @@ fn build_first(
 
 /// The first pipeline as the loop's live one at `mode`. The input thread's framing, the
 /// clipboard's gamescope and the portal's cursor verdict follow it, the rate it opened at is
-/// adopted, and `/status` gets the mode it delivers.
+/// adopted, the control task learns the display it joined, and `/status` gets the mode it
+/// delivers.
 fn first_live(
     pipe: Pipeline,
     display: &mut DisplayRequest,
@@ -1192,8 +1197,8 @@ fn first_live(
         display.no_overlay_means_off_output =
             settle_portal_cursor(&*display.vd, &mut display.metadata_composite);
     }
-    #[cfg(not(target_os = "linux"))]
-    let _ = display;
+    let joined = crate::native::wiring::joined_display(display.vd_params.join_live, display_gen);
+    shared.joined_display.store(joined, Ordering::Relaxed);
     adopt_built_bitrate(&mut bitrate_kbps, built, &shared.live_bitrate, retarget);
     // Stats slot only — an ordinary connect is not owed a corrective Reconfigured.
     let delivered = delivered_mode(frame.width, frame.height, interval);

@@ -158,8 +158,8 @@ export interface SessionActions {
 
 /**
  * A live session. `stream` is set only on the row the host reports numbers for. A seat's row
- * says so (`seat`), and its primary action ends the seat's session (`endLabel`). Its folded
- * facts name the link rate every frame is paced at, the wake shape while it is on, and where
+ * says so (`seat`), and its primary action ends the seat's session (`endLabel`). A session on
+ * another's screen says so beside its mode (`join`). Its folded facts name the link rate every frame is paced at, the wake shape while it is on, and where
  * the last minute's lost shards fell in their frames (`link`, absent in the first minute).
  *
  * Mute and the player slot ride native-only lanes; access is ungoverned on the compat plane, so
@@ -208,6 +208,7 @@ export const SessionRowView: FC<
 	const facts = [
 		game ? who : undefined,
 		seat ? m.home_own_desktop() : undefined,
+		row.join ? m.sessions_joined() : undefined,
 		row.mode,
 		stream
 			? `${stream.codec.toUpperCase()} · ${fmtNumber(stream.bitrate_kbps / 1000, 1)} Mbit/s`
@@ -216,7 +217,7 @@ export const SessionRowView: FC<
 	].filter(Boolean);
 	const more = [
 		row.preset_name,
-		row.join ? m.sessions_joined() : m.sessions_own_display(),
+		row.join ? undefined : m.sessions_own_display(),
 		sharedWith.length > 0
 			? m.sessions_shared_path({ names: sharedWith.join(", ") })
 			: undefined,

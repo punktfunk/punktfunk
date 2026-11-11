@@ -1438,5 +1438,5 @@
 	"display_preset_hotdesk_hint": "Line under the 'Hot-desk' preset card.",
 	"display_preset_shared_desktop_hint": "Line under the 'Desk PC' preset card.",
 	"display_preset_workstation_hint": "Line under the 'Workstation' preset card.",
-	"display_preset_play_together_hint": "Line under the 'Play together' preset card."
+	"display_preset_play_together_hint": "Line under the 'Play together' preset card. 'The first to connect' is the first device; its resolution sets the shared screen's size."
 }

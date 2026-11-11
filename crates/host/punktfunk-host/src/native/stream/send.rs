@@ -272,9 +272,9 @@ pub(super) struct SendStats {
 /// Whether this session may accept a mid-stream `Reconfigure`.
 ///
 /// Off for gamescope (a resize respawns the nested game), a per-client-mode identity (the mode
-/// is part of the slot key, so a resize is a different display), and a `shared` display: a
-/// monitor mirror (`design/per-monitor-portal-capture.md`) or a `mode_conflict: join` session.
-/// Both stream a display whose mode belongs to someone else. The client scales.
+/// is part of the slot key, so a resize is a different display), and a `shared` display, a
+/// monitor mirror (`design/per-monitor-portal-capture.md`), whose mode belongs to someone else.
+/// The client scales. A `mode_conflict: join` session is asked at each switch instead.
 pub(crate) fn reconfig_allowed(
     compositor: Option<crate::vdisplay::Compositor>,
     per_client_mode: bool,

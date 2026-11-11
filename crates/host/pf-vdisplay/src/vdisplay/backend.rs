@@ -107,10 +107,11 @@ pub struct VirtualOutput {
     /// retrying the same dead node. `None` on a fresh create or a non-poolable output.
     #[cfg(target_os = "linux")]
     pub reused_gen: Option<u64>,
-    /// Pool generation of this display (fresh or reused, unlike `reused_gen`). A mid-stream
-    /// mode-switch [`registry::retire`](crate::registry::retire)s the superseded display so it
-    /// does not linger. `None` for non-poolable outputs. See `design/midstream-resolution-resize.md`.
-    #[cfg(target_os = "linux")]
+    /// Generation of this display (fresh or reused, unlike `reused_gen`): the Linux pool's or
+    /// the Windows monitor's, which a joiner's output shares with its owner's. A mid-stream mode
+    /// switch [`registry::retire`](crate::registry::retire)s the superseded one;
+    /// [`registry::shared`](crate::registry::shared) counts its holders. `None` for an output
+    /// neither tracks.
     pub pool_gen: Option<u64>,
     /// Created at a sacrificial size so KWin rebuilds its format offer (refresh cap only updates
     /// on a size change while recording). Capturer holds frames until renegotiation to
@@ -167,7 +168,6 @@ impl VirtualOutput {
             ownership: DisplayOwnership::Owned,
             #[cfg(target_os = "linux")]
             reused_gen: None,
-            #[cfg(target_os = "linux")]
             pool_gen: None,
             #[cfg(target_os = "linux")]
             expect_exact_dims: false,

@@ -55,7 +55,7 @@ pub(crate) fn preset_summary(id: &str) -> &'static str {
         "shared-desktop" => "For a PC you also use in person. Your real monitors are never blanked or left with a leftover display, and extra viewers each get their own screen.",
         "hotdesk" => "One person at a time — roam between your own devices with an instant reconnect. Anyone else is told the box is busy.",
         "workstation" => "Your multi-monitor daily driver. Displays come back exactly where you arranged them, each client keeps its own settings, and the desktop is yours alone.",
-        "play-together" => "For playing or watching with friends. Everyone who connects sees the same screen and can use it.",
+        "play-together" => "For playing or watching with friends. Everyone sees and uses one screen, sized for the first to connect.",
         _ => "",
     }
 }

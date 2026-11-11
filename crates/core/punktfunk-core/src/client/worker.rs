@@ -94,6 +94,8 @@ pub(crate) struct ClientShared {
     pub(crate) video_format: Mutex<crate::quic::VideoFormat>,
     /// `CODEC_*` bits of the last codec ask the host refused; `0` while none was.
     pub(crate) codec_refused: AtomicU8,
+    /// Mode switches the host refused; the control task counts them.
+    pub(crate) mode_refusals: AtomicU32,
     /// The desktop audio stream's live format and the `AudioConfig` that moves it next.
     pub(crate) audio_anchor: Mutex<super::pump::anchor::AudioAnchor>,
     /// The audio format of the newest packet handed to the embedder; `None` = the Welcome's.
@@ -182,6 +184,7 @@ impl ClientShared {
             anchor: Mutex::default(),
             video_format: Mutex::default(),
             codec_refused: AtomicU8::new(0),
+            mode_refusals: AtomicU32::new(0),
             audio_anchor: Mutex::default(),
             audio_out: Mutex::default(),
             live_bitrate_kbps: AtomicU32::new(0),

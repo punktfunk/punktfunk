@@ -60,6 +60,9 @@ Access belongs to the device: two sessions from one device share it.
 
 ## Couch co-op over JOIN
 
+The **Play together** preset on **Displays** shares the screen with every device that connects, in
+one click: see [Play together](/docs/play-together). The steps below do it for one device.
+
 To add a second player to the game you're streaming:
 
 1. Pair the guest's device **Controller only**.

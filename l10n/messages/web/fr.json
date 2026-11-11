@@ -1636,5 +1636,5 @@
 	"display_preset_hotdesk_hint": "Une personne à la fois, avec reconnexion instantanée entre vos appareils ; les autres apprennent que l’hôte est occupé.",
 	"display_preset_shared_desktop_hint": "Pour un hôte que vous utilisez aussi sur place : vos moniteurs restent allumés, les autres spectateurs ont leur écran.",
 	"display_preset_workstation_hint": "Votre machine multi-écrans de tous les jours : les écrans reviennent où vous les avez placés, le bureau est à vous seul.",
-	"display_preset_play_together_hint": "Pour jouer ou regarder entre amis : tous ceux qui se connectent voient le même écran et peuvent l’utiliser."
+	"display_preset_play_together_hint": "Pour jouer ou regarder entre amis : tous voient et utilisent le même écran, à la taille du premier appareil connecté."
 }

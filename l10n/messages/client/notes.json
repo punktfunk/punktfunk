@@ -861,6 +861,7 @@
 	"notice_motion_unreachable": "Badge at stream start when a pad's gyro cannot reach the host's virtual controller. 'Controller type' is the setting's label (player_gamepad).",
 	"notice_exit_arming": "Cue over the stream while the controller's leave chord is held, before it fires.",
 	"notice_pin_unsustainable": "Toast once per stream when a fixed bitrate overruns this device. rate = megabits per second, a whole number. 'Automatic' is the Bitrate setting's option (player_bitrate_kbps_automatic).",
+	"notice_shared_screen": "Toast once at stream start when this device joins a screen another device opened (Play together).",
 	"notice_falling_behind": "Toast once per stream after five seconds of skipped frames. width, height = the stream's size in pixels.",
 	"hosts_error_name_empty": "Toast when the host page's Name row is applied empty."
 }

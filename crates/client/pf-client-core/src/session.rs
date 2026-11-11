@@ -1287,7 +1287,11 @@ fn pump(
         // This is what the host sent. `PUNKTFUNK_AU_FAULT` injects one level down, so
         // a faulted run's fixture is the clean bitstream and will not replay the damage.
         au_dump: crate::au_dump::AuDump::from_env(connector.codec),
-        notices: WindowNotices::default(),
+        notices: WindowNotices {
+            shared_unsaid: connector.screen()
+                == Some(&punktfunk_core::quic::v2::hello::ScreenEcho::Shared),
+            ..Default::default()
+        },
         window_start: Instant::now(),
         total_frames: 0,
         picture: None,
@@ -1840,6 +1844,8 @@ struct WindowNotices {
     overrun_noticed: bool,
     /// The last launch verdict turned into a notice: each verdict is said once.
     launch_told: Option<punktfunk_core::quic::LaunchOutcome>,
+    /// The session started on another device's screen, and the first window has not said so.
+    shared_unsaid: bool,
 }
 
 impl WindowNotices {
@@ -1855,6 +1861,9 @@ impl WindowNotices {
         launch: Option<punktfunk_core::quic::LaunchOutcome>,
     ) -> Vec<String> {
         let mut notices = Vec::new();
+        if std::mem::take(&mut self.shared_unsaid) {
+            notices.push(pf_l10n::client::notice_shared_screen().to_string());
+        }
         if pin_kbps != 0 && !self.pin_noticed {
             self.pin_noticed = true;
             notices.push(pf_l10n::client::notice_pin_unsustainable(pin_kbps / 1000));
@@ -2465,6 +2474,20 @@ mod tests {
         for _ in 0..10 {
             assert!(close(&mut w, 5).is_empty(), "said once per session");
         }
+    }
+
+    /// A session on another device's screen says so in its first window, once.
+    #[test]
+    fn a_shared_screen_is_said_once_at_start() {
+        let mut w = WindowNotices {
+            shared_unsaid: true,
+            ..Default::default()
+        };
+        assert_eq!(
+            w.tick(0, 60, 0, mode_1080p(), None),
+            ["You're sharing this screen. Its size was set by the first device to connect."]
+        );
+        assert!(w.tick(0, 120, 0, mode_1080p(), None).is_empty());
     }
 
     /// Each launch verdict is said once; one that needs no words says nothing.

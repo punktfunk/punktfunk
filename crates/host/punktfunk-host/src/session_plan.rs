@@ -558,13 +558,27 @@ pub(crate) fn live_depth(plan_hdr: bool, source_hdr: bool, bit_depth: u8) -> (bo
 }
 
 impl SessionPlan {
-    /// The plan of a session `mode_conflict: join` admitted. On Windows the owner's display is
-    /// captured by a worker; a Linux joiner gets a second cast through the same portal path.
+    /// The plan of a session `mode_conflict: join` admitted, until its capture opens. On Windows
+    /// the owner's display is captured by a worker; a Linux joiner gets a second cast through
+    /// the same portal path. With nothing left to join, the display open makes one of the
+    /// joiner's own, and [`Self::captured_by`] settles the plan on it.
     pub(crate) fn sharing_live_display(mut self) -> Self {
         if cfg!(target_os = "windows") {
             self.capture = CaptureBackend::Wgc;
             self.topology = resolve_topology(self.capture);
         }
+        self
+    }
+
+    /// This plan on the capture that opened: the driver's encoder is IDD-push, a worker's is
+    /// WGC. A capture with no remote encoder leaves the plan as it is.
+    pub(crate) fn captured_by(mut self, capturer: &dyn crate::capture::Capturer) -> Self {
+        self.capture = match capturer.remote_encoder().map(|r| r.site()) {
+            Some(pf_capture::EncoderSite::Driver) => CaptureBackend::IddPush,
+            Some(pf_capture::EncoderSite::Worker) => CaptureBackend::Wgc,
+            None => return self,
+        };
+        self.topology = resolve_topology(self.capture);
         self
     }
 }

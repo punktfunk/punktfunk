@@ -293,29 +293,37 @@ fn label(v: &[u8], max: usize) -> Option<String> {
 /// Longest connector a [`ScreenEcho::Monitor`] carries; a longer one reads as no echo.
 const CONNECTOR_MAX: usize = 64;
 
-/// What a session streams, as its `ServerHello` says: a screen of its own, or the monitor it
-/// mirrors by connector (`HDMI-A-1`). Tag 28 carries `0x00`, else the connector.
+/// What a session streams, as its `ServerHello` says: a screen of its own, the monitor it
+/// mirrors by connector (`HDMI-A-1`), or a screen another device opened. Tag 28 carries `0x00`,
+/// `0xFF`, else the connector.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ScreenEcho {
     /// A virtual display the host made for this session.
     Own,
     /// A physical monitor, by connector.
     Monitor(String),
+    /// The screen of the session that connected first, sized by it.
+    Shared,
 }
+
+/// [`ScreenEcho::Shared`] on the wire. Not UTF-8, so an older build reads it as no echo.
+const SHARED_WIRE: u8 = 0xFF;
 
 impl ScreenEcho {
     fn wire(&self) -> &[u8] {
         match self {
             ScreenEcho::Own => &[0],
             ScreenEcho::Monitor(c) => c.as_bytes(),
+            ScreenEcho::Shared => &[SHARED_WIRE],
         }
     }
 
     fn of_wire(v: &[u8]) -> Option<Self> {
-        if v == [0] {
-            return Some(ScreenEcho::Own);
+        match v {
+            [0] => Some(ScreenEcho::Own),
+            [SHARED_WIRE] => Some(ScreenEcho::Shared),
+            _ => label(v, CONNECTOR_MAX).map(ScreenEcho::Monitor),
         }
-        label(v, CONNECTOR_MAX).map(ScreenEcho::Monitor)
     }
 }
 
@@ -766,6 +774,22 @@ mod tests {
         assert_eq!(read(b"DP-1"), Some(ScreenEcho::Monitor("DP-1".into())));
         assert_eq!(read(&[]), None);
         assert_eq!(read(&[b'x'; CONNECTOR_MAX + 1]), None);
+    }
+
+    /// A shared screen rides tag 28 as `0xFF`. A build without the variant reads every value but
+    /// `0x00` as a connector label, and `0xFF` is none, so it sees no echo, as for a joiner before.
+    #[test]
+    fn a_shared_screen_rides_the_screen_echo() {
+        let mut sh = ServerHello::from_body(&Fields::new().bytes(1, &[0; 16]).into_body()).unwrap();
+        sh.screen = Some(ScreenEcho::Shared);
+        let body = sh.fields().into_body();
+        assert!(body.ends_with(&[0x1c, 0x01, 0xff]), "{body:02x?}");
+        assert_eq!(ServerHello::from_body(&body).unwrap(), sh);
+        assert_eq!(
+            label(&[SHARED_WIRE], CONNECTOR_MAX),
+            None,
+            "an older build's read"
+        );
     }
 
     /// The unlock promise rides the feature bits; a hello without it reads `false`.

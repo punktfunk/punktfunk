@@ -138,6 +138,21 @@ pub unsafe extern "C" fn punktfunk_connection_profile(
     })
 }
 
+/// `true` when this session started on a screen another device opened and sized. As the session
+/// started: that device may leave later. `false` from a host that does not say.
+///
+/// # Safety
+/// `c` is a valid connection handle; `shared` is writable (NULL is skipped).
+#[cfg(feature = "quic")]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn punktfunk_connection_shares_screen(
+    c: *const PunktfunkConnection,
+    shared: *mut bool,
+) -> PunktfunkStatus {
+    use punktfunk_core::quic::v2::hello::ScreenEcho;
+    conn_out!(c, shared => c.inner.screen() == Some(&ScreenEcho::Shared))
+}
+
 /// The host's sentence when this session's launch did not give the player their game,
 /// NUL-terminated, into the caller's buffer; empty otherwise. The latest verdict wins, so
 /// poll it. A 256-byte buffer is ample: the wire caps this at 200.

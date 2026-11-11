@@ -406,6 +406,7 @@ fn run(
                     route: gamescope_route.clone(),
                     isolation: None,
                     audio_sink: Default::default(),
+                    hdr: cfg.hdr,
                 },
             ),
         };

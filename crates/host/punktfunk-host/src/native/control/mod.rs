@@ -459,6 +459,12 @@ impl Task {
             self.pyrowave_max_kbps,
         )
     }
+
+    /// This session streams a display it joined and may not change now, read at each ask
+    /// ([`joined_held`](super::wiring::joined_held)).
+    fn joined_held(&self) -> bool {
+        super::wiring::joined_held(self.shared.joined_display.load(Ordering::Relaxed))
+    }
 }
 
 /// Ends when the control stream closes or a data-plane channel drops. Each arm's future is
@@ -1100,6 +1106,22 @@ impl OffloadGuard {
 mod tests {
     use super::*;
     use punktfunk_core::quic::ProbeRequest;
+
+    /// A session on its own display may switch. A joiner may not until its stream knows the
+    /// display, nor off Linux; on Linux, while no other session holds that display, it may.
+    #[test]
+    fn a_joiner_switches_only_alone_on_linux() {
+        use super::super::wiring::{joined_display, joined_held, JOINED_UNSEEN};
+        assert_eq!(joined_display(false, Some(7)), 0);
+        assert_eq!(joined_display(true, None), JOINED_UNSEEN);
+        assert!(!joined_held(0), "its own display");
+        assert!(joined_held(JOINED_UNSEEN), "not known yet");
+        // No pool entry holds generation 7, so nobody shares it.
+        assert_eq!(
+            joined_held(joined_display(true, Some(7))),
+            !cfg!(target_os = "linux")
+        );
+    }
 
     #[test]
     fn offload_guard_downshifts_only_on_sustained_loss() {

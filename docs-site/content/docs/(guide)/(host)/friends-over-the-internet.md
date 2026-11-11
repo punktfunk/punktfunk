@@ -5,7 +5,8 @@ description: Let a friend stream from your host without joining your home networ
 
 Let a friend outside your home stream from your host, and reach nothing else on your network.
 [Pairing](/docs/pairing) and [access levels](/docs/access-levels) already decide what their device
-may do; this page only gets them to the host.
+may do; this page only gets them to the host. To share your screen with them once they're in, see
+[Play together](/docs/play-together).
 
 ## Pick a path
 

@@ -67,6 +67,7 @@
     {"id": "launch_download_refused", "params": {"title": "Quail", "reason": "the server is down"}, "english": "The host's own English.", "sentence": "Couldn't download Quail — the server is down"},
     {"id": "launch_download_stalled", "params": {"title": "Quail"}, "english": "The host's own English.", "sentence": "Quail stopped downloading. Start it again to try once more."},
     {"id": "launch_nothing_to_run", "params": {"title": "Quail"}, "english": "The host's own English.", "sentence": "Couldn't start Quail — this host had nothing to run for it."},
+    {"id": "launch_shared_screen", "params": {}, "english": "The host's own English.", "sentence": "Couldn't start that game — this screen is shared, and the first device to connect picks the game."},
     {"id": "launch_title_not_in_library", "params": {}, "english": "The host's own English.", "sentence": "Couldn't start that game — it isn't in this host's library anymore."},
     {"id": "seatline_seat_gone", "params": {}, "english": "The host's own English.", "sentence": "This profile's seat is gone. Remove the profile and add it again."},
     {"id": "seatline_sign_in_once", "params": {"profile": "Kid"}, "english": "The host's own English.", "sentence": "Sign Kid in at the host once."},

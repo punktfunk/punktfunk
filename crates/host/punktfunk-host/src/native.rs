@@ -1426,25 +1426,20 @@ async fn negotiate_session(
         host_mbps = n.host_link.link_mbps,
         "link facts of both ends"
     );
-    let join_live = n.joined.is_some();
     // Live reconfigure is off for gamescope (resize must not relaunch the title),
-    // `identity: per-client-mode` (resize would resolve a different slot), a monitor
-    // mirror (physical head ignores the requested mode) and a `join` session (the mode
-    // is the owner's). Synthetic stays on. The mirror is the handshake's pick: a console change
-    // mid-session must not change this session's answer.
+    // `identity: per-client-mode` (resize would resolve a different slot) and a monitor
+    // mirror (physical head ignores the requested mode). The mirror is the handshake's pick: a
+    // console change mid-session must not change this session's answer. A `join` session is
+    // asked at each switch (`wiring::joined_held`).
     let mirrored = n.mirrored;
     let live_reconfig_ok = {
         let per_client_mode_identity = crate::vdisplay::policy::prefs()
             .configured_effective()
             .is_some_and(|e| e.identity == crate::vdisplay::policy::Identity::PerClientMode);
-        reconfig_allowed(
-            n.compositor,
-            per_client_mode_identity,
-            mirrored || join_live,
-        )
+        reconfig_allowed(n.compositor, per_client_mode_identity, mirrored)
     };
-    // A mirror and a `join` session share another session's capture: their format stays.
-    let format_change_ok = !(mirrored || join_live);
+    // A mirror shares another session's capture: its format stays.
+    let format_change_ok = !mirrored;
     let codec = crate::encode::codec_from_wire(n.welcome.codec);
     tracing::info!(
         peer = %scope.conn().remote_address(),
@@ -1513,6 +1508,9 @@ async fn wire_session(
             (n.client_link.kind, n.client_link.mbps),
         ),
     );
+    // A joiner may not switch before its stream knows the display it joined.
+    let joined = wiring::joined_display(n.joined.is_some(), None);
+    shared.joined_display.store(joined, Ordering::Relaxed);
     // Shard renegotiation only if `Hello::max_shard_payload` and not PyroWave (PyroWave pins
     // the Welcome value for the session; a mid-stream re-key would desync). Not for a browser
     // either: the driver's targets are UDP-over-IP maths, and a WebTransport datagram also
@@ -2045,6 +2043,7 @@ fn display_half(
         compositor,
         gamescope_route.as_ref(),
         &knobs,
+        joined.as_ref().map(|(d, _)| d.hdr),
     );
     let reframe_to = handshake::reframe_to(hello.video_fit, handshake::joined_view(&joined), view);
     // Read back from Welcome, not recomputed (would re-probe and could drift).
