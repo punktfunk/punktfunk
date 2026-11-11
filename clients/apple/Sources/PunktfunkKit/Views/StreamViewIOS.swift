@@ -508,6 +508,7 @@ public final class StreamViewController: StreamViewControllerBase {
         // Pencil stays a finger, exactly as before). Same trust gate as touch.
         streamView.penEnabled = connection.hostSupportsPen
         streamView.touchPassthroughEnabled = connection.hostSupportsTouch
+        streamView.textInputEnabled = connection.hostSupportsText
         // The two-finger twist → the quick-action ring, same trust gate as touch.
         streamView.onDial = { [weak self] event in
             guard let self, self.captureEnabled else { return }
@@ -1348,6 +1349,9 @@ final class StreamLayerUIView: UIView {
     /// The host injects wire touch contacts (`HOST_CAP2_TOUCH`). Off, the `touch` model's
     /// fingers drive the trackpad engine instead of vanishing on the host.
     var touchPassthroughEnabled = true
+    /// The host types committed text (`HOST_CAP_TEXT_INPUT`), so the soft keyboard sends
+    /// characters instead of US key positions.
+    var textInputEnabled = false
     /// Pencil proximity transitions (hover or contact) — the presenter's panel-rate boost.
     var onPenProximity: ((Bool) -> Void)?
     /// Indirect pointer (mouse/trackpad with no lock) → absolute cursor moves.
@@ -1833,12 +1837,11 @@ extension StreamLayerUIView {
 #endif
 
 #if os(iOS) || os(visionOS)
-// The soft keyboard's output → wire key events. UIKeyInput is deliberately minimal (no
-// UITextInput): the stream needs keystrokes, not an editing buffer — insertions map through
-// `SoftKeyMap` to US-positional VKs (with a VK_LSHIFT wrap for shifted characters) and
-// characters outside the map (emoji, non-Latin scripts) are dropped, matching the wire's VK
-// contract. Events ride the same `onTouchEvent` path as the touch-driven mouse, so they're
-// gated on captureEnabled with everything else and can't leak past a trust prompt.
+// The soft keyboard's output → wire events. UIKeyInput is deliberately minimal (no UITextInput):
+// the stream needs keystrokes, not an editing buffer. Toward a text-capable host each character
+// goes as committed text, typed in the host's layout; Return and Tab stay keys. Otherwise
+// `SoftKeyMap` gives US-positional VKs, a capital wrapped in VK_LSHIFT, and drops the rest.
+// Events ride `onTouchEvent`, so the trust prompt gates them with the touch mouse.
 extension StreamLayerUIView: UIKeyInput {
     // Keep the IME literal — no autocorrect/smart substitutions; a remote desktop is not prose,
     // and the host does its own text handling.
@@ -1858,6 +1861,11 @@ extension StreamLayerUIView: UIKeyInput {
         // every character, so the HID path owns keys whenever a hardware keyboard is attached.
         guard GCKeyboard.coalesced == nil else { return }
         for ch in text {
+            let control = ch.asciiValue.map { $0 < 0x20 } ?? false // Return, Tab
+            if textInputEnabled, !control {
+                ch.unicodeScalars.forEach { onTouchEvent?(.text($0)) }
+                continue
+            }
             guard let key = SoftKeyMap.vk(for: ch) else { continue }
             if key.shift { onTouchEvent?(.key(0xA0, down: true)) } // VK_LSHIFT
             onTouchEvent?(.key(key.vk, down: true))
