@@ -2,12 +2,32 @@
 //!
 //! Admin lane only: denied to the plugin token (`auth::plugin_may_access`) and
 //! absent from the paired-cert allowlist. An update trigger is operator business.
+//! On a door, the owner's host answers a packaged install's update ([`owner_answer`]).
 //!
 //! Pin the wire types at [`UpdateStatus`]. Evidence:
 //! `design/host-update-from-web-console.md`.
 
+use super::owner::Answer;
 use super::shared::*;
 use crate::update::{self, detect};
+
+/// On a door, the owner's host's answer to a packaged install's update call. polkit lets only
+/// the operator's `punktfunk-update` group start the root helper, and the door runs as
+/// `punktfunk`. `None` keeps the call on the door: a Deck build, or no owner's host running.
+async fn owner_answer(
+    st: &MgmtState,
+    method: &str,
+    target: &str,
+    body: Option<Vec<u8>>,
+) -> Option<Response> {
+    if st.door.is_none() || !update::helper_kind(detect::detect().0) {
+        return None;
+    }
+    match st.owner_call(method, target, body, false).await {
+        reply @ Answer::Reply(..) => Some(reply.into_response()),
+        _ => None,
+    }
+}
 
 #[derive(Serialize, Deserialize, ToSchema)]
 pub(crate) struct UpdateManifestInfo {
@@ -173,8 +193,11 @@ fn status_from(snap: update::Snapshot) -> UpdateStatus {
         (status = UNAUTHORIZED, description = "Missing or invalid bearer token", body = ApiError),
     )
 )]
-pub(crate) async fn get_update_status() -> Json<UpdateStatus> {
-    Json(status_from(update::snapshot_and_maybe_refresh()))
+pub(crate) async fn get_update_status(State(st): State<Arc<MgmtState>>) -> Response {
+    if let Some(owner) = owner_answer(&st, "GET", "update/status", None).await {
+        return owner;
+    }
+    Json(status_from(update::snapshot_and_maybe_refresh())).into_response()
 }
 
 /// Force a manifest fetch and verification.
@@ -193,7 +216,10 @@ pub(crate) async fn get_update_status() -> Json<UpdateStatus> {
         (status = UNAUTHORIZED, description = "Missing or invalid bearer token", body = ApiError),
     )
 )]
-pub(crate) async fn force_update_check() -> Response {
+pub(crate) async fn force_update_check(State(st): State<Arc<MgmtState>>) -> Response {
+    if let Some(owner) = owner_answer(&st, "POST", "update/check", None).await {
+        return owner;
+    }
     match update::force_check().await {
         Ok(snap) => Json(status_from(snap)).into_response(),
         Err(update::ForceError::Disabled) => api_error_coded(
@@ -238,6 +264,10 @@ pub(crate) async fn apply_update(
     // Axum has no optional-body extractor; send `{}` for defaults.
     ApiJson(req): ApiJson<ApplyRequest>,
 ) -> Response {
+    let forwarded = serde_json::json!({ "force": req.force }).to_string();
+    if let Some(owner) = owner_answer(&st, "POST", "update/apply", Some(forwarded.into())).await {
+        return owner;
+    }
     // Either streaming plane counts as an active session (`get_status` same).
     let session_active = st.app.streaming.load(std::sync::atomic::Ordering::SeqCst)
         || !crate::session_status::snapshot().is_empty();

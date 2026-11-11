@@ -63,7 +63,8 @@ struct Caps {
     /// Pacman's root-owned full-sysupgrade opt-in; the helper refuses pacman without it.
     pacman_optin: bool,
     /// This host is the door, a system service as the `punktfunk` user: no group of the
-    /// operator's lets it start the helper, and the Deck's checkout is not its own.
+    /// operator's lets it start the helper, and the Deck's checkout is not its own. Its console
+    /// asks the owner's host for a helper kind's update ([`crate::mgmt::update`]).
     door: bool,
 }
 
@@ -103,7 +104,7 @@ enum Leg {
 }
 
 /// Kinds the root helper applies.
-fn helper_kind(kind: detect::InstallKind) -> bool {
+pub(crate) fn helper_kind(kind: detect::InstallKind) -> bool {
     use detect::InstallKind as K;
     matches!(kind, K::Apt | K::Dnf | K::Sysext | K::RpmOstree | K::Pacman)
 }
@@ -689,6 +690,16 @@ mod tests {
                 ));
             }
         }
+    }
+
+    /// A door's console asks the owner's host for exactly the helper legs. A Deck build stays.
+    #[test]
+    fn a_door_hands_the_helper_legs_to_the_owner_s_host() {
+        for kind in KINDS {
+            let helper = apply_leg(kind, ready()) == Some(Leg::Helper);
+            assert_eq!(helper_kind(kind), helper, "{}", kind.as_str());
+        }
+        assert!(!helper_kind(detect::InstallKind::SteamosSource));
     }
 
     #[test]
