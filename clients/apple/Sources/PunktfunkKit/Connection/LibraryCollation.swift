@@ -156,17 +156,15 @@ public enum LibraryCollation {
         GameEntry(id: desktopID, store: "", title: title, art: Artwork(), icon: desktopIcon)
     }
 
-    /// Fold a title down to something sortable: lowercase, diacritics relaxed to their base
-    /// letter, punctuation dropped, and a leading article removed.
+    /// A title's A–Z key: the search fold (case, width, kana by sound whatever the script),
+    /// Latin accents relaxed, punctuation dropped, a leading article removed.
     ///
-    /// The article fold is what a user actually means by A–Z. "The Witcher 3" belongs under W;
-    /// left alone, every "The …" in a library piles up under T and the sort is useless exactly
-    /// where it is most needed. English articles only — the host's titles are whatever the store
-    /// called them, and inventing rules for languages we cannot detect would file things under
-    /// letters nobody expects.
+    /// "The Witcher 3" belongs under W. English articles only: titles are store strings in no
+    /// known language. Kanji, hanzi and Hangul compare by code point. ー keeps its code point,
+    /// so スーパー follows the other ス titles.
     public static func sortTitle(_ title: String) -> String {
         var relaxed = String.UnicodeScalarView()
-        for scalar in title.lowercased().unicodeScalars {
+        for scalar in searchFold(title) {
             let folded = fold(scalar)
             let props = folded.properties
             // Rust's `is_alphanumeric() || is_whitespace()`: Alphabetic, or a numeric type,
@@ -213,6 +211,83 @@ public enum LibraryCollation {
         case "ñ": return "n"
         default: return scalar
         }
+    }
+
+    /// `punktfunk_core::search::fold`, scalar for scalar: lowercase, full-width ASCII and the
+    /// ideographic space as ASCII, half-width kana at full width, a kana and a combining voiced
+    /// mark composed, conjoining jamo composed, then katakana as hiragana. ー stays.
+    static func searchFold(_ text: String) -> [Unicode.Scalar] {
+        var out: [Unicode.Scalar] = []
+        // Held back one scalar: the next may be a mark or a jamo that composes with it.
+        var held: UInt32?
+        for scalar in text.lowercased().unicodeScalars {
+            let c = compat(scalar.value)
+            if let h = held, let both = compose(h, c) {
+                held = both
+                continue
+            }
+            if let h = held { out.append(hiragana(h)) }
+            held = c
+        }
+        if let h = held { out.append(hiragana(h)) }
+        return out
+    }
+
+    /// U+FF61–FF9F as NFKC maps them. The two marks at the end are the combining voiced marks.
+    private static let halfWidthKana: [UInt32] = Array(
+        "。「」、・ヲァィゥェォャュョッーアイウエオカキクケコサシスセソタチツテトナニヌネノハヒフヘホマミムメモヤユヨラリルレロワン\u{3099}\u{309A}"
+            .unicodeScalars.map(\.value))
+
+    private static func compat(_ c: UInt32) -> UInt32 {
+        switch c {
+        case 0x3000: return 0x20
+        case 0xFF01...0xFF5E: return c - 0xFEE0
+        case 0xFF61...0xFF9F: return halfWidthKana[Int(c - 0xFF61)]
+        default: return c
+        }
+    }
+
+    /// The precomposed character canonical composition makes of `a` then `b`, if any.
+    private static func compose(_ a: UInt32, _ b: UInt32) -> UInt32? {
+        switch b {
+        case 0x1161...0x1175 where (0x1100...0x1112).contains(a):
+            return 0xAC00 + ((a - 0x1100) * 21 + (b - 0x1161)) * 28
+        case 0x11A8...0x11C2 where (0xAC00...0xD7A3).contains(a) && (a - 0xAC00) % 28 == 0:
+            return a + (b - 0x11A7)
+        case 0x3099: return voiced(a)
+        case 0x309A where haRow(kanaRow(a)): return a + 2
+        default: return nil
+        }
+    }
+
+    /// Katakana sits 0x60 above hiragana, row for row.
+    private static func kanaRow(_ a: UInt32) -> UInt32 {
+        (0x30A1...0x30FE).contains(a) ? a - 0x60 : a
+    }
+
+    /// は ひ ふ へ ほ: the one row that takes both marks.
+    private static func haRow(_ h: UInt32) -> Bool {
+        [0x306F, 0x3072, 0x3075, 0x3078, 0x307B].contains(h)
+    }
+
+    /// The voiced form of kana `a`, which is the next code point except for う and ワ ヰ ヱ ヲ.
+    private static func voiced(_ a: UInt32) -> UInt32? {
+        let h = kanaRow(a)
+        switch h {
+        case 0x304B...0x3061 where h % 2 == 1: return a + 1
+        case 0x3064, 0x3066, 0x3068, 0x309D: return a + 1
+        case _ where haRow(h): return a + 1
+        case 0x3046: return a + 0x4E
+        case 0x308F...0x3092 where a > 0x30A0: return a + 8
+        default: return nil
+        }
+    }
+
+    /// U+30A1–30F6 as the hiragana U+3041–3096.
+    private static func hiragana(_ c: UInt32) -> Unicode.Scalar {
+        let n = (0x30A1...0x30F6).contains(c) ? c - 0x60 : c
+        // Every value the fold hands here is a scalar it read or a kana it built.
+        return Unicode.Scalar(n) ?? "\u{FFFD}"
     }
 
     /// The bucket for one game under `by`.
