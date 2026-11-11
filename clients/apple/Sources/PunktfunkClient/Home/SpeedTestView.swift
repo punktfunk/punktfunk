@@ -8,9 +8,9 @@ import Foundation
 import PunktfunkKit
 import SwiftUI
 
-/// Leaving the page abandons the probe: the detached connect/poll loop checks this flag and closes
-/// the connection itself. A single Bool, so a torn read between the loop and the main actor is
-/// harmless.
+/// One Start's claim on the page. Stop and leaving the page cancel it, so its probe's late word is
+/// dropped; the core call itself runs on until it returns. A single Bool, so a torn read between
+/// the probe and the main actor is harmless.
 private final class ProbeToken: @unchecked Sendable {
     var cancelled = false
 }
@@ -20,15 +20,6 @@ private final class ProbeToken: @unchecked Sendable {
 /// host's send and this device's receive settle; a short probe swings wildly on the same link.
 private let probeTargetKbps: UInt32 = 3_000_000
 private let probeDurationMs: UInt32 = 5_000
-
-/// Where a measurement is.
-enum SpeedTestPhase: Equatable {
-    case idle
-    case connecting
-    case probing
-    case done(PunktfunkConnection.ProbeResult)
-    case failed(String)
-}
 
 struct SpeedTestView: View {
     let host: StoredHost
@@ -42,13 +33,12 @@ struct SpeedTestView: View {
     @AppStorage(DefaultsKey.bitrateKbps) private var bitrateKbps = SettingDefault.bitrateKbps
     /// The catalog, so Apply writes the layer this host reads its bitrate from.
     @ObservedObject private var presets = PresetStore.shared
-    @State private var phase: SpeedTestPhase = .idle
+    /// The phase and the check's report behind `.done` (`SpeedTestRun`).
+    @State private var state = SpeedTestRun.State()
     @State private var trace = PunktfunkConnection.ProbeTrace()
     @State private var token = ProbeToken()
     /// What the last Apply changed, said under the buttons.
     @State private var applied: String?
-    /// The check's report behind `phase == .done`: the findings.
-    @State private var report: PunktfunkConnection.HealthReport?
 
     #if os(tvOS)
     private let chartHeight: CGFloat = 360
@@ -84,7 +74,7 @@ struct SpeedTestView: View {
         .onAppear {
             #if DEBUG
             if let shotRun {
-                phase = shotRun.phase
+                state = SpeedTestRun.State(phase: shotRun.phase)
                 trace = shotRun.trace
                 return
             }
@@ -93,6 +83,9 @@ struct SpeedTestView: View {
         }
         .onDisappear { token.cancelled = true }
     }
+
+    private var phase: SpeedTestPhase { state.phase }
+    private var report: PunktfunkConnection.HealthReport? { state.report }
 
     // MARK: - Pieces
 
@@ -290,13 +283,6 @@ struct SpeedTestView: View {
         }
     }
 
-    /// The check's report as the page's measurement: the ceiling, and the clean round's loss.
-    static func probeResult(from r: PunktfunkConnection.HealthReport) -> PunktfunkConnection.ProbeResult {
-        PunktfunkConnection.ProbeResult(
-            done: true, recvBytes: 0, recvPackets: 0, hostBytes: 0, hostPackets: 0, elapsedMs: 0,
-            throughputKbps: r.ceilingKbps, lossPct: r.clean?.lossPct ?? 0)
-    }
-
     private func tile(_ label: String, _ value: String) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             Text(label)
@@ -394,9 +380,13 @@ struct SpeedTestView: View {
 
     // MARK: - The probe
 
+    private func send(_ event: SpeedTestRun.Event) {
+        state = SpeedTestRun.reduce(state, event)
+    }
+
     private func stop() {
         token.cancelled = true
-        phase = .idle
+        send(.stop)
     }
 
     private func run() {
@@ -404,10 +394,9 @@ struct SpeedTestView: View {
         token.cancelled = true
         token = ProbeToken()
         let token = token
-        phase = .connecting
+        send(.start)
         trace = PunktfunkConnection.ProbeTrace()
         applied = nil
-        report = nil
         let address = host.address
         let port = host.port
         let pin = host.pinnedSHA256
@@ -428,26 +417,18 @@ struct SpeedTestView: View {
             } catch {
                 await MainActor.run {
                     guard !token.cancelled else { return }
-                    phase = .failed(L10n.appleSpeedtestUnreachableBody(address: address))
+                    send(.unreachable(L10n.appleSpeedtestUnreachableBody(address: address)))
                 }
                 return
             }
             defer { conn.close() }
 
-            await MainActor.run { if !token.cancelled { phase = .probing } }
+            await MainActor.run { if !token.cancelled { send(.connected) } }
             // The whole check, reported once: the ceiling the bring-up ramp proved, a clean round
             // at half of it, two shaped legs, both ends' facts, and the findings. It blocks this
             // detached task for ten to twenty seconds.
             let checked = conn.networkCheck()
-            await MainActor.run {
-                guard !token.cancelled else { return }
-                if let r = checked {
-                    report = r
-                    phase = .done(Self.probeResult(from: r))
-                } else {
-                    phase = .failed(String(localized: L10n.speedtestNoResultBody))
-                }
-            }
+            await MainActor.run { if !token.cancelled { send(.checked(checked)) } }
         }
     }
 }
