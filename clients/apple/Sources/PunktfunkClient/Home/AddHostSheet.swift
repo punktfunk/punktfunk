@@ -12,7 +12,9 @@ struct AddHostSheet: View {
 
     @State private var name = ""
     @State private var address = ""
-    @State private var port = 9777
+    /// Text, as every host form keeps it: a number field writes its value only on commit, and
+    /// a tap on Add Host straight after typing would save the port from before.
+    @State private var port = String(HostFormDraft.defaultPort)
     @State private var mac = ""
     #if !os(tvOS)
     /// Share the clipboard with this host (design clipboard-and-file-transfer.md §5.3). Off by
@@ -41,7 +43,7 @@ struct AddHostSheet: View {
     /// out-of-range one is refused rather than silently clamped, and a pasted `address:port` is
     /// split rather than stored whole.
     private var draft: HostFormDraft {
-        HostFormDraft(name: name, address: address, port: String(port))
+        HostFormDraft(name: name, address: address, port: port)
     }
     private var canSave: Bool { draft.canSave }
 
@@ -59,7 +61,7 @@ struct AddHostSheet: View {
                 placeholder: String(localized: L10n.hostsFieldAddressPlaceholder)
             ) { editingField = .address }
             TVFieldRow(
-                label: String(localized: L10n.hostsFieldPort), value: String(port), placeholder: ""
+                label: String(localized: L10n.hostsFieldPort), value: port, placeholder: ""
             ) { editingField = .port }
             TVFieldRow(
                 label: String(localized: L10n.hostsFieldMac), value: mac,
@@ -91,10 +93,10 @@ struct AddHostSheet: View {
                 }
             case .port:
                 TVTextEntry(
-                    title: String(localized: L10n.hostsFieldPort), text: String(port),
+                    title: String(localized: L10n.hostsFieldPort), text: port,
                     keyboardType: .numberPad
                 ) {
-                    if let value = Int($0), (1...65535).contains(value) { port = value }
+                    if let value = Int($0), (1...65535).contains(value) { port = String(value) }
                     editingField = nil
                 }
             case .mac:
@@ -134,8 +136,11 @@ struct AddHostSheet: View {
                     .keyboardType(.URL)
                     #endif
                 TextField(
-                    String(localized: L10n.hostsFieldPort), value: $port,
-                    format: .number.grouping(.never))
+                    String(localized: L10n.hostsFieldPort), text: $port,
+                    prompt: Text(verbatim: String(HostFormDraft.defaultPort)))
+                    #if os(iOS) || os(visionOS)
+                    .keyboardType(.numberPad)
+                    #endif
                 TextField(
                     String(localized: L10n.hostsFieldMac), text: $mac,
                     prompt: Text(L10n.hostsFieldMacPlaceholder))
