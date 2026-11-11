@@ -2,6 +2,7 @@ import { expect, test } from "bun:test";
 import {
 	applyPatch,
 	gameEntry,
+	setList,
 	storeOf,
 	streamSummary,
 	usageOf,
@@ -46,6 +47,14 @@ test("Same as the source clears the game's entry, where Device decides opts out"
 	const doc = { sources: { lutris: { gamepad: "xbox360" } } };
 	expect(gameEntry(doc, "lutris:4", null)).toEqual({});
 	expect(gameEntry(doc, "lutris:4", {})).toEqual({ none: true });
+});
+
+test("shared overrides sort by name in the UI language's order", () => {
+	const doc = { sets: { a: { name: "Zed" }, b: { name: "Ärlig" } } };
+	const ids = (locale: string) => setList(doc, locale).map((s) => s.id);
+	// German files Ä beside A; Swedish files it after Z.
+	expect(ids("de")).toEqual(["b", "a"]);
+	expect(ids("sv")).toEqual(["a", "b"]);
 });
 
 test("usage counts the games and sources naming a set", () => {

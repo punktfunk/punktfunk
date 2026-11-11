@@ -37,6 +37,7 @@ import {
 } from "@/components/ui/select";
 import { Spinner } from "@/components/ui/spinner";
 import { apiErrorMessage } from "@/lib/errors";
+import { useLocale } from "@/lib/i18n";
 import { useLocalPref } from "@/lib/prefs";
 import type { Loadable } from "@/lib/query";
 import { useDebounced } from "@/lib/use-debounced";
@@ -73,6 +74,7 @@ export const LibraryGridSection: FC<{
 	/** Opens where sources are added: the way out of an empty library. */
 	onSources?: () => void;
 }> = ({ providerFilter, source, onSources }) => {
+	const locale = useLocale();
 	const qc = useQueryClient();
 	const { confirm } = useDialogs();
 	const [query, setQuery] = useState("");
@@ -241,7 +243,7 @@ export const LibraryGridSection: FC<{
 							if (!next.delete(id)) next.add(id);
 							return next;
 						}),
-					sets: setList(overrides.data).map((s) => ({
+					sets: setList(overrides.data, locale).map((s) => ({
 						id: s.id,
 						name: s.name ?? s.id,
 					})),

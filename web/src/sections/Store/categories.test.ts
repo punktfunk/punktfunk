@@ -31,17 +31,30 @@ describe("store categories", () => {
 	});
 
 	test("groups keep page order, skip empty ones, and lift detected entries", () => {
-		const groups = groupCatalog([
-			entry("RTSS", ["tools"], false),
-			entry("Epic", ["library"]),
-			entry("Steam", ["library"], true),
-			entry("Amazon", ["library"], false),
-			entry("Legacy"),
-		]);
+		const groups = groupCatalog(
+			[
+				entry("RTSS", ["tools"], false),
+				entry("Epic", ["library"]),
+				entry("Steam", ["library"], true),
+				entry("Amazon", ["library"], false),
+				entry("Legacy"),
+			],
+			"en",
+		);
 		expect(groups.map(([g, list]) => [g, list.map((e) => e.title)])).toEqual([
 			["library", ["Steam", "Amazon", "Epic"]],
 			["tools", ["RTSS"]],
 			["other", ["Legacy"]],
 		]);
+	});
+
+	test("titles sort in the UI language's order", () => {
+		const titles = (locale: string) =>
+			groupCatalog([entry("Zed", ["tools"]), entry("Ärlig", ["tools"])], locale)
+				.flatMap(([, list]) => list)
+				.map((e) => e.title);
+		// German files Ä beside A; Swedish files it after Z.
+		expect(titles("de")).toEqual(["Ärlig", "Zed"]);
+		expect(titles("sv")).toEqual(["Zed", "Ärlig"]);
 	});
 });
