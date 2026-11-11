@@ -78,28 +78,6 @@ struct LaunchHoldTarget: Equatable {
     let seq: Int
 }
 
-/// The entry behind a `connect(launchID:)`, handed over out of band: the shelf's launch callbacks
-/// carry only the id (five call sites, three tile views), and the launch hold needs the title, art
-/// and tile rect. Keyed by id on the way out, so a stale entry can never dress a different launch.
-enum LaunchedEntry {
-    private static var last: (entry: GameEntry, rect: CGRect?)?
-
-    static func remember(_ entry: GameEntry?, from rect: CGRect?) {
-        last = entry.map { ($0, rect) }
-    }
-
-    /// The remembered entry for `id`, left for `take`.
-    static func peek(_ id: String) -> GameEntry? {
-        last?.entry.id == id ? last?.entry : nil
-    }
-
-    static func take(_ id: String, seq: Int) -> LaunchHoldTarget? {
-        defer { last = nil }
-        guard let last, last.entry.id == id else { return nil }
-        return LaunchHoldTarget(entry: last.entry, sourceRect: last.rect, seq: seq)
-    }
-}
-
 /// The values the views read for one session, each documented on its `SessionModel` property.
 /// `disconnect` assigns a fresh one, so the next session starts with no hold, hint or mute.
 struct SessionUI {
@@ -474,8 +452,10 @@ final class SessionModel: ObservableObject {
         launchedShelf = shelf
         // The host never tracks a launcher tile, so there is nothing to wait for.
         launchSeq += 1
-        launchHold = hold ?? launchID.flatMap { LaunchedEntry.take($0, seq: launchSeq) }
-            .flatMap { $0.entry.isLauncher ? nil : $0 }
+        launchHold = hold ?? launchID.flatMap(LaunchedEntry.take).flatMap {
+            $0.entry.isLauncher
+                ? nil : LaunchHoldTarget(entry: $0.entry, sourceRect: $0.rect, seq: launchSeq)
+        }
         launchWindowWait = false
         launchDownload = nil
         errorMessage = nil
