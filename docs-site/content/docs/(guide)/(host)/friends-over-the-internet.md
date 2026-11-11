@@ -58,11 +58,16 @@ them reach every port on it, so step 2 matters.
 
 ## Admit them as a guest
 
-The friend's first connect waits in the console under **Waiting for approval**. Admit it with a
-[PIN](/docs/pairing#pair-with-a-pin) read out over voice chat, not a bare **Approve**. Pick
-**Controller only** and **Until they disconnect**, so nothing is left to clean up after the evening
-([Temporary access](/docs/access-levels#temporary-access)). **Expire now** or **Unpair** ends a
-running session at once.
+Pair the friend with a PIN read out over voice chat. Through Porthole or Tailscale their device
+reaches the host as a local one, so its row under **Waiting for approval** offers only **Approve**.
+
+1. In the console, open **Devices** and click **Pair a device**. Pick **Controller only** and
+   **Until they disconnect**, so nothing is left to clean up after the evening
+   ([Temporary access](/docs/access-levels#temporary-access)), then click **Show PIN**.
+2. The friend picks your host and types the PIN instead of requesting access
+   ([Pair with a PIN](/docs/pairing#pair-with-a-pin)).
+
+**Expire now** or **Unpair** ends a running session at once.
 
 ## Port forwarding
 
