@@ -23,11 +23,12 @@ extension RingNav {
     public static let refreshRates: [UInt32] = [120, 60]
 
     /// The Resolution row's next stop `dir` (±1) steps to from `mode`, round Native and the
-    /// presets; the refresh rate stays. A 0×0 Native, a session read after its handle went, is
-    /// no stop.
+    /// presets; the refresh rate stays. A preset Native's size is Native's stop. A 0×0 Native, a
+    /// session read after its handle went, is no stop.
     public static func nextMode(mode: Mode, native: Mode, dir: Int) -> Mode {
         let first = native.width > 0 && native.height > 0 ? [(native.width, native.height)] : []
         let stops = first + resolutions.map { ($0.width, $0.height) }
+            .filter { $0 != (native.width, native.height) }
         let i = stops.firstIndex { $0 == (mode.width, mode.height) } ?? 0
         let next = stops[wrap(i + dir, stops.count)]
         return Mode(width: next.0, height: next.1, hz: mode.hz)

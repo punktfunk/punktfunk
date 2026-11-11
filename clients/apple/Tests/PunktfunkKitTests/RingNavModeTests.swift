@@ -21,6 +21,17 @@ final class RingNavModeTests: XCTestCase {
         XCTAssertEqual(RingNav.nextMode(mode: res(1280, 720, 120), native: uhd, dir: 1), res(3840, 2160, 120))
     }
 
+    /// A preset the size of Native is Native's stop, not a second one: on a 1080p display Right
+    /// walks Native, 1440p, 720p, and every stop is reached either way.
+    func testAPresetEqualToNativeIsOneStop() {
+        let fhd = res(1920, 1080)
+        let forward = [fhd, res(2560, 1440), res(1280, 720), fhd]
+        for (from, to) in zip(forward, forward.dropFirst()) {
+            XCTAssertEqual(RingNav.nextMode(mode: from, native: fhd, dir: 1), to)
+            XCTAssertEqual(RingNav.nextMode(mode: to, native: fhd, dir: -1), from)
+        }
+    }
+
     /// A size off the cycle, a resized window's, steps as if from Native.
     func testAnOffCycleSizeStepsFromNative() {
         XCTAssertEqual(RingNav.nextMode(mode: res(1700, 900), native: uhd, dir: 1), res(2560, 1440))
