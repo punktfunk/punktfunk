@@ -15,19 +15,19 @@ import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.VolumeOff
 import androidx.compose.material.icons.automirrored.filled.VolumeUp
@@ -1141,44 +1141,56 @@ private fun sheetRows(
     return rows
 }
 
-/** The sheet as a scrollable bottom panel; the pad's cursor row is tinted. */
+/** The sheet as a scrollable bottom panel; the pad's cursor row is tinted. The panel follows
+ *  the cursor: a TV remote has no finger to drag the list, so a row the cursor reached off the
+ *  panel would be unreachable. One item per row (header glued to its row) keeps item index ==
+ *  row index, so the scroll can target the cursor directly. */
 @Composable
 private fun RingSheet(state: RingState, rows: List<SheetRowSpec>, haptics: ConsoleHaptics, modifier: Modifier) {
-    val scroll = rememberScrollState()
-    Column(
-        modifier
+    val list = rememberLazyListState()
+    LaunchedEffect(state.sheetCursor, rows.size) {
+        if (rows.isEmpty()) return@LaunchedEffect
+        val i = state.sheetCursor.coerceIn(0, rows.lastIndex)
+        val info = list.layoutInfo.visibleItemsInfo.firstOrNull { it.index == i }
+        if (info == null || info.offset + info.size > list.layoutInfo.viewportEndOffset) {
+            list.animateScrollToItem(i)
+        }
+    }
+    LazyColumn(
+        state = list,
+        modifier = modifier
             .fillMaxWidth(0.92f)
             .padding(bottom = 16.dp)
             .background(Color.Black.copy(alpha = 0.78f), RoundedCornerShape(16.dp))
-            .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) {}
-            .padding(vertical = 8.dp)
-            .verticalScroll(scroll),
+            .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) {},
+        contentPadding = PaddingValues(vertical = 8.dp),
     ) {
-        rows.forEachIndexed { i, r ->
-            r.header?.let { text ->
-                Text(
-                    text, color = Color.White.copy(alpha = 0.6f), fontSize = 12.sp, fontWeight = FontWeight.SemiBold,
-                    modifier = Modifier.padding(start = 20.dp, top = 12.dp, bottom = 4.dp),
-                )
-            }
-            Row(
-                Modifier
-                    .fillMaxWidth()
-                    .background(if (state.sheetCursor == i) Color.White.copy(alpha = 0.12f) else Color.Transparent)
-                    .clickable {
-                        state.touch()
-                        state.sheetCursor = i
-                        if (r.enabled) haptics.tick() else haptics.boundary()
-                        r.onTap()
-                    }
-                    .padding(horizontal = 20.dp, vertical = 12.dp)
-                    .alpha(if (r.enabled) 1f else 0.45f),
-            ) {
-                Text(r.label, color = Color.White, fontSize = 15.sp, modifier = Modifier.weight(1f))
-                if (r.value.isNotEmpty()) Text(r.value, color = Color.White.copy(alpha = 0.7f), fontSize = 15.sp)
+        itemsIndexed(rows) { i, r ->
+            Column {
+                r.header?.let { text ->
+                    Text(
+                        text, color = Color.White.copy(alpha = 0.6f), fontSize = 12.sp, fontWeight = FontWeight.SemiBold,
+                        modifier = Modifier.padding(start = 20.dp, top = 12.dp, bottom = 4.dp),
+                    )
+                }
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .background(if (state.sheetCursor == i) Color.White.copy(alpha = 0.12f) else Color.Transparent)
+                        .clickable {
+                            state.touch()
+                            state.sheetCursor = i
+                            if (r.enabled) haptics.tick() else haptics.boundary()
+                            r.onTap()
+                        }
+                        .padding(horizontal = 20.dp, vertical = 12.dp)
+                        .alpha(if (r.enabled) 1f else 0.45f),
+                ) {
+                    Text(r.label, color = Color.White, fontSize = 15.sp, modifier = Modifier.weight(1f))
+                    if (r.value.isNotEmpty()) Text(r.value, color = Color.White.copy(alpha = 0.7f), fontSize = 15.sp)
+                }
             }
         }
-        Spacer(Modifier.height(4.dp))
     }
 }
 
