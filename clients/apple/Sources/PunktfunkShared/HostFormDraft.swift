@@ -67,6 +67,20 @@ public struct HostFormDraft: Equatable, Sendable {
         host.port = resolvedPort ?? Self.defaultPort
     }
 
+    /// The Wake-on-LAN field's MACs: split on commas, semicolons and whitespace, keeping the
+    /// well-formed `aa:bb:cc:dd:ee:ff` ones in lower case. nil when none is valid, so clearing
+    /// the field clears the stored MACs.
+    public static func parseMacs(_ s: String) -> [String]? {
+        let macs = s
+            .split(whereSeparator: { ",; \n\t".contains($0) })
+            .map { $0.trimmingCharacters(in: .whitespaces).lowercased() }
+            .filter { m in
+                let parts = m.split(separator: ":")
+                return parts.count == 6 && parts.allSatisfy { $0.count == 2 && UInt8($0, radix: 16) != nil }
+            }
+        return macs.isEmpty ? nil : macs
+    }
+
     /// Split a trailing `:port` off an address. Bare IPv6 (more than one colon, unbracketed) is
     /// returned whole.
     static func split(_ raw: String) -> (host: String, port: UInt16?) {

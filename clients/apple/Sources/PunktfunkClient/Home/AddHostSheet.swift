@@ -219,7 +219,7 @@ struct AddHostSheet: View {
     private func save() {
         var host = StoredHost(name: "", address: "")
         draft.apply(to: &host)
-        host.macAddresses = Self.parseMacs(mac)
+        host.macAddresses = HostFormDraft.parseMacs(mac)
         #if !os(tvOS)
         // nil when off: the key stays absent from the saved JSON (forward-compat, and "never
         // opted in" and "opted out" read the same — off).
@@ -227,19 +227,5 @@ struct AddHostSheet: View {
         #endif
         onSave(host)
         dismiss()
-    }
-
-    /// Split comma/space/newline-separated MACs, keep only well-formed `aa:bb:cc:dd:ee:ff` (six hex
-    /// octets, normalized lower-case); nil when none are valid, so clearing the field clears the
-    /// stored MAC.
-    static func parseMacs(_ s: String) -> [String]? {
-        let macs = s
-            .split(whereSeparator: { ",; \n\t".contains($0) })
-            .map { $0.trimmingCharacters(in: .whitespaces).lowercased() }
-            .filter { m in
-                let parts = m.split(separator: ":")
-                return parts.count == 6 && parts.allSatisfy { $0.count == 2 && UInt8($0, radix: 16) != nil }
-            }
-        return macs.isEmpty ? nil : macs
     }
 }

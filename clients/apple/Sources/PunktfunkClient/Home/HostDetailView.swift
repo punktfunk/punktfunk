@@ -494,7 +494,7 @@ private struct HostConnectionFields: View {
         var updated = host
         let draft = HostFormDraft(name: name, address: address, port: port)
         if draft.canSave { draft.apply(to: &updated) }
-        let parsed = AddHostSheet.parseMacs(macs)
+        let parsed = HostFormDraft.parseMacs(macs)
         if parsed != nil || macs.allSatisfy(\.isWhitespace) { updated.macAddresses = parsed }
         if updated != host { onSave(updated) }
         load(updated)
