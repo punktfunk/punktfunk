@@ -188,14 +188,17 @@ final class LibraryShelfTests: XCTestCase {
         XCTAssertFalse(paused.polls)
     }
 
-    /// R5-1, as it stands: a missed read clears what the last answer said.
-    func testAMissedReadReadsAsNothingRunning() {
+    /// R5-1: one missed read keeps the badges, the grants and the poll.
+    func testAMissedReadKeepsTheLastAnswer() {
         let live = LibraryShelf.State().applying(
             ([running("a")], [HostDownload(appID: "d", state: "downloading")], 3))
         let missed = live.applying(nil)
-        XCTAssertTrue(missed.running.isEmpty)
-        XCTAssertFalse(missed.polls)
-        XCTAssertNil(missed.grants)
+        XCTAssertEqual(missed, live)
+        XCTAssertTrue(missed.polls)
+        XCTAssertEqual(Set(missed.running.keys), ["a"])
+        XCTAssertEqual(missed.grants, 3)
+        // An answer that nothing runs is still an answer.
+        XCTAssertFalse(live.applying(([], [], nil)).polls)
     }
 
     // MARK: - A title's acts

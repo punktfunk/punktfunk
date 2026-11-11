@@ -703,7 +703,8 @@ struct LibraryView: View {
         }
     }
 
-    /// What the host runs and downloads, and what this device may do there.
+    /// What the host runs and downloads, and what this device may do there. A read the host
+    /// didn't answer changes nothing.
     private func refreshStatus() async {
         let current = host
         guard case .success(let target) = MgmtTarget.make(host: current) else { return }
@@ -711,7 +712,7 @@ struct LibraryView: View {
         shelf = shelf.applying(answer)
         // The host cards read what runs from the store: hand it this answer rather than let
         // their TTL ask again. It also carries what no badge can: an untracked launch has no id.
-        nowPlayingStore.adopt(answer?.games ?? [], for: current)
+        if let answer { nowPlayingStore.adopt(answer.games, for: current) }
     }
 
     /// Ask the host to end `game`. Gone either way drops the badge; a refusal, or no way to ask,

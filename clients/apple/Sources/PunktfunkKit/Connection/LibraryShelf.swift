@@ -86,11 +86,12 @@ public enum LibraryShelf {
         /// A download runs, so the shelf reads `/status` again to move its percentage.
         public var polls: Bool { downloads.values.contains(where: \.live) }
 
-        /// The shelf after a `/status` read; a miss (nil) reads as nothing running.
+        /// The shelf after a `/status` read. A miss (nil) keeps what the last answer said, so a
+        /// download it showed live keeps the poll going.
         public func applying(
             _ answer: (games: [RunningGame], downloads: [HostDownload], grants: UInt32?)?
         ) -> State {
-            let answer = answer ?? ([], [], nil)
+            guard let answer else { return self }
             var next = self
             next.running = Dictionary(
                 answer.games.filter(\.isUp).compactMap { g in g.appID.map { ($0, g) } },
