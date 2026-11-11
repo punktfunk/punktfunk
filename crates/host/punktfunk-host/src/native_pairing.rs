@@ -310,6 +310,21 @@ impl NativePairing {
         self.store.effective(fp_hex, now_unix)
     }
 
+    /// Whether `fp_hex` is authorized here within `wait`. A seat host's store is a copy of the
+    /// box's file, so a device the box paired a moment ago arrives with the next copy.
+    pub async fn admits_within(&self, fp_hex: &str, wait: Duration) -> bool {
+        let deadline = tokio::time::Instant::now() + wait;
+        loop {
+            if self.effective(fp_hex, crate::clock::unix_secs()).is_some() {
+                return true;
+            }
+            if tokio::time::Instant::now() >= deadline {
+                return false;
+            }
+            tokio::time::sleep(Duration::from_millis(200)).await;
+        }
+    }
+
     /// GameStream grant for this fingerprint. No row means ungoverned full control — that plane's
     /// pairing authority is its cert list, not this store. A row that exists governs as native
     /// (`effective`): mask, reserved bits cleared, expiry → `None`. One snapshot: `is_paired`
@@ -1728,6 +1743,23 @@ mod tests {
         let later = std::time::SystemTime::now() + Duration::from_secs(secs);
         let f = std::fs::File::options().write(true).open(path).unwrap();
         f.set_modified(later).unwrap();
+    }
+
+    /// A device the box pairs while it is already at the seat is admitted once the copy names
+    /// it; one the box never paired is not.
+    #[tokio::test]
+    async fn a_seat_admits_a_device_once_the_boxes_pairing_reaches_it() {
+        let (_temp, p) = temp();
+        let box_np = NativePairing::load_with(Some(p.clone()), None, false).unwrap();
+        let seat = NativePairing::with_store(store::TrustStore::at(p.clone(), true), None, false);
+        let pair = async {
+            tokio::time::sleep(Duration::from_millis(300)).await;
+            box_np.add("Safari on Mac", "ff68").unwrap();
+            later_mtime(&p, 5);
+        };
+        let (admitted, ()) = tokio::join!(seat.admits_within("ff68", Duration::from_secs(3)), pair);
+        assert!(admitted);
+        assert!(!seat.admits_within("ff69", Duration::from_millis(300)).await);
     }
 
     /// A box file that is missing or garbled says nothing: the seat's sessions stay until the
