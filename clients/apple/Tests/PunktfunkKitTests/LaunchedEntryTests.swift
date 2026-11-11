@@ -25,10 +25,12 @@ final class LaunchedEntryTests: XCTestCase {
         XCTAssertNil(LaunchedEntry.peek("steam:570"))
     }
 
-    /// Another id never wears the entry.
-    func testAnotherLaunchGetsNothing() {
-        LaunchedEntry.remember(dota, from: nil)
+    /// Another id never wears the entry, and leaves it for the connect it names: a redial or a
+    /// second window's launch can't lose a newer tap's hold.
+    func testAnotherLaunchLeavesTheEntry() {
+        LaunchedEntry.remember(dota, from: tile)
         XCTAssertNil(LaunchedEntry.peek("steam:1"))
         XCTAssertNil(LaunchedEntry.take("steam:1"))
+        XCTAssertEqual(LaunchedEntry.take("steam:570")?.entry, dota)
     }
 }

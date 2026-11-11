@@ -18,10 +18,11 @@ public enum LaunchedEntry {
         last?.entry.id == id ? last?.entry : nil
     }
 
-    /// The remembered entry for `id` and the rect of the tile it was tapped on.
+    /// The remembered entry for `id` and the rect of the tile it was tapped on. A take for
+    /// another id leaves the entry for the connect it names.
     public static func take(_ id: String) -> (entry: GameEntry, rect: CGRect?)? {
-        defer { last = nil }
-        guard let last, last.entry.id == id else { return nil }
-        return last
+        guard let taken = last, taken.entry.id == id else { return nil }
+        last = nil
+        return taken
     }
 }
