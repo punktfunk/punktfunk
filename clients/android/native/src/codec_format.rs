@@ -160,6 +160,14 @@ fn vendor_keys(codec_name: &str, aggressive: bool) -> Vec<(&'static str, i32)> {
     keys
 }
 
+/// Whether the fed stream is recoded with a 16-bit POC: HEVC on an Amlogic decoder, whose
+/// long-term references fail behind a POC lsb wrap. `forced` is the debug override.
+pub(crate) fn widens_poc(codec: u8, codec_name: &str, forced: Option<bool>) -> bool {
+    let name = codec_name.to_ascii_lowercase();
+    let amlogic = name.starts_with("omx.amlogic") || name.starts_with("c2.amlogic");
+    codec == punktfunk_core::quic::CODEC_HEVC && forced.unwrap_or(amlogic)
+}
+
 /// Whether a decoder tolerates `operating-rate = Short.MAX` rather than regressing on it. Follows
 /// Moonlight's allowlist: only Qualcomm decoders honour the sentinel. The Adreno 620 generation
 /// is the known exception Moonlight excludes by GPU model, which native code cannot see; it rides
@@ -208,6 +216,43 @@ pub(crate) fn p50_max_ms(mut v: Vec<u64>) -> (f64, f64) {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn only_amlogic_hevc_takes_the_wide_poc() {
+        use punktfunk_core::quic::{CODEC_AV1, CODEC_HEVC};
+        assert!(super::widens_poc(
+            CODEC_HEVC,
+            "c2.amlogic.hevc.decoder",
+            None
+        ));
+        assert!(super::widens_poc(
+            CODEC_HEVC,
+            "OMX.amlogic.hevc.decoder.awesome2",
+            None
+        ));
+        assert!(!super::widens_poc(CODEC_HEVC, "c2.qti.hevc.decoder", None));
+        assert!(!super::widens_poc(
+            CODEC_AV1,
+            "c2.amlogic.av1.decoder",
+            None
+        ));
+        // The override moves the decoder pick, never the codec.
+        assert!(super::widens_poc(
+            CODEC_HEVC,
+            "c2.qti.hevc.decoder",
+            Some(true)
+        ));
+        assert!(!super::widens_poc(
+            CODEC_HEVC,
+            "c2.amlogic.hevc.decoder",
+            Some(false)
+        ));
+        assert!(!super::widens_poc(
+            CODEC_AV1,
+            "c2.amlogic.av1.decoder",
+            Some(true)
+        ));
+    }
+
     use super::*;
 
     #[test]
