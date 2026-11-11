@@ -26,4 +26,30 @@ final class OverlayConfigEditTests: XCTestCase {
         cfg.swap(2, 2)
         XCTAssertEqual(cfg, before)
     }
+
+    /// Three shortcuts on a ring and a pad binding that sends the third.
+    private func threeShortcuts() -> (OverlayConfig, Shortcuts) {
+        var cfg = OverlayConfig.platformDefault(.tv)
+        for keys in [["f1"], ["f2"], ["ctrl", "f3"]] {
+            cfg.saveShortcut(OverlayShortcut(id: cfg.nextShortcutID(bindings: Shortcuts()), keys: keys))
+        }
+        let bindings = Shortcuts(bindings: [
+            .init(trigger: .pad(buttons: [0x0020, 0x8000], hold: false), action: .slot(.shortcut("s3"))),
+            .init(trigger: .pad(buttons: [0x0020, 0x1000], hold: false), action: .ring),
+        ])
+        return (cfg, bindings)
+    }
+
+    /// R7-1: a binding left on a removed shortcut's id never fires the next new one.
+    func testANewShortcutSkipsAnIdABindingStillNames() {
+        var (cfg, bindings) = threeShortcuts()
+        XCTAssertEqual(cfg.shortcuts.map(\.id), ["s1", "s2", "s3"])
+        var other = bindings
+        cfg.removeShortcut("s3")
+        XCTAssertEqual(cfg.nextShortcutID(bindings: bindings), "s4", "the binding is in another layer")
+        other.bindings.removeAll()
+        XCTAssertEqual(cfg.nextShortcutID(bindings: other), "s3", "no binding names it")
+        bindings.bindings[0].action = .slot(.shortcut("s9"))
+        XCTAssertEqual(cfg.nextShortcutID(bindings: bindings), "s10")
+    }
 }

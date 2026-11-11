@@ -15,7 +15,8 @@ struct TVQuickActionsEditor: View {
     @Binding var blob: String
     /// The edited preset owns its own dial.
     let overridden: Bool
-    /// The Shortcuts page of the same layer, a push away.
+    /// The Shortcuts page of the same layer, a push away. A new shortcut skips every id its
+    /// bindings name.
     let shortcuts: ShortcutsEditor
     /// The pad chord that opens the dial, from the live shortcuts; nil when none does.
     let padOpener: String?
@@ -144,7 +145,8 @@ struct TVQuickActionsEditor: View {
                 }
             }
             Button {
-                shortcut = ShortcutDraft(id: cfg.nextShortcutID, label: "", keys: [], isNew: true)
+                shortcut = ShortcutDraft(id: cfg.nextShortcutID(bindings: Shortcuts.parse(shortcuts.blob)),
+                                         label: "", keys: [], isNew: true)
             } label: {
                 Label(L10n.ringShortcutAdd, systemImage: "plus")
             }

@@ -34,6 +34,9 @@ struct QuickActionsEditor: View {
     /// The edited preset owns its own ring (the row's override marker says so; this says it
     /// under the ring).
     let overridden: Bool
+    /// The `shortcuts` blob the edited layer streams with: a new shortcut skips every id a
+    /// binding there names.
+    var bindings: Binding<String> = .constant("")
     /// Back to the platform ring: drops the override in preset scope, clears the global
     /// otherwise.
     let reset: () -> Void
@@ -150,7 +153,9 @@ struct QuickActionsEditor: View {
                 }
                 #endif
                 Button {
-                    editingShortcut = ShortcutDraft(id: cfg.nextShortcutID, label: "", keys: [], isNew: true)
+                    editingShortcut = ShortcutDraft(
+                        id: cfg.nextShortcutID(bindings: Shortcuts.parse(bindings.wrappedValue)),
+                        label: "", keys: [], isNew: true)
                 } label: {
                     Label(L10n.ringShortcutAdd, systemImage: "plus")
                 }

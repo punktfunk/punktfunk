@@ -268,9 +268,14 @@ public struct OverlayConfig: Equatable, Sendable {
         }
     }
 
-    /// The id a new shortcut takes: one past the highest `s<n>` in use.
-    public var nextShortcutID: String {
-        "s\((shortcuts.compactMap { Int($0.id.dropFirst()) }.max() ?? 0) + 1)"
+    /// The id a new shortcut takes: one past the highest `s<n>` here or sent by one of
+    /// `bindings`, so a binding a removed shortcut left behind never fires the new one.
+    public func nextShortcutID(bindings: Shortcuts) -> String {
+        let sent = bindings.bindings.compactMap { b -> String? in
+            if case .slot(.shortcut(let id)) = b.action { return id }
+            return nil
+        }
+        return "s\(((shortcuts.map(\.id) + sent).compactMap { Int($0.dropFirst()) }.max() ?? 0) + 1)"
     }
 
     public static func platformDefault(_ platform: RingPlatform = .touch) -> OverlayConfig {
