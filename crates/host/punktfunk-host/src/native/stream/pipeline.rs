@@ -737,10 +737,7 @@ fn attach_pipeline(
     let reused_gen = vout.reused_gen;
     #[cfg(target_os = "linux")]
     let lease = OutputLease::of(&vout);
-    #[cfg(target_os = "linux")]
     let pool_gen = vout.pool_gen;
-    #[cfg(not(target_os = "linux"))]
-    let pool_gen = None;
     let node_id = vout.node_id;
     let achieved_hz = vout
         .preferred_mode

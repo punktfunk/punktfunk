@@ -161,9 +161,9 @@ impl StreamState {
     }
 
     /// The capture side of a built pipeline, then its encoder. The plan settles on the new
-    /// capture: a joiner's rebuild can join or miss anew. A new capturer numbers its cursor
-    /// shapes from 1 again, so the last forwarded one is forgotten, and the clipboard follows
-    /// the new capture's gamescope.
+    /// capture: a joiner's rebuild can join or miss anew, and the control task learns the
+    /// display it joined. A new capturer numbers its cursor shapes from 1 again, so the last
+    /// forwarded one is forgotten, and the clipboard follows the new capture's gamescope.
     fn adopt_pipeline(&mut self, p: Pipeline) {
         let Pipeline {
             capturer,
@@ -193,6 +193,9 @@ impl StreamState {
         self.live.interval = interval;
         self.live.cur_node_id = node_id;
         self.live.cur_display_gen = display_gen;
+        let joined =
+            crate::native::wiring::joined_display(self.display.vd_params.join_live, display_gen);
+        (self.shared.joined_display).store(joined, std::sync::atomic::Ordering::Relaxed);
         #[cfg(target_os = "linux")]
         {
             super::state::publish_gamescope_xwayland(
@@ -284,12 +287,13 @@ pub(super) mod tests {
         }
     }
 
-    /// What the fake's display was asked: the HDR and cursor it was last told, and how many
-    /// displays.
+    /// What the fake's display was asked: the HDR, cursor and join it was last told, and how
+    /// many displays.
     #[derive(Default)]
     pub(in crate::native::stream) struct DisplayAsks {
         pub(in crate::native::stream) hdr: Option<bool>,
         pub(in crate::native::stream) hw_cursor: Option<bool>,
+        pub(in crate::native::stream) join_live: Option<bool>,
         pub(in crate::native::stream) creates: u32,
     }
 
@@ -316,6 +320,9 @@ pub(super) mod tests {
         }
         fn set_hw_cursor(&mut self, on: bool) {
             self.0.lock().unwrap().hw_cursor = Some(on);
+        }
+        fn set_join_live(&mut self, on: bool) {
+            self.0.lock().unwrap().join_live = Some(on);
         }
     }
 
@@ -600,6 +607,7 @@ pub(super) mod tests {
                 cadence_behind_score: Default::default(),
                 client_packets_received: Default::default(),
                 cursor_client_draws: Default::default(),
+                joined_display: Default::default(),
             },
             ends: LoopEnds {
                 cursor_shape_tx: tokio::sync::watch::channel(None).0,

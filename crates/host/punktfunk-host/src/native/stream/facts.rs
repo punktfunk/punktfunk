@@ -70,6 +70,8 @@ pub(super) struct Shared {
     pub(super) cadence_behind_score: Arc<AtomicU32>,
     pub(super) client_packets_received: Arc<AtomicU32>,
     pub(super) cursor_client_draws: Arc<AtomicBool>,
+    /// [`crate::native::wiring::SessionShared::joined_display`].
+    pub(super) joined_display: Arc<AtomicU64>,
 }
 
 /// The loop's ends of the control task's and the input thread's channels.

@@ -23,6 +23,7 @@ use crate::bringup::Trace;
 use crate::encode_recovery::{
     EncoderWatchdog, RebuildBudget, MAX_CAPTURE_REBUILDS, MAX_ENCODER_RESETS,
 };
+use crate::native::wiring::{joined_display, joined_held};
 use crate::session_status::pack_mode;
 
 /// How long a capture-loss rebuild waits after a failed attempt.
@@ -299,8 +300,9 @@ struct Prepared {
 
 /// The one rebuild performer: [`StreamState::rebuild`] and the steps it runs.
 impl StreamState {
-    /// What [`rebuild_plan::plan`] reads.
+    /// What [`rebuild_plan::plan`] reads, the display's holders as they are now.
     fn rebuild_facts(&self) -> RebuildFacts {
+        let (joined, generation) = (self.display.vd_params.join_live, self.live.cur_display_gen);
         RebuildFacts {
             mode: self.live.cur_mode,
             rate_kbps: self.live.bitrate_kbps,
@@ -311,6 +313,13 @@ impl StreamState {
             seen_reassert_gen: self.seen_reassert_gen,
             follows_session: pf_host_config::config().compositor.is_none(),
             windows: cfg!(target_os = "windows"),
+            // A display it joined counts as held wherever it may not change it.
+            shared: if joined {
+                joined_held(joined_display(true, generation))
+            } else {
+                generation.is_some_and(crate::vdisplay::registry::shared)
+            },
+            joined,
         }
     }
 
@@ -355,9 +364,9 @@ impl StreamState {
         }
     }
 
-    /// Snapshot what the plan changes, take the ask's payload — a mode ask's view goes into the
-    /// session plan — and apply its display change: a switch's env, route and cursor plan, or a
-    /// codec's.
+    /// Snapshot what the plan changes, take the ask's payload — a mode ask's view, or the size it
+    /// asked on a display that stays, goes into the session plan — and apply its display change:
+    /// a joiner that stops joining, a switch's env, route and cursor plan, or a codec's.
     fn prepare(&mut self, plan: &RebuildPlan, ask: RebuildAsk) -> Prepared {
         let d = &self.display;
         let mut prep = Prepared {
@@ -388,6 +397,7 @@ impl StreamState {
                 prep.launch = sw.launch;
             }
             RebuildAsk::Mode(new_mode, view) => {
+                let view = rebuild_plan::view_for(new_mode, view, plan.mode);
                 tracing::info!(?new_mode, ?view, "rebuilding pipeline for mode switch");
                 self.plan.reframe_to = view.map(|v| (punktfunk_core::video_fit::VideoFit::Fit, v));
             }
@@ -399,6 +409,13 @@ impl StreamState {
             RebuildAsk::Format(_) | RebuildAsk::SourceMode(_) | RebuildAsk::Bitrate(_) => {}
         }
 
+        if plan.stops_joining {
+            tracing::info!(
+                "the display this session joined has no other holder — building its own"
+            );
+            self.display.vd_params.join_live = false;
+            self.display.vd.set_join_live(false);
+        }
         match plan.display {
             Some(DisplayChange::Switch(to)) => {
                 let route = crate::vdisplay::resolve_gamescope_route(to, false);
@@ -605,7 +622,7 @@ impl StreamState {
 
     /// Swap the build in, then the plan's epilogue: the display request it commits to and the
     /// colour later joiners read off it, the input route, the rate, the further screens, the
-    /// mode and who hears it, the gap.
+    /// mode, which a switch also gives later joiners, and who hears it, the gap.
     fn commit(
         &mut self,
         plan: &RebuildPlan,
@@ -647,6 +664,11 @@ impl StreamState {
                 self.display.no_overlay_means_off_output =
                     settle_portal_cursor(&*self.display.vd, &mut self.display.metadata_composite);
             }
+        }
+        if plan.reason == super::swap::SwapReason::ModeSwitch && plan.mode != self.live.cur_mode {
+            let m = plan.mode;
+            let mode = (m.width, m.height, m.refresh_hz);
+            crate::vdisplay::admission::publish_mode(self.facts.life.stop_flag(), mode);
         }
         self.live.cur_mode = plan.mode;
         if e.keyframe {
@@ -713,6 +735,9 @@ impl StreamState {
         if prep.shown {
             d.vd.set_hdr(params.hdr);
             d.vd.set_hw_cursor(params.hw_cursor);
+        }
+        if plan.stops_joining {
+            d.vd.set_join_live(params.join_live);
         }
         d.vd_params = params;
         if plan.rollback.gap {
@@ -1586,6 +1611,70 @@ mod tests {
         let view = Some((VideoFit::Fit, (8, 8)));
         assert_eq!(opened_for, [view, view, None]);
         assert_eq!(f.st.plan.codec, crate::encode::Codec::H264);
+    }
+
+    /// Another session holds the display: a smaller size asked reopens the encoder framed for
+    /// it at the live mode, and the client, acked with the size it asked for, hears that mode.
+    #[test]
+    fn a_shared_display_keeps_its_mode_and_frames_the_asked_size() {
+        use punktfunk_core::video_fit::VideoFit;
+        let mut f = super::super::swap::tests::fake();
+        let keyframes = Arc::new(AtomicU32::new(0));
+        let ask = RebuildAsk::Mode(mode((8, 8), 60), None);
+        let facts = RebuildFacts {
+            shared: true,
+            ..f.st.rebuild_facts()
+        };
+        let plan = rebuild_plan::plan(&ask, &facts).expect("an encoder rebuild");
+        assert_eq!((plan.build.clone(), plan.mode), (Build::Encoder, ASKED));
+        let mut opened_for = None;
+        let built = f.st.perform(plan, ask, |st, plan, _, _| {
+            opened_for = st.plan.reframe_to;
+            script(Script::Encoder, plan.rate_kbps, &keyframes)
+        });
+        assert!(matches!(built, Ok(Rebuilt::Built)));
+        assert_eq!(opened_for, Some((VideoFit::Fit, (8, 8))));
+        assert_eq!(f.st.live.cur_mode, ASKED, "the display's mode stays");
+        let told: Vec<_> = std::iter::from_fn(|| f.told.try_recv().ok())
+            .map(|d| (d.mode, d.corrects))
+            .collect();
+        assert_eq!(told, [(DELIVERED, false), (DELIVERED, true)]);
+    }
+
+    /// A joiner alone on its display builds as an owner: it stops joining once the build
+    /// commits, and joins again, display and control task both, when it fails.
+    #[test]
+    fn a_lone_joiner_builds_a_display_of_its_own() {
+        let keyframes = Arc::new(AtomicU32::new(0));
+        for (built, joins_after) in [
+            (Script::Pipeline(WIDE, 20_000), false),
+            (Script::Fails, true),
+        ] {
+            let mut f = super::super::swap::tests::fake();
+            f.st.display.vd_params.join_live = true;
+            f.st.shared.joined_display.store(1, Ordering::Relaxed);
+            let ask = RebuildAsk::Mode(mode(WIDE, 60), None);
+            let facts = RebuildFacts {
+                shared: false,
+                ..f.st.rebuild_facts()
+            };
+            let plan = rebuild_plan::plan(&ask, &facts).expect("a rebuild");
+            assert!(plan.stops_joining);
+            let mut joined_in_build = None;
+            let _ = f.st.perform(plan, ask, |st, plan, _, _| {
+                joined_in_build = Some(st.display.vd_params.join_live);
+                script(built, plan.rate_kbps, &keyframes)
+            });
+            assert_eq!(
+                joined_in_build,
+                Some(false),
+                "the build acquires as an owner"
+            );
+            assert_eq!(f.st.display.vd_params.join_live, joins_after);
+            assert_eq!(f.display.lock().unwrap().join_live, Some(joins_after));
+            let joined = f.st.shared.joined_display.load(Ordering::Relaxed);
+            assert_eq!(joined != 0, joins_after, "what the control task reads");
+        }
     }
 
     /// A new view whose encoder cannot frame it runs PyroWave at the size it opened at, and

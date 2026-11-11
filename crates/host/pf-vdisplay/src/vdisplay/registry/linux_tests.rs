@@ -727,6 +727,40 @@ fn a_mode_switch_successor_takes_the_group_from_the_display_it_replaces() {
     });
 }
 
+/// A joiner takes a hold on its owner's display, under the owner's generation. Once the owner
+/// leaves, the joiner's mode switch acquires as an owner and retires what it joined: one
+/// display, at the new mode, held once.
+#[test]
+fn a_lone_joiners_mode_switch_leaves_one_display_of_its_own() {
+    in_child(
+        "a_lone_joiners_mode_switch_leaves_one_display_of_its_own",
+        KEPT,
+        || {
+            let owner = FakeDisplay::new("kwin");
+            owner.script(|s| s.output_name = Some("Virtual-1"));
+            let owned = acquire(&owner, MODE, false);
+            let generation = owned.pool_gen.expect("pooled");
+            let joiner = FakeDisplay::new("kwin");
+            joiner.script(|s| s.join_live = true);
+            let joined = acquire(&joiner, MODE, false);
+            assert_eq!(joined.pool_gen, Some(generation));
+            assert!(registry::shared(generation), "owner and joiner");
+            drop(owned);
+            assert!(!registry::shared(generation), "the joiner alone");
+
+            joiner.script(|s| s.join_live = false);
+            let quit = Arc::new(AtomicBool::new(false));
+            let own = registry::acquire(&mut joiner.boxed(), QHD, quit, Some(generation))
+                .expect("its own display");
+            drop(joined);
+            registry::retire(generation);
+            assert_eq!(modes(), [QHD]);
+            assert_eq!(pool(), [("kwin", lifecycle::State::Active { refs: 1 })]);
+            drop(own);
+        },
+    );
+}
+
 /// `Entry::drop`: gamescope is the one virtual output that offers HDR, so only its
 /// teardown re-arms an offer that failed.
 #[test]

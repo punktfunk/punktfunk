@@ -332,9 +332,10 @@ async fn launch_under(
 }
 
 /// The launch against the native sessions in the display table, under the same policy: a
-/// refusal is the 503 to answer, a steal ends them first, a join returns the owner's display.
-/// A join of an HDR display needs `hdr_asked`. The reservation holds this launch's place until
-/// it answers; this plane's own rows hold `gs.preempted`, so they never conflict.
+/// refusal is the 503 to answer, a steal ends them first, a join returns the owner's display,
+/// once a native connect still in bring-up streams. A join of an HDR display needs
+/// `hdr_asked`. The reservation holds this launch's place until it answers; this plane's own
+/// rows hold `gs.preempted`, so they never conflict.
 async fn admit_native(
     st: &AppState,
     conflict: crate::vdisplay::policy::ModeConflict,
@@ -348,7 +349,14 @@ async fn admit_native(
     Response,
 > {
     use crate::vdisplay::admission::{admit_under, all_gone, joined_hdr, Admission};
-    let (native, reservation) = admit_under(conflict, None, mode, st.gs.preempted.clone());
+    // `join` may wait out a native connect's bring-up: off the runtime's workers.
+    let preempted = st.gs.preempted.clone();
+    let admitted =
+        tokio::task::spawn_blocking(move || admit_under(conflict, None, mode, preempted));
+    let Ok((native, reservation)) = admitted.await else {
+        tracing::warn!("GameStream launch REJECTED — the admission task did not finish");
+        return Err((StatusCode::SERVICE_UNAVAILABLE, xml(error_xml(BUSY))).into_response());
+    };
     match native {
         Admission::Separate => {}
         Admission::Join(_, d)

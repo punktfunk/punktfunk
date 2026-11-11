@@ -234,6 +234,25 @@ pub fn retire(generation: u64) {
     let _ = generation;
 }
 
+/// Another session holds the display of `generation` ([`crate::VirtualOutput::pool_gen`]): a
+/// `join` session shares it, or it shares its owner's. Read under the pool lock on Linux and off
+/// the manager's last commit on Windows. `false` for a generation neither tracks, and elsewhere.
+pub fn shared(generation: u64) -> bool {
+    #[cfg(target_os = "linux")]
+    {
+        linux::shared(generation)
+    }
+    #[cfg(target_os = "windows")]
+    {
+        super::manager::shared(generation)
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "linux")))]
+    {
+        let _ = generation;
+        false
+    }
+}
+
 /// Seat key of the pooled display with this `pool_gen` ([`crate::VirtualOutput::seat`]).
 ///
 /// The session already carries its pool generation, so this hands the seat to the launch, the
@@ -502,6 +521,12 @@ mod pool {
                 && epoch_matches(e.ownership, e.epoch, cur_epoch)
                 && e.join_name.as_ref().is_some_and(|n| n.get().is_some())
         })
+    }
+
+    /// More than one session holds the display of `generation`. Joins do not re-stamp it, so
+    /// owner and joiners name the same entry.
+    pub(super) fn shared(entries: &[Entry], generation: u64) -> bool {
+        (entries.iter()).any(|e| e.generation == generation && e.life.refs() > 1)
     }
 
     /// Display group: one per desktop compositor backend. A spawned compositor is a group of
@@ -986,6 +1011,24 @@ mod pool {
             assert_eq!(join_target(&pool, "hyprland", m, &None, true, 0), None);
             assert_eq!(join_target(&pool, "hyprland", m, &None, false, 1), None);
             assert_eq!(join_target(&pool, "kwin", m, &None, false, 0), None);
+        }
+
+        /// A display is shared while a second hold is on it: a joiner's beside its owner's.
+        /// A kept display and an unknown generation are nobody's.
+        #[test]
+        fn a_display_is_shared_while_a_second_session_holds_it() {
+            let mut pool = vec![test_entry("kwin", 1, None), test_entry("kwin", 2, None)];
+            pool[0].life.acquire();
+            pool[1].life.acquire();
+            assert!(!shared(&pool, 1), "its owner alone");
+            pool[0].life.acquire();
+            assert!(shared(&pool, 1), "owner and joiner");
+            assert!(!shared(&pool, 2), "another display");
+            assert!(!shared(&pool, 9), "no such display");
+            pool[0].life.release(Instant::now(), Linger::Forever);
+            assert!(!shared(&pool, 1), "one of the two left");
+            pool[0].life.release(Instant::now(), Linger::Forever);
+            assert!(!shared(&pool, 1), "kept");
         }
 
         #[test]
@@ -2508,6 +2551,12 @@ mod linux {
     /// [`force_release`] (kept only; Active refused; already-gone no-op); distinct log.
     pub(super) fn retire(generation: u64) {
         release_kept(Some(generation), "retired (superseded by a mode switch)");
+    }
+
+    /// [`super::pool::shared`] under the pool lock. `false` before the first acquire.
+    pub(super) fn shared(generation: u64) -> bool {
+        REG.get()
+            .is_some_and(|r| super::pool::shared(&r.entries.lock().unwrap(), generation))
     }
 
     /// Tear down every kept display of `backend` sharing `isolation`, so a sole-instance

@@ -1063,6 +1063,7 @@ fn shared_handles(ctx: &SessionContext) -> (Shared, FecState) {
         cadence_behind_score: s.cadence_behind_score.clone(),
         client_packets_received: s.client_packets_received.clone(),
         cursor_client_draws: s.cursor_client_draws.clone(),
+        joined_display: s.joined_display.clone(),
     };
     let fec = FecState {
         requested: s.fec_requested.clone(),
@@ -1165,7 +1166,8 @@ fn build_first(
 
 /// The first pipeline as the loop's live one at `mode`. The input thread's framing, the
 /// clipboard's gamescope and the portal's cursor verdict follow it, the rate it opened at is
-/// adopted, and `/status` gets the mode it delivers.
+/// adopted, the control task learns the display it joined, and `/status` gets the mode it
+/// delivers.
 fn first_live(
     pipe: Pipeline,
     display: &mut DisplayRequest,
@@ -1195,8 +1197,8 @@ fn first_live(
         display.no_overlay_means_off_output =
             settle_portal_cursor(&*display.vd, &mut display.metadata_composite);
     }
-    #[cfg(not(target_os = "linux"))]
-    let _ = display;
+    let joined = crate::native::wiring::joined_display(display.vd_params.join_live, display_gen);
+    shared.joined_display.store(joined, Ordering::Relaxed);
     adopt_built_bitrate(&mut bitrate_kbps, built, &shared.live_bitrate, retarget);
     // Stats slot only — an ordinary connect is not owed a corrective Reconfigured.
     let delivered = delivered_mode(frame.width, frame.height, interval);

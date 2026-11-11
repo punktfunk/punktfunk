@@ -52,11 +52,12 @@ impl ControlTask {
         Ok(())
     }
 
-    /// A codec ask: the client cannot decode `exclude`. The stream thread rebuilds when another
-    /// codec is left and no ask is pending; otherwise the ask is refused at once.
+    /// A codec ask: the client cannot decode `exclude`. The stream thread rebuilds when the
+    /// session may change its capture, another codec is left and no ask is pending; otherwise
+    /// the ask is refused at once.
     async fn on_codec_ask(&mut self, exclude: u8) -> Step {
         let mut to = None;
-        if self.task.format_change_ok && self.asked == 0 {
+        if self.task.format_change_ok && !self.task.joined_held() && self.asked == 0 {
             self.excluded |= exclude;
             let left = self.task.client_codecs & !self.excluded;
             let t = &self.task;
@@ -84,7 +85,8 @@ impl ControlTask {
 
     /// A `Reconfigure`, its view filled by [`asked_view`], as [`reconfigure_ask`] reads it: a
     /// codec ask goes on as one; a mode switch is acked at once with the mode the client now
-    /// holds, then handed to the stream thread with its view. A refused switch hands nothing on.
+    /// holds, then handed to the stream thread with its view. A refused switch hands nothing on;
+    /// a joiner's is refused while its display is held.
     async fn on_reconfigure(&mut self, req: Reconfigure) -> Step {
         let now = std::time::Instant::now();
         let too_soon = self
@@ -95,7 +97,8 @@ impl ControlTask {
             ..req
         };
         let t = &self.task;
-        let accepted = match reconfigure_ask(&req, t.codec, t.live_reconfig_ok, too_soon) {
+        let live = t.live_reconfig_ok && !t.joined_held();
+        let accepted = match reconfigure_ask(&req, t.codec, live, too_soon) {
             Ask::Codec(exclude) => return self.on_codec_ask(exclude).await,
             Ask::Mode(asked) => Some(asked),
             Ask::Refused => None,

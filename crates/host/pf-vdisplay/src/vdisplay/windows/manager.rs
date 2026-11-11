@@ -1618,8 +1618,8 @@ impl VirtualDisplayManager {
         }
     }
 
-    /// [`VirtualOutput`] for `mon` in `slot`: preferred mode, capture target,
-    /// generation-stamped lease. `quit` is read by the lease `Drop` (see
+    /// [`VirtualOutput`] for `mon` in `slot`: preferred mode, capture target, the monitor's
+    /// generation, and a lease stamped with it. `quit` is read by the lease `Drop` (see
     /// [`Self::release`]). A session's own monitor is `Owned`: the manager owns its lifecycle
     /// and the registry delegates through `vd.create`. A joiner's is `External`, and its lease
     /// gives back a joined hold.
@@ -1634,6 +1634,7 @@ impl VirtualDisplayManager {
             node_id: 0,
             preferred_mode: Some((mon.mode.width, mon.mode.height, mon.mode.refresh_hz)),
             win_capture: mon.target(),
+            pool_gen: Some(mon.generation),
             keepalive: Box::new(MonitorLease {
                 mgr: self,
                 slot,
@@ -2921,6 +2922,12 @@ pub(crate) fn force_release(slot: Option<u64>) -> usize {
     VDM.get().map(|m| m.force_release(slot)).unwrap_or(0)
 }
 
+/// Another session holds the monitor of `generation`, as the last commit left it.
+pub(crate) fn shared(generation: u64) -> bool {
+    VDM.get()
+        .is_some_and(|m| m.view.lock().unwrap().shared(generation))
+}
+
 #[cfg(test)]
 mod tests {
     use super::ccd::fake::{CcdCall, FakeCcd};
@@ -3167,6 +3174,28 @@ mod tests {
             .collect();
         assert_eq!(rows, [(0, "active", 1)]);
         // Its release would tear the display down under the host's linger policy.
+        std::mem::forget(joiner);
+    }
+
+    /// A joiner's output carries its owner's generation, and the monitor is shared until one
+    /// of the two lets go.
+    #[test]
+    fn a_joined_monitor_is_shared_until_a_holder_leaves() {
+        let mgr = fake_manager(&FakeCcd::new());
+        {
+            let mut t = mgr.transition();
+            *t = exclusive_group(&[0]);
+            t.slots.get_mut(&0).unwrap().mon.gdi_name = Some(r"\\.\DISPLAY9".into());
+        }
+        let shared = || mgr.view.lock().unwrap().shared(1);
+        assert!(!shared(), "the owner alone");
+        let joiner = mgr
+            .join(m(1920, 1080, 60), None)
+            .expect("slot 0 is joinable");
+        assert_eq!(joiner.pool_gen, Some(1));
+        assert!(shared(), "owner and joiner");
+        mgr.release(0, 1, false, false, Duration::ZERO);
+        assert!(!shared(), "the joiner alone");
         std::mem::forget(joiner);
     }
 
