@@ -1690,7 +1690,7 @@ fn unit_ended(seat: &Seat, state: &session::UnitState, login: bool) -> BackendEr
 
 /// Writes the environment file of a row on a person's own account again with the token it holds,
 /// as the box's Seat defaults stand now: Browser streaming reaches its host at the next start.
-/// The owner's is handed to the owner, whose own host reads it; another person's stays root's.
+/// Every row's stays root's; the owner may read theirs, which their own host reads too.
 /// `None` when the file holds no token, `Some(true)` when it changed.
 fn rewrite_env(
     inner: &Inner,
@@ -1701,8 +1701,8 @@ fn rewrite_env(
         return Ok(None);
     };
     let browser = session::browser(&inner.box_dir);
-    let handed = seat.owner.then_some((passwd.uid, passwd.gid));
-    let changed = session::write_env(seat, &passwd.home, &inner.state, &token, handed, &browser)?;
+    let reader = seat.owner.then_some((passwd.uid, passwd.gid));
+    let changed = session::write_env(seat, &passwd.home, &inner.state, &token, reader, &browser)?;
     if changed {
         tracing::info!(account = %seat.account, browser = browser.on,
             "environment file rewritten for its host's next start");

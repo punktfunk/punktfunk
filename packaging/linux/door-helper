@@ -25,6 +25,8 @@
 # there can't make root read or overwrite anything the user couldn't.
 set -eu
 export LC_ALL=C
+# Root runs this: the system directories come first. NixOS keeps its tools in the unit's PATH.
+export PATH="/usr/sbin:/usr/bin:/sbin:/bin${PATH:+:$PATH}"
 
 BOX=/var/lib/punktfunk
 # The seat supervisor's own directory, root's alone. `owner` there is the one account the door is
@@ -33,6 +35,8 @@ BOX=/var/lib/punktfunk
 STATE=/var/lib/punktfunk-seats
 RECORD="$STATE/owner"
 MARK="$STATE/door-on"
+# The owner's port lines for the door's two units, which also hand them to `ports`, as root.
+PORTS="$STATE/host.env"
 SEATS=/usr/libexec/punktfunk/punktfunk-seats
 # The door user's primary group. Never `punktfunk`, which owns the usbip attach nodes and passes
 # pf-dm-helper: the door opens no device.
@@ -183,13 +187,42 @@ give_password() {
 # Taken at each door start: the owner's files stay theirs, and the door never writes a port.
 PORT_LINE='^[[:space:]]*PUNKTFUNK_(MGMT_BIND|NATIVE_PORT|UI_BIND)[[:space:]]*='
 
+# Stdin's port lines into $PORTS, where only root writes: the last line per key, unquoted, and
+# only when its value is address characters. Nothing else reaches the file.
+to_ports() {
+    { grep -E "$PORT_LINE" || true; } | awk -v q="'" '
+    {
+        eq = index($0, "=")
+        key = substr($0, 1, eq - 1)
+        gsub(/[[:space:]]/, "", key)
+        value = substr($0, eq + 1)
+        gsub(/^[[:space:]]+|[[:space:]]+$/, "", value)
+        first = substr(value, 1, 1)
+        if (length(value) > 1 && (first == "\"" || first == q) && substr(value, length(value)) == first)
+            value = substr(value, 2, length(value) - 2)
+        last[key] = value
+    }
+    END {
+        split("PUNKTFUNK_MGMT_BIND PUNKTFUNK_NATIVE_PORT PUNKTFUNK_UI_BIND", keys, " ")
+        for (i = 1; i <= 3; i++) {
+            if (!(keys[i] in last)) continue
+            rest = last[keys[i]]
+            gsub(/[0-9A-Za-z.:%_-]|\[|\]/, "", rest)
+            if (last[keys[i]] != "" && rest == "") print keys[i] "=" last[keys[i]]
+        }
+    }' >"$PORTS.tmp"
+    chmod 0644 "$PORTS.tmp"
+    mv -f "$PORTS.tmp" "$PORTS"
+}
+
 take_ports() {
     # Their files out of reach, as a home that isn't mounted yet: the last copy stays.
     as_user test -d "$OWN" || return 0
+    # Either file may be absent: one missing must not end the group before the other is read.
     {
-        as_user cat -- "$OWN/host.env" 2>/dev/null
-        as_user cat -- "$OWN/web.env" 2>/dev/null
-    } | { grep -E "$PORT_LINE" || true; } | to_door host.env
+        as_user cat -- "$OWN/host.env" 2>/dev/null || true
+        as_user cat -- "$OWN/web.env" 2>/dev/null || true
+    } | to_ports
 }
 
 safe_name() {
@@ -331,6 +364,11 @@ on) door_on ;;
 off) door_off ;;
 ports)
     legacy_mark
+    # The copy the door kept in $BOX before $PORTS: filtered the same way, once, then removed.
+    if [ ! -e "$PORTS" ]; then
+        as_door cat -- "$BOX/host.env" 2>/dev/null | to_ports
+        as_door rm -f "$BOX/host.env" || true
+    fi
     [ "$gone" = 1 ] || take_ports
     ;;
 esac

@@ -42,7 +42,11 @@ export function seatPath(id: string, tail: string): string {
 	return `/api/v1/profiles/${id}/proxy/${tail}`;
 }
 
-/** A plugin UI's credential never reaches a browser, from a seat's host either. */
-export function isUiCredential(rest: string): boolean {
-	return /^plugins\/[^/]+\/ui-credential$/i.test(rest);
+/**
+ * A plugin's UI credential, or its page relay (`ui`, `ui/`, `ui/**`). The console's own
+ * `/plugin-ui` proxy calls both server-side; a browser gets neither, from a seat's host either:
+ * a plugin's page on the console origin would run as the console.
+ */
+export function isPluginPrivate(rest: string): boolean {
+	return /^plugins\/[^/]+\/(?:ui-credential|ui(?:\/.*)?)$/i.test(rest);
 }

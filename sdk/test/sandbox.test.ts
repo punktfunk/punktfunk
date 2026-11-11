@@ -67,13 +67,67 @@ describe("refusedRoot", () => {
 			"/home/u/.config/punktfunk-extra",
 			"/home/u/Games/../.ssh",
 		]) {
-			expect([p, refusedRoot(p, "/home/u", paths.configDir)]).toEqual([p, true]);
+			for (const write of [false, true]) {
+				expect([p, write, refusedRoot(p, "/home/u", paths.configDir, write)]).toEqual([
+					p,
+					write,
+					true,
+				]);
+			}
+		}
+	});
+
+	test("keeps login and session start-up files, and their parents, out of every writable bind", () => {
+		for (const p of [
+			"/home/u/.config/systemd",
+			"/home/u/.config/systemd/user",
+			"/home/u/.local/share/systemd/user",
+			"/home/u/.config/autostart",
+			"/home/u/.config/autostart-scripts",
+			"/home/u/.config/environment.d",
+			"/home/u/.config/fish/conf.d",
+			"/home/u/.config/plasma-workspace/env",
+			"/home/u/.local/bin",
+			"/home/u/.local/share/applications",
+			"/home/u/.bashrc",
+			"/home/u/.bash_profile",
+			"/home/u/.bash_login",
+			"/home/u/.bash_logout",
+			"/home/u/.profile",
+			"/home/u/.zshrc",
+			"/home/u/.zshenv",
+			"/home/u/.zprofile",
+			"/home/u/.zlogin",
+			"/home/u/.pam_environment",
+			"/home/u/.xprofile",
+			"/home/u/.xinitrc",
+			// A parent binds its child with it.
+			"/home/u/.local",
+			"/home/u/.local/share",
+			"/home/u/.config/plasma-workspace",
+			"/home/u/.config/autostart/../systemd/user",
+		]) {
+			for (const config of [paths.configDir, "/var/lib/punktfunk"]) {
+				expect([p, config, refusedRoot(p, "/home/u", config, true)]).toEqual([p, config, true]);
+				// A launcher reads them (the desktop-entry plugin scans `~/.local/share/applications`).
+				expect([p, config, refusedRoot(p, "/home/u", config, false)]).toEqual([
+					p,
+					config,
+					false,
+				]);
+			}
 		}
 	});
 
 	test("lets launcher, media and temp paths through", () => {
 		for (const p of [
 			"/home/u/.local/share/Steam",
+			"/home/u/.local/share/lutris",
+			"/home/u/.local/share/systemd-extra",
+			"/home/u/.local/binx",
+			"/home/u/.config/heroic",
+			"/home/u/.config/autostartx",
+			"/home/u/.config/plasma-workspace-extra",
 			"/home/u/.config/retroarch",
 			"/home/u/Emu",
 			"/run/media/u/SD",
@@ -81,7 +135,13 @@ describe("refusedRoot", () => {
 			"/tmp/vhclient_response",
 			"/usr/share/applications",
 		]) {
-			expect([p, refusedRoot(p, "/home/u", paths.configDir)]).toEqual([p, false]);
+			for (const write of [false, true]) {
+				expect([p, write, refusedRoot(p, "/home/u", paths.configDir, write)]).toEqual([
+					p,
+					write,
+					false,
+				]);
+			}
 		}
 	});
 
@@ -94,9 +154,12 @@ describe("refusedRoot", () => {
 		const home = path.join(root, "home/u");
 		try {
 			const config = path.join(home, ".config", "punktfunk");
-			expect(refusedRoot(real, home, config)).toBe(true);
-			expect(refusedRoot(path.join(real, ".ssh"), home, config)).toBe(true);
-			expect(refusedRoot(path.join(real, "Games"), home, config)).toBe(false);
+			expect(refusedRoot(real, home, config, false)).toBe(true);
+			expect(refusedRoot(path.join(real, ".ssh"), home, config, false)).toBe(true);
+			expect(refusedRoot(path.join(real, "Games"), home, config, false)).toBe(false);
+			// A start-up file is seen through the linked home as well.
+			expect(refusedRoot(path.join(real, ".bashrc"), home, config, true)).toBe(true);
+			expect(refusedRoot(path.join(real, ".bashrc"), home, config, false)).toBe(false);
 		} finally {
 			fs.rmSync(root, { recursive: true, force: true });
 		}
@@ -108,15 +171,24 @@ describe("refusedRoot", () => {
 			"../../crates/host/punktfunk-host/testdata/path-refusal-vectors.json",
 		);
 		const { vectors } = JSON.parse(fs.readFileSync(file, "utf8")) as {
-			vectors: { path: string; home: string; config_dir: string; refused: boolean }[];
+			vectors: {
+				path: string;
+				home: string;
+				config_dir: string;
+				write: boolean;
+				refused: boolean;
+			}[];
 		};
 		expect(vectors.some((v) => v.config_dir !== paths.configDir)).toBe(true);
-		// No row has `~/.config` under a non-default config dir: the host binds it there, the
+		expect(vectors.some((v) => v.write)).toBe(true);
+		// No read row has `~/.config` under a non-default config dir: the host binds it there, the
 		// sandbox still refuses it. Stricter on purpose, as defense in depth.
 		for (const v of vectors) {
-			expect([v.path, v.config_dir, refusedRoot(v.path, v.home, v.config_dir)]).toEqual([
+			const got = refusedRoot(v.path, v.home, v.config_dir, v.write);
+			expect([v.path, v.config_dir, v.write, got]).toEqual([
 				v.path,
 				v.config_dir,
+				v.write,
 				v.refused,
 			]);
 		}
@@ -133,6 +205,33 @@ describe("refusedRoot", () => {
 		expect(bound).not.toContain("/proc");
 		expect(bound).not.toContain("/home/u/.config/punktfunk/plugin-run");
 		expect(bound).not.toContain("/run/user/1000");
+	});
+
+	test("a start-up location is bound read-only and never read-write", () => {
+		const argv = bwrapArgv(
+			manifest({
+				reads: ["~/.config/heroic", "~/.local/share/applications", "~/.local/bin"],
+				writes: ["~/.config/systemd/user", "~/.config/autostart", "~/.bashrc", "~/.local", "/tmp/x"],
+			}),
+			paths,
+			[
+				{ path: "/home/u/.config/environment.d", write: true },
+				{ path: "/home/u/.config/fish", write: false },
+			],
+		);
+		const writable = binds(argv, "--bind-try").map(([src]) => src);
+		expect(writable).toContain("/tmp/x");
+		expect(writable.filter((p) => p.startsWith("/home/u"))).toEqual([]);
+		const readable = binds(argv, "--ro-bind-try").map(([src]) => src);
+		expect(readable).toEqual(
+			expect.arrayContaining([
+				"/home/u/.config/heroic",
+				"/home/u/.local/share/applications",
+				"/home/u/.local/bin",
+				"/home/u/.config/fish",
+			]),
+		);
+		expect(readable).not.toContain("/home/u/.config/environment.d");
 	});
 });
 

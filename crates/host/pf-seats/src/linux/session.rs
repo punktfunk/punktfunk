@@ -80,8 +80,8 @@ pub(super) fn token_line(token: &str) -> String {
     format!("{TOKEN_KEY}{token}\n")
 }
 
-/// The token `account`'s environment file holds. The owner can edit that file, so only a token
-/// [`mint_token`] could have made counts.
+/// The token `account`'s environment file holds. Only a token [`mint_token`] could have made
+/// counts: a file an owner once owned may hold anything.
 pub(super) fn env_token(account: &str) -> Option<String> {
     token_in(&std::fs::read_to_string(env_path(account)).ok()?).map(str::to_owned)
 }
@@ -293,11 +293,19 @@ pub(super) fn set_login(account: &str, dropin: Option<&str>) -> Result<(), Backe
     Ok(())
 }
 
-/// Writes `contents` at `path` with `mode` unless it already holds exactly that. `true` when it
+/// Writes `contents` at `path` with `mode` unless it is already this process's file holding
+/// exactly that. One another uid owns is replaced: root reads these files. `true` when it
 /// changed.
 pub(super) fn write_if_changed(path: &Path, contents: &str, mode: u32) -> std::io::Result<bool> {
-    use std::os::unix::fs::{OpenOptionsExt as _, PermissionsExt as _};
-    if std::fs::read_to_string(path).is_ok_and(|current| current == contents) {
+    use std::io::Read as _;
+    use std::os::unix::fs::{MetadataExt as _, OpenOptionsExt as _, PermissionsExt as _};
+    let unchanged = std::fs::File::open(path).and_then(|mut file| {
+        let mut current = String::new();
+        file.read_to_string(&mut current)?;
+        let ours = file.metadata()?.uid() == rustix::process::geteuid().as_raw();
+        Ok(ours && current == contents)
+    });
+    if unchanged.unwrap_or(false) {
         return Ok(false);
     }
     if let Some(parent) = path.parent() {
@@ -347,9 +355,9 @@ pub(super) fn browser(box_dir: &Path) -> Browser {
     read().ok().flatten().unwrap_or_default()
 }
 
-/// Writes the environment file for `seat`. It holds a secret: root reads it before the unit drops
-/// privileges, nobody else. The owner's user unit reads it too, so it is the owner's, `0600`.
-/// `true` when the file changed.
+/// Writes the environment file for `seat`, root's `0600`: it holds a secret, and the unit's root
+/// commands take their environment from it. The owner's own user unit reads it too, through
+/// [`reader_acl`] for `owner`'s uid. `true` when the file changed.
 pub(super) fn write_env(
     seat: &Seat,
     home: &Path,
@@ -362,18 +370,31 @@ pub(super) fn write_env(
     let path = env_path(&seat.account);
     let written = write_if_changed(&path, &render_env(seat, home, state, token, browser), 0o600)
         .map_err(|e| io("write the seat environment file", e))?;
-    if let Some((uid, gid)) = owner {
-        std::os::unix::fs::chown(&path, Some(uid), Some(gid))
-            .map_err(|e| io("hand the environment file to its owner", e))?;
+    if let Some((uid, _)) = owner {
+        let (acl, flags) = (reader_acl(uid), rustix::fs::XattrFlags::empty());
+        rustix::fs::lsetxattr(&path, shared::ACL_ACCESS, &acl, flags)
+            .map_err(|e| io("let the owner read the environment file", e.into()))?;
     }
     Ok(written)
+}
+
+/// The access ACL of a file only root writes and `uid` may read.
+fn reader_acl(uid: u32) -> Vec<u8> {
+    use shared::{ACL_GROUP_OBJ, ACL_MASK, ACL_NO_ID, ACL_OTHER, ACL_USER, ACL_USER_OBJ};
+    shared::acl_bytes(&[
+        (ACL_USER_OBJ, 6, ACL_NO_ID),
+        (ACL_USER, 4, uid),
+        (ACL_GROUP_OBJ, 0, ACL_NO_ID),
+        (ACL_MASK, 4, ACL_NO_ID),
+        (ACL_OTHER, 0, ACL_NO_ID),
+    ])
 }
 
 /// Writes the environment file and the drop-ins for `seat`, then reloads systemd when a drop-in
 /// changed. Every seat gets the update helpers' binds. The owner's row gets the `background`
 /// class, a made seat its private directories and `shares`, and another person's row neither. A
 /// drop-in the row doesn't get is removed: its account may have been another kind of row before.
-/// `user` is the seat user's uid and gid: the owner's row hands its environment file to them,
+/// `user` is the seat user's uid and gid: the owner's row lets them read its environment file,
 /// and a made seat's user gets the seat's binds in its own systemd manager too. A person's
 /// manager is theirs and gets nothing.
 pub(super) fn write_unit_files(
@@ -1063,5 +1084,60 @@ mod tests {
             std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
             0o640
         );
+    }
+
+    /// The owner reads the environment file and only root writes it: the owner's entry and the
+    /// mask are `r--`, the group and others get nothing.
+    #[test]
+    fn the_owner_may_read_the_env_file_and_never_write_it() {
+        let entry = |tag: u16, perm: u16, id: u32| {
+            [
+                &tag.to_le_bytes()[..],
+                &perm.to_le_bytes(),
+                &id.to_le_bytes(),
+            ]
+            .concat()
+        };
+        let none = u32::MAX;
+        assert_eq!(
+            reader_acl(1000),
+            [
+                2u32.to_le_bytes().to_vec(),
+                entry(0x01, 6, none),
+                entry(0x02, 4, 1000),
+                entry(0x04, 0, none),
+                entry(0x10, 4, none),
+                entry(0x20, 0, none),
+            ]
+            .concat()
+        );
+    }
+
+    /// A file another uid owns is replaced even when it holds the same text, and the kernel takes
+    /// the owner's read entry on the replacement. Giving a file away needs root, so elsewhere this
+    /// checks nothing.
+    #[test]
+    fn a_file_another_uid_owns_is_replaced() {
+        use std::os::unix::fs::MetadataExt as _;
+        if !rustix::process::geteuid().is_root() {
+            return;
+        }
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("owner.env");
+        assert!(write_if_changed(&path, "X=\"1\"\n", 0o600).unwrap());
+        std::os::unix::fs::chown(&path, Some(1000), Some(1000)).unwrap();
+        assert!(write_if_changed(&path, "X=\"1\"\n", 0o600).unwrap());
+        let meta = std::fs::metadata(&path).unwrap();
+        assert_eq!((meta.uid(), meta.gid()), (0, 0));
+        assert!(!write_if_changed(&path, "X=\"1\"\n", 0o600).unwrap());
+        let acl = reader_acl(1000);
+        let flags = rustix::fs::XattrFlags::empty();
+        match rustix::fs::lsetxattr(&path, shared::ACL_ACCESS, &acl, flags) {
+            Err(rustix::io::Errno::NOTSUP) => {}
+            set => {
+                set.unwrap();
+                assert_eq!(std::fs::metadata(&path).unwrap().mode() & 0o777, 0o640);
+            }
+        }
     }
 }

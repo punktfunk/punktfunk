@@ -118,10 +118,12 @@ enum ClientTLS {
         return identity
         #else
         // Add the key (tagged) and the certificate (labelled, matched to the key by public key)
-        // separately; the deletes above make a duplicate impossible.
+        // separately; the deletes above make a duplicate impossible. Both carry the class of
+        // `ClientIdentityStore`: readable after first unlock, never in a backup or a migration.
         let addKey: [CFString: Any] = [
             kSecClass: kSecClassKey,
             kSecAttrApplicationTag: tag,
+            kSecAttrAccessible: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly,
             kSecValueRef: secKey,
         ]
         let keyStatus = SecItemAdd(addKey as CFDictionary, nil)
@@ -132,6 +134,7 @@ enum ClientTLS {
         let addCert: [CFString: Any] = [
             kSecClass: kSecClassCertificate,
             kSecAttrLabel: certLabel,
+            kSecAttrAccessible: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly,
             kSecValueRef: cert,
         ]
         let certStatus = SecItemAdd(addCert as CFDictionary, nil)

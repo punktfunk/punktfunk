@@ -94,6 +94,30 @@ pub(crate) fn turn_seat(action: &ConsoleAction, console_busy: bool, switching: b
     }
 }
 
+/// The session a `wake` attaches to the console: only a seat that reads `Switchable` switches,
+/// so a wake never cuts a live stream or repeats a switch in flight.
+pub(crate) fn wake_switch(action: &ConsoleAction, seat: &TurnSeat) -> Option<u32> {
+    match (action, seat) {
+        (ConsoleAction::Switch(session), TurnSeat::Switchable) => Some(*session),
+        _ => None,
+    }
+}
+
+/// `account`'s action and seat from what Windows reports now. The card and the wake both read
+/// this, so they can't disagree. Blocking (WTS).
+pub(crate) fn seat_now(account: &str) -> (ConsoleAction, TurnSeat) {
+    let action = decide(&account_state(account));
+    // A stream on the console as another account: a switch would cut it.
+    let console_busy = console_account().is_some() && crate::telemetry::session_status::count() > 0;
+    let switching = switch_in_flight(
+        switch_marker().as_ref().map(|(a, t)| (a.as_str(), *t)),
+        account,
+        crate::clock::unix_secs(),
+    );
+    let seat = turn_seat(&action, console_busy, switching);
+    (action, seat)
+}
+
 /// How long a switch marker counts as in flight before a fresh `wake` may try again: the console
 /// change plus the host relaunch. Past this, the marker is stale (the switch never took) and the
 /// card goes back to `Switchable`.
@@ -263,6 +287,17 @@ mod tests {
         assert_eq!(turn_seat(&switch, true, false), TurnSeat::Occupied);
         // A switch in flight shows the wait even while the old console is still busy.
         assert_eq!(turn_seat(&switch, true, true), TurnSeat::Switching);
+    }
+
+    #[test]
+    fn a_wake_switches_only_a_switchable_seat() {
+        let switch = ConsoleAction::Switch(4);
+        let wake = |busy, switching| wake_switch(&switch, &turn_seat(&switch, busy, switching));
+        assert_eq!(wake(false, false), Some(4));
+        assert_eq!(wake(true, false), None);
+        assert_eq!(wake(false, true), None);
+        let here = ConsoleAction::Here;
+        assert_eq!(wake_switch(&here, &turn_seat(&here, false, false)), None);
     }
 
     #[test]

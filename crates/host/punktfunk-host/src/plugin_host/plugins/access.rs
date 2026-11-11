@@ -504,10 +504,38 @@ fn windows_protected(canonical: &Path) -> bool {
     false
 }
 
+/// Under the home: what the user's login or session runs at start. A writable bind of one, or of
+/// a parent, escapes the sandbox; a read-only one is fine. The SDK's `STARTUP` is the same list.
+#[cfg(unix)]
+const STARTUP_PATHS: &[&str] = &[
+    ".config/systemd",
+    ".local/share/systemd",
+    ".config/autostart",
+    ".config/environment.d",
+    ".config/fish",
+    ".local/bin",
+    ".bashrc",
+    ".bash_profile",
+    ".bash_login",
+    ".bash_logout",
+    ".profile",
+    ".zshrc",
+    ".zshenv",
+    ".zprofile",
+    ".zlogin",
+    ".pam_environment",
+    ".xprofile",
+    ".xinitrc",
+    ".config/plasma-workspace/env",
+    ".config/autostart-scripts",
+    ".local/share/applications",
+];
+
 /// The safety refusals for a path, in order; `None` means the path is a directory the host
 /// could in principle grant. `operator` is true for a grant the operator makes (CLI, console)
-/// and false for a plugin's request or manifest. Coverage, sticky denial, and caps are the
-/// caller's business and are checked after this.
+/// and false for a plugin's request or manifest. `write` also refuses the login and session
+/// start-up files and their parents. Coverage, sticky denial, and caps are the caller's business
+/// and are checked after this.
 fn refusal_rule(
     raw: &Path,
     canonical: &Path,
@@ -559,7 +587,13 @@ fn refusal_rule(
             || (!volume
                 && ["/proc", "/sys", "/dev", "/run"]
                     .iter()
-                    .any(|r| within(canonical, Path::new(r))));
+                    .any(|r| within(canonical, Path::new(r))))
+            || (write
+                && !home.as_os_str().is_empty()
+                && STARTUP_PATHS.iter().any(|d| {
+                    let d = home.join(d);
+                    within(canonical, &d) || within(&d, canonical)
+                }));
     }
     #[cfg(windows)]
     {
@@ -1930,7 +1964,9 @@ mod tests {
         const HOME: &str = "/home/u";
         const USER_CONFIG: &str = "/home/u/.config/punktfunk";
         const SYSTEM_CONFIG: &str = "/var/lib/punktfunk";
-        let rows: &[(&str, &[&str])] = &[
+        // `(config dir, read-only roots, read-write roots)`; every start-up location is added to
+        // both lists below, so a read of it is pinned allowed and a write of it refused.
+        let rows: &[(&str, &[&str], &[&str])] = &[
             (
                 USER_CONFIG,
                 &[
@@ -1951,14 +1987,47 @@ mod tests {
                     "/home/u/.config/punktfunk",
                     "/home/u/.config/punktfunk/plugin-run",
                     "/home/u/.config/punktfunk-extra",
+                    "/home/u/.local",
+                    "/home/u/.local/share",
+                    "/home/u/.local/share/systemd/user",
+                    "/home/u/.config/systemd/user",
+                    "/home/u/.config/fish/conf.d",
+                    "/home/u/.config/plasma-workspace",
                     "/home/u/.local/share/Steam",
+                    "/home/u/.local/share/lutris",
+                    "/home/u/.local/share/systemd-extra",
+                    "/home/u/.local/binx",
                     "/home/u/.config/retroarch",
+                    "/home/u/.config/heroic",
+                    "/home/u/.config/autostartx",
+                    "/home/u/.config/plasma-workspace-extra",
                     "/home/u/Emu",
                     "/run/media/u/SD",
                     "/run/media/deck/SD/Emulation/roms",
                     "/mnt/games1",
                     "/tmp/vhclient_response",
                     "/usr/share/applications",
+                ],
+                &[
+                    "/home/u/.ssh",
+                    "/home/u/.config",
+                    "/home/u/.config/punktfunk",
+                    "/home/u/.local",
+                    "/home/u/.local/share",
+                    "/home/u/.local/share/systemd/user",
+                    "/home/u/.config/systemd/user",
+                    "/home/u/.config/fish/conf.d",
+                    "/home/u/.config/plasma-workspace",
+                    "/home/u/.local/share/Steam",
+                    "/home/u/.local/share/lutris",
+                    "/home/u/.local/share/systemd-extra",
+                    "/home/u/.local/binx",
+                    "/home/u/.config/retroarch",
+                    "/home/u/.config/heroic",
+                    "/home/u/.config/autostartx",
+                    "/home/u/.config/plasma-workspace-extra",
+                    "/home/u/Emu",
+                    "/home/u/Games",
                 ],
             ),
             (
@@ -1974,6 +2043,17 @@ mod tests {
                     "/home/u/.ssh",
                     "/home/u/.config/punktfunk",
                     "/home/u/.config/punktfunk-extra",
+                    "/home/u/.config/systemd/user",
+                    "/home/u/.local/share",
+                    "/home/u/.local/share/Steam",
+                    "/home/u/.config/retroarch",
+                    "/home/u/Games",
+                ],
+                &[
+                    "/home/u/.config",
+                    "/home/u/.config/systemd/user",
+                    "/home/u/.local/share",
+                    "/home/u/.local/share/Steam",
                     "/home/u/.config/retroarch",
                     "/home/u/Games",
                 ],
@@ -1984,22 +2064,29 @@ mod tests {
             owner_uid: None,
         };
         let mut lines = Vec::new();
-        for (config_dir, paths) in rows {
+        for (config_dir, reads, writes) in rows {
             let policy = PathPolicy {
                 home: HOME.into(),
                 config_dir: (*config_dir).into(),
                 runtime_dir: Some("/run/user/1000".into()),
             };
-            for path in *paths {
-                let p = Path::new(path);
-                let rule = refusal_rule(p, p, false, false, &policy, facts);
+            let startup = || STARTUP_PATHS.iter().map(|d| format!("{HOME}/{d}"));
+            let reads = reads.iter().map(|p| (false, (*p).to_string()));
+            let writes = writes.iter().map(|p| (true, (*p).to_string()));
+            let rows = reads
+                .chain(startup().map(|p| (false, p)))
+                .chain(writes)
+                .chain(startup().map(|p| (true, p)));
+            for (write, path) in rows {
+                let p = Path::new(&path);
+                let rule = refusal_rule(p, p, write, false, &policy, facts);
                 assert!(
                     matches!(rule, None | Some("broad_root" | "protected_path")),
                     "{path}: {rule:?}"
                 );
                 lines.push(format!(
                     "    {{\"path\": \"{path}\", \"home\": \"{HOME}\", \"config_dir\": \"{config_dir}\", \
-                     \"refused\": {}}}",
+                     \"write\": {write}, \"refused\": {}}}",
                     rule.is_some()
                 ));
             }
@@ -2007,7 +2094,7 @@ mod tests {
         format!(
             "{{\n  \"$comment\": \"Generated from punktfunk-host plugin_host access::refusal_rule by \
              path_refusal_vectors_are_checked_in (UPDATE_VECTORS=1 rewrites it). The SDK's sandbox \
-             replays it.\",\n  \"vectors\": [\n{}\n  ]\n}}\n",
+             replays it; `write` is a read-write bind.\",\n  \"vectors\": [\n{}\n  ]\n}}\n",
             lines.join(",\n")
         )
     }
@@ -2155,6 +2242,46 @@ mod tests {
             &[],
         ));
         assert_eq!(targets(&roots), vec![]);
+    }
+
+    /// A launcher reads the start-up locations (the desktop-entry plugin scans
+    /// `~/.local/share/applications`); only a read-write bind of one, or of a parent, escapes.
+    #[cfg(unix)]
+    #[test]
+    fn start_up_locations_are_readable_and_never_writable() {
+        let f = fixture();
+        let apps = f.dir("home/.local/share/applications");
+        let local = f.dir("home/.local");
+        f.dir("home/.local/bin");
+        f.dir("home/.config/systemd/user");
+        f.dir("home/Games");
+        let h = |rel: &str| f.policy.home.join(rel).to_string_lossy().into_owned();
+        let roots = f.store().runner_roots(&manifest(
+            &["~/.local/share/applications", "~/.local/bin"],
+            &[
+                "~/.local/share/applications",
+                "~/.config/systemd/user",
+                "~/.local",
+                "~/Games",
+            ],
+        ));
+        assert_eq!(
+            targets(&roots),
+            vec![
+                (h(".local/bin"), false),
+                (h(".local/share/applications"), false),
+                (h("Games"), true),
+            ]
+        );
+        for dir in [&apps, &local] {
+            let p = dir.to_str().unwrap();
+            assert_eq!(f.request_w(p, true), "refused:protected_path", "{p}");
+            let err = f.store().grant("demo", dir, true, "cli").unwrap_err();
+            assert_eq!(err.kind(), io::ErrorKind::InvalidInput, "{p}");
+        }
+        assert_eq!(f.request(apps.to_str().unwrap()), "pending");
+        f.store().grant("demo", &apps, false, "cli").unwrap();
+        assert_eq!(f.store().grants_for("demo").len(), 1);
     }
 
     #[cfg(unix)]

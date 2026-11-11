@@ -255,19 +255,20 @@ fn seat(st: &MgmtState, p: &Profile, seats: &Snapshot, operator: bool) -> SeatPu
     }
 }
 
-/// Attach `account` to the console if it isn't already and can be — the switch a take-turns
-/// `wake` triggers. A no-op when the account is already on screen or has no session to attach;
-/// the seat state then tells the client to wait or to sign in. Blocking (WTS + `tscon`).
+/// Attach `account` to the console when its seat reads switchable — the switch a take-turns
+/// `wake` triggers. Any other seat is left alone: on screen, signed in nowhere, switching, or
+/// held by someone else's live stream; its seat line tells the client why. Blocking (WTS +
+/// `tscon`).
 fn take_turns_switch(account: &str) {
-    use crate::profiles::take_turns::{self, ConsoleAction};
-    match take_turns::decide(&take_turns::account_state(account)) {
-        ConsoleAction::Switch(session) => {
+    let (action, seat) = take_turns::seat_now(account);
+    match take_turns::wake_switch(&action, &seat) {
+        Some(session) => {
             if let Err(e) = take_turns::switch_to(account, session) {
                 tracing::warn!(%account, error = %format!("{e:#}"), "take-turns switch did not run");
             }
         }
-        other => {
-            tracing::debug!(%account, ?other, "take-turns wake: no switch needed");
+        None => {
+            tracing::debug!(%account, ?seat, "take-turns wake: no switch");
         }
     }
 }
@@ -277,19 +278,8 @@ fn take_turns_switch(account: &str) {
 /// runs, `unavailable` when it must sign in once or someone else holds the console
 /// (`design/windows-take-turns.md` §2). Not a managed seat — no pin, no per-seat host.
 fn take_turns_seat(st: &MgmtState, display_name: &str, account: &str) -> SeatPublic {
-    use crate::profiles::take_turns::{self, TurnSeat};
-    let action = take_turns::decide(&take_turns::account_state(account));
-    // A stream on the console as another account: a switch would cut it, so hold off.
-    let console_busy =
-        take_turns::console_account().is_some() && crate::telemetry::session_status::count() > 0;
-    let switching = take_turns::switch_in_flight(
-        take_turns::switch_marker()
-            .as_ref()
-            .map(|(a, t)| (a.as_str(), *t)),
-        account,
-        crate::clock::unix_secs(),
-    );
-    let (state, detail) = match take_turns::turn_seat(&action, console_busy, switching) {
+    use crate::profiles::take_turns::TurnSeat;
+    let (state, detail) = match take_turns::seat_now(account).1 {
         TurnSeat::Ready => (SeatState::Ready, None),
         TurnSeat::Switching => (
             SeatState::Starting,
@@ -1098,8 +1088,8 @@ pub(crate) async fn wake_profile(
             "This device isn't allowed to start another profile's seat.",
         );
     }
-    // A take-turns profile has no ledger row: waking it attaches its Windows account to the
-    // console. The host that runs the switch does not survive the console change, so the client
+    // A take-turns profile has no ledger row: waking a switchable seat attaches its Windows
+    // account to the console. The host that runs the switch does not survive it, so the client
     // polls the relaunched host; the switch marker carries the "Switching to …" line meanwhile.
     if let OsAccount::Windows { account_name, .. } = &p.os_account {
         let account = account_name.clone();

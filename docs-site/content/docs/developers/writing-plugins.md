@@ -46,11 +46,15 @@ nothing the plugin does at runtime widens it. Without it, a plugin does not star
 | `files` | Folders the plugin reads the files of, nothing below them. Use it for a folder that holds a game tree: on Windows a `reads` entry rewrites every file below it, and a `files` entry lands at once. One `*` component names each folder under it: `%ProgramFiles%/EA Games/*/__Installer` is every game's `__Installer`, new ones within a minute. Needs host 0.46; an older host drops the entry, so also ask for it from `wants`. |
 | `writes` | Paths it also writes. |
 | `network` | `true` to reach the network. |
-| `registry` | Windows registry keys it reads, as `HKLM\…` or `HKCU\…`. A key under `HKCU`, like a path under `~/`, marks a source that belongs to one account; the host grants it in every signed-in account's hive. |
+| `registry` | Windows registry keys it reads, as `HKLM\Software\…` or `HKCU\Software\…`: a launcher's own key, never one that holds credentials or policy, nor a parent of one. A key under `HKCU`, like a path under `~/`, marks a source that belongs to one account; the host grants it in every signed-in account's hive. |
 | `exec` | Named argv templates the host may run for this plugin's titles. |
 
 The sandbox never binds `/`, the home directory or its parents, `/proc`, `/sys`, `/dev`, `/run`
-(except `/run/media`), `~/.ssh`, `~/.gnupg` or `~/.config/punktfunk`.
+(except `/run/media`), `~/.ssh`, `~/.gnupg` or `~/.config/punktfunk`. On Linux a `writes` entry
+(or a write grant) also never binds what runs at login or session start, nor a parent of it:
+`~/.config/systemd`, `~/.config/autostart`, `~/.local/bin`, `~/.local/share/applications`, the
+shell and X start-up files such as `~/.bashrc`, `~/.profile` and `~/.xinitrc`, and so `~/.config`
+and `~/.local`. Reading them with `reads` is fine.
 
 An `exec` template names a program and its arguments with `{param}` placeholders. A title supplies
 the values, and the host builds the argv itself. `exe` is a program name looked up on `PATH`, or an absolute path inside the plugin's roots; it may

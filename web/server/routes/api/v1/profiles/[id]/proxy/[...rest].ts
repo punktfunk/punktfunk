@@ -10,7 +10,7 @@ import { seatGate } from "../../../../../../util/gates";
 import { relayToMgmt } from "../../../../../../util/mgmt";
 import {
 	encodeRest,
-	isUiCredential,
+	isPluginPrivate,
 	seatCall,
 	seatPath,
 } from "../../../../../../util/seatProxy";
@@ -21,11 +21,11 @@ export default defineEventHandler((event) => {
 	if (!call) {
 		throw createError({ statusCode: 404, statusMessage: "no such seat path" });
 	}
-	if (isUiCredential(call.rest)) {
+	if (isPluginPrivate(call.rest)) {
 		throw createError({
 			statusCode: 403,
 			statusMessage:
-				"plugin UI credentials are not accessible from the browser",
+				"plugin UI credentials and pages are not accessible from the browser",
 		});
 	}
 	event.context.seat = call.id;

@@ -381,7 +381,8 @@ fn battlenet_exe() -> Option<std::path::PathBuf> {
 }
 
 /// The client a store's launcher tile opens, by `launcher_ui` value. Each forwards to a
-/// running instance, so it is a hand-off. The Amazon and itch apps install per user.
+/// running instance, so it is a hand-off. The Amazon and itch apps install per user, and only
+/// the player's own copy counts: the launch runs as them.
 fn store_client_exe(value: &str) -> Option<std::path::PathBuf> {
     let file = |p: std::path::PathBuf| p.is_file().then_some(p);
     let program_files = |rel: &str| {
@@ -391,7 +392,8 @@ fn store_client_exe(value: &str) -> Option<std::path::PathBuf> {
             .find_map(|pf| file(std::path::PathBuf::from(pf).join(rel)))
     };
     let per_user = |rel: &str| {
-        windows_user_profiles()
+        user_scope(Whose::Player)
+            .1
             .into_iter()
             .find_map(|home| file(home.join(r"AppData\Local").join(rel)))
     };

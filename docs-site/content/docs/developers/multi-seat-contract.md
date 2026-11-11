@@ -657,8 +657,8 @@ port, under those origins, and closes when the box stops streaming to browsers. 
 without Seat defaults follows these variables. With the owner's GameStream
 setting on, the owner's row is the box's Moonlight host, on the owner's own pairings: the door
 can't redirect Moonlight, and a contract seat never serves it. The row's environment file is
-`/run/punktfunk/seats/<user>.env`, owned by the owner, and the owner's user `punktfunk-host` reads
-it, so it moves to the row's ports at boot, logged in or not. The owner's own console,
+`/run/punktfunk/seats/<user>.env`, root's, with an ACL entry that lets the owner read it. The
+owner's user `punktfunk-host` reads it, so it moves to the row's ports at boot, logged in or not. The owner's own console,
 `punktfunk-web.service`, doesn't start while that file exists: the door's console has the port.
 
 - **One owner host.** The row's unit runs the owner's host in a `background` session, on a
@@ -689,8 +689,8 @@ it, so it moves to the row's ports at boot, logged in or not. The owner's own co
 - **The box's ports.** The door binds the ports the owner's `host.env` names
   (`PUNKTFUNK_MGMT_BIND`, `PUNKTFUNK_NATIVE_PORT`), and its console binds where the owner's
   console did (`PUNKTFUNK_UI_BIND`, from `web.env` on SteamOS). `door-helper ports` copies those
-  lines to `/var/lib/punktfunk/host.env` before each door start, so an update or a later edit
-  reaches the door. On NixOS the door also takes the two port keys from
+  lines to `/var/lib/punktfunk-seats/host.env`, root's, before each door start, so an update or
+  a later edit reaches the door. On NixOS the door also takes the two port keys from
   `services.punktfunk.host.settings`, and its console follows `services.punktfunk.web.bind`.
 
 ### A seat on a person's own account
