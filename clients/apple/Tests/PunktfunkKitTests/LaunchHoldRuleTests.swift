@@ -48,6 +48,16 @@ final class LaunchHoldRuleTests: XCTestCase {
         XCTAssertEqual(step(nil, after: 15), .reveal)
     }
 
+    /// D3: a read the host didn't answer is not an answer that lists nothing. The hold, what it
+    /// shows and its clock stand; only the long cap still lifts it.
+    func testAMissIsNotAnEmptyAnswer() {
+        let miss = { LaunchHoldRule.step(nil, elapsed: $0, cap: self.cap, noLease: self.noLease) }
+        XCTAssertEqual(miss(15), .unchanged)
+        XCTAssertEqual(miss(119), .unchanged)
+        XCTAssertFalse(miss(15).restartsClock)
+        XCTAssertEqual(miss(120), .reveal)
+    }
+
     /// The files coming in hold past every cap, show on the hold, and start the clock over.
     func testALiveDownloadHoldsAndRestartsTheClock() {
         for state in [nil, "launching"] {

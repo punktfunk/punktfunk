@@ -9,6 +9,8 @@ public enum LaunchHoldRule: Equatable {
     case keep(windowWait: Bool, download: HostDownload?)
     /// Drop the hold: the game is up, or never will be.
     case reveal
+    /// The host didn't answer: the hold, what it shows and its clock stay as they are.
+    case unchanged
 
     /// The held title's download, as a launch reads it.
     public enum Download: Equatable {
@@ -57,8 +59,9 @@ public enum LaunchHoldRule: Equatable {
     public static func step(
         _ title: Title?, elapsed: TimeInterval, cap: TimeInterval, noLease: TimeInterval
     ) -> LaunchHoldRule {
-        // A miss reads as an answer that lists nothing.
-        let title = title ?? Title(state: nil)
+        // A miss says nothing about the title. The long cap still holds: a host that never
+        // answers can't keep the stream covered.
+        guard let title else { return elapsed >= cap ? .reveal : .unchanged }
         // No cap while the files come.
         if case .live(let download) = title.download {
             return .keep(windowWait: title.windowWait, download: download)

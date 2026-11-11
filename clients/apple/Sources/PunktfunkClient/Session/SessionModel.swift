@@ -1227,14 +1227,18 @@ final class SessionModel: ObservableObject {
                 let step = LaunchHoldRule.step(
                     title, elapsed: Date().timeIntervalSince(began), cap: launchHoldMax,
                     noLease: launchNoLease)
-                // A stopped download reveals too: the host's notice says why.
-                guard case .keep(let windowWait, let download) = step else {
+                switch step {
+                case .keep(let windowWait, let download):
+                    if step.restartsClock { began = Date() }
+                    if self?.launchDownload != download { self?.launchDownload = download }
+                    if self?.launchWindowWait != windowWait { self?.launchWindowWait = windowWait }
+                case .unchanged:
+                    break
+                case .reveal:
+                    // A stopped download reveals too: the host's notice says why.
                     self?.revealStream()
                     return
                 }
-                if step.restartsClock { began = Date() }
-                if self?.launchDownload != download { self?.launchDownload = download }
-                if self?.launchWindowWait != windowWait { self?.launchWindowWait = windowWait }
                 try? await Task.sleep(nanoseconds: NSEC_PER_SEC)
             }
         }
