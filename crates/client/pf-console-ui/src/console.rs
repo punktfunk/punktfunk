@@ -182,6 +182,18 @@ impl Console {
         Ok(self)
     }
 
+    /// Add faces for what Geist lacks to a live console, after the ones it holds. The next
+    /// frame draws with them. On an error none is added.
+    pub fn add_fallback_fonts(&mut self, faces: &[&[u8]]) -> Result<()> {
+        self.fonts.add_fallback(faces)
+    }
+
+    /// The chars no face could draw since the last call, each once: what a host that fetches
+    /// faces on demand fetches next.
+    pub fn take_missing_chars(&self) -> String {
+        self.fonts.take_missing()
+    }
+
     /// `pad` is the chip label; `None` means no controller.
     pub fn frame(
         &mut self,
