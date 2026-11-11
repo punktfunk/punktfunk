@@ -741,11 +741,14 @@ struct ContentView: View {
         #endif
     }
 
-    /// What a link sees of this window's session.
+    /// What a link sees of this window: busy with its session, or with a redial, a wake or a
+    /// profile fetch on its way to one. The host a redial or a wake is for counts as the live one.
     private var linkSession: DeepLinkRouter.SessionState {
         DeepLinkRouter.SessionState(
-            isIdle: LinkIdle.isIdle(phase: model.phase),
-            activeHostID: model.activeHost?.id,
+            isIdle: LinkIdle.isIdle(
+                phase: model.phase, redialPending: model.redial != nil,
+                waking: waker.waking != nil, preDialFetch: flowLife.fetching),
+            activeHostID: model.activeHost?.id ?? model.redial?.host.id ?? waker.waking?.hostID,
             activeHostName: model.activeHost?.displayName)
     }
 
