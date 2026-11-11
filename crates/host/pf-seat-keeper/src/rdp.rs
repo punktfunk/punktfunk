@@ -10,7 +10,7 @@
 //! remains connected until its job is closed or the server disconnects it.
 
 use ironrdp::connector::{
-    self, ClientConnector, ClientConnectorState, ConnectionResult, Credentials,
+    self, ClientConnector, ClientConnectorState, ConnectionResult, ConnectorErrorKind, Credentials,
 };
 use ironrdp::graphics::image_processing::PixelFormat;
 use ironrdp::pdu::gcc::KeyboardType;
@@ -78,7 +78,9 @@ const HELD: Duration = Duration::from_secs(30);
 ///
 /// The session's existence is the test, not the disconnect reason: a logoff removes it, anything
 /// recoverable leaves it. That needs no match on the server's English description. A drop the
-/// seat host marked as its own ([`keeper::host_disconnected`]) spends no attempt.
+/// seat host marked as its own ([`keeper::host_disconnected`]) spends no attempt. A sign-in the
+/// server refuses ([`REFUSED`]) ends the keeper at once: every retry is one more bad logon
+/// toward the account's lockout, and the supervisor's next start names the changed password.
 pub(crate) fn keep_from_stdin() -> WinResult<()> {
     let mut input = std::io::stdin().lock();
     let mut bootstrap = RdpBootstrap::read_from(&mut input)
@@ -92,6 +94,9 @@ pub(crate) fn keep_from_stdin() -> WinResult<()> {
         let Err(error) = keep_session(&bootstrap, domain.clone(), &account) else {
             return Ok(());
         };
+        if error.code == REFUSED {
+            break error;
+        }
         // No session left means the seat is gone (logged off, or it never came up): hand the
         // error back so the supervisor restarts the seat rather than reconnecting to nothing.
         let Ok(Some(session)) = keeper::session_of(&account) else {
@@ -120,7 +125,8 @@ pub(crate) fn keep_from_stdin() -> WinResult<()> {
 }
 
 /// One connect-and-hold. The password is copied per attempt because the connector consumes it;
-/// the copy is wiped on every path but the one that hands it to IronRDP.
+/// the copy is wiped on every path but the one that hands it to IronRDP. A sign-in the server
+/// refuses answers [`REFUSED`].
 fn keep_session(bootstrap: &RdpBootstrap, domain: Option<String>, account: &str) -> WinResult<()> {
     let config = connector_config(account.to_owned(), bootstrap.password.to_string(), domain);
     let mut attempt = Wiped(Some(ClientConnector::new(config, UNBOUND)));
@@ -148,13 +154,27 @@ fn keep_session(bootstrap: &RdpBootstrap, domain: Option<String>, account: &str)
         None,
     )
     .map_err(|error| {
-        io_error(
-            "rdp_connect",
-            "IronRDP connection finalization failed",
-            error,
-        )
+        let code = if refused(error.kind()) {
+            REFUSED
+        } else {
+            "rdp_connect"
+        };
+        io_error(code, "IronRDP connection finalization failed", error)
     })?;
     active_loop(result, framed)
+}
+
+/// The code of a sign-in the server refused.
+const REFUSED: &str = "rdp_signin_refused";
+
+/// The server refused the credential: CredSSP carried its error status back, or HYBRID_EX's
+/// early result denied the account. A dropped or garbled link is neither.
+fn refused(kind: &ConnectorErrorKind) -> bool {
+    match kind {
+        ConnectorErrorKind::Credssp(error) => error.nstatus.is_some(),
+        ConnectorErrorKind::AccessDenied => true,
+        _ => false,
+    }
 }
 
 /// The client address before a connect learns the real one, which [`negotiate_tls`] sets.
@@ -411,5 +431,27 @@ impl connector::sspi::network_client::NetworkClient for NoExternalNetwork {
             connector::sspi::ErrorKind::NoAuthenticatingAuthority,
             "external Kerberos transport is disabled for local seat login",
         ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{refused, ConnectorErrorKind};
+    use ironrdp::connector::sspi::{self, credssp};
+
+    /// A status the server sends back in CredSSP is a refusal; a local or transport error is not.
+    #[test]
+    fn only_the_servers_refusal_ends_the_keeper() {
+        let answer = credssp::TsRequest {
+            error_code: Some(credssp::NStatusCode::LOGON_FAILURE),
+            ..Default::default()
+        };
+        let status = answer.check_error().unwrap_err();
+        assert!(refused(&ConnectorErrorKind::Credssp(status)));
+        assert!(refused(&ConnectorErrorKind::AccessDenied));
+        let local = sspi::Error::new(sspi::ErrorKind::InternalError, "local");
+        assert!(!refused(&ConnectorErrorKind::Credssp(local)));
+        assert!(!refused(&ConnectorErrorKind::Custom));
+        assert!(!refused(&ConnectorErrorKind::General));
     }
 }
