@@ -3,8 +3,8 @@
 // Every sample carries the COMPLETE pen state (in-range/touching/buttons + all axes) — the
 // host diffs consecutive samples and synthesizes down/up/button transitions itself, so a lost
 // datagram self-heals and this file never sends edge events. Three sources feed one stream:
-// UITouch contacts (with coalesced samples for full 240 Hz fidelity), the hover gesture
-// (zOffset > 0 distinguishes a hovering Pencil from a trackpad pointer), and
+// UITouch contacts (with coalesced samples for full 240 Hz fidelity), the view's
+// Pencil-only hover recognizer, and
 // UIPencilInteraction (squeeze held → barrel 1, double-tap → a momentary barrel 2 —
 // Apple Pencil has no hardware eraser end or barrel buttons, so these mappings are how
 // host-side apps get their stylus button/eraser affordances).
@@ -39,9 +39,6 @@ final class PencilStream: NSObject {
     /// hover-capable hardware keeps proximity (the hover recognizer owns the exit), anything
     /// else leaves range on lift so the host never parks a phantom hovering pen.
     private var sawHover = false
-    /// A hover gesture is live right now (routes ended-state hover callbacks to us even when
-    /// the recognizer's final zOffset reads 0).
-    private(set) var hoverActive = false
     private var last = PencilStream.idleSample()
     private var heartbeat: Timer?
     /// When the last batch (event or keepalive) went out — the heartbeat tick's idle test.
@@ -89,19 +86,17 @@ final class PencilStream: NSObject {
         }
     }
 
-    // MARK: - Hover path (forwarded from the view's hover recognizer)
+    // MARK: - Hover path (the view's Pencil-only hover recognizer)
 
-    /// Returns whether the event was consumed as Pencil hover; `false` hands it back to the
-    /// pointer path. A hovering Pencil reports `zOffset > 0`; trackpad/mouse hover is 0.
-    func maybeHover(_ r: UIHoverGestureRecognizer, in view: UIView) -> Bool {
+    /// The recognizer admits `.pencil` only, so every event is the Pencil. `zOffset` is just
+    /// the distance: it never decides whose hover this is.
+    func hover(_ r: UIHoverGestureRecognizer, in view: UIView) {
         switch r.state {
         case .began, .changed:
-            guard r.zOffset > 0 || hoverActive else { return false }
-            hoverActive = true
             sawHover = true
             inRange = true
             touching = false
-            guard let (x, y) = videoNorm?(r.location(in: view)) else { return true }
+            guard let (x, y) = videoNorm?(r.location(in: view)) else { return }
             var s = PencilStream.idleSample()
             s.state = stateBits()
             s.x = x
@@ -111,14 +106,11 @@ final class PencilStream: NSObject {
             s.azimuth_deg = Self.azimuthDeg(r.azimuthAngle(in: view))
             if #available(iOS 17.5, *) { s.roll_deg = Self.rollDeg(r.rollAngle) }
             emit([s])
-            return true
         case .ended, .cancelled, .failed:
-            guard hoverActive else { return false }
-            hoverActive = false
-            if !touching { release() }
-            return true
+            // A hover that ends on contact leaves the stroke alone.
+            if inRange, !touching { release() }
         default:
-            return hoverActive
+            break
         }
     }
 
@@ -128,7 +120,6 @@ final class PencilStream: NSObject {
     func reset() {
         if inRange || touching { release() }
         sawHover = false
-        hoverActive = false
         squeezeHeld = false
     }
 

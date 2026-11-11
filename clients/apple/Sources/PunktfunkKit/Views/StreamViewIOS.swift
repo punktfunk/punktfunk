@@ -1434,8 +1434,15 @@ final class StreamLayerUIView: UIView {
         isMultipleTouchEnabled = true
         // Button-less mouse/trackpad movement (no lock) arrives as hover, not touches —
         // forward it as absolute cursor moves so the host cursor tracks without a click held.
-        addGestureRecognizer(
-            UIHoverGestureRecognizer(target: self, action: #selector(handleHover)))
+        // The Pencil hovers on a recognizer of its own, so neither has to guess the device.
+        let pointerHover = UIHoverGestureRecognizer(target: self, action: #selector(handleHover))
+        let pointerTypes: [UITouch.TouchType] = [.direct, .indirect, .indirectPointer]
+        pointerHover.allowedTouchTypes = pointerTypes.map { NSNumber(value: $0.rawValue) }
+        addGestureRecognizer(pointerHover)
+        let pencilHover = UIHoverGestureRecognizer(
+            target: self, action: #selector(handlePencilHover))
+        pencilHover.allowedTouchTypes = [NSNumber(value: UITouch.TouchType.pencil.rawValue)]
+        addGestureRecognizer(pencilHover)
         // Trackpad two-finger / wheel scroll → scroll-ONLY pans: allowedTouchTypes = []
         // rejects finger drags (those stay host touches). One recognizer per scroll type so
         // UIKit itself says which device this is: a continuous trackpad delta is a measured
@@ -1633,11 +1640,18 @@ final class StreamLayerUIView: UIView {
         return nil
     }
 
-    /// Button-less mouse/trackpad movement (no lock) → absolute cursor move — unless it is a
-    /// hovering PENCIL (`zOffset > 0`) on a pen-capable host, which becomes in-range pen
-    /// samples (hover preview with distance/tilt/azimuth) instead of a cursor move.
+    /// A hovering Pencil → in-range pen samples (distance, tilt, azimuth) on a pen-capable
+    /// host. Toward any other host it moves the cursor, like a pointer.
+    @objc private func handlePencilHover(_ recognizer: UIHoverGestureRecognizer) {
+        if penEnabled {
+            pencil.hover(recognizer, in: self)
+        } else {
+            handleHover(recognizer)
+        }
+    }
+
+    /// Button-less mouse/trackpad movement (no lock) → absolute cursor move.
     @objc private func handleHover(_ recognizer: UIHoverGestureRecognizer) {
-        if penEnabled, pencil.maybeHover(recognizer, in: self) { return }
         switch recognizer.state {
         case .began, .changed:
             if let h = hostPoint(from: recognizer.location(in: self)) { onPointerMoveAbs?(h) }
