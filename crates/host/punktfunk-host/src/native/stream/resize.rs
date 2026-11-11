@@ -8,14 +8,15 @@ use super::*;
 
 impl StreamState {
     /// Mode-set the live monitor, restore its presentation, and open an encoder at the first
-    /// frame of the new size, for the rebuild performer to swap in. `None` → full rebuild.
+    /// frame of the new size, at `kbps_for` the picture it encodes, for the rebuild performer to
+    /// swap in. `None` → full rebuild.
     /// With the driver's encoder, only its pool taking a frame proves the new size; a second
     /// without one restarts the presentation once. `recover_ring` re-attaches the ring at the
     /// current mode and demands a second, newer present as proof the OS resumed presenting.
     pub(super) fn resize(
         &mut self,
         new_mode: punktfunk_core::Mode,
-        bitrate_kbps: u32,
+        kbps_for: impl Fn(u32, u32) -> u32,
         trace: &crate::bringup::Trace,
         recover_ring: bool,
     ) -> Option<Next> {
@@ -77,7 +78,7 @@ impl StreamState {
                             &*self.live.capturer,
                             framing,
                             effective_hz,
-                            enc_of.enc_kbps(bitrate_kbps) as u64 * 1000,
+                            enc_of.enc_kbps(kbps_for(framing.out.0, framing.out.1)) as u64 * 1000,
                             self.bit_depth,
                             self.facts.client_hdr,
                             wire_seq_base,
@@ -199,7 +200,7 @@ impl StreamState {
                 &new_frame,
                 (new_mode.width, new_mode.height),
                 effective_hz,
-                |_, _| enc_of.enc_kbps(bitrate_kbps) as u64 * 1000,
+                |w, h| enc_of.enc_kbps(kbps_for(w, h)) as u64 * 1000,
                 self.bit_depth,
                 self.facts.client_hdr,
                 wire_seq_base,
