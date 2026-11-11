@@ -14,14 +14,32 @@ export interface Bundle {
 
 export type Params = Record<string, string | number>;
 
+/** A `zh` tag with no script, written with the one its region uses (`zh-TW` is `zh-Hant-TW`, bare `zh` is `zh-Hans`). */
+function chineseScript(tag: string): string | undefined {
+  const [primary, ...rest] = tag.split("-");
+  if (primary.toLowerCase() !== "zh" || /^[a-z]{4}$/i.test(rest[0] ?? "")) return undefined;
+  const script = ["TW", "HK", "MO"].includes((rest[0] ?? "").toUpperCase()) ? "Hant" : "Hans";
+  return [primary, script, ...rest].join("-");
+}
+
 /** The shipped language best matching `tags` (most preferred first); the source when none does. */
 export function pick(tags: readonly string[], shipped: readonly string[], fallback: Record<string, string>): string {
   const find = (tag: string) => shipped.find((l) => l.toLowerCase() === tag.toLowerCase());
+  const exact = (tag: string) => {
+    const via = Object.entries(fallback).find(([from]) => from.toLowerCase() === tag.toLowerCase());
+    return find(tag) ?? (via && find(via[1]));
+  };
   for (const raw of tags) {
-    let tag = raw.trim().replace(/_/g, "-");
+    // A POSIX locale's `.UTF-8` and `@euro` are not part of the tag.
+    let tag = raw.split(/[.@]/)[0].trim().replace(/_/g, "-");
+    const scripted = chineseScript(tag);
+    if (scripted) {
+      const hit = exact(tag);
+      if (hit) return hit;
+      tag = scripted;
+    }
     for (;;) {
-      const via = Object.entries(fallback).find(([from]) => from.toLowerCase() === tag.toLowerCase());
-      const hit = find(tag) ?? (via && find(via[1]));
+      const hit = exact(tag);
       if (hit) return hit;
       const cut = tag.lastIndexOf("-");
       if (cut < 0) break;

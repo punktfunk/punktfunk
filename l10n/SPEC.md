@@ -90,6 +90,12 @@ message in any language that holds `*`, a backtick, `~~`, `](` or an `_emphasis_
   category reads `other`.
 - **The language** is picked from the OS's list, most preferred first. Each tag is tried as
   it is, then through `locales.json`'s `fallback`, then one subtag shorter (`de-AT`, `de`).
-  Case and `_` do not matter. Nothing matches: the source language. A program drawn in a
-  terminal reads the terminal's `LC_ALL`, `LC_MESSAGES` or `LANG` first when one is set, so
-  `LC_ALL=C` gives the source language on every OS.
+  Case and `_` do not matter, and a POSIX locale's `.UTF-8` or `@euro` is dropped. Nothing
+  matches: the source language.
+- **Chinese script.** A `zh` tag with no script subtag is tried as it is, then with one added:
+  `Hant` when the region is TW, HK or MO, `Hans` for any other region or none (`zh-TW` is
+  `zh-Hant-TW`, `zh-CN` and `zh` are `zh-Hans-CN` and `zh-Hans`), then shortened as above. A
+  tag that has a script (`zh-Hant-HK`) is left alone. `zh-Hans` and `zh-Hant` ship as they
+  are; `locales.json` needs no `fallback` for them.
+- **Terminal.** A program drawn in a terminal reads the terminal's `LC_ALL`, `LC_MESSAGES` or
+  `LANG` first when one is set, so `LC_ALL=C` gives the source language on every OS.
