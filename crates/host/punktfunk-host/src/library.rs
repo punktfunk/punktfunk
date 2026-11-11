@@ -378,10 +378,11 @@ pub fn all_games_for_operator() -> Vec<OperatorGameEntry> {
         .collect()
 }
 
-/// A title's place in the list: folded title, then id so equal titles keep one order.
+/// A title's place in the list: its search fold (case, width, kana script), then id so equal
+/// titles keep one order. Articles and accents stay: folding those is the clients' Title sort.
 /// The paged route cuts its pages by this key, so the list has to be sorted by it.
 pub(crate) fn sort_key(g: &GameEntry) -> (String, String) {
-    (g.title.to_lowercase(), g.id.clone())
+    (punktfunk_core::search::fold(&g.title), g.id.clone())
 }
 
 /// Counts this process's writes to the library files. Two saves inside one mtime tick can
@@ -556,6 +557,41 @@ mod tests {
             install: None,
             meta: GameMeta::default(),
         }
+    }
+
+    #[test]
+    fn host_order_reads_kana_by_sound_and_width_variants_as_their_normal_form() {
+        let mut games: Vec<GameEntry> = [
+            "モンスターハンター",
+            "ｾﾞﾙﾀﾞ無双",
+            "ぷよぷよテトリス",
+            "Ｆｉｎａｌ",
+            "The Witcher",
+            "ゼルダの伝説",
+            "final",
+            "原神",
+            "あつまれ どうぶつの森",
+        ]
+        .iter()
+        .enumerate()
+        .map(|(i, t)| entry(&format!("custom:{i}"), t))
+        .collect();
+        games.sort_by_cached_key(sort_key);
+        let titles: Vec<&str> = games.iter().map(|g| g.title.as_str()).collect();
+        assert_eq!(
+            titles,
+            [
+                "Ｆｉｎａｌ",
+                "final",
+                "The Witcher",
+                "あつまれ どうぶつの森",
+                "ゼルダの伝説",
+                "ｾﾞﾙﾀﾞ無双",
+                "ぷよぷよテトリス",
+                "モンスターハンター",
+                "原神",
+            ]
+        );
     }
 
     /// Pin the operator-view wire: a normal entry plus one extra key, omitted when visible.

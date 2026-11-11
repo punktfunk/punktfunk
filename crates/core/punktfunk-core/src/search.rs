@@ -1,6 +1,10 @@
 //! The form a library search compares. The query and every title fold alike, then the title
 //! has to contain the query; host and console both search this way.
 //!
+//! Library order starts from this fold too: the host's `sort_key`, `collate::sort_title`, and
+//! Apple's `LibraryCollation.searchFold`, which copies it. A change here regenerates
+//! `clients/shared/library-collate-vectors.json`.
+//!
 //! The fold lowercases, then applies the parts of NFKC a CJK keyboard reaches: full-width
 //! ASCII and space, half-width katakana, a kana and a combining voiced mark, conjoining
 //! Hangul jamo. Katakana then reads as hiragana, so ゼルダ, ぜるだ and ｾﾞﾙﾀﾞ are one

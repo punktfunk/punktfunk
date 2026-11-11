@@ -143,11 +143,14 @@ pub enum GroupBy {
     Store,
 }
 
-/// "The Witcher 3" belongs under W. English articles only — titles are store strings
-/// and we cannot detect language.
+/// A title's A–Z key: the search fold (case, width, kana by sound whatever the script), Latin
+/// accents relaxed, punctuation dropped, a leading article removed. Equal keys keep host order.
+///
+/// "The Witcher 3" belongs under W. English articles only: titles are store strings in no
+/// known language. Kanji, hanzi and Hangul compare by code point. ー keeps its code point, so
+/// スーパー follows the other ス titles.
 pub fn sort_title(title: &str) -> String {
-    let relaxed: String = title
-        .to_lowercase()
+    let relaxed: String = punktfunk_core::search::fold(title)
         .chars()
         .map(|c| match c {
             'á' | 'à' | 'â' | 'ä' | 'ã' | 'å' => 'a',
@@ -481,7 +484,7 @@ mod tests {
         let file: serde_json::Value =
             serde_json::from_str(raw).expect("library-collate-vectors.json must parse");
         assert_eq!(
-            file["version"], 2,
+            file["version"], 3,
             "bump the reader when the file's version moves"
         );
 
@@ -540,6 +543,18 @@ mod tests {
                 case["out"].as_str().expect("out"),
                 "sort_title({input:?})"
             );
+        }
+        for case in file["title_order"].as_array().expect("title_order") {
+            let name = case["name"].as_str().expect("name");
+            let shelf: Vec<GameEntry> = str_list(&case["titles"])
+                .iter()
+                .map(|t| game(t, t, "custom", None, false))
+                .collect();
+            let got: Vec<&str> = filtered(&shelf, SortKey::Title, None)
+                .into_iter()
+                .map(|i| shelf[i].title.as_str())
+                .collect();
+            assert_eq!(got, str_list(&case["expect"]), "{name}");
         }
         for (store, label) in file["store_labels"].as_object().expect("store_labels") {
             assert_eq!(
