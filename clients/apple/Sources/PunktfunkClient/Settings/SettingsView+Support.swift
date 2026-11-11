@@ -135,12 +135,6 @@ extension SettingsView {
 
     // MARK: - Bitrate
 
-    /// Slider domain, log-scale: the useful range spans three orders of magnitude
-    /// (a few Mbps … 3 Gbps) — linear would cram everything below 100 Mbps into the
-    /// first pixels.
-    private static let minSliderKbps = 2_000.0
-    private static let maxSliderKbps = 3_000_000.0
-
     static var gigabitWarning: String {
         String(localized: L10n.appleBitrateKbpsGigabitWarning)
     }
@@ -154,23 +148,12 @@ extension SettingsView {
             set: { bitrate.wrappedValue = $0 ? 0 : 20_000 })
     }
 
-    /// Slider position 0...1 ↔ kbps on the log scale, snapped to two significant figures
-    /// so the readout shows round numbers instead of 47_322.
+    /// The manual rate's slider, on `BitrateScale`.
     var bitrateSlider: Binding<Double> {
         let bitrate = scoped(SettingsFields.bitrateKbps)
         return Binding(
-            get: {
-                let v = min(max(Double(bitrate.wrappedValue), Self.minSliderKbps),
-                            Self.maxSliderKbps)
-                return log(v / Self.minSliderKbps)
-                    / log(Self.maxSliderKbps / Self.minSliderKbps)
-            },
-            set: { pos in
-                let raw = Self.minSliderKbps
-                    * pow(Self.maxSliderKbps / Self.minSliderKbps, pos)
-                let mag = pow(10, floor(log10(raw)) - 1)
-                bitrate.wrappedValue = Int((raw / mag).rounded() * mag)
-            })
+            get: { BitrateScale.position(kbps: bitrate.wrappedValue) },
+            set: { bitrate.wrappedValue = BitrateScale.kbps(position: $0) })
     }
 
     // MARK: - Statistics
