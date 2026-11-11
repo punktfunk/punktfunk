@@ -229,16 +229,20 @@ safe_name() {
     case $1 in '' | . | .. | *[!A-Za-z0-9._-]*) return 1 ;; esac
 }
 
+# The avatars, by name: one safe_name refuses stays put. `|| continue`, because a loop whose last
+# turn ends on a refusal returns it, and errexit then ends the whole switch.
 take_avatars() {
     as_door mkdir -p -m 0700 "$BOX/profiles"
     for name in $(as_user ls -1 -- "$OWN/profiles" 2>/dev/null); do
-        safe_name "$name" && take "profiles/$name"
+        safe_name "$name" || continue
+        take "profiles/$name"
     done
 }
 
 give_avatars() {
     for name in $(as_door ls -1 -- "$BOX/profiles" 2>/dev/null); do
-        safe_name "$name" && give "profiles/$name"
+        safe_name "$name" || continue
+        give "profiles/$name"
     done
 }
 
