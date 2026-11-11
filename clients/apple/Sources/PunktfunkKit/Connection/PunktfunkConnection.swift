@@ -880,6 +880,11 @@ public final class PunktfunkConnection: @unchecked Sendable {
         hostCaps & UInt8(PUNKTFUNK_HOST_CAP_PEN) != 0
     }
 
+    /// The host types committed Unicode text in its own layout (`HOST_CAP_TEXT_INPUT`).
+    public var hostSupportsText: Bool {
+        hostCaps & UInt8(PUNKTFUNK_HOST_CAP_TEXT_INPUT) != 0
+    }
+
     /// The second host capability byte (`punktfunk_connection_host_caps2`); `0` from an older host.
     public private(set) var hostCaps2: UInt8 = 0
 
