@@ -395,6 +395,16 @@ impl Overlay for SkiaOverlay {
                 .is_some_and(|f| f.secure)
     }
 
+    fn text_input_area(&self) -> Option<(sdl3::rect::Rect, i32)> {
+        if !self.text_input_active() {
+            return None;
+        }
+        let (field, caret) = self.shell.as_ref()?.ui.caret.get()?;
+        let (w, h) = (field.width().round(), field.height().round());
+        let at = sdl3::rect::Rect::new(field.left as i32, field.top as i32, w as u32, h as u32);
+        Some((at, caret.round() as i32))
+    }
+
     fn session_phase(&mut self, phase: SessionPhase) {
         // The exit hint's clock is the overlay's, in a plain `--connect` session too; the
         // phase itself is the console shell's.

@@ -1194,6 +1194,7 @@ fn text_in_progress_stays_out_of_the_value() {
     assert_eq!(typed(&s), "ff");
     s.render(surface.canvas(), 1280, 800, &fonts, None, None, &[]);
     assert_eq!(s.ui.preedit, "にほん", "the field draws it");
+    assert!(s.ui.caret.get().is_some(), "and says where its caret is");
     for key in [Key::Backspace, Key::Left, Key::Return, Key::Escape] {
         assert!(s.key(key, false, false), "{key:?} is the input method's");
     }

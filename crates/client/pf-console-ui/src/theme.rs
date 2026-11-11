@@ -301,6 +301,9 @@ pub struct Frame {
     /// An input method's text in progress. The field being typed into draws it at its caret,
     /// underlined; it is not in the field's value until the input method commits it.
     pub(crate) preedit: String,
+    /// The field being typed into as this frame drew it, device px, and its caret's offset
+    /// from the field's left. The input method's candidate window opens there.
+    pub(crate) caret: Cell<Option<(Rect, f32)>>,
 }
 
 impl Default for Frame {
@@ -320,6 +323,7 @@ impl Frame {
             in_layer: Cell::new(false),
             el: crate::el::Ledger::default(),
             preedit: String::new(),
+            caret: Cell::new(None),
         }
     }
 

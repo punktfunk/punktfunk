@@ -1317,7 +1317,7 @@ impl MenuList {
 
     /// The value field: slider track, the right-aligned readout with its slip crossfade,
     /// the caret and the chevrons. The caret row also draws [`Frame::preedit`] before its
-    /// caret, underlined.
+    /// caret, underlined, and records itself in [`Frame::caret`].
     fn paint_value(
         &self,
         canvas: &Canvas,
@@ -1458,15 +1458,20 @@ impl MenuList {
         }
         if row.caret {
             // Ride `dx` so the caret stays on the text end mid-slip.
+            let caret_x = (val_right + 3.0 * k + dx) as f32;
             canvas.draw_rect(
                 Rect::from_xywh(
-                    (val_right + 3.0 * k + dx) as f32,
+                    caret_x,
                     (cy - 9.0 * k) as f32,
                     (2.0 * k) as f32,
                     (18.0 * k) as f32,
                 ),
                 &fill(ui.accent(1.0)),
             );
+            let to_device = canvas.local_to_device_as_3x3();
+            let (field, _) = to_device.map_rect(r);
+            let caret_x = to_device.map_point((caret_x, r.top)).x;
+            ui.caret.set(Some((field, caret_x - field.left)));
         }
         if row.adjustable && f > 0.01 {
             let alpha = 0.6 * f as f32;
@@ -1826,7 +1831,8 @@ mod tests {
     }
 
     /// An input method's text in progress draws where the committed text would, after the
-    /// value or in place of the placeholder, plus an underline below the centre line.
+    /// value or in place of the placeholder, plus an underline below the centre line. The
+    /// field records where its caret is.
     #[test]
     fn a_composing_field_draws_its_text_in_progress_underlined() {
         let fonts = crate::theme::build_fonts().unwrap();
@@ -1849,9 +1855,9 @@ mod tests {
                 list.render(canvas, &ui, rect, &rows, &fonts, 1.0, 1.0 / 60.0, true);
             }
             let cell = list.row_rect(0).expect("the field is in view");
-            (read_back(&mut surface, w, h), cell)
+            (read_back(&mut surface, w, h), cell, ui.caret.get())
         };
-        let (composing, cell) = draw("ab", "cd");
+        let (composing, cell, caret) = draw("ab", "cd");
         let (plain, ..) = draw("ab", "");
         let (committed, ..) = draw("abcd", "");
         let (over_placeholder, ..) = draw("", "cd");
@@ -1866,6 +1872,12 @@ mod tests {
             "underlined"
         );
         assert_eq!(band_diff(&over_placeholder, &cd, w, x, above), 0);
+        let (field, offset) = caret.expect("the caret row records itself");
+        assert!((field.top - cell.top).abs() < 1.0, "{field:?} vs {cell:?}");
+        assert!(
+            offset > field.width() / 2.0 && offset < field.width(),
+            "{offset}"
+        );
     }
 
     /// Stepping one row must leave every other row's pixels unchanged. One
