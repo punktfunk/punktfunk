@@ -31,6 +31,8 @@ import {
 } from "@/api/gen/profiles/profiles";
 import {
 	endGame as endGameRequest,
+	stopOneSession,
+	stopSession,
 	useEndGame,
 	useGetRecentSessions,
 	useRequestIdr,
@@ -173,12 +175,17 @@ function useSessionActions(active: number): SessionActions {
 const representative = (s: RuntimeStatus, row: SessionRow) =>
 	s.session_id != null ? row.id === s.session_id : row.plane === "gamestream";
 
+/** Whether two rows are on one host. A door's status holds every seat's, each counting from 1. */
+const sameSeat = (a: { seat?: string | null }, b: { seat?: string | null }) =>
+	(a.seat ?? null) === (b.seat ?? null);
+
 /** The title a session streams, if the host launched one for it. A waiting game streams nowhere. */
-const gameOf = (s: RuntimeStatus, row: SessionRow) =>
+export const gameOf = (s: RuntimeStatus, row: SessionRow) =>
 	s.games.find(
 		(g) =>
 			g.state !== "grace" &&
 			g.state !== "detached" &&
+			sameSeat(g, row) &&
 			(g.session_id != null
 				? g.session_id === row.id
 				: row.id == null && g.plane === row.plane),
@@ -281,10 +288,14 @@ export const SectionHome: FC = () => {
 	const recent = useGetRecentSessions({ query: { retry: false } });
 	const actions = useSessionActions(status.data?.active_sessions ?? 0);
 	const endGame = useEndGame();
-	// A door's leftover game is a seat's, so its host ends it.
+	// A door's leftover game is a seat's, so its host ends it, or stops the session it runs in.
 	const endSeatGame = useMutation({
 		mutationFn: ({ seat, app_id }: { seat: string; app_id: string | null }) =>
 			inSeat(seat, () => endGameRequest({ app_id })),
+	});
+	const stopSeatSession = useMutation({
+		mutationFn: ({ seat, id }: { seat: string; id: number | null }) =>
+			inSeat(seat, () => (id == null ? stopSession() : stopOneSession(id))),
 	});
 	const stop = useStopSession();
 	const seatAct = useMutation({
@@ -334,20 +345,27 @@ export const SectionHome: FC = () => {
 	);
 
 	/**
-	 * A game nobody streams ends directly. `app_id: null` means "every unstreamed game" to the host,
-	 * so a row without an id says so first when there are several.
+	 * A game nobody streams ends directly; a running one stops the session it runs in, on the host
+	 * that runs it. `app_id: null` means "every unstreamed game" to the host, so a row without an id
+	 * says so first when there are several.
 	 */
 	const onEndGame = async (game: ActiveGame) => {
 		const games = status.data?.games ?? [];
 		const unstreamed = (g: ActiveGame) =>
 			g.state === "grace" || g.state === "detached";
 		if (!unstreamed(game)) {
-			if (game.session_id != null) {
-				const row = status.data?.sessions.find((r) => r.id === game.session_id);
-				if (row) actions.onStop(row);
+			const stopped = { onError: failed(m.action_stop_failed()) };
+			const id = game.session_id ?? null;
+			if (id != null) {
+				const row = status.data?.sessions.find(
+					(r) => r.id === id && sameSeat(r, game),
+				);
+				if (row?.seat) stopSeatSession.mutate({ seat: row.seat, id }, stopped);
+				else if (row) actions.onStop(row);
 				return;
 			}
-			stop.mutate({}, { onError: failed(m.action_stop_failed()) });
+			if (game.seat) stopSeatSession.mutate({ seat: game.seat, id }, stopped);
+			else stop.mutate({}, stopped);
 			return;
 		}
 		const waiting = games.filter(
@@ -431,7 +449,10 @@ export const SectionHome: FC = () => {
 								art={coverOf(g)}
 								onEnd={() => onEndGame(g)}
 								isEnding={
-									endGame.isPending || endSeatGame.isPending || stop.isPending
+									endGame.isPending ||
+									endSeatGame.isPending ||
+									stopSeatSession.isPending ||
+									stop.isPending
 								}
 							/>
 						))}
