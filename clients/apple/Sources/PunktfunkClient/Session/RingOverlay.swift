@@ -869,39 +869,28 @@ private struct SheetRowSpec {
     }
 }
 
-private let resPresets: [(String, UInt32, UInt32)] = [("1440p", 2560, 1440), ("1080p", 1920, 1080), ("720p", 1280, 720)]
-private let hzPresets: [UInt32] = [120, 60]
-
 extension Collection {
     fileprivate subscript(safe i: Index) -> Element? { indices.contains(i) ? self[i] : nil }
 }
 
 extension RingOverlay {
-    /// Depth two: the complete catalogue in a fixed order (D2).
+    /// Depth two: the complete catalogue in a fixed order (D2). The mode rows step through
+    /// `RingNav.nextMode` and `.nextRefresh`.
     fileprivate func sheetRows() -> [SheetRowSpec] {
         let a = actions
-        let mode = a.currentMode()
-        let native = state.native ?? mode
+        let live = a.currentMode()
+        let mode = RingNav.Mode(width: live.w, height: live.h, hz: live.hz)
+        let native = state.native.map { RingNav.Mode(width: $0.w, height: $0.h, hz: $0.hz) } ?? mode
         let resLabel: String = {
-            if mode.w == native.w && mode.h == native.h {
-                return L10n.ringSheetNative(width: String(mode.w), height: String(mode.h))
+            if mode.width == native.width && mode.height == native.height {
+                return L10n.ringSheetNative(width: String(mode.width), height: String(mode.height))
             }
-            return resPresets.first { $0.1 == mode.w && $0.2 == mode.h }?.0 ?? "\(mode.w)×\(mode.h)"
+            return RingNav.resolutions.first { $0.width == mode.width && $0.height == mode.height }?.name
+                ?? "\(mode.width)×\(mode.height)"
         }()
-        func adjustRes(_ dir: Int) {
-            let options = [(native.w, native.h)] + resPresets.map { ($0.1, $0.2) }
-            let i = options.firstIndex { $0 == (mode.w, mode.h) } ?? 0
-            let n = options.count
-            let next = options[((i + dir) % n + n) % n]
-            a.requestMode(next.0, next.1, mode.hz)
-        }
-        func adjustHz(_ dir: Int) {
-            var options = [native.hz]
-            for hz in hzPresets where !options.contains(hz) { options.append(hz) }
-            let i = options.firstIndex(of: mode.hz) ?? 0
-            let n = options.count
-            a.requestMode(mode.w, mode.h, options[((i + dir) % n + n) % n])
-        }
+        func request(_ m: RingNav.Mode) { a.requestMode(m.width, m.height, m.hz) }
+        func adjustRes(_ dir: Int) { request(RingNav.nextMode(mode: mode, native: native, dir: dir)) }
+        func adjustHz(_ dir: Int) { request(RingNav.nextRefresh(mode: mode, native: native, dir: dir)) }
         var rows: [SheetRowSpec] = []
         rows.append(SheetRowSpec(header: String(localized: L10n.ringGroupSession),
                                  label: String(localized: L10n.ringEndStream),
