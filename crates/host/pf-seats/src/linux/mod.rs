@@ -1009,10 +1009,9 @@ impl PlatformBackend for LinuxBackend {
         }
         accounts::close_home(&passwd.home)?;
         let games = accounts::ensure_group(accounts::GAMES_GROUP)?;
-        let rejoined = accounts::join_groups(&passwd.name).unwrap_or_else(|error| {
+        if let Err(error) = accounts::join_groups(&passwd.name) {
             tracing::warn!(account = %passwd.name, %error, "seat user's groups not restored");
-            false
-        });
+        }
         shared::ensure_games(state, games)?;
         shared::ensure_seat_dirs(state, &seat.id, &passwd, self.owner_uid())?;
         if let Err(error) = shared::link_steam(&passwd) {
@@ -1056,12 +1055,10 @@ impl PlatformBackend for LinuxBackend {
                 &browser,
             )?;
             self.stopped_since(asked)?;
-            // A manager the last run left keeps the groups it started with; the new session
-            // would join it and hand its apps those.
-            if rejoined {
-                let manager = format!("user@{}.service", passwd.uid);
-                let _ = run("systemctl_failed", "systemctl", &["stop", &manager]);
-            }
+            // A manager already up (the last run's, or a linger's from boot) lacks this start's
+            // groups and drop-in; the new session would join it and hand its apps neither.
+            let manager = format!("user@{}.service", passwd.uid);
+            let _ = run("systemctl_failed", "systemctl", &["stop", &manager]);
             let _ = run("systemctl_failed", "systemctl", &["reset-failed", &unit]);
             run("systemctl_failed", "systemctl", &["start", &unit])?;
             // The mount's own error is in the unit's journal.
