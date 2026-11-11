@@ -151,16 +151,9 @@ private struct ShortcutSheet: View {
         _trigger = State(initialValue: b?.trigger)
     }
 
-    /// The other bindings, which the new one is checked against.
-    private var others: Shortcuts {
-        var s = shortcuts
-        if let index { s.bindings.remove(at: index) }
-        return s
-    }
-
-    private var conflict: Shortcuts.Conflict? {
-        guard let trigger else { return nil }
-        return others.validate(.init(trigger: trigger, action: action ?? .ring))
+    /// What Save does with the trigger as it stands; nil before there is one.
+    private var decision: Shortcuts.SaveDecision? {
+        trigger.map { shortcuts.saveDecision($0, action: action ?? .ring, editing: index) }
     }
 
     var body: some View {
@@ -203,9 +196,7 @@ private struct ShortcutSheet: View {
                 if let index {
                     Section {
                         Button(L10n.shortcutsRemove, role: .destructive) {
-                            var s = shortcuts
-                            s.bindings.remove(at: index)
-                            save(s)
+                            save(shortcuts.without(index))
                             dismiss()
                         }
                     }
@@ -219,7 +210,7 @@ private struct ShortcutSheet: View {
                 ToolbarItem(placement: .cancellationAction) { Button(L10n.commonCancel) { dismiss() } }
                 ToolbarItem(placement: .confirmationAction) {
                     Button(index == nil ? L10n.commonAdd : L10n.commonSave) {
-                        if case .identical(let i) = conflict { replacing = i } else { commit() }
+                        if case .replace(let i)? = decision { replacing = i } else { commit() }
                     }
                     .disabled(action == nil || trigger == nil || blocking != nil)
                 }
@@ -278,11 +269,11 @@ private struct ShortcutSheet: View {
     /// Why Save is off, in the player's words; nil when it may save (an identical trigger asks
     /// to replace instead).
     private var blocking: String? {
-        guard let conflict, let trigger else { return nil }
+        guard case .blocked(let conflict)? = decision, let trigger else { return nil }
         switch conflict {
         case .identical: return nil
         case .pressSubset(let i):
-            let other = others.bindings[i].trigger
+            let other = shortcuts.without(index).bindings[i].trigger
             let (first, second) = trigger.ids.count < other.ids.count ? (trigger, other) : (other, trigger)
             return L10n.shortcutsSubset(first: first.chord(client: shortcutClient),
                                         second: second.chord(client: shortcutClient))
@@ -294,19 +285,15 @@ private struct ShortcutSheet: View {
 
     private var replacePrompt: String {
         guard let replacing else { return "" }
-        let b = others.bindings[replacing]
+        let b = shortcuts.without(index).bindings[replacing]
         return L10n.shortcutsIdenticalReplace(keys: b.trigger.label(client: shortcutClient),
                                               action: b.action.label(overlay))
     }
 
-    /// Store the edit; `replacing` indexes `others`, the binding the new one takes over from.
+    /// Store the edit, less the binding at `replacing` (an index of the others) it takes over from.
     private func commit(replacing: Int? = nil) {
         guard let action, let trigger else { return }
-        var s = shortcuts
-        let binding = Shortcuts.Binding(trigger: trigger, action: action)
-        if let index { s.bindings[index] = binding } else { s.bindings.append(binding) }
-        if let r = replacing { s.bindings.remove(at: index.map { r >= $0 ? r + 1 : r } ?? r) }
-        save(s)
+        save(shortcuts.applying(binding: .init(trigger: trigger, action: action), at: index, replacing: replacing))
         dismiss()
     }
 
