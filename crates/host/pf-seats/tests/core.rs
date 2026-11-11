@@ -754,6 +754,24 @@ fn ledger_recovers_the_last_valid_backup_and_newer_temporary() {
     assert!(!temp.path().join(format!("{LEDGER_FILE}.tmp")).exists());
 }
 
+/// A save that fails after its temporary was written is not loaded later as the newer ledger.
+#[test]
+fn a_failed_save_is_not_loaded_later() {
+    let temp = tempfile::tempdir().unwrap();
+    let store = LedgerStore::open(temp.path()).unwrap();
+    let mut first = Ledger::new();
+    first.generation = 1;
+    store.save(&first).unwrap();
+    // The backup step can't replace a directory: the save fails after the temporary is written.
+    let blocker = temp.path().join(format!("{LEDGER_FILE}.bak.tmp"));
+    std::fs::create_dir(&blocker).unwrap();
+    let mut second = first.clone();
+    second.generation = 2;
+    assert!(store.save(&second).is_err());
+    std::fs::remove_dir(&blocker).unwrap();
+    assert_eq!(store.load().unwrap().generation, 1);
+}
+
 #[cfg(unix)]
 #[test]
 fn persistence_rejects_linked_roots_and_ledger_files() {
