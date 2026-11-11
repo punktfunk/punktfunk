@@ -50,12 +50,12 @@ public enum LinkArbiter {
     public static let delay: TimeInterval = 0.25
 
     /// `isBusy`: the window has something under way (`LinkIdle`). `isFront`: it is the key window
-    /// on a Mac, a foreground-active scene elsewhere. A busy window still takes a link, and
-    /// `DeepLinkRouter` answers it there.
+    /// on a Mac, a foreground-active scene elsewhere. The window in front takes a link first; a
+    /// busy one still takes it, and `DeepLinkRouter` answers it there.
     public static func decide(kind: Kind, isBusy: Bool, isFront: Bool) -> Decision {
         switch kind {
-        case .link(.mac): isFront ? .runHere : .retryAfter(delay)
-        case .link: .runHere
+        case .link(.tv): .runHere
+        case .link: isFront ? .runHere : .retryAfter(delay)
         case .hostDial: isBusy ? .leave : .runHere
         case .hostOther: .runHere
         }
