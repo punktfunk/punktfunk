@@ -595,38 +595,50 @@ final class SessionModel: ObservableObject {
                         "connect \(host.displayName, privacy: .public) failed: \(String(describing: error), privacy: .public)")
                     self.phase = .idle
                     self.activeHost = nil
-                    // The launch hold is an OPAQUE cover; only `revealStream` drops it, and
-                    // otherwise nothing here does. It would sit over the home screen until the
-                    // next session, and on tvOS it makes the host grid unfocusable behind it.
-                    self.revealStream()
-                    // true: the caller re-dials and says what it ends in.
-                    if case PunktfunkClientError.rejected(.profileUnknown, _) = error,
-                       onProfileUnknown?() == true {
-                        return
-                    }
-                    if case PunktfunkClientError.rejected(.profileLocked, let said) = error,
-                       onProfileLocked?(said) == true {
-                        return
-                    }
-                    let wake = PunktfunkConnection.wakeRedialDelay(
-                        after: error, autoWake: self.lastDial?.autoWake ?? false,
-                        sinceFirst: self.sinceFirstWake)
-                    if let wake, let plan = self.lastDial {
-                        self.redialWhileWaking(plan, after: wake)
-                        return
-                    }
-                    if let message = ConnectOffer.failureMessage(
-                        error, hostName: host.displayName, pinned: pin != nil,
+                    let recovery = DialRecovery.decide(
+                        error,
+                        wakeDelay: self.lastDial.flatMap {
+                            PunktfunkConnection.wakeRedialDelay(
+                                after: error, autoWake: $0.autoWake,
+                                sinceFirst: self.sinceFirstWake)
+                        },
+                        hostName: host.displayName, pinned: pin != nil,
                         requestAccess: requestAccess, callerRecovers: onUnreachable != nil)
-                    {
-                        self.redial = nil
-                        self.errorMessage = message
-                    } else {
-                        // The caller owns recovery (wake-and-retry); its overlay explains it.
-                        onUnreachable?()
-                    }
+                    // The launch hold is an opaque cover only `revealStream` drops. Left up, it
+                    // sits over the home screen, and on tvOS the host grid can't take focus.
+                    if !recovery.keepsLaunchHold { self.revealStream() }
+                    self.recover(
+                        recovery, onProfileUnknown: onProfileUnknown,
+                        onProfileLocked: onProfileLocked, onUnreachable: onUnreachable)
                 }
             }
+        }
+    }
+
+    /// Perform a failed dial's recovery. A profile handler returns true when it takes the failure
+    /// over (it dials again or prompts); otherwise the recovery after it runs.
+    private func recover(
+        _ recovery: DialRecovery,
+        onProfileUnknown: (@MainActor () -> Bool)?,
+        onProfileLocked: (@MainActor (String?) -> Bool)?,
+        onUnreachable: (@MainActor () -> Void)?
+    ) {
+        switch recovery {
+        case .profileUnknown(let otherwise):
+            guard onProfileUnknown?() != true else { return }
+            recover(
+                otherwise, onProfileUnknown: nil, onProfileLocked: nil, onUnreachable: onUnreachable)
+        case .profileLocked(let said, let otherwise):
+            guard onProfileLocked?(said) != true else { return }
+            recover(
+                otherwise, onProfileUnknown: nil, onProfileLocked: nil, onUnreachable: onUnreachable)
+        case .wakeRedial(let wait):
+            if let plan = lastDial { redialWhileWaking(plan, after: wait) }
+        case .alert(let message):
+            redial = nil
+            errorMessage = message
+        case .handBack:
+            onUnreachable?()
         }
     }
 
