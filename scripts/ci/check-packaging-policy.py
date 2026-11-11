@@ -14,6 +14,10 @@ join or name a group it lacks.
 packaging/linux/payload.txt's seats rows are the seat supervisor's files. The Nix and Steam Deck
 recipes build nothing CI can read, so each must name every one of those files.
 
+A SteamOS update rebuilds /etc and keeps only what its keep lists name, so every /etc path the
+Steam Deck scripts install must be on scripts/punktfunk-atomic-keep.conf or under a tree SteamOS
+keeps itself.
+
 Usage: python3 scripts/ci/check-packaging-policy.py [--self-test]
 """
 import glob
@@ -38,6 +42,10 @@ SEATS_RECIPES = {
     "packaging/nix/packages.nix": {"50-punktfunk-seats.conf"},
     "scripts/steamdeck/door.sh": set(),
 }
+KEEP_LIST = "scripts/punktfunk-atomic-keep.conf"
+DECK_SCRIPTS = "scripts/steamdeck/*.sh"
+# The /etc trees SteamOS's own keep list holds, as KEEP_LIST's comments say.
+STOCK_KEPT = ("/etc/systemd/system/", "/etc/atomic-update.conf.d/")
 # Created on first use by door-helper and the seat supervisor, so no package ships them.
 RUNTIME_GROUPS = {"punktfunk-games"}
 # Groups the distribution provides.
@@ -226,6 +234,28 @@ def seats_errors(payload, texts):
             if name not in SEATS_RECIPES.get(path, set()) and name not in strip_comments(text)]
 
 
+# A file path under /etc, not a tail of another path such as /usr/share/punktfunk/etc.
+ETC_PATH = re.compile(r"(?<![\w.-])/etc/[^\s\"'$)]+")
+
+
+def keep_errors(keep, texts):
+    """[(path, error)] for each /etc file a script in `texts` installs or tees that `keep`, the
+    keep list, does not keep. Its `*` matches within a path segment and `**` across."""
+    kept = [re.compile("".join(".*" if t == "**" else "[^/]*" if t == "*" else re.escape(t)
+                               for t in re.split(r"(\*\*|\*)", line.strip())) + r"\Z")
+            for line in keep.splitlines() if line.startswith("/")]
+    errors = []
+    for path, text in texts.items():
+        for line in strip_comments(text.replace("\\\n", " ")).splitlines():
+            if not re.search(r"\b(install|tee)\b", line):
+                continue
+            errors += [(path, f"installs {etc}, which {KEEP_LIST} does not keep across a SteamOS update")
+                       for etc in ETC_PATH.findall(line)
+                       if not etc.endswith("/") and not etc.startswith(STOCK_KEPT)
+                       and not any(k.match(etc) for k in kept)]
+    return errors
+
+
 def tree_errors():
     matrix = read_matrix(read(MATRIX))
     const = dict(GATE_CONST.findall(read(GATE)))
@@ -251,7 +281,10 @@ def tree_errors():
         errors += [(where.get(binary, first), e)
                    for binary, e in compare(matrix, channel, grants, covers)]
     seats = {path: read(path) for path in SEATS_RECIPES}
-    return errors + tree_group_errors() + seats_errors(read(PAYLOAD), seats)
+    deck = {os.path.relpath(f, ROOT): read(os.path.relpath(f, ROOT))
+            for f in sorted(glob.glob(os.path.join(ROOT, DECK_SCRIPTS)))}
+    return (errors + tree_group_errors() + seats_errors(read(PAYLOAD), seats)
+            + keep_errors(read(KEEP_LIST), deck))
 
 
 def check():
@@ -354,6 +387,20 @@ sudo setcap cap_sys_nice=ep ${WORKER}
     expect("seats file missing", len(seats_errors(payload, {nix: "# door-helper\n"})), 1)
     expect("seats exemption is per recipe",
            len(seats_errors(payload, {"scripts/steamdeck/door.sh": "door-helper\n"})), 1)
+
+    keep = "# c\n/etc/udev/rules.d/60-punktfunk.rules\n/etc/pam.d/punktfunk-*\n/etc/a/**\n"
+    deck = ("sudo install -Dm 0644 x /etc/pam.d/punktfunk-seat\n"
+            "door_paths x \\\n    | sudo install -Dm 0644 /dev/stdin /etc/a/b/c.conf\n"
+            'sudo tee "/etc/systemd/system/$unit" >/dev/null\n'
+            'warn "sudo install -m644 x /etc/udev/rules.d/ &&"\n'
+            "# sudo install x /etc/old.conf\n"
+            "[ -f /etc/os-release ] && . /etc/os-release\n"
+            'install -D x "$PF_OPT/etc/y.conf"\n')
+    expect("deck installs kept", keep_errors(keep, {"d.sh": deck}), [])
+    for name, text in (("not kept", "sudo install x /etc/pam.d/other\n"),
+                       ("* stays in a segment", "sudo tee /etc/pam.d/punktfunk-x/y\n"),
+                       ("continued line", "sudo install x \\\n  /etc/b.conf\n")):
+        expect(f"deck install: {name}", len(keep_errors(keep, {"d.sh": text})), 1)
     if fails:
         return 1
     print("check-packaging-policy self-test ok")
