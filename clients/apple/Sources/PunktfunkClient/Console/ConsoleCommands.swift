@@ -455,8 +455,11 @@ extension ConsoleModel {
         store.update(host)
     }
 
+    /// Wake the host on row `key`; with `thenConnect`, connect once it answers, with the preset
+    /// a pinned card's key carries.
     private func wake(key: String, thenConnect: Bool) {
         guard let host = host(key: key) else { return }
+        let preset = PresetSelection(presetID: ConsoleJSON.preset(ofKey: key))
         waker.start(
             host: host, connectsAfter: thenConnect, macs: host.wakeMacs, lastIP: host.address,
             isOnline: { [weak self] in
@@ -469,7 +472,7 @@ extension ConsoleModel {
             onOnline: { [weak self] in
                 guard let self else { return }
                 bridge.push(.wake, "null")
-                if thenConnect { actions.connect(host, .inherit, .send(host.pickedProfile?.id)) }
+                if thenConnect { actions.connect(host, preset, .send(host.pickedProfile?.id)) }
             })
     }
 
