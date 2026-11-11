@@ -22,6 +22,8 @@ pub(crate) struct Run {
     pub clip: Option<(f32, f32)>,
     /// Which pass drew it: [`layer`] starts a new one.
     pub layer: u32,
+    /// A char drew as the missing-glyph box: no face, fallback included, has it.
+    pub missing: bool,
 }
 
 thread_local! {
@@ -57,14 +59,15 @@ pub(crate) fn layer() {
     LAYER.with(|l| l.set(l.get() + 1));
 }
 
-/// A run of `width` from `x` between the rows `y`. One the clip hides top to bottom draws
-/// nothing and is not kept.
+/// A run of `width` from `x` between the rows `y`, `missing` when a char of it drew as a box.
+/// One the clip hides top to bottom draws nothing and is not kept.
 pub(crate) fn run(
     canvas: &Canvas,
     text: &str,
     (x, width): (f32, f32),
     (y0, y1): (f32, f32),
     box_w: Option<f32>,
+    missing: bool,
 ) {
     RUNS.with(|r| {
         if let Some(runs) = r.borrow_mut().as_mut() {
@@ -82,6 +85,7 @@ pub(crate) fn run(
                 box_w,
                 clip,
                 layer: LAYER.with(Cell::get),
+                missing,
             });
         }
     });

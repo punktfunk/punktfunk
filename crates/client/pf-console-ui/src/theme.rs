@@ -958,16 +958,22 @@ impl Fonts {
             }
         };
         #[cfg(test)]
-        crate::textprobe::run(
-            canvas,
-            text,
-            (x as f32, advance),
-            (
-                (baseline - size * 0.8) as f32,
-                (baseline + size * 0.25) as f32,
-            ),
-            boxed.map(|b| b as f32),
-        );
+        {
+            let whole = [(text, self.face(w).clone())];
+            let missing = (runs.as_deref().unwrap_or(&whole).iter())
+                .any(|(t, face)| t.chars().any(|c| !has(face, c)));
+            crate::textprobe::run(
+                canvas,
+                text,
+                (x as f32, advance),
+                (
+                    (baseline - size * 0.8) as f32,
+                    (baseline + size * 0.25) as f32,
+                ),
+                boxed.map(|b| b as f32),
+                missing,
+            );
+        }
         advance
     }
 
@@ -1025,7 +1031,9 @@ impl Fonts {
                     0.0
                 };
                 let rows = (at.y, at.y + entry.para.height());
-                crate::textprobe::run(canvas, text, (at.x + lead, line), rows, Some(max_w as f32));
+                let missing = entry.para.unresolved_glyphs().is_some_and(|n| n > 0);
+                let run = (at.x + lead, line);
+                crate::textprobe::run(canvas, text, run, rows, Some(max_w as f32), missing);
             }
         }
         let height = f64::from(entry.para.height());
@@ -1323,6 +1331,7 @@ mod tests {
                 "{run:?}"
             );
             assert!(run.x1 - run.x0 <= max_w as f32, "{run:?}");
+            assert!(!run.missing, "{run:?}");
         }
     }
 
