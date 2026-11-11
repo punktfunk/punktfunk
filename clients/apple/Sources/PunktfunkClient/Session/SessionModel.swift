@@ -1153,26 +1153,31 @@ final class SessionModel: ObservableObject {
     /// ring's End game. Read from `/status` when the stream starts and when the ring opens.
     private(set) var streamedGame: RunningGame? { get { ui.streamedGame } set { ui.streamedGame = newValue } }
 
-    /// Ask the host what this stream plays. Best-effort: a failed read keeps the last answer.
+    /// Ask the host what this stream plays. Best-effort: a failed read keeps the last answer, and
+    /// an answer lands only in the session it was asked for.
     func refreshStreamedGame() {
         guard let host = activeHost, !DemoMode.isDemo(host),
               case .success(let target) = MgmtTarget.make(host: host, port: connection?.hostMgmtPort)
         else { return }
+        let seq = connectSeq
         Task { [weak self] in
             let games = await LibraryClient.running(target)
-            guard let self, self.activeHost?.id == host.id, self.phase == .streaming else { return }
+            guard let self, self.connectSeq == seq, self.activeHost?.id == host.id,
+                  self.phase == .streaming else { return }
             self.streamedGame = games.first(where: \.streamedHere)
         }
     }
 
     /// End the streamed game on the host, then the stream. A refusal keeps the stream and says why.
+    /// The answer acts only on the session it was asked from, never a newer one to the same host.
     func endStreamedGame() {
         guard let game = streamedGame, let appID = game.appID, let host = activeHost,
               case .success(let target) = MgmtTarget.make(host: host, port: connection?.hostMgmtPort)
         else { return }
+        let seq = connectSeq
         Task { [weak self] in
             let outcome = await LibraryClient.endGame(appID: appID, on: target)
-            guard let self, self.activeHost?.id == host.id else { return }
+            guard let self, self.connectSeq == seq, self.activeHost?.id == host.id else { return }
             if outcome.gameGone {
                 self.disconnect()
             } else {
