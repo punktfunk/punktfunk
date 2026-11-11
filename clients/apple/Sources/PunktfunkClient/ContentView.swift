@@ -715,6 +715,19 @@ struct ContentView: View {
     }
     #endif
 
+    #if os(iOS) || os(visionOS) || os(tvOS)
+    /// Perform what `BackgroundPolicy` decides for this window's session.
+    private func applyBackgroundPolicy() {
+        switch BackgroundPolicy.decide(
+            phase: model.phase, keepAlive: backgroundKeepAlive, minutes: backgroundTimeoutMinutes)
+        {
+        case .hold(let minutes): model.enterBackground(timeoutMinutes: minutes)
+        case .end: model.disconnect(deliberate: false)
+        case .none: break
+        }
+    }
+    #endif
+
     /// Route a `punktfunk://` deep link into the existing connect path — the whole §2 grammar
     /// (design/client-deep-links.md): a stable id, a unique host name or an `addr[:port]`, with
     /// `fp`/`host` recovery parameters and a one-off `preset`.
@@ -726,20 +739,6 @@ struct ContentView: View {
     /// live session (same host → focus, different host → say so; NEVER tear one down on a
     /// background tap), and carries only references — a preset it can't honor refuses with a
     /// notice rather than streaming with the wrong settings.
-    #if os(iOS) || os(visionOS) || os(tvOS)
-    /// Hold a streaming session under the opt-in keep-alive, or end it.
-    private func applyBackgroundPolicy() {
-        guard model.phase == .streaming else { return }
-        if backgroundKeepAlive {
-            model.enterBackground(timeoutMinutes: backgroundTimeoutMinutes)
-        } else {
-            // Not deliberate: the user may come straight back, so let the host linger the
-            // display for a fast reconnect instead of tearing it down.
-            model.disconnect(deliberate: false)
-        }
-    }
-    #endif
-
     private func handleDeepLink(_ url: URL) {
         // Explicit intent beats the start-screen policy, and the two race on a cold start:
         // `.onOpenURL` and `.onAppear` have no guaranteed order. Claiming the once-per-process
