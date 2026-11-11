@@ -1195,8 +1195,8 @@ final class SessionModel: ObservableObject {
         launchDownload = nil
     }
 
-    /// Poll the host once a second for the launched title's state, and reveal when it has
-    /// answered — or when it never will. Same lane and identity as the shelf's Resume badge.
+    /// Poll the host once a second for the launched title's state and take `LaunchHoldRule`'s
+    /// step. Same lane and identity as the shelf's Resume badge.
     private func watchLaunch() {
         guard let hold = launchHold?.entry, let host = activeHost else { return }
         // The demo host has no `/status` and its title is up at once; hold as a real start would,
@@ -1218,41 +1218,22 @@ final class SessionModel: ObservableObject {
         launchWatch = Task { [weak self] in
             var began = Date()
             while !Task.isCancelled {
-                let status = await LibraryClient.status(target)
-                // A cancelled read comes back empty, which reads as "nothing to wait for".
+                let answer = await LibraryClient.statusIfAnswered(target)
+                // A cancelled read comes back as a miss.
                 guard !Task.isCancelled else { return }
-                let game = status.games.first { $0.appID == hold.id }
-                let state = game?.state
-                let download = status.downloads.first { $0.appID == hold.id }
-                // The host fetches the title's files before it starts it: no cap while they come,
-                // and the clocks start over once they are in.
-                if let download, download.live {
-                    if self?.launchDownload != download { self?.launchDownload = download }
-                    began = Date()
-                    try? await Task.sleep(nanoseconds: NSEC_PER_SEC)
-                    continue
+                let title = answer.map {
+                    LaunchHoldRule.Title(of: hold, games: $0.games, downloads: $0.downloads)
                 }
-                if self?.launchDownload != nil { self?.launchDownload = nil }
-                // A download that stopped: nothing will start. The host's notice says why.
-                if download?.stopped(title: hold.title) != nil, state == nil || state == "launching" {
+                let step = LaunchHoldRule.step(
+                    title, elapsed: Date().timeIntervalSince(began), cap: launchHoldMax,
+                    noLease: launchNoLease)
+                // A stopped download reveals too: the host's notice says why.
+                guard case .keep(let windowWait, let download) = step else {
                     self?.revealStream()
                     return
                 }
-                let elapsed = Date().timeIntervalSince(began)
-                let windowWait = state == "running" && game?.awaitingWindow == true
-                let done: Bool
-                switch state {
-                case "launching": done = elapsed >= launchHoldMax
-                // A Proton prefix or a splash can sit behind a running process for a minute.
-                case "running" where windowWait: done = elapsed >= launchHoldMax
-                // window, running, exited, untracked, grace: the host has said all it will.
-                case .some: done = true
-                case nil: done = elapsed >= launchNoLease
-                }
-                if done {
-                    self?.revealStream()
-                    return
-                }
+                if step.restartsClock { began = Date() }
+                if self?.launchDownload != download { self?.launchDownload = download }
                 if self?.launchWindowWait != windowWait { self?.launchWindowWait = windowWait }
                 try? await Task.sleep(nanoseconds: NSEC_PER_SEC)
             }
