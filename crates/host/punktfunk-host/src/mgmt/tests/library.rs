@@ -154,6 +154,9 @@ async fn library_pages_by_cursor_with_search_and_counts() {
     let (_, found) = send(&app, get_req("/api/v1/library/page?q=HA")).await;
     assert_eq!(titles(&found), ["alpha", "Charlie"]);
     assert_eq!(found["total"], 2);
+    // `ＨＡ`, typed at full width.
+    let (_, wide) = send(&app, get_req("/api/v1/library/page?q=%EF%BC%A8%EF%BC%A1")).await;
+    assert_eq!(titles(&wide), ["alpha", "Charlie"]);
 
     // The platform filter narrows the page, not the counts beside it.
     let (_, n64) = send(&app, get_req("/api/v1/library/page?platform=n64")).await;

@@ -318,7 +318,7 @@ pub(crate) async fn get_library_page(
     // Rows borrow the kept list: only the titles of this page are copied out of it.
     let library = crate::library::sorted_games();
     let hidden = crate::library::hidden_ids();
-    let needle = q.q.as_deref().map(str::trim).unwrap_or("").to_lowercase();
+    let needle = punktfunk_core::search::fold(q.q.as_deref().map(str::trim).unwrap_or(""));
     let narrow = LibraryQuery {
         provider: q.provider.clone(),
         platform: None,
@@ -330,7 +330,7 @@ pub(crate) async fn get_library_page(
         .filter(|(_, hidden)| lane.is_operator() || !hidden)
         .filter(|(g, _)| {
             matches_query(g, &narrow)
-                && (needle.is_empty() || g.title.to_lowercase().contains(&needle))
+                && (needle.is_empty() || punktfunk_core::search::fold(&g.title).contains(&needle))
                 && q.id.as_deref().is_none_or(|id| g.id == id)
                 && match q.role.as_deref() {
                     Some("launcher") => g.role == crate::library::GameRole::Launcher,

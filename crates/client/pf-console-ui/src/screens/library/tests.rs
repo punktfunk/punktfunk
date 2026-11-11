@@ -118,6 +118,11 @@ fn a_search_keeps_only_the_matching_titles() {
     assert!(titles.iter().all(|t| t.to_lowercase().contains('a')));
     assert!(!s.no_match());
 
+    // A full-width query finds what its ASCII twin finds.
+    let (mut s, _library) = live_shelf();
+    s.set_query("Ａ");
+    assert_eq!(s.len(), 4);
+
     let (mut s, _library) = live_shelf();
     s.set_query("xyz");
     assert!(s.no_match());
