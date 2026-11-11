@@ -990,6 +990,8 @@ extension SettingsView {
         SettingDefault.resetAll()
         // This tier's @AppStorage default was read at launch, from the value just removed.
         statsVerbosityRaw = SettingDefault.statsVerbosity
+        // The pad manager keeps its own copy of the pinned controller, read at launch.
+        gamepads.preferredID = ""
         #if os(iOS) || os(visionOS) || os(macOS)
         customMode = false
         customScaleMode = false
