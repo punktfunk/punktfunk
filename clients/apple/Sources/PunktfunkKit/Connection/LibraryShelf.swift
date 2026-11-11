@@ -1,6 +1,6 @@
-// The touch shelf's decisions: which titles each of its rows holds, and what a load event does
-// to the shelf. Pure values over `LibraryCollation`'s rules, so `LibraryShelfTests` pins them;
-// `LibraryView` gathers the facts and draws the result.
+// The touch shelf's decisions: which titles each of its rows holds, what a load event does to
+// the shelf, and which acts a title offers. Pure values over `LibraryCollation`'s rules, so
+// `LibraryShelfTests` pins them; `LibraryView` gathers the facts and draws the result.
 
 import Foundation
 import PunktfunkShared
@@ -128,6 +128,77 @@ public enum LibraryShelf {
             next.loading = false
         }
         return next
+    }
+
+    /// One act a title offers.
+    public enum Act: Hashable, Sendable {
+        /// Play, Resume (the host has the title up), or the desktop tile's Connect.
+        case play, resume, desktop
+        case favorite, unfavorite
+        case details
+        case copyLink
+        /// The one change to the title's files this device may ask for.
+        case files(InstallAction)
+        /// The host runs a launch of this device's, so this device may end it.
+        case endGame
+
+        /// Pressed on the details sheet, the act runs once the sheet is down, so the session it
+        /// starts never presents over a sheet that is still leaving.
+        public var waitsForDetailsToClose: Bool {
+            switch self {
+            case .play, .resume, .desktop: true
+            default: false
+            }
+        }
+
+        /// The menu row's words; `install` sizes a download.
+        public func label(_ install: TitleInstall?) -> String {
+            switch self {
+            case .play: String(localized: L10n.commonPlay)
+            case .resume: String(localized: L10n.libResume)
+            case .desktop: String(localized: L10n.libDesktopAction)
+            case .favorite: String(localized: L10n.libFavoriteAdd)
+            case .unfavorite: String(localized: L10n.libFavoriteRemove)
+            case .details: String(localized: L10n.libTitleDetails)
+            case .copyLink: String(localized: L10n.hostcardCopyLink)
+            case .files(let action): action.label(install)
+            case .endGame: String(localized: L10n.libEndGame)
+            }
+        }
+
+        /// The menu row's SF Symbol.
+        public var symbol: String {
+            switch self {
+            case .play, .resume, .desktop: "play.fill"
+            case .favorite: "heart"
+            case .unfavorite: "heart.slash"
+            case .details: "info.circle"
+            case .copyLink: "link"
+            case .files(.install), .files(.resume): "arrow.down.circle"
+            case .files(.pause): "pause.circle"
+            case .files(.remove): "trash"
+            case .endGame: "xmark.circle"
+            }
+        }
+    }
+
+    /// A title's acts in menu order: Play or Resume leads, then what a tap can't do.
+    /// `favorite` is nil where favorites aren't offered, else whether the title is one.
+    public static func acts(
+        _ game: GameEntry, running: RunningGame?, download: HostDownload?, grants: UInt32?,
+        canLaunch: Bool, favorite: Bool?, canCopyLink: Bool
+    ) -> [Act] {
+        let desktop = game.id == LibraryCollation.desktopID
+        var acts: [Act] = []
+        if canLaunch { acts.append(desktop ? .desktop : running != nil ? .resume : .play) }
+        if let favorite, !desktop { acts.append(favorite ? .unfavorite : .favorite) }
+        if !desktop { acts.append(.details) }
+        if canCopyLink { acts.append(.copyLink) }
+        if let files = InstallAction.forTitle(game.install, download: download, grants: grants) {
+            acts.append(.files(files))
+        }
+        if !desktop, running?.endable == true { acts.append(.endGame) }
+        return acts
     }
 }
 

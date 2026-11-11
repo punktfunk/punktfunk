@@ -1,4 +1,4 @@
-// The touch shelf's rows and its load reducer (`LibraryShelf`).
+// The touch shelf's rows, its load reducer and a title's acts (`LibraryShelf`).
 
 import XCTest
 @testable import PunktfunkKit
@@ -196,5 +196,64 @@ final class LibraryShelfTests: XCTestCase {
         XCTAssertTrue(missed.running.isEmpty)
         XCTAssertFalse(missed.polls)
         XCTAssertNil(missed.grants)
+    }
+
+    // MARK: - A title's acts
+
+    private func acts(
+        _ game: GameEntry, running: RunningGame? = nil, download: HostDownload? = nil,
+        grants: UInt32? = nil, canLaunch: Bool = true, favorite: Bool? = nil,
+        canCopyLink: Bool = true
+    ) -> [LibraryShelf.Act] {
+        LibraryShelf.acts(
+            game, running: running, download: download, grants: grants, canLaunch: canLaunch,
+            favorite: favorite, canCopyLink: canCopyLink)
+    }
+
+    func testATitleOffersPlayThenWhatATapCannotDo() {
+        let game = entry("a", "Alpha")
+        XCTAssertEqual(acts(game), [.play, .details, .copyLink])
+        XCTAssertEqual(acts(game, favorite: false), [.play, .favorite, .details, .copyLink])
+        XCTAssertEqual(acts(game, favorite: true, canCopyLink: false), [.play, .unfavorite, .details])
+        XCTAssertEqual(acts(game, canLaunch: false), [.details, .copyLink])
+    }
+
+    func testARunningTitleResumesAndOnlyThisDevicesLaunchEnds() {
+        let game = entry("a", "Alpha")
+        XCTAssertEqual(acts(game, running: running("a")), [.resume, .details, .copyLink])
+        XCTAssertEqual(
+            acts(game, running: running("a", endable: true)),
+            [.resume, .details, .copyLink, .endGame])
+    }
+
+    func testTheDesktopTileConnectsAndCarriesNoTitleActs() {
+        let desktop = LibraryCollation.desktopEntry()
+        XCTAssertEqual(
+            acts(desktop, running: running(LibraryCollation.desktopID, endable: true), favorite: true),
+            [.desktop, .copyLink])
+    }
+
+    func testTheFilesActFollowsTheGrants() {
+        let missing = entry("a", "Alpha", missing: true)
+        XCTAssertEqual(acts(missing).last, .files(.install))
+        XCTAssertEqual(acts(missing, grants: 0), [.play, .details, .copyLink])
+        let downloading = HostDownload(appID: "a", state: "downloading")
+        XCTAssertEqual(
+            acts(missing, download: downloading, grants: PunktfunkConnection.grantManageGames).last,
+            .files(.pause))
+    }
+
+    func testPlayWaitsForTheDetailsSheetToClose() {
+        for act: LibraryShelf.Act in [.play, .resume, .desktop] {
+            XCTAssertTrue(act.waitsForDetailsToClose, "\(act)")
+        }
+        for act: LibraryShelf.Act in [.favorite, .unfavorite, .details, .copyLink, .files(.install)] {
+            XCTAssertFalse(act.waitsForDetailsToClose, "\(act)")
+        }
+    }
+
+    /// R5-7, as it stands: End Game from the sheet presents at once.
+    func testEndGameDoesNotWaitForTheDetailsSheet() {
+        XCTAssertFalse(LibraryShelf.Act.endGame.waitsForDetailsToClose)
     }
 }

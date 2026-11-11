@@ -115,9 +115,9 @@ struct LibraryView: View {
     @State private var showCustomize = false
     /// The title whose details sheet is up (the title menu's Details…).
     @State private var detailGame: GameEntry?
-    /// A Play pressed on that sheet, run once the sheet is down so the session never presents
-    /// over a sheet that is still leaving.
-    @State private var launchAfterDetails: String?
+    /// An act pressed on that sheet that runs once the sheet is down
+    /// (`LibraryShelf.Act.waitsForDetailsToClose`).
+    @State private var afterDetails: (act: LibraryShelf.Act, game: GameEntry)?
     /// The title End Game is asking about, and what the host said when it refused.
     @State private var endingGame: GameEntry?
     @State private var endGameNotice: String?
@@ -247,9 +247,9 @@ struct LibraryView: View {
             #endif
             #if os(tvOS)
             // A TV's sheet is a narrow card; the details want the screen.
-            .fullScreenCover(item: $detailGame, onDismiss: launchPendingTitle) { detailSheet($0) }
+            .fullScreenCover(item: $detailGame, onDismiss: runAfterDetails) { detailSheet($0) }
             #else
-            .sheet(item: $detailGame, onDismiss: launchPendingTitle) { detailSheet($0) }
+            .sheet(item: $detailGame, onDismiss: runAfterDetails) { detailSheet($0) }
             #endif
             // Before the first frame: a shelf seen this run opens on its titles, any other one on
             // the (held back) spinner rather than a flash of the empty state.
@@ -657,44 +657,33 @@ struct LibraryView: View {
             caption: caption, host: host, frameID: frameID)
     }
 
-    /// A title's own acts, one level below a host card's (design §2.5): Play / Resume leads,
-    /// then what a tap cannot do.
-    @ViewBuilder private func titleMenu(_ game: GameEntry) -> some View {
-        if let launch = launchAndRemember {
-            Button(playLabel(game), systemImage: "play.fill") { launch(game.id) }
-        }
-        if inTab, game.id != LibraryCollation.desktopID {
-            let marked = favoriteIDs.contains(game.id)
+    /// A title's own acts, one level below a host card's (design §2.5).
+    private func titleMenu(_ game: GameEntry) -> some View {
+        ForEach(titleActs(game), id: \.self) { act in
             Button(
-                marked ? L10n.libFavoriteRemove : L10n.libFavoriteAdd,
-                systemImage: marked ? "heart.slash" : "heart"
-            ) {
-                favorites.toggle(game.id, host: host.id.uuidString)
-            }
-        }
-        if game.id != LibraryCollation.desktopID {
-            Button(L10n.libTitleDetails, systemImage: "info.circle") { detailGame = game }
-        }
-        if LinkClipboard.isAvailable {
-            Button(L10n.hostcardCopyLink, systemImage: "link") { copyLink(game) }
-        }
-        if let files = InstallAction.forTitle(
-            game.install, download: shelf.downloads[game.id], grants: shelf.grants)
-        {
-            Button(files.label(game.install), systemImage: Self.filesSymbol(files)) {
-                if files == .remove { removingGame = game } else { changeInstall(game, files) }
-            }
-        }
-        if canEnd(game) {
-            Button(L10n.libEndGame, systemImage: "xmark.circle", role: .destructive) { endingGame = game }
+                act.label(game.install), systemImage: act.symbol,
+                role: act == .endGame ? .destructive : nil
+            ) { perform(act, on: game) }
         }
     }
 
-    private static func filesSymbol(_ action: InstallAction) -> String {
-        switch action {
-        case .install, .resume: return "arrow.down.circle"
-        case .pause: return "pause.circle"
-        case .remove: return "trash"
+    private func titleActs(_ game: GameEntry) -> [LibraryShelf.Act] {
+        LibraryShelf.acts(
+            game, running: shelf.running[game.id], download: shelf.downloads[game.id],
+            grants: shelf.grants, canLaunch: onLaunch != nil,
+            favorite: inTab ? favoriteIDs.contains(game.id) : nil,
+            canCopyLink: LinkClipboard.isAvailable)
+    }
+
+    private func perform(_ act: LibraryShelf.Act, on game: GameEntry) {
+        switch act {
+        case .play, .resume, .desktop: launch(game.id)
+        case .favorite, .unfavorite: favorites.toggle(game.id, host: host.id.uuidString)
+        case .details: detailGame = game
+        case .copyLink: copyLink(game)
+        case .files(.remove): removingGame = game
+        case .files(let action): changeInstall(game, action)
+        case .endGame: endingGame = game
         }
     }
 
@@ -725,11 +714,6 @@ struct LibraryView: View {
         nowPlayingStore.adopt(answer?.games ?? [], for: current)
     }
 
-    /// The host runs a launch of this device's of `game`, so it lets this device end it.
-    private func canEnd(_ game: GameEntry) -> Bool {
-        game.id != LibraryCollation.desktopID && shelf.running[game.id]?.endable == true
-    }
-
     /// Ask the host to end `game`. Gone either way drops the badge; a refusal, or no way to ask,
     /// says why.
     private func endGame(_ game: GameEntry) {
@@ -747,22 +731,20 @@ struct LibraryView: View {
         }
     }
 
-    private func playLabel(_ game: GameEntry) -> String {
-        if game.id == LibraryCollation.desktopID { return String(localized: L10n.libDesktopAction) }
-        return String(localized: shelf.running[game.id] != nil ? L10n.libResume : L10n.commonPlay)
-    }
-
+    /// The title menu's acts on the details sheet, less Details and the files act.
     private func detailSheet(_ game: GameEntry) -> some View {
-        TitleDetailSheet(
-            game: game, artLoader: artLoader, playLabel: playLabel(game),
-            isFavorite: inTab ? favoriteIDs.contains(game.id) : nil,
-            onToggleFavorite: { favorites.toggle(game.id, host: host.id.uuidString) },
-            onPlay: launchAndRemember == nil ? nil : {
-                launchAfterDetails = game.id
-                detailGame = nil
-            },
-            onCopyLink: LinkClipboard.isAvailable ? { copyLink(game) } : nil,
-            onEndGame: canEnd(game) ? {
+        let acts = titleActs(game)
+        let play = acts.first { [.play, .resume, .desktop].contains($0) }
+        let heart = acts.first { $0 == .favorite || $0 == .unfavorite }
+        func pressed(_ act: LibraryShelf.Act?) -> (() -> Void)? {
+            guard let act, acts.contains(act) else { return nil }
+            return { fromDetails(act, game) }
+        }
+        return TitleDetailSheet(
+            game: game, artLoader: artLoader, playLabel: play?.label(nil) ?? "",
+            isFavorite: heart.map { $0 == .unfavorite }, onToggleFavorite: pressed(heart) ?? {},
+            onPlay: pressed(play), onCopyLink: pressed(.copyLink),
+            onEndGame: acts.contains(.endGame) ? {
                 detailGame = nil
                 endingGame = game
             } : nil,
@@ -774,10 +756,17 @@ struct LibraryView: View {
             #endif
     }
 
-    private func launchPendingTitle() {
-        guard let id = launchAfterDetails else { return }
-        launchAfterDetails = nil
-        launchAndRemember?(id)
+    /// An act pressed on the details sheet: one that waits for the sheet runs from its dismissal.
+    private func fromDetails(_ act: LibraryShelf.Act, _ game: GameEntry) {
+        guard act.waitsForDetailsToClose else { return perform(act, on: game) }
+        afterDetails = (act, game)
+        detailGame = nil
+    }
+
+    private func runAfterDetails() {
+        guard let pending = afterDetails else { return }
+        afterDetails = nil
+        perform(pending.act, on: pending.game)
     }
 
     /// What a tile says under its title for the active sort (design P6): when it was last
