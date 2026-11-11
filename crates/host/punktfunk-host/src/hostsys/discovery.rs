@@ -39,10 +39,12 @@ pub const NATIVE_PROTO: &str = "punktfunk/1";
 /// A-record target (`<label>.local.`), not the service instance name. Instance may be free
 /// text (`PUNKTFUNK_HOST_NAME`); a host name may not. `mdns-sd` rejects the whole `ServiceInfo`
 /// if the target is illegal, which takes discovery down rather than looking wrong. Already-legal
-/// names pass through; anything outside `[A-Za-z0-9.-]` becomes `-`.
+/// names pass through; anything outside `[A-Za-z0-9.-]` becomes `-`. A non-ASCII name also gets
+/// `-` and 6 hex of its SHA-256, so two all-CJK hosts on one LAN do not answer for one label.
 pub(crate) fn dns_label(name: &str) -> String {
+    let name = name.trim();
     let mut out = String::new();
-    for c in name.trim().chars() {
+    for c in name.chars() {
         if out.len() >= 63 {
             break;
         }
@@ -52,12 +54,17 @@ pub(crate) fn dns_label(name: &str) -> String {
             '-'
         });
     }
-    let out = out.trim_matches(['-', '.']).to_string();
-    if out.is_empty() {
-        "punktfunk-host".to_string()
-    } else {
-        out
+    let out = match out.trim_matches(['-', '.']) {
+        "" => "punktfunk-host",
+        out => out,
+    };
+    if name.is_ascii() {
+        return out.to_string();
     }
+    use sha2::Digest as _;
+    let tag = hex::encode(&sha2::Sha256::digest(name.as_bytes())[..3]);
+    let base = out[..out.len().min(63 - 7)].trim_end_matches(['-', '.']);
+    format!("{base}-{tag}")
 }
 
 /// Holds the mDNS daemon; dropping it unregisters the service and stops the re-announce loop.
@@ -208,10 +215,22 @@ mod tests {
         // Free-text display names become a legal label instead of poisoning the record.
         assert_eq!(dns_label("Living Room PC"), "Living-Room-PC");
         assert_eq!(dns_label("  Ben's Rig!  "), "Ben-s-Rig");
-        assert_eq!(dns_label("Wohnzimmer-PC ☕"), "Wohnzimmer-PC");
         assert_eq!(dns_label("***"), "punktfunk-host");
         assert_eq!(dns_label(""), "punktfunk-host");
         // DNS caps a label at 63 bytes.
-        assert!(dns_label(&"a".repeat(200)).len() <= 63);
+        assert_eq!(dns_label(&"a".repeat(200)), "a".repeat(63));
+    }
+
+    /// A non-ASCII name keeps a label of its own: two all-CJK hosts would otherwise both answer
+    /// for `punktfunk-host.local.`. The suffix is the name's SHA-256, so it never moves.
+    #[test]
+    fn dns_label_tells_non_ascii_names_apart() {
+        assert_eq!(dns_label("客厅电脑"), "punktfunk-host-dce017");
+        assert_eq!(dns_label("書斎"), "punktfunk-host-c4cdbc");
+        assert_eq!(dns_label(" 거실 PC "), "PC-673531");
+        assert_eq!(dns_label("Wohnzimmer-PC ☕"), "Wohnzimmer-PC-055666");
+        let long = dns_label(&format!("{}漢", "a".repeat(200)));
+        assert_eq!(long.len(), 63);
+        assert!(long.starts_with(&"a".repeat(56)), "{long}");
     }
 }
