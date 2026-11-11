@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { encodeRest, isUiCredential, seatCall, seatPath } from "./seatProxy";
+import { encodeRest, isPluginPrivate, seatCall, seatPath } from "./seatProxy";
 
 const ID = "0a1b2c3d4e5f";
 const base = `/api/v1/profiles/${ID}/proxy`;
@@ -51,12 +51,24 @@ describe("seatCall", () => {
 	});
 });
 
-test("a plugin UI's credential is refused whichever way it is spelled", () => {
-	expect(isUiCredential("plugins/steam/ui-credential")).toBe(true);
-	expect(
-		isUiCredential(
-			seatCall(`${base}/plugins/a/../steam/ui-credential`)?.rest ?? "",
-		),
-	).toBe(true);
-	expect(isUiCredential("plugins/steam")).toBe(false);
+test("a plugin's credential and page relay are refused whichever way they are spelled", () => {
+	for (const rest of [
+		"plugins/steam/ui-credential",
+		"plugins/steam/ui",
+		"plugins/steam/ui/a.html",
+		"plugins/steam/UI/a",
+		seatCall(`${base}/plugins/a/../steam/ui-credential`)?.rest,
+		seatCall(`${base}/plugins/steam/ui/`)?.rest,
+		seatCall(`${base}/plugins/steam/%75i/a.html`)?.rest,
+	]) {
+		expect(isPluginPrivate(rest ?? ""), rest).toBe(true);
+	}
+	for (const rest of [
+		"plugins",
+		"plugins/steam",
+		"plugins/steam/ui-credentials-other",
+		"plugins/steam/uix/a",
+	]) {
+		expect(isPluginPrivate(rest), rest).toBe(false);
+	}
 });
