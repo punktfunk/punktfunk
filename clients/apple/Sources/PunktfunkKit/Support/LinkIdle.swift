@@ -1,6 +1,6 @@
-// Whether a window is free to start what a link hands it. `ContentView` gathers the facts and
-// `DeepLinkRouter` refuses a link in a busy window. Pure, so `swift test` covers it
-// (`LinkIdleTests`).
+// Whether a window is free to start what a link or a Mac host page hands it. `ContentView`
+// gathers the facts; `DeepLinkRouter` refuses a link in a busy window, and `LinkArbiter` leaves a
+// host page's dial to an idle one. Pure, so `swift test` covers it (`LinkIdleTests`).
 
 import Foundation
 

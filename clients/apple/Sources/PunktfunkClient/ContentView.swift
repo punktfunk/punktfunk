@@ -454,17 +454,19 @@ struct ContentView: View {
         // nothing.
         .onReceive(NotificationCenter.default.publisher(for: .punktfunkOpenDeepLink)) { note in
             guard let link = note.object as? NSURL else { return }
-            #if os(macOS)
-            // Every window hears it: the front one takes it now, another only if none did.
-            let wait: TimeInterval = controlActiveState == .key ? 0 : 0.25
-            DispatchQueue.main.asyncAfter(deadline: .now() + wait) {
+            @MainActor func run() {
                 guard DeepLinkInbox.take(link) else { return }
                 handleDeepLink(link as URL)
             }
-            #else
-            guard DeepLinkInbox.take(link) else { return }
-            handleDeepLink(link as URL)
-            #endif
+            // Every window hears it; the first to take it from the inbox runs it.
+            switch LinkArbiter.decide(
+                kind: .link(.current), isBusy: !linkSession.isIdle, isFront: isFrontWindow)
+            {
+            case .runHere: run()
+            case .retryAfter(let wait):
+                DispatchQueue.main.asyncAfter(deadline: .now() + wait) { run() }
+            case .leave: break
+            }
         }
         .onChange(of: model.phase) { _, phase in
             // A parked dial that streamed, failed or was cancelled has nothing left to wait for.
@@ -620,20 +622,22 @@ struct ContentView: View {
     }
 
     /// Run a host window's pending request here, unless another main window took it first. A
-    /// connect or a pairing needs an idle window: a busy one leaves it to an idle one, then opens
-    /// a window of its own for it.
+    /// window `LinkArbiter` sends away leaves it to an idle one, then opens a window of its own
+    /// for it.
     private func takeHostRequest() {
         guard let request = hostRouter.pending else { return }
-        switch request {
-        case .connect, .pair:
-            guard !model.isBusy else {
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
-                    if hostRouter.claimOpening(request) { openWindow(id: PunktfunkClientApp.mainSceneID) }
-                }
-                return
+        let kind: LinkArbiter.Kind =
+            switch request {
+            case .connect, .pair: .hostDial
+            case .browse, .wake: .hostOther
             }
-        case .browse, .wake:
-            break
+        let decision = LinkArbiter.decide(
+            kind: kind, isBusy: !linkSession.isIdle, isFront: isFrontWindow)
+        guard decision != .leave else {
+            DispatchQueue.main.asyncAfter(deadline: .now() + LinkArbiter.delay) {
+                if hostRouter.claimOpening(request) { openWindow(id: PunktfunkClientApp.mainSceneID) }
+            }
+            return
         }
         _ = hostRouter.take()
         func saved(_ id: StoredHost.ID) -> StoredHost? { store.hosts.first { $0.id == id } }
@@ -727,6 +731,15 @@ struct ContentView: View {
         }
     }
     #endif
+
+    /// The key window on a Mac, a foreground-active scene elsewhere.
+    private var isFrontWindow: Bool {
+        #if os(macOS)
+        controlActiveState == .key
+        #else
+        scenePhase == .active
+        #endif
+    }
 
     /// What a link sees of this window's session.
     private var linkSession: DeepLinkRouter.SessionState {
