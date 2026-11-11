@@ -19,7 +19,7 @@ use skia_safe::{
     Point, RRect, Rect, TileMode, Typeface, Unichar,
 };
 use std::cell::{Cell, RefCell};
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 
 /// Anti-aliased fill. Skia's `Paint::new` defaults `fAntiAlias` off, so a
 /// bare constructor hard-steps every round-rect and glyph.
@@ -590,11 +590,16 @@ pub struct Fonts {
     semibold: Typeface,
     bold: Typeface,
     collection: FontCollection,
-    /// The host's own faces ([`build_fonts_with`]), tried before the system's.
+    /// The collection's asset manager, kept to register faces added later.
+    provider: TypefaceFontProvider,
+    /// The host's own faces ([`build_fonts_with`], [`Fonts::add_fallback`]), tried before
+    /// the system's.
     extra: Vec<Typeface>,
     /// A paragraph's families: Geist, then [`Self::extra`] under their aliases.
     families: Vec<String>,
     fallback: RefCell<Fallback>,
+    /// Chars no face had, since [`Fonts::take_missing`] last ran.
+    missing: RefCell<BTreeSet<char>>,
     /// Shaped paragraphs keyed by [`ParaKey`]. Position is not in the key (`paint`
     /// takes it) so a scrolling shelf reuses the same layout. `RefCell`: every draw
     /// path is `&self` and the shell is one render thread.
@@ -773,17 +778,14 @@ pub(crate) const TEST_FALLBACK: &[u8] = include_bytes!("../../../../assets/lucid
 
 fn build(fallback: &[&[u8]], system: FontMgr) -> Result<Fonts> {
     let mgr = FontMgr::new();
-    let load = |bytes: &[u8]| mgr.new_from_data(Data::new_copy(bytes), None);
     let geist = |bytes, which: &str| {
-        load(bytes).ok_or_else(|| anyhow!("embedded Geist face rejected: {which}"))
+        (mgr.new_from_data(Data::new_copy(bytes), None))
+            .ok_or_else(|| anyhow!("embedded Geist face rejected: {which}"))
     };
     let regular = geist(GEIST_REGULAR, "Regular")?;
     let medium = geist(GEIST_MEDIUM, "Medium")?;
     let semibold = geist(GEIST_SEMIBOLD, "SemiBold")?;
     let bold = geist(GEIST_BOLD, "Bold")?;
-    let extra = (fallback.iter().enumerate())
-        .map(|(i, bytes)| load(bytes).ok_or_else(|| anyhow!("fallback face rejected: {i}")))
-        .collect::<Result<Vec<_>>>()?;
 
     // Asset provider first: all four weights under one "Geist" alias so style matching
     // picks the face, the host's faces each under their own; system manager is fallback.
@@ -791,26 +793,25 @@ fn build(fallback: &[&[u8]], system: FontMgr) -> Result<Fonts> {
     for tf in [&regular, &medium, &semibold, &bold] {
         provider.register_typeface(tf.clone(), Some("Geist"));
     }
-    let mut families = vec!["Geist".to_owned()];
-    for (i, tf) in extra.iter().enumerate() {
-        families.push(format!("pf-fallback-{i}"));
-        provider.register_typeface(tf.clone(), Some(families[i + 1].as_str()));
-    }
     let mut collection = FontCollection::new();
-    collection.set_asset_font_manager(Some(provider.into()));
+    collection.set_asset_font_manager(Some(provider.clone().into()));
     collection.set_default_font_manager(system, None);
-    Ok(Fonts {
+    let mut fonts = Fonts {
         regular,
         medium,
         semibold,
         bold,
         collection,
-        extra,
-        families,
+        provider,
+        extra: Vec::new(),
+        families: vec!["Geist".to_owned()],
         fallback: RefCell::default(),
+        missing: RefCell::default(),
         paragraphs: RefCell::new(HashMap::new()),
         frame: Cell::new(0),
-    })
+    };
+    fonts.add_fallback(fallback)?;
+    Ok(fonts)
 }
 
 impl Fonts {
@@ -821,6 +822,37 @@ impl Fonts {
             W::SemiBold => &self.semibold,
             W::Bold => &self.bold,
         }
+    }
+
+    /// Register `faces` after the fallback faces already held; each blob is one face. What was
+    /// found or shaped without them is dropped, so the next draw uses them. On an error none
+    /// is added.
+    pub fn add_fallback(&mut self, faces: &[&[u8]]) -> Result<()> {
+        let mgr = FontMgr::new();
+        let loaded = (faces.iter().enumerate())
+            .map(|(i, bytes)| {
+                (mgr.new_from_data(Data::new_copy(bytes), None))
+                    .ok_or_else(|| anyhow!("fallback face rejected: {i}"))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        for tf in loaded {
+            let family = format!("pf-fallback-{}", self.extra.len());
+            (self.provider).register_typeface(tf.clone(), Some(family.as_str()));
+            self.families.push(family);
+            self.extra.push(tf);
+        }
+        *self.fallback.get_mut() = Fallback::default();
+        self.paragraphs.get_mut().clear();
+        self.collection.clear_caches();
+        Ok(())
+    }
+
+    /// The chars no face could draw since the last call, each once. A host that fetches faces
+    /// on demand reads this after a frame and hands the faces to [`Self::add_fallback`].
+    pub fn take_missing(&self) -> String {
+        std::mem::take(&mut *self.missing.borrow_mut())
+            .into_iter()
+            .collect()
     }
 
     /// Geist alone. Text goes through [`measure`](Self::measure) and [`draw`](Self::draw),
@@ -840,7 +872,7 @@ impl Fonts {
     }
 
     /// The face for `c`, which Geist lacks: the host's, else the system's for the UI language.
-    /// `None` when no face has it.
+    /// `None` when no face has it, and `c` joins [`Self::take_missing`].
     fn fallback(&self, c: char, w: W) -> Option<Typeface> {
         let lang = pf_l10n::language();
         let mut fb = self.fallback.borrow_mut();
@@ -869,8 +901,13 @@ impl Fonts {
                     None,
                 )
                 .filter(|f| has(f, c));
-            if let Some(f) = &face {
-                fb.pages.insert(page, f.clone());
+            match &face {
+                Some(f) => {
+                    fb.pages.insert(page, f.clone());
+                }
+                None => {
+                    self.missing.borrow_mut().insert(c);
+                }
             }
         }
         fb.chars.insert((c, w), face.clone());
@@ -985,7 +1022,8 @@ impl Fonts {
 
     /// Draw a cached paragraph and return its laid-out height. `at` is top-left and
     /// is not part of the key. With no canvas it only shapes, for a caller placing
-    /// a block by a title's height before drawing it.
+    /// a block by a title's height before drawing it. A shape no face completes adds its
+    /// chars to [`Self::take_missing`].
     #[allow(clippy::too_many_arguments)]
     fn draw_paragraph(
         &self,
@@ -1015,9 +1053,14 @@ impl Fonts {
             lang: pf_l10n::language(),
         };
         let mut cache = self.paragraphs.borrow_mut();
-        let entry = cache.entry(key).or_insert_with_key(|k| Cached {
-            para: shape(&self.collection, &self.families, k),
-            used: frame,
+        let entry = cache.entry(key).or_insert_with_key(|k| {
+            let mut para = shape(&self.collection, &self.families, k);
+            if para.unresolved_glyphs().is_some_and(|n| n > 0) {
+                let lost = para.unresolved_codepoints().into_iter();
+                (self.missing.borrow_mut())
+                    .extend(lost.filter_map(|u| char::from_u32(u32::try_from(u).ok()?)));
+            }
+            Cached { para, used: frame }
         });
         entry.used = frame;
         if let Some(canvas) = canvas {
@@ -1298,6 +1341,33 @@ mod tests {
         let ink = Color4f::new(1.0, 1.0, 1.0, 1.0);
         let drawn = fonts.draw(surface.canvas(), text, 0.0, 30.0, W::Regular, 16.0, ink);
         assert_eq!(drawn, latin + lucide);
+    }
+
+    /// A face added to live fonts draws, on both text paths, the char that drew as a box,
+    /// and the box was reported once.
+    #[test]
+    fn a_face_added_later_draws_what_was_missing() {
+        let text = "Play \u{e58a}";
+        let mut fonts = test_fonts(&[]);
+        let mut surface = skia_safe::surfaces::raster_n32_premul((300, 80)).unwrap();
+        let ink = Color4f::new(1.0, 1.0, 1.0, 1.0);
+        let mut boxes = |fonts: &Fonts| {
+            crate::textprobe::begin();
+            let c = surface.canvas();
+            fonts.draw(c, text, 0.0, 20.0, W::Regular, 16.0, ink);
+            fonts.title(c, text, W::Regular, 16.0, ink, 0.0, 30.0, 280.0);
+            (crate::textprobe::end().iter())
+                .map(|r| r.missing)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(boxes(&fonts), [true, true]);
+        assert_eq!(fonts.take_missing(), "\u{e58a}");
+        assert_eq!(fonts.take_missing(), "");
+        fonts.add_fallback(&[TEST_FALLBACK]).unwrap();
+        assert_eq!(boxes(&fonts), [false, false]);
+        assert_eq!(fonts.take_missing(), "");
+        assert!(fonts.add_fallback(&[b"not a font"]).is_err());
+        assert_eq!(fonts.extra.len(), 1);
     }
 
     /// A long line of chars Geist lacks ellipsizes inside its box: Lucide icons always, and
