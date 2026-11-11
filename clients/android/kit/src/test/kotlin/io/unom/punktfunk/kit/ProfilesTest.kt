@@ -47,6 +47,15 @@ class ProfilesTest {
     }
 
     @Test
+    fun firstLetterKeepsACharacterPastTheBmpWhole() {
+        assertEquals("D", firstLetter("desk"))
+        assertEquals("書", firstLetter("書斎"))
+        assertEquals("𠮷", firstLetter("𠮷野家"))
+        assertEquals("🖥", firstLetter("🖥️ pc"))
+        assertEquals("𠮷𠮷", initials("𠮷 𠮷x"))
+    }
+
+    @Test
     fun aKeptPickFollowsItsProfilesNewPictureAndSurvivesTheStore() {
         val old = ProfilePick("kid", "Kid", remember = true, avatar = "/kid?v=old")
         val rows = listOf(
