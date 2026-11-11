@@ -378,4 +378,9 @@
 			"rlig" 1,
 			"calt" 1;
 	}
+	/* Korean breaks at spaces, not between syllables. A long token still breaks. */
+	:lang(ko) {
+		word-break: keep-all;
+		overflow-wrap: anywhere;
+	}
 }
