@@ -298,8 +298,12 @@ struct HostDetailView: View {
                 paired ? L10n.appleHostcardPairAgainWithPin : L10n.hostcardPairWithPin,
                 systemImage: "number", action: a.pair)
             if paired {
+                // The rule the card's star reads: the sole paired host is the default unasked.
                 Toggle(L10n.hostcardDefaultHost, isOn: Binding(
-                    get: { defaultHostID.lowercased() == host.id.uuidString.lowercased() },
+                    get: {
+                        StartScreen.defaultHost(id: defaultHostID, hosts: store.hosts).host?.id
+                            == host.id
+                    },
                     set: { defaultHostID = $0 ? host.id.uuidString : "" }))
                 Button(L10n.hostcardForgetIdentity, role: .destructive) { confirmForget = true }
                     .tint(.red)
