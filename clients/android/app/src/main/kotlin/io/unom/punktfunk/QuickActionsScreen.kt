@@ -323,7 +323,7 @@ private fun PadSlider(
 }
 
 /** The ring's commands with nothing behind them: the editor shows, it never fires (§3.3). */
-private fun previewActionsIn(ctx: Context) = RingActions(
+internal fun previewActionsIn(ctx: Context) = RingActions(
     endStream = {}, disconnectLinger = {},
     touchMode = { TouchMode.TRACKPAD }, cycleTouchMode = {},
     keyboardGranted = { true }, keyboard = {},

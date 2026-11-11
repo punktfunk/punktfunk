@@ -11,6 +11,7 @@ import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.animateScrollBy
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Box
@@ -791,7 +792,7 @@ private fun confirmText(ctx: Context, slot: SlotId, label: String): String {
  * to the centre, A fires it (the centre opens the sheet), B closes.
  * In the sheet, Up/Down walk the rows and Left/Right adjust one.
  */
-private fun navigate(
+internal fun navigate(
     n: RingNav,
     state: RingState,
     rows: List<SheetRowSpec>,
@@ -1005,7 +1006,7 @@ internal fun KeycapDisc(keys: List<String>, size: androidx.compose.ui.unit.Dp = 
 }
 
 /** One row of the sheet as data, so a finger and a pad drive the same list. */
-private data class SheetRowSpec(
+internal data class SheetRowSpec(
     val header: String? = null,
     val label: String,
     val value: String = "",
@@ -1141,19 +1142,23 @@ private fun sheetRows(
     return rows
 }
 
-/** The sheet as a scrollable bottom panel; the pad's cursor row is tinted. The panel follows
- *  the cursor: a TV remote has no finger to drag the list, so a row the cursor reached off the
- *  panel would be unreachable. One item per row (header glued to its row) keeps item index ==
- *  row index, so the scroll can target the cursor directly. */
+/** The sheet as a scrollable bottom panel; the pad's cursor row is tinted. The scroll keeps the
+ *  cursor's row whole on the panel and moves the least, as a remote has no finger to drag it.
+ *  An item is a row with its header, so the item index is the row index. */
 @Composable
-private fun RingSheet(state: RingState, rows: List<SheetRowSpec>, haptics: ConsoleHaptics, modifier: Modifier) {
+internal fun RingSheet(state: RingState, rows: List<SheetRowSpec>, haptics: ConsoleHaptics, modifier: Modifier) {
     val list = rememberLazyListState()
     LaunchedEffect(state.sheetCursor, rows.size) {
         if (rows.isEmpty()) return@LaunchedEffect
         val i = state.sheetCursor.coerceIn(0, rows.lastIndex)
-        val info = list.layoutInfo.visibleItemsInfo.firstOrNull { it.index == i }
-        if (info == null || info.offset + info.size > list.layoutInfo.viewportEndOffset) {
-            list.animateScrollToItem(i)
+        val info = list.layoutInfo
+        val row = info.visibleItemsInfo.firstOrNull { it.index == i }
+        // A row stops above the bottom padding, so the next one stays laid out in it.
+        val past = row?.let { it.offset + it.size - (info.viewportEndOffset - info.afterContentPadding) } ?: 0
+        when {
+            row == null -> list.animateScrollToItem(i)
+            row.offset < 0 -> list.animateScrollBy(row.offset.toFloat())
+            past > 0 -> list.animateScrollBy(past.toFloat())
         }
     }
     LazyColumn(
