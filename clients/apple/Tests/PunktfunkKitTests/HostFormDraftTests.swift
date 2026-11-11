@@ -68,17 +68,26 @@ final class HostFormDraftTests: XCTestCase {
 
     private static let record = StoredHost(
         name: "Desk", address: "10.0.0.1", port: 9777, macAddresses: ["aa:bb:cc:dd:ee:ff"])
+    private static let loaded = HostFormDraft(record: record)
+
+    /// The record as the sweep and an advert leave it while a field has focus.
+    private static var moved: StoredHost {
+        var host = record
+        host.move(to: "10.0.0.9", port: 9800)
+        host.macAddresses = ["11:22:33:44:55:66"]
+        return host
+    }
 
     func testAFormLoadsARecordAsItShowsIt() {
         XCTAssertEqual(
-            HostFormDraft(record: Self.record),
+            Self.loaded,
             HostFormDraft(name: "Desk", address: "10.0.0.1", port: "9777", macs: "aa:bb:cc:dd:ee:ff"))
     }
 
-    func testASaveWritesEachField() {
+    func testASaveWritesEachChangedField() {
         var host = Self.record
         HostFormDraft(name: "Den", address: "10.0.0.2:5000", port: "9777", macs: "11-22-33-44-55-66")
-            .commit(to: &host)
+            .commit(to: &host, changedFrom: Self.loaded)
         XCTAssertEqual(host.name, "Den")
         XCTAssertEqual(host.address, "10.0.0.2")
         XCTAssertEqual(host.port, 5000)
@@ -88,19 +97,47 @@ final class HostFormDraftTests: XCTestCase {
     /// Name, address and port go in together or not at all.
     func testABadPortKeepsTheRecordsNameAddressAndPort() {
         var host = Self.record
-        HostFormDraft(name: "Den", address: "10.0.0.2", port: "99999", macs: "aa:bb:cc:dd:ee:ff")
-            .commit(to: &host)
+        var form = Self.loaded
+        form.name = "Den"
+        form.port = "99999"
+        form.commit(to: &host, changedFrom: Self.loaded)
         XCTAssertEqual(host, Self.record)
     }
 
     func testUnreadableMacsKeepTheRecordsAndABlankFieldClearsThem() {
         var host = Self.record
-        var form = HostFormDraft(record: host)
+        var form = Self.loaded
         form.macs = "not a mac"
-        form.commit(to: &host)
+        form.commit(to: &host, changedFrom: Self.loaded)
         XCTAssertEqual(host.wakeMacs, ["aa:bb:cc:dd:ee:ff"])
         form.macs = "  "
-        form.commit(to: &host)
+        form.commit(to: &host, changedFrom: Self.loaded)
         XCTAssertNil(host.macAddresses)
+    }
+
+    /// R4-4: the record moved under untouched fields, and a save writes nothing back.
+    func testASaveWithNothingChangedKeepsWhatTheRecordMovedTo() {
+        var host = Self.moved
+        Self.loaded.commit(to: &host, changedFrom: Self.loaded)
+        XCTAssertEqual(host, Self.moved)
+    }
+
+    /// R4-4: each field the player changed goes in; the rest keep what the record moved to.
+    func testEachChangedFieldGoesInAlone() {
+        let edits: [(WritableKeyPath<HostFormDraft, String>, String, (inout StoredHost) -> Void)] = [
+            (\.name, "Den", { $0.name = "Den" }),
+            (\.address, "10.0.0.7", { $0.address = "10.0.0.7" }),
+            (\.port, "5000", { $0.port = 5000 }),
+            (\.macs, "22-33-44-55-66-77", { $0.macAddresses = ["22:33:44:55:66:77"] }),
+        ]
+        for (field, typed, expect) in edits {
+            var form = Self.loaded
+            form[keyPath: field] = typed
+            var host = Self.moved
+            form.commit(to: &host, changedFrom: Self.loaded)
+            var want = Self.moved
+            expect(&want)
+            XCTAssertEqual(host, want, "\(typed)")
+        }
     }
 }

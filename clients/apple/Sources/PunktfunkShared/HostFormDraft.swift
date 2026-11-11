@@ -77,10 +77,18 @@ public struct HostFormDraft: Equatable, Sendable {
         host.port = resolvedPort ?? Self.defaultPort
     }
 
-    /// A host page's save: name, address and port together when the draft can save, the MACs
-    /// when they parse or the field is blank. What the rules refuse keeps the record's value.
-    public func commit(to host: inout StoredHost) {
-        if canSave { apply(to: &host) }
+    /// A host page's save over `host`, which can move while the form is open (a sweep
+    /// re-addresses it, an advert teaches it a MAC). Only a field that differs from `loaded`, the
+    /// form as it last loaded the record, is written. Name, address and port go in together when
+    /// the result can save, the MACs when they parse or the field is blank. What the rules
+    /// refuse keeps the record's value.
+    public func commit(to host: inout StoredHost, changedFrom loaded: HostFormDraft) {
+        var merged = HostFormDraft(record: host)
+        if name != loaded.name { merged.name = name }
+        if address != loaded.address { merged.address = address }
+        if port != loaded.port { merged.port = port }
+        if merged != HostFormDraft(record: host), merged.canSave { merged.apply(to: &host) }
+        guard macs != loaded.macs else { return }
         let parsed = Self.parseMacs(macs)
         if parsed != nil || macs.allSatisfy(\.isWhitespace) { host.macAddresses = parsed }
     }

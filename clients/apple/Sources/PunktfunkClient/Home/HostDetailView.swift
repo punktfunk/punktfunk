@@ -368,6 +368,8 @@ private struct HostConnectionFields: View {
     let host: StoredHost
     let onSave: (StoredHost) -> Void
     @State private var form: HostFormDraft
+    /// The form as it last loaded the record: a field still equal to it is one the player left.
+    @State private var loaded: HostFormDraft
     #if os(tvOS)
     @State private var editing: Field?
     #else
@@ -405,6 +407,7 @@ private struct HostConnectionFields: View {
         self.host = host
         self.onSave = onSave
         _form = State(initialValue: HostFormDraft(record: host))
+        _loaded = State(initialValue: HostFormDraft(record: host))
     }
 
     var body: some View {
@@ -468,16 +471,17 @@ private struct HostConnectionFields: View {
     }
     #endif
 
-    /// Writes what the rules take (`HostFormDraft.commit`), then shows the record as saved: a
-    /// pasted `address:port` split, the MACs normalised.
+    /// Writes the fields the player changed (`HostFormDraft.commit`), then shows the record as
+    /// saved: a pasted `address:port` split, the MACs normalised.
     private func save() {
         var updated = host
-        form.commit(to: &updated)
+        form.commit(to: &updated, changedFrom: loaded)
         if updated != host { onSave(updated) }
         load(updated)
     }
 
     private func load(_ saved: StoredHost) {
         form = HostFormDraft(record: saved)
+        loaded = form
     }
 }
