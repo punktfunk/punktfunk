@@ -551,11 +551,11 @@ struct MicNoticeBadge: View {
 #if os(iOS) || os(visionOS)
 /// Device display geometry the overlay needs but UIKit doesn't expose publicly.
 enum DeviceMetrics {
-    /// The physical display's corner radius. There's no public API for it, so read the private
-    /// `_displayCornerRadius` via KVC on the active window scene's screen, guarded by a fallback that
-    /// approximates a modern rounded device — a future OS that hides the key just yields a slightly
-    /// less-perfect inset, never a crash. The key is assembled from parts so it isn't a plain literal
-    /// in the binary; note the App Store private-API consideration regardless.
+    /// The physical display's corner radius, read from the screen's private
+    /// `_displayCornerRadius` by KVC: there is no public API. KVC raises on a key the object
+    /// lacks, so the read is behind `responds(to:)`, and a screen without it gets 44, close to
+    /// a modern rounded device. The key is assembled from parts so it is no plain literal in
+    /// the binary; it is private API all the same.
     static var displayCornerRadius: CGFloat {
         #if os(visionOS)
         return 46 // every visionOS window's corner radius
@@ -565,6 +565,7 @@ enum DeviceMetrics {
             let screen = UIApplication.shared.connectedScenes
                 .compactMap({ $0 as? UIWindowScene })
                 .first?.screen,
+            screen.responds(to: NSSelectorFromString(key)),
             let radius = screen.value(forKey: key) as? NSNumber,
             radius.doubleValue > 0
         else { return 44 }
