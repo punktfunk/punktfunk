@@ -1,6 +1,6 @@
 # pacman scriptlet for the seat supervisor. Nothing here enables the daemon: the console turns
 # seats on. The host's post-install makes its directories and punktfunk-restart.hook restarts it.
 pre_remove() {
-  # door-helper enables the door's units, so removal disables them.
-  systemctl disable --now punktfunk-web-door.service punktfunk-door.service punktfunk-seats.service 2>/dev/null || true
+  # A removal, not an upgrade: the door goes off for its owner, or its units are disabled.
+  /usr/libexec/punktfunk/door-remove || true
 }
