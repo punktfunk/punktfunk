@@ -13,6 +13,19 @@ export type Patch = { [K in keyof Fields]?: NonNullable<Fields[K]> | null };
 
 export const RESOLUTIONS = [2160, 1440, 1080, 720] as const;
 export const REFRESH_RATES = [144, 120, 90, 60, 30] as const;
+/** What the host takes for a custom value: `MIN_LINES`… in `game_overrides.rs`. */
+export const LINES_RANGE = [360, 4320] as const;
+export const HZ_RANGE = [24, 240] as const;
+
+/** A typed custom value as a whole number clamped to `range`; null when it isn't a number. */
+export function wholeIn(
+	raw: string,
+	[min, max]: readonly [number, number],
+): number | null {
+	const n = Math.round(Number(raw));
+	if (raw.trim() === "" || !Number.isFinite(n)) return null;
+	return Math.min(max, Math.max(min, n));
+}
 
 /** `2160` reads `4K`; any other height is its `p` name. */
 export const linesLabel = (lines: number): string =>

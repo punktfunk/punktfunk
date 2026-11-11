@@ -136,6 +136,8 @@ override or **New shared override…**. A change saves right away, even on a tit
 A value you set wins over the device's own pick, within what the device can show. The resolution
 stays within what it decodes, and at or below its screen unless **Also on smaller screens** is
 ticked. The refresh rate stays at or below the screen's; HDR **On** reaches only an HDR screen.
+**Custom…** under **Resolution** takes any height from 360 to 4320 lines, and under **Refresh
+rate** any rate from 24 to 240 Hz.
 The width follows the screen's shape: a 16:10 laptop under **1080p** streams 1728×1080.
 
 ### Shared overrides
