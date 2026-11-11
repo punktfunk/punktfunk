@@ -270,8 +270,8 @@ final class LibraryShelfTests: XCTestCase {
         }
     }
 
-    /// R5-7, as it stands: End Game from the sheet presents at once.
-    func testEndGameDoesNotWaitForTheDetailsSheet() {
-        XCTAssertFalse(LibraryShelf.Act.endGame.waitsForDetailsToClose)
+    /// R5-7: End Game's confirmation presents once the sheet is gone, as Play's session does.
+    func testEndGameWaitsForTheDetailsSheetToClose() {
+        XCTAssertTrue(LibraryShelf.Act.endGame.waitsForDetailsToClose)
     }
 }

@@ -744,11 +744,7 @@ struct LibraryView: View {
         return TitleDetailSheet(
             game: game, artLoader: artLoader, playLabel: play?.label(nil) ?? "",
             isFavorite: heart.map { $0 == .unfavorite }, onToggleFavorite: pressed(heart) ?? {},
-            onPlay: pressed(play), onCopyLink: pressed(.copyLink),
-            onEndGame: acts.contains(.endGame) ? {
-                detailGame = nil
-                endingGame = game
-            } : nil,
+            onPlay: pressed(play), onCopyLink: pressed(.copyLink), onEndGame: pressed(.endGame),
             host: host)
             #if os(iOS) || os(visionOS)
             .presentationDetents([.medium, .large])

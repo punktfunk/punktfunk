@@ -147,11 +147,11 @@ public enum LibraryShelf {
         /// The host runs a launch of this device's, so this device may end it.
         case endGame
 
-        /// Pressed on the details sheet, the act runs once the sheet is down, so the session it
-        /// starts never presents over a sheet that is still leaving.
+        /// Pressed on the details sheet, the act runs once the sheet is down: what it presents,
+        /// a session or End Game's confirmation, is lost over a sheet that is still leaving.
         public var waitsForDetailsToClose: Bool {
             switch self {
-            case .play, .resume, .desktop: true
+            case .play, .resume, .desktop, .endGame: true
             default: false
             }
         }
