@@ -450,10 +450,6 @@ impl State {
         }
     }
 
-    pub(crate) fn account(&self) -> &str {
-        &self.account
-    }
-
     pub(crate) fn status(&self) -> &RuntimeStatus {
         &self.status
     }

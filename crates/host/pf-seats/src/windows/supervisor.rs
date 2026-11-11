@@ -42,6 +42,7 @@ pub(super) struct Supervisor {
 }
 
 struct Runtime {
+    seat: Seat,
     state: Mutex<State>,
     changed: Condvar,
     join: Mutex<Option<JoinHandle<()>>>,
@@ -54,9 +55,10 @@ pub(super) struct RuntimeSnapshot {
 }
 
 impl Runtime {
-    fn new(account: String) -> Self {
+    fn new(seat: &Seat) -> Self {
         Self {
-            state: Mutex::new(State::new(account)),
+            seat: seat.clone(),
+            state: Mutex::new(State::new(seat.account.clone())),
             changed: Condvar::new(),
             join: Mutex::new(None),
         }
@@ -134,7 +136,7 @@ impl Supervisor {
         let _ = self.accounts.credential_for_start(seat)?;
         // No runtime of ours holds this seat, so a session left on its account is an orphan of
         // a supervisor that died. Its host would still hold the seat's ports.
-        wts::logoff_account_if_present(&seat.account)?;
+        logoff_owned(&self.accounts, seat)?;
         ensure_ports_free(seat)?;
 
         let runtime = {
@@ -142,7 +144,7 @@ impl Supervisor {
                 .runtimes
                 .lock()
                 .unwrap_or_else(|poison| poison.into_inner());
-            let runtime = Arc::new(Runtime::new(seat.account.clone()));
+            let runtime = Arc::new(Runtime::new(seat));
             runtimes.insert(key.clone(), runtime.clone());
             runtime
         };
@@ -199,8 +201,7 @@ impl Supervisor {
         }
     }
 
-    /// Ends `seat`'s runtime, then logs its account's sessions off unless `logoff` is false:
-    /// the name holds a stranger's account, whose sessions stay.
+    /// Ends `seat`'s runtime, then logs its account's sessions off unless `logoff` is false.
     pub(super) fn stop(&self, seat: &Seat, logoff: bool) -> WinResult<RuntimeStatus> {
         let key = seat.id.to_string();
         let runtime = self
@@ -211,7 +212,7 @@ impl Supervisor {
             .cloned();
         let Some(runtime) = runtime else {
             if logoff {
-                self.logoff_owned(seat)?;
+                logoff_owned(&self.accounts, seat)?;
             }
             return Ok(RuntimeStatus::stopped());
         };
@@ -242,7 +243,7 @@ impl Supervisor {
             let _ = worker.join();
         }
         if logoff {
-            wts::logoff_account_if_present(&seat.account)?;
+            logoff_owned(&self.accounts, seat)?;
         }
         let mut runtimes = self
             .runtimes
@@ -262,13 +263,6 @@ impl Supervisor {
         Ok(RuntimeStatus::stopped())
     }
 
-    /// Logs off `seat`'s account for a caller that holds no runtime of it, so nothing here
-    /// proved the account is the seat's. A stranger's account of that name keeps its sessions.
-    fn logoff_owned(&self, seat: &Seat) -> WinResult<usize> {
-        self.accounts.ensure_owned_or_absent(seat)?;
-        wts::logoff_account_if_present(&seat.account)
-    }
-
     /// Logs off what a service that died left in `seat`'s account: a child that broke away from
     /// the job outlives it, in a disconnected session. The first look at a seat this process
     /// doesn't run does it, and the service's ledger lock keeps a start from overlapping it.
@@ -276,7 +270,7 @@ impl Supervisor {
         if !self.claim_sweep(seat) {
             return;
         }
-        match self.logoff_owned(seat) {
+        match logoff_owned(&self.accounts, seat) {
             Ok(0) => {}
             Ok(sessions) => {
                 tracing::info!(seat = %seat.id, sessions, "leftover seat session logged off");
@@ -335,9 +329,8 @@ impl Supervisor {
                     .unwrap_or_else(|poison| poison.into_inner());
                 state = next;
             }
-            let account = state.account().to_owned();
             drop(state);
-            let _ = wts::logoff_account_if_present(&account);
+            let _ = logoff_owned(&self.accounts, &runtime.seat);
             if runtime.lock().finished()
                 && let Some(worker) = runtime
                     .join
@@ -359,6 +352,13 @@ impl Supervisor {
             super::steam::restore_registration();
         }
     }
+}
+
+/// Logs off `seat`'s account's sessions, and counts them. Every logoff goes through here: a
+/// stranger's account of the seat's name keeps its sessions.
+fn logoff_owned(accounts: &AccountManager, seat: &Seat) -> WinResult<usize> {
+    accounts.ensure_owned_or_absent(seat)?;
+    wts::logoff_account_if_present(&seat.account)
 }
 
 /// One seat's loop: probe what the state names, step, perform what it answers.
@@ -681,8 +681,7 @@ impl Rig {
 
     /// End the cycle in this order: the host and the gate, the keeper and its job, then
     /// the account's session. A session child ends when its handle drops. The session is found
-    /// by account: Windows reuses the id this cycle recorded. An adopted name that now holds a
-    /// new account keeps that account's sessions.
+    /// by account: Windows reuses the id this cycle recorded.
     fn end_cycle(&mut self) {
         self.host = None;
         if let (Some(gate), Some(launch)) = (self.gate.take(), &self.launch) {
@@ -692,10 +691,7 @@ impl Rig {
         self.launch = None;
         self.keeper = None;
         self.session = None;
-        if self.accounts.name_reassigned(&self.seat) {
-            return;
-        }
-        if let Err(error) = wts::logoff_account_if_present(&self.seat.account) {
+        if let Err(error) = logoff_owned(&self.accounts, &self.seat) {
             tracing::warn!(seat = %self.seat.id, %error, "seat session not logged off");
         }
     }
@@ -799,8 +795,8 @@ mod tests {
         }
     }
 
-    /// A stop with no runtime logs off only an account that is the seat's or is not there.
-    /// It needs LocalSystem to make an account, so it runs nowhere else.
+    /// A stop logs off only an account that is the seat's or is not there, whether a runtime
+    /// ended first or none ran. It needs LocalSystem to make an account, so it runs nowhere else.
     #[test]
     fn a_stop_leaves_a_strangers_account_alone() {
         if !util::is_local_system().unwrap_or(false) {
@@ -811,7 +807,16 @@ mod tests {
         let supervisor = supervisor(temp.path());
         let name = format!("pfs{}", std::process::id());
         let _stranger = Stranger::add(&name);
-        let refused = supervisor.stop(&seat(&name), true).unwrap_err();
+        let stranger = seat(&name);
+        let refused = supervisor.stop(&stranger, true).unwrap_err();
+        assert_eq!(refused.code, "account_not_owned");
+        let ended = Arc::new(Runtime::new(&stranger));
+        ended.step(Observation::Stop);
+        ended.step(Observation::Probe(Probe::default()));
+        assert!(ended.lock().finished());
+        let key = stranger.id.to_string();
+        supervisor.runtimes.lock().unwrap().insert(key, ended);
+        let refused = supervisor.stop(&stranger, true).unwrap_err();
         assert_eq!(refused.code, "account_not_owned");
         assert!(supervisor.stop(&seat("pfs-absent"), true).is_ok());
     }
@@ -826,7 +831,7 @@ mod tests {
         assert!(!supervisor.claim_sweep(&idle));
 
         let running = seat("pfs-running");
-        let runtime = Arc::new(Runtime::new(running.account.clone()));
+        let runtime = Arc::new(Runtime::new(&running));
         let key = running.id.to_string();
         supervisor
             .runtimes
