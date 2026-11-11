@@ -1,5 +1,8 @@
 package io.unom.punktfunk.console
 
+import android.content.Context
+import android.icu.util.ULocale
+import android.view.inputmethod.InputMethodManager
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
@@ -30,6 +33,22 @@ import androidx.compose.ui.text.input.TextFieldValue
 import io.unom.punktfunk.kit.R
 import io.unom.punktfunk.kit.asciiDigits
 import org.json.JSONObject
+
+/**
+ * Whether the console's tray, which types Latin letters, cannot write the player's language: the
+ * keyboard's language or the system's first is written in another script. Empty is no signal.
+ */
+internal fun needsSystemKeyboard(imeTag: String, systemTag: String): Boolean =
+    listOf(imeTag, systemTag).any { tag ->
+        tag.isNotEmpty() && ULocale.addLikelySubtags(ULocale.forLanguageTag(tag)).script.let { it.isNotEmpty() && it != "Latn" }
+    }
+
+/** The current keyboard's language as a BCP-47 tag; empty when it names none. */
+internal fun imeLanguageTag(context: Context): String {
+    val subtype = context.getSystemService(InputMethodManager::class.java)?.currentInputMethodSubtype ?: return ""
+    @Suppress("DEPRECATION")
+    return subtype.languageTag.ifEmpty { subtype.locale.replace('_', '-') }
+}
 
 /** A console field the system keyboard types into: the bridge's `edit_text`. */
 internal data class SystemEntry(val label: String, val text: String, val digits: Boolean) {

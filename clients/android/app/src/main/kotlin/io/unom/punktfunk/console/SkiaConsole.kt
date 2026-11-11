@@ -218,9 +218,12 @@ object SkiaConsole {
             // The same MediaCodec answer the Hello advertises by: without a real AV1
             // decoder the codec row marks AV1 unsupported instead of offering a dead pick.
             .put("av1_ok", VideoDecoders.decodableCodecBits() and 4 != 0)
-            // The system IME types into every field but a password: composition, candidates,
-            // dictation and a TV remote's keyboard live there ([SystemEntryDialog]).
-            .put("system_keyboard", true)
+            // A player whose language the tray cannot type gets the system IME for every field
+            // but a password: composition, candidates and dictation live there.
+            .put(
+                "system_keyboard",
+                needsSystemKeyboard(imeLanguageTag(app), io.unom.punktfunk.languageTags(app).firstOrNull().orEmpty()),
+            )
             // Answers `FetchProfiles`, so a connect checks the box's profiles first.
             .put("profiles", true)
             // Takes each launch's password out of the console (`nativeConsoleTakeUnlock`) and
