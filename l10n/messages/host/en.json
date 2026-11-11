@@ -303,6 +303,7 @@
 	"apierr_worker_switch_stopped": "The switch stopped responding.",
 	"apierr_worker_windows_accounts_stopped": "The Windows accounts stopped responding.",
 	"close_display_asleep": "The host's screen is asleep and couldn't be woken. Wake it, then connect again.",
+	"close_join_needs_hdr": "Couldn't join the shared screen — it's in HDR, and this device isn't streaming in HDR. Turn on HDR in this app's settings, or ask whoever connected first to turn it off.",
 	"close_monitor_missing": "The host is set to stream “{monitor}”, which isn't connected. Pick another screen in its web console, under Displays.",
 	"close_monitor_none": "The host is set to capture a monitor called \"{monitor}\", and reports no monitors at all. Clear that in the host's display settings to stream a virtual display instead.",
 	"close_niri_no_outputs": "The host's niri can't create a display for this stream. Its owner can install biri; the web console shows how.",

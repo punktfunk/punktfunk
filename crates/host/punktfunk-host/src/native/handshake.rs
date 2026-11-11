@@ -600,7 +600,8 @@ struct Terms {
 }
 
 /// `ClientHello` → `ServerHello` → `Ready`. Borrows the control streams; the caller keeps them
-/// for mid-stream renegotiation.
+/// for mid-stream renegotiation. A joiner that can't stream the owner's HDR display is refused
+/// before `ServerHello`.
 pub(super) async fn negotiate(
     n: Negotiation<'_>,
     send: &mut super::link::CtlSend,
@@ -648,6 +649,7 @@ pub(super) async fn negotiate(
     );
 
     let studio_asked = crate::session_plan::StudioAsk::of(&n.first.features);
+    let owner_hdr = joined.as_ref().map(|(d, _)| d.hdr);
     let (bit_depth, session_hdr, chroma) = negotiate_video_format(
         FormatFacts::of(
             &hello,
@@ -655,12 +657,23 @@ pub(super) async fn negotiate(
             compositor,
             gamescope_route.as_ref(),
             &n.knobs,
+            owner_hdr,
         ),
         codec,
         encoder.clone(),
         hello.mode,
     )
     .await?;
+    if owner_hdr.is_some_and(|o| crate::vdisplay::admission::joined_hdr(o, session_hdr).is_none()) {
+        // Out of the table first, as `admit_mode`'s refusal.
+        drop(reservation);
+        let said = super::Said::new(
+            "close_join_needs_hdr",
+            crate::vdisplay::admission::JOIN_NEEDS_HDR,
+        );
+        n.conn.refuse_said(REJECT_BUSY_CODE, &said).await;
+        anyhow::bail!("join refused: the shared display is HDR and this session can't be");
+    }
 
     // After depth + chroma: PyroWave Automatic is a ~bpp pin that scales with both, at the
     // client's quality when it sent one.
@@ -1407,6 +1420,8 @@ pub(super) struct FormatFacts {
     pub(super) sdr10_widen: bool,
     /// The colours the client asked to get at studio range.
     pub(super) studio_asked: crate::session_plan::StudioAsk,
+    /// A joiner's: whether the owner's display shows HDR.
+    pub(super) owner_hdr: Option<bool>,
 }
 
 impl FormatFacts {
@@ -1416,6 +1431,7 @@ impl FormatFacts {
         compositor: Option<crate::vdisplay::Compositor>,
         gamescope_route: Option<&crate::vdisplay::GamescopeRoute>,
         knobs: &SessionKnobs,
+        owner_hdr: Option<bool>,
     ) -> FormatFacts {
         FormatFacts {
             video_caps: hello.video_caps,
@@ -1423,13 +1439,14 @@ impl FormatFacts {
             gamescope_route: gamescope_route.cloned(),
             sdr10_widen: knobs.sdr10_widen,
             studio_asked,
+            owner_hdr,
         }
     }
 
     /// Bit depth, HDR verdict, and chroma for `codec` at `mode`, each gated by host, client,
-    /// codec, source, and `encoder`, the session's resolution. `mode` is the one the pipeline
-    /// opens at: the Hello's at the handshake, the live one on a codec change. Blocks on its
-    /// probes.
+    /// codec, source, and `encoder`, the session's resolution. A joiner asks HDR only of an HDR
+    /// display. `mode` is the one the pipeline opens at: the Hello's at the handshake, the live
+    /// one on a codec change. Blocks on its probes.
     pub(super) fn resolve(
         &self,
         codec: crate::encode::Codec,
@@ -1443,7 +1460,7 @@ impl FormatFacts {
         let client_supports_10bit = self.video_caps & punktfunk_core::quic::VIDEO_CAP_10BIT != 0;
         // `VIDEO_CAP_HDR` is BT.2020 PQ. `VIDEO_CAP_10BIT` alone is 10-bit SDR (Main10, display
         // untouched).
-        let client_wants_hdr = self.video_caps & punktfunk_core::quic::VIDEO_CAP_HDR != 0;
+        let client_wants_hdr = hdr_asked(self.video_caps, self.owner_hdr);
         // Source-aware: Linux HDR depends on the compositor just resolved. Gamescope and direct
         // capture fold in `hdr_capture_failed(VirtualOutput)`; GameStream's rtsp.rs check has no
         // twin here: that latch is per-source and this gate already used this session's source.
@@ -1455,7 +1472,9 @@ impl FormatFacts {
         // needs the opt-in. Either way the backend must write the 10 bits. Linux non-PyroWave 4:4:4
         // SDR is clamped to 8-bit below.
         let sdr10_widen = self.sdr10_widen;
-        let sdr10_source = crate::capture::capturer_delivers_sdr10_for(compositor, gamescope_route);
+        // A Windows joiner captures through WGC, which reads an SDR display at 8 bits.
+        let sdr10_source = crate::capture::capturer_delivers_sdr10_for(compositor, gamescope_route)
+            && !(cfg!(windows) && self.owner_hdr.is_some());
         let sdr10_chain_ok = (sdr10_widen || sdr10_source)
             && codec_carries_sdr10(codec, sdr10_source)
             && encoder.carries_sdr10(codec);
@@ -1569,6 +1588,11 @@ impl FormatFacts {
 
         (bit_depth, session_hdr, chroma)
     }
+}
+
+/// HDR the client asks for: `VIDEO_CAP_HDR`, except a joiner of an SDR display (`owner_hdr`).
+fn hdr_asked(video_caps: u8, owner_hdr: Option<bool>) -> bool {
+    video_caps & punktfunk_core::quic::VIDEO_CAP_HDR != 0 && owner_hdr != Some(false)
 }
 
 /// [`FormatFacts::resolve`] off the runtime: its probes may open a tiny encoder.
@@ -1792,6 +1816,29 @@ mod tests {
             Some((VideoFit::Fit, (1366, 768)))
         );
         assert_eq!(reframe_to(crop, None, None), None);
+    }
+
+    /// A joiner's colour is the owner display's: an SDR display asks no HDR of an HDR client,
+    /// an HDR one keeps an HDR client's ask, and a client that can't ask HDR of it is refused.
+    /// The verdict stands in for a GPU and capture that allow whatever is asked.
+    #[test]
+    fn a_joiner_takes_the_owners_colour_or_is_refused() {
+        use crate::vdisplay::admission::joined_hdr;
+        use punktfunk_core::quic::{VIDEO_CAP_10BIT, VIDEO_CAP_HDR};
+        let hdr_client = VIDEO_CAP_10BIT | VIDEO_CAP_HDR;
+        let join = |caps, owner| joined_hdr(owner, hdr_asked(caps, Some(owner)));
+        assert_eq!(
+            join(hdr_client, false),
+            Some(false),
+            "SDR display, HDR client"
+        );
+        assert_eq!(
+            join(hdr_client, true),
+            Some(true),
+            "HDR display, HDR client"
+        );
+        assert_eq!(join(VIDEO_CAP_10BIT, true), None, "HDR display, SDR client");
+        assert!(hdr_asked(hdr_client, None), "not a joiner: its own ask");
     }
 
     /// The host lowers what a client asked for and never raises it: it knows no panel, so a

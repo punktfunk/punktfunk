@@ -2045,6 +2045,7 @@ fn display_half(
         compositor,
         gamescope_route.as_ref(),
         &knobs,
+        joined.as_ref().map(|(d, _)| d.hdr),
     );
     let reframe_to = handshake::reframe_to(hello.video_fit, handshake::joined_view(&joined), view);
     // Read back from Welcome, not recomputed (would re-probe and could drift).

@@ -603,8 +603,9 @@ impl StreamState {
         None
     }
 
-    /// Swap the build in, then the plan's epilogue: the display request it commits to, the
-    /// input route, the rate, the further screens, the mode and who hears it, the gap.
+    /// Swap the build in, then the plan's epilogue: the display request it commits to and the
+    /// colour later joiners read off it, the input route, the rate, the further screens, the
+    /// mode and who hears it, the gap.
     fn commit(
         &mut self,
         plan: &RebuildPlan,
@@ -626,6 +627,7 @@ impl StreamState {
         }
         // The request every later display of this session starts from.
         if let Some(params) = prep.params {
+            crate::vdisplay::admission::publish_hdr(self.facts.life.stop_flag(), params.hdr);
             self.display.vd_params = params;
         }
         if e.input {

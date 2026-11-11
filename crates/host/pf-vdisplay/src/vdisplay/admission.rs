@@ -5,8 +5,8 @@
 //! mid-build failure:
 //!
 //! * `separate` — fresh display at the requested mode (Linux default).
-//! * `join` — admit onto the live display: its mode, compositor and route
-//!   (Welcome carries the real mode).
+//! * `join` — admit onto the live display: its mode, compositor, route and colour
+//!   (Welcome carries the real mode). A joiner that can't take an HDR display is refused.
 //! * `steal` — signal victim stop flags, wait for their release ([`all_gone`]), then serve.
 //! * `reject` — handshake error naming the live mode and client.
 //!
@@ -30,6 +30,19 @@ pub struct LiveDisplay {
     /// `node.name` of the sink this session captures, published once its capturer is open.
     /// A joiner on the shared path taps it instead of claiming a second default sink.
     pub audio_sink: Arc<Mutex<Option<String>>>,
+    /// The display shows HDR. Its owner republishes it on a codec change ([`publish_hdr`]).
+    pub hdr: bool,
+}
+
+/// What a joiner refused by [`joined_hdr`] reads.
+pub const JOIN_NEEDS_HDR: &str = "Couldn't join the shared screen — it's in HDR, and this device \
+     isn't streaming in HDR. Turn on HDR in this app's settings, or ask whoever connected first \
+     to turn it off.";
+
+/// The colour a joiner streams the owner's display at: the owner's. `None` when that display
+/// is HDR and the joiner can't carry HDR: its capture would read PQ as SDR, so it is refused.
+pub fn joined_hdr(owner_hdr: bool, joiner_can_hdr: bool) -> Option<bool> {
+    (!owner_hdr || joiner_can_hdr).then_some(owner_hdr)
 }
 
 #[derive(Clone)]
@@ -297,6 +310,16 @@ pub fn register(
     reservation.register(mode, label, display, resume_id)
 }
 
+/// The colour the display of the session holding `stop` now shows, for the next joiner.
+pub fn publish_hdr(stop: &Arc<AtomicBool>, hdr: bool) {
+    let mut live = table().lock().unwrap();
+    for s in live.iter_mut().filter(|s| Arc::ptr_eq(&s.stop, stop)) {
+        if let Some(d) = s.display.as_mut() {
+            d.hdr = hdr;
+        }
+    }
+}
+
 /// Is this identity streaming right now? Asked before the host pre-warms that seat: a live
 /// session already owns its planes, and a second compositor under the same id fights for them.
 pub fn has_live_session(identity: [u8; 32]) -> bool {
@@ -494,6 +517,42 @@ mod tests {
         // The joiner takes the owner's display, not only its mode.
         assert_eq!(display.compositor, Some(crate::Compositor::Gamescope));
         assert_eq!(display.route, Some(crate::GamescopeRoute::Spawn));
+    }
+
+    /// A joiner streams at the owner's colour: SDR under an SDR display whatever it could
+    /// carry, HDR under an HDR one, and nothing when it can't carry that HDR.
+    #[test]
+    fn a_joiner_follows_the_owners_colour() {
+        assert_eq!(joined_hdr(false, true), Some(false));
+        assert_eq!(joined_hdr(false, false), Some(false));
+        assert_eq!(joined_hdr(true, true), Some(true));
+        assert_eq!(joined_hdr(true, false), None);
+    }
+
+    /// An owner's codec change reaches the next joiner through its row.
+    #[test]
+    fn a_published_colour_reaches_the_next_join() {
+        let stop = Arc::new(AtomicBool::new(false));
+        let display = LiveDisplay {
+            hdr: true,
+            ..LiveDisplay::default()
+        };
+        let _guard = register(
+            Some([0xED; 32]),
+            MODE,
+            stop.clone(),
+            "hdr".into(),
+            display,
+            None,
+        );
+        let row_hdr = || {
+            let live = table().lock().unwrap();
+            let row = live.iter().find(|s| Arc::ptr_eq(&s.stop, &stop)).cloned();
+            row.and_then(|s| s.display).map(|d| d.hdr)
+        };
+        assert_eq!(row_hdr(), Some(true));
+        publish_hdr(&stop, false);
+        assert_eq!(row_hdr(), Some(false));
     }
 
     #[test]

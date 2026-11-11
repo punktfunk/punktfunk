@@ -450,6 +450,7 @@ pub(super) mod tests {
                     gamescope_route: None,
                     sdr10_widen: false,
                     studio_asked: crate::session_plan::StudioAsk::default(),
+                    owner_hdr: None,
                 },
             },
             next: now,

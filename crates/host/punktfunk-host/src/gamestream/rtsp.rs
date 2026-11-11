@@ -251,7 +251,17 @@ fn handle_request(req: &Request, state: &Arc<AppState>, peer: Option<SocketAddr>
                 return response_status("400 Bad Request", &req.cseq, &[], None);
             }
             match stream_config(&map, super::apps::by_id(ls.appid).as_ref()) {
-                Some(cfg) => {
+                Some(mut cfg) => {
+                    let owner_hdr = (state.gs.joined.lock().unwrap_or_else(|e| e.into_inner()))
+                        .as_ref()
+                        .map(|(_, d)| d.hdr);
+                    if !follow_joined_hdr(&mut cfg, &map, owner_hdr) {
+                        tracing::warn!(
+                            "RTSP ANNOUNCE — refused: the shared display is HDR and this stream \
+                             can't be"
+                        );
+                        return response_status("406 Not Acceptable", &req.cseq, &[], None);
+                    }
                     tracing::info!(?cfg, "RTSP ANNOUNCE — negotiated stream config");
                     *state.gs.stream.lock().unwrap_or_else(|e| e.into_inner()) = Some(cfg);
                 }
@@ -800,6 +810,31 @@ fn stream_config(
     })
 }
 
+/// A launch that joined a native session streams at the owner display's colour (`owner_hdr`),
+/// not its app's. `false` = that display is HDR and this client asked for no HDR or negotiated
+/// a codec without 10 bits.
+fn follow_joined_hdr(
+    cfg: &mut StreamConfig,
+    map: &HashMap<String, String>,
+    owner_hdr: Option<bool>,
+) -> bool {
+    let Some(owner) = owner_hdr else {
+        return true;
+    };
+    let asked = map
+        .get("x-nv-video[0].dynamicRangeMode")
+        .and_then(|s| s.trim().parse::<u32>().ok())
+        .is_some_and(|m| m != 0);
+    let can = owner && asked && cfg.encoder.can_encode_10bit(cfg.codec);
+    match crate::vdisplay::admission::joined_hdr(owner, can) {
+        Some(hdr) => {
+            cfg.hdr = hdr;
+            true
+        }
+        None => false,
+    }
+}
+
 /// Why a PyroWave ANNOUNCE (`bitStreamFormat=3`) cannot be served, or `None`. The driver
 /// emits record-framed AUs only, so a client must parse record framing; length-prefixed
 /// clients and the retired compression/Hybrid transports are refused. The client's decoder
@@ -1088,6 +1123,30 @@ mod tests {
         }
         let unset = stream_config(&announce(&[]), None).unwrap().studio_asked;
         assert_eq!(unset, StudioAsk::default());
+    }
+
+    /// A joined launch takes the owner display's colour: SDR under an SDR display whatever it
+    /// asked, refused under an HDR one it asked no HDR of, and never SDR under an HDR one.
+    #[test]
+    fn a_joined_announce_follows_the_owners_colour() {
+        let asked = announce(&[
+            ("x-nv-video[0].dynamicRangeMode", "1"),
+            ("x-nv-vqos[0].bitStreamFormat", "1"),
+        ]);
+        let mut cfg = stream_config(&asked, None).unwrap();
+        cfg.hdr = true;
+        assert!(follow_joined_hdr(&mut cfg, &asked, Some(false)));
+        assert!(!cfg.hdr, "SDR display");
+        let unasked = announce(&[]);
+        let mut cfg = stream_config(&unasked, None).unwrap();
+        assert!(!follow_joined_hdr(&mut cfg, &unasked, Some(true)));
+        let mut cfg = stream_config(&asked, None).unwrap();
+        let served = follow_joined_hdr(&mut cfg, &asked, Some(true));
+        assert_eq!(served, cfg.hdr, "an HDR display streams HDR or not at all");
+        let mut own = stream_config(&asked, None).unwrap();
+        let before = own.hdr;
+        assert!(follow_joined_hdr(&mut own, &asked, None));
+        assert_eq!(own.hdr, before, "not a join: its own verdict");
     }
 
     #[test]

@@ -371,7 +371,7 @@ pub(super) fn spawn_planes(
 
 /// Mode-conflict admission: the handshake's reservation goes live at the Welcome's mode. Later
 /// clients see this identity, mode and stop (and may `steal`), and a joiner finds the display,
-/// its route, the planes and the sink `audio_sink` names.
+/// its route and colour, the planes and the sink `audio_sink` names.
 fn register_live(
     scope: &SessionScope,
     n: &super::handshake::Negotiated,
@@ -396,6 +396,7 @@ fn register_live(
             route: n.gamescope_route.clone(),
             isolation: scope.planes().isolation.clone(),
             audio_sink: audio_sink.clone(),
+            hdr: n.welcome.color.is_hdr(),
         },
         Some(conn.v2_session().session_id),
     ))
