@@ -297,14 +297,12 @@ struct ConnectFlow {
 
     /// Resolve the stream mode + input prefs and hand off to the session model. The gamepad-type
     /// setting resolves NOW (Automatic → match the active physical controller): the host's virtual
-    /// pad backend is fixed per session. `requestAccess` opens the no-PIN delegated-approval
-    /// connect (host parks it until the operator approves). Only the first dial carries the
-    /// profile's unlock; the waker's redial goes without it.
+    /// pad backend is fixed per session. Only the first dial carries the profile's unlock; the
+    /// waker's redial goes without it.
     private func startSession(
         _ host: StoredHost, launchID: String? = nil,
         preset: PresetSelection = .inherit,
-        allowTofu: Bool, requestAccess: Bool = false, approvalReq: ApprovalRequest? = nil,
-        fromLibrary: Bool = false, profile: ProfileDial = ProfileDial()
+        allowTofu: Bool, fromLibrary: Bool = false, profile: ProfileDial = ProfileDial()
     ) {
         var redial = profile
         redial.unlock = nil
@@ -314,7 +312,6 @@ struct ConnectFlow {
             startSessionDirect(
                 store.hosts.first { $0.id == host.id } ?? host,
                 launchID: launchID, preset: preset, allowTofu: allowTofu,
-                requestAccess: requestAccess, approvalReq: approvalReq,
                 fromLibrary: fromLibrary, profile: redial)
         }
         // A host the probe calls down still gets the dial first: a routed host (VPN, another
@@ -324,8 +321,7 @@ struct ConnectFlow {
             discovery.start() // so the wake-wait can pick up a host that moved address
             startSessionDirect(
                 host, launchID: launchID, preset: preset, allowTofu: allowTofu,
-                requestAccess: requestAccess, approvalReq: approvalReq, fromLibrary: fromLibrary,
-                profile: profile,
+                fromLibrary: fromLibrary, profile: profile,
                 onUnreachable: {
                     waker.start(
                         host: host, connectsAfter: true, macs: host.wakeMacs, lastIP: host.address,
@@ -336,8 +332,7 @@ struct ConnectFlow {
             startSessionDirect(
                 store.hosts.first { $0.id == host.id } ?? host,
                 launchID: launchID, preset: preset, allowTofu: allowTofu,
-                requestAccess: requestAccess, approvalReq: approvalReq, fromLibrary: fromLibrary,
-                profile: profile)
+                fromLibrary: fromLibrary, profile: profile)
         }
     }
 
@@ -349,15 +344,12 @@ struct ConnectFlow {
     private func startSessionDirect(
         _ host: StoredHost, launchID: String? = nil,
         preset: PresetSelection = .inherit,
-        allowTofu: Bool, requestAccess: Bool = false, approvalReq: ApprovalRequest? = nil,
-        fromLibrary: Bool = false, profile: ProfileDial = ProfileDial(), redialed: Bool = false,
+        allowTofu: Bool, fromLibrary: Bool = false, profile: ProfileDial = ProfileDial(),
+        redialed: Bool = false,
         onUnreachable: (@MainActor () -> Void)? = nil
     ) {
         let profileID = profile.id
         prepareWake(for: host)
-        // The delegated-approval wait prompt only makes sense once we're actually dialing — set it
-        // here (after any wake), not before, so it never stacks under the "Waking…" overlay.
-        if let approvalReq { awaitingApproval = approvalReq }
         launchOverrides(host, launchID) { overrides in
             // THE resolution point (design §4.4): the globals plus this connect's preset, once,
             // here, then the host's overrides for the game. The model latches the result for the
@@ -384,7 +376,6 @@ struct ConnectFlow {
                 shelf: launchID != nil || fromLibrary
                     ? LibraryTarget(host: host, preset: preset) : nil,
                 allowTofu: allowTofu,
-                requestAccess: requestAccess,
                 autoWake: autoWake,
                 onProfileUnknown: {
                     // One re-dial when the list still has the profile: a seat host refused a stale
@@ -410,7 +401,6 @@ struct ConnectFlow {
                             startSessionDirect(
                                 store.hosts.first { $0.id == host.id } ?? host,
                                 launchID: launchID, preset: preset, allowTofu: allowTofu,
-                                requestAccess: requestAccess, approvalReq: approvalReq,
                                 fromLibrary: fromLibrary, profile: next, redialed: true,
                                 onUnreachable: onUnreachable)
                         }
