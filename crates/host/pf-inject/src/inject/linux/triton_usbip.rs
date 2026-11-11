@@ -844,6 +844,7 @@ impl TritonUsbip {
             kind: UsbKind::SteamController2,
             index,
             slot: 0,
+            seat: 0,
             identity: identity_for(index).map(|i| i.blob()).unwrap_or_default(),
         };
         let attach = attach_device(hello, None, &format!("virtual Steam Controller 2 {index}"))?;
@@ -871,6 +872,7 @@ impl TritonUsbip {
             kind: UsbKind::SteamController2Puck,
             index,
             slot: slot as u8,
+            seat: 0,
             identity: identity.map(|i| i.blob()).unwrap_or_default(),
         };
         let attach = attach_device(

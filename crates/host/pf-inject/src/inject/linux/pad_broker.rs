@@ -157,6 +157,30 @@ pub fn seat_phys(account: &str, rest: &str) -> String {
     format!("punktfunk-seat:{account}/{rest}")
 }
 
+/// The seat a PlayStation pad's MAC carries ([`pf_driver_proto::gamepad::mark_ps_seat`]): 16
+/// bits of the seat's random id, never 0. The id is fixed for the seat's life, so its pads keep
+/// their MACs across restarts.
+pub fn ps_seat(seat_id: &str) -> u16 {
+    let bits = seat_id
+        .get(..4)
+        .and_then(|hex| u16::from_str_radix(hex, 16).ok());
+    bits.unwrap_or(0).max(1)
+}
+
+/// The seat this host's PlayStation pads carry: [`ps_seat`] on a contract seat, 0 on the box's
+/// own host and the owner's row, whose pads keep the box's MACs.
+pub fn own_ps_seat() -> u16 {
+    let id = pf_paths::seat::seat_id().ok().flatten();
+    ps_seat_for(pf_paths::seat::role(), id.as_deref())
+}
+
+fn ps_seat_for(role: pf_paths::seat::HostRole, seat_id: Option<&str>) -> u16 {
+    match seat_id {
+        Some(id) if role.follows_contract() => ps_seat(id),
+        _ => 0,
+    }
+}
+
 const MAGIC: [u8; 4] = *b"PFPD";
 const VERSION: u8 = 2;
 const OP_CREATE: u8 = 1;
@@ -843,6 +867,25 @@ mod tests {
             seat_phys("pf-seat-1", ds.phys.trim_start_matches("punktfunk/")),
             "punktfunk-seat:pf-seat-1/dualsense/2"
         );
+    }
+
+    /// Only a contract seat marks its PlayStation pads; the box's own host and the owner's row
+    /// keep today's MACs. A seat's mark is its id's, so a restart keeps it.
+    #[test]
+    fn only_a_contract_seat_marks_its_playstation_pads() {
+        use pf_paths::seat::{HostRole, SeatRole};
+        let id = "beef0123456789abcdef0123456789ab";
+        for role in HostRole::ALL {
+            let want = if role == HostRole::Seat(SeatRole::Contract) {
+                0xBEEF
+            } else {
+                0
+            };
+            assert_eq!(ps_seat_for(role, Some(id)), want, "{role:?}");
+            assert_eq!(ps_seat_for(role, None), 0, "{role:?} without an id");
+        }
+        assert_eq!(ps_seat("0000ffff"), 1, "never the box's own");
+        assert_ne!(ps_seat(id), ps_seat("1234abcd"));
     }
 
     /// A stored pad's name carries what a restarted supervisor needs to relay it again.

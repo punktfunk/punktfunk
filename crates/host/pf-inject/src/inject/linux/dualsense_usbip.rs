@@ -21,6 +21,7 @@ use super::dualsense_proto::{
 use super::usbip::{attach_device, boxed, ep, hid_class_descriptor, UsbipAttachment};
 use super::usbip_relay::{one_report, Hello, Output, Outputs, Served, UsbKind};
 use anyhow::Result;
+use pf_driver_proto::gamepad::mark_ps_seat;
 use std::any::Any;
 use std::sync::mpsc::{sync_channel, Receiver};
 use std::sync::{Arc, Mutex};
@@ -274,12 +275,14 @@ impl UsbInterfaceHandler for MicStreamHandler {
 
 /// Interface 3 HID. Same codec as [`super::dualsense::DualSensePad`]: input `0x01`,
 /// output `0x02`, feature `0x05`/`0x09`/`0x20` (`hid-playstation` init; without them no
-/// input devices appear). Every output goes to the pad as written.
+/// input devices appear). Every output goes to the pad as written. The `0x09` MAC is pad
+/// `pad`'s, marked with `seat` ([`mark_ps_seat`]).
 #[derive(Debug)]
 struct HidHandler {
     report: Arc<Mutex<[u8; DS_INPUT_REPORT_LEN]>>,
     out: Outputs,
     pad: u8,
+    seat: u16,
     current_alt: u8,
 }
 
@@ -304,7 +307,8 @@ impl UsbInterfaceHandler for HidHandler {
                 (0x81, 0x06) if (setup.value >> 8) == 0x22 => DUALSENSE_RDESC.to_vec(),
                 // HID GET_REPORT(Feature): wValue low byte is the report id.
                 (0xA1, 0x01) => {
-                    let pairing = ds_pairing_reply(DEVTYPE_DUALSENSE, self.pad);
+                    let mut pairing = ds_pairing_reply(DEVTYPE_DUALSENSE, self.pad);
+                    mark_ps_seat(&mut pairing, self.seat);
                     match setup.value as u8 {
                         0x05 => DS_FEATURE_CALIBRATION.to_vec(),
                         0x09 => pairing.to_vec(),
@@ -361,10 +365,12 @@ fn feedback(pad: u8, outputs: Vec<Output>) -> DsFeedback {
     merged
 }
 
-/// Assemble the 4-interface composite. `index` is the wire pad; it does not appear in
-/// descriptors (no `iSerialNumber`; `hid-playstation` takes identity from feature `0x09`).
+/// Assemble the 4-interface composite. `index` is the wire pad and `seat` its MAC's seat; neither
+/// appears in descriptors (no `iSerialNumber`; `hid-playstation` takes identity from feature
+/// `0x09`).
 fn build_device(
     index: u8,
+    seat: u16,
     report: &Arc<Mutex<[u8; DS_INPUT_REPORT_LEN]>>,
     out: Outputs,
 ) -> UsbDevice {
@@ -452,16 +458,17 @@ fn build_device(
                 report: report.clone(),
                 out,
                 pad: index,
+                seat,
                 current_alt: 0,
             }),
         )
 }
 
 /// The server's half: the device, and the pad's report `0x01` into interface 3 only.
-pub(crate) fn served(index: u8, out: Outputs) -> Served {
+pub(crate) fn served(index: u8, seat: u16, out: Outputs) -> Served {
     let report = Arc::new(Mutex::new([0u8; DS_INPUT_REPORT_LEN]));
     Served {
-        device: build_device(index, &report, out),
+        device: build_device(index, seat, &report, out),
         input: one_report(report, HID, Some(INPUT_REPORT_ID)),
     }
 }
@@ -489,6 +496,7 @@ impl DualSenseUsbip {
             kind: UsbKind::DualSense,
             index,
             slot: 0,
+            seat: crate::pad_broker::own_ps_seat(),
             identity: Vec::new(),
         };
         let attach = attach_device(hello, Some(tx), &format!("virtual DualSense {index}"))?;
@@ -821,7 +829,8 @@ mod tests {
     }
 
     /// `hid-playstation` publishes no input device until feature `0x05`/`0x09`/`0x20`
-    /// answer; `0x09` MAC must differ per pad or SDL/Steam merge them.
+    /// answer; `0x09` MAC must differ per pad or SDL/Steam merge them, and per seat or
+    /// `hid-playstation` refuses the second. The box's own pad 0 keeps today's MAC.
     #[test]
     fn hid_feature_reports_answer_and_the_mac_is_per_pad() {
         let feature = |h: &mut HidHandler, id: u8| {
@@ -846,18 +855,25 @@ mod tests {
             )
             .expect("feature")
         };
-        let mk = |pad| HidHandler {
+        let mk = |pad, seat| HidHandler {
             report: Arc::new(Mutex::new([0u8; DS_INPUT_REPORT_LEN])),
             out: test_relay().0,
             pad,
+            seat,
             current_alt: 0,
         };
-        let (mut a, mut b) = (mk(0), mk(1));
+        let (mut a, mut b, mut seated) = (mk(0, 0), mk(1, 0), mk(0, 0xBEEF));
         assert_eq!(feature(&mut a, 0x05), DS_FEATURE_CALIBRATION.to_vec());
         assert_eq!(feature(&mut a, 0x20), DS_FEATURE_FIRMWARE.to_vec());
         let (m0, m1) = (feature(&mut a, 0x09), feature(&mut b, 0x09));
-        assert_eq!(m0[0], 0x09, "reply keeps its report id");
+        assert_eq!(
+            m0,
+            crate::dualsense_proto::DS_FEATURE_PAIRING,
+            "the box's own pad 0"
+        );
         assert_ne!(m0[1..7], m1[1..7], "per-pad MAC must differ");
+        let seat0 = feature(&mut seated, 0x09);
+        assert_ne!(m0[1..7], seat0[1..7], "a seat's pad 0 is not the box's");
     }
 
     #[test]
@@ -867,6 +883,7 @@ mod tests {
             report: Arc::new(Mutex::new([0u8; DS_INPUT_REPORT_LEN])),
             out,
             pad: 0,
+            seat: 0,
             current_alt: 0,
         };
         // Report 0x02 with the compatible-vibration flag and both motors set.
@@ -899,6 +916,7 @@ mod tests {
             report: report.clone(),
             out: test_relay().0,
             pad: 0,
+            seat: 0,
             current_alt: 0,
         };
         let mut r = [0u8; DS_INPUT_REPORT_LEN];
@@ -927,7 +945,7 @@ mod tests {
     /// A seat's vhci port binds only listed devices.
     #[test]
     fn the_dualsense_is_a_listed_device() {
-        let dev = served(0, test_relay().0).device;
+        let dev = served(0, 0, test_relay().0).device;
         assert!(crate::usbip::EMULATED.contains(&(dev.vendor_id, dev.product_id)));
     }
 

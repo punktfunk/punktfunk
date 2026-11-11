@@ -269,6 +269,7 @@ impl SteamUsbip {
             kind,
             index,
             slot: 0,
+            seat: 0,
             identity: identity.map(|i| i.blob()).unwrap_or_default(),
         };
         let attach = attach_device(hello, None, &format!("virtual {label} {index}"))?;

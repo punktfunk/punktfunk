@@ -311,6 +311,7 @@ mod tests {
                 kind,
                 index: 0,
                 slot: 0,
+                seat: 0,
                 identity: Vec::new(),
             };
             let dev = served(&hello, Outputs::new(&relay).unwrap())
