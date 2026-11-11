@@ -503,6 +503,7 @@ struct ContentView: View {
         }
         .onDisappear { // window closed mid-session or mid-wake (Cmd+N spawns more)
             waker.cancel() // its onOnline would dial for a window that is gone
+            flowLife.close() // and so would the connect flow's deferred work
             model.disconnect()
         }
         // Expose the session to the Scene-level Stream menu (Disconnect ⌃⌥⇧D works even when

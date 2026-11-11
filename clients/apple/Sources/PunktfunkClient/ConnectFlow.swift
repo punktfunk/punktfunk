@@ -41,8 +41,12 @@ struct ConnectFlow {
     /// What this window's flow keeps between taps, since a `ConnectFlow` lives for one use.
     @MainActor
     final class Life {
+        /// False once the window closed: work begun before then never dials for its model.
+        private(set) var isOpen = true
         /// A tap's profile fetch is running: another tap does nothing until it answers.
         var fetching = false
+
+        func close() { isOpen = false }
     }
 
     /// Which profile a connect plays as.
@@ -82,7 +86,7 @@ struct ConnectFlow {
         preset: PresetSelection = .inherit, allowTofu: Bool? = nil,
         fromLibrary: Bool = false, profile: ProfileChoice = .ask(), fromLink: Bool = false
     ) {
-        guard !life.fetching else { return }
+        guard life.isOpen, !life.fetching else { return }
         let door = ConnectPlan.door(
             pinned: host.pinnedSHA256 != nil, allowTofu: allowTofu,
             advertsTofu: discovery.hosts.contains { host.matches($0) && $0.allowsTofu },
@@ -135,6 +139,7 @@ struct ConnectFlow {
         Task { @MainActor in
             let answer = await ProfileFetch.list(host, within: ProfileFetch.wait)
             life.fetching = false
+            guard life.isOpen else { return }
             let rows = answer.rows
             let unlocked: @MainActor (String?) -> Void = { id in
                 guard let row = rows?.first(where: { $0.id == id }) else {
@@ -291,8 +296,8 @@ struct ConnectFlow {
             while !Task.isCancelled {
                 try? await Task.sleep(nanoseconds: 2_000_000_000)
                 let answer = await ProfileFetch.list(host, within: ProfileFetch.wait)
-                // The sheet closed meanwhile: that is Cancel.
-                guard !Task.isCancelled, seatWait === wait else { return }
+                // The sheet or its window closed meanwhile: that is Cancel.
+                guard !Task.isCancelled, seatWait === wait, life.isOpen else { return }
                 switch ConnectPlan.seatStep(rows: answer.rows, failed: answer.failed, id: first.id) {
                 case .dial:
                     seatWait = nil
@@ -364,6 +369,7 @@ struct ConnectFlow {
         let profileID = profile.id
         learnAdvert(of: host)
         launchOverrides(host, launchID) { overrides in
+            guard life.isOpen else { return }
             // THE resolution point (design §4.4): the globals plus this connect's preset, once,
             // here, then the host's overrides for the game. The model latches the result for the
             // whole session, so nothing downstream can apply a preset to half of it.
@@ -399,6 +405,7 @@ struct ConnectFlow {
                     }
                     Task { @MainActor in
                         let answer = await ProfileFetch.list(host, within: ProfileFetch.wait)
+                        guard life.isOpen else { return }
                         guard case .listed(let rows?) = answer,
                               rows.contains(where: { $0.id == profileID }) else {
                             store.setProfile(host.id, nil)
