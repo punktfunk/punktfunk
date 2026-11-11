@@ -218,8 +218,8 @@ pub(super) fn resize_tick(
         &mut st.resize_pending,
         st.resize_sent_at,
         st.resize_requested,
-        (m.width, m.height),
-        pixel_size,
+        ((m.width, m.height), st.params.view),
+        (pixel_size, view),
     ) {
         ResizeAction::Wait => {}
         ResizeAction::Settled(target) => {
@@ -230,7 +230,7 @@ pub(super) fn resize_tick(
                 let (lw, lh) = window.size();
                 persist(lw, lh);
             }
-            let Some((w, h)) = target else { return };
+            let Some(((w, h), view)) = target else { return };
             tracing::info!(w, h, ?view, "window resized — requesting mode switch");
             let mode = Mode {
                 width: w,
@@ -242,7 +242,7 @@ pub(super) fn resize_tick(
             }
             // A redial asks for the connector's mode; the view rides beside it.
             st.params.view = view;
-            st.resize_requested = Some((w, h));
+            st.resize_requested = Some(((w, h), view));
             st.resize_sent_at = Some(Instant::now());
             // Scrim + spinner until a frame at this size lands: the live drag stays
             // sharp; only the host's rebuild gap is covered.
@@ -251,26 +251,30 @@ pub(super) fn resize_tick(
     }
 }
 
+/// A mode ask's size and the view it is shown at (`None` = the mode itself).
+pub(super) type SizeAsk = ((u32, u32), Option<(u32, u32)>);
+
 /// What one [`resize_decision`] tick decided.
 #[derive(Debug, PartialEq, Eq)]
 pub(super) enum ResizeAction {
     /// Nothing to do yet — the pending stamp is kept so a later tick retries.
     Wait,
-    /// Debounce settled (caller persists the window size). `None` when the size needs no
-    /// switch (equal to the streamed mode, or this exact size was already requested).
-    Settled(Option<(u32, u32)>),
+    /// Debounce settled (caller persists the window size). `None` when the ask needs no
+    /// switch (equal to the streamed mode and view, or this exact ask was already sent).
+    Settled(Option<SizeAsk>),
 }
 
 /// Debounce to resize-end, ≥ 1 s between requests, physical pixels even-floored and
-/// clamped ≥ 320×200, skip when equal to the streamed mode, each distinct size at most
-/// once (covers rejected sizes and host-side rollbacks).
+/// clamped ≥ 320×200, skip when the mode and view are what streams, each distinct ask at
+/// most once (covers rejected sizes and host-side rollbacks). A clamped mode still moves
+/// its view.
 pub(super) fn resize_decision(
     now: Instant,
     pending: &mut Option<Instant>,
     sent_at: Option<Instant>,
-    requested: Option<(u32, u32)>,
-    current: (u32, u32),
-    pixel_size: (u32, u32),
+    requested: Option<SizeAsk>,
+    current: SizeAsk,
+    (pixel_size, view): SizeAsk,
 ) -> ResizeAction {
     const DEBOUNCE: Duration = Duration::from_millis(400);
     const SPACING: Duration = Duration::from_secs(1);
@@ -284,7 +288,10 @@ pub(super) fn resize_decision(
         return ResizeAction::Wait; // keep the pending stamp — a later tick retries
     }
     *pending = None;
-    let target = ((pixel_size.0 & !1).max(320), (pixel_size.1 & !1).max(200));
+    let target = (
+        ((pixel_size.0 & !1).max(320), (pixel_size.1 & !1).max(200)),
+        view,
+    );
     if current == target || requested == Some(target) {
         return ResizeAction::Settled(None);
     }
@@ -1088,10 +1095,11 @@ mod tests {
     fn resize_decision_follows_the_d2_discipline() {
         let t0 = Instant::now();
         let ms = Duration::from_millis;
+        let at = |w, h| ((w, h), None);
 
         let mut pending = None;
         assert_eq!(
-            resize_decision(t0, &mut pending, None, None, (1280, 720), (1000, 600)),
+            resize_decision(t0, &mut pending, None, None, at(1280, 720), at(1000, 600)),
             ResizeAction::Wait
         );
 
@@ -1103,8 +1111,8 @@ mod tests {
                 &mut pending,
                 None,
                 None,
-                (1280, 720),
-                (1000, 600)
+                ((1280, 720), None),
+                ((1000, 600), None)
             ),
             ResizeAction::Wait
         );
@@ -1117,10 +1125,10 @@ mod tests {
                 &mut pending,
                 None,
                 None,
-                (1280, 720),
-                (1001, 601)
+                ((1280, 720), None),
+                ((1001, 601), None)
             ),
-            ResizeAction::Settled(Some((1000, 600))),
+            ResizeAction::Settled(Some(((1000, 600), None))),
             "odd pixels floor to even"
         );
         assert!(pending.is_none(), "pending consumed");
@@ -1133,9 +1141,9 @@ mod tests {
                 t0 + ms(900),
                 &mut pending,
                 Some(t0),
-                Some((1000, 600)),
-                (1280, 720),
-                (800, 500)
+                Some(((1000, 600), None)),
+                ((1280, 720), None),
+                ((800, 500), None)
             ),
             ResizeAction::Wait
         );
@@ -1145,11 +1153,11 @@ mod tests {
                 t0 + ms(1000),
                 &mut pending,
                 Some(t0),
-                Some((1000, 600)),
-                (1280, 720),
-                (800, 500)
+                Some(((1000, 600), None)),
+                ((1280, 720), None),
+                ((800, 500), None)
             ),
-            ResizeAction::Settled(Some((800, 500)))
+            ResizeAction::Settled(Some(((800, 500), None)))
         );
 
         // Equal to the streamed mode → settle (persist) but no request.
@@ -1160,8 +1168,8 @@ mod tests {
                 &mut pending,
                 None,
                 None,
-                (1280, 720),
-                (1280, 720)
+                ((1280, 720), None),
+                ((1280, 720), None)
             ),
             ResizeAction::Settled(None)
         );
@@ -1174,9 +1182,9 @@ mod tests {
                 t0 + ms(400),
                 &mut pending,
                 None,
-                Some((1000, 600)),
-                (1280, 720),
-                (1000, 600)
+                Some(((1000, 600), None)),
+                ((1280, 720), None),
+                ((1000, 600), None)
             ),
             ResizeAction::Settled(None)
         );
@@ -1189,10 +1197,25 @@ mod tests {
                 &mut pending,
                 None,
                 None,
-                (1280, 720),
-                (100, 80)
+                ((1280, 720), None),
+                ((100, 80), None)
             ),
-            ResizeAction::Settled(Some((320, 200)))
+            ResizeAction::Settled(Some(((320, 200), None)))
+        );
+
+        // A clamped mode with a new view is an ask of its own.
+        let mut pending = Some(t0);
+        let viewed = ((1280, 720), Some((960, 540)));
+        assert_eq!(
+            resize_decision(
+                t0 + ms(400),
+                &mut pending,
+                None,
+                None,
+                at(1280, 720),
+                viewed
+            ),
+            ResizeAction::Settled(Some(viewed))
         );
     }
 

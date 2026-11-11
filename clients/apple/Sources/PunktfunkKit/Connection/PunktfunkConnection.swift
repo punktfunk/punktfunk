@@ -399,6 +399,8 @@ public final class PunktfunkConnection: @unchecked Sendable {
     public let settings: EffectiveSettings
     /// The caller opens a window per screen: the session may show more than one picture.
     public let showsScreens: Bool
+    /// The view the connect asked for beside its mode; nil shows the mode itself.
+    public let connectView: (width: UInt32, height: UInt32)?
 
     /// Negotiated session mode (host-confirmed).
     public private(set) var width: UInt32 = 0
@@ -1178,6 +1180,7 @@ public final class PunktfunkConnection: @unchecked Sendable {
         defer { unlock?.secret.wipe() }
         self.settings = settings
         self.showsScreens = showsScreens
+        self.connectView = view
         _ = Self.abiVersionGate // version-equality guard — fail loudly before the first C call
         if let pin = pinSHA256, pin.count != 32 { throw PunktfunkClientError.invalidPin }
         if unlock != nil, pinSHA256 == nil { throw PunktfunkClientError.invalidPin }

@@ -10,10 +10,10 @@
 //
 // The trigger discipline is the shared cross-client one (mirrors the session binary's
 // `resize_decision`): physical pixels rounded DOWN to even (the host rejects odd dimensions) and
-// clamped ≥ 320×200; debounce to resize-end; ≥ 1 s between requests; skip a size equal to the live
-// mode; and request each distinct size at most once — which both stops re-asking a rejected size
-// and keeps a host-side rollback (accepted, rebuild failed, corrective ack restored the old mode)
-// from looping request → rollback → request.
+// clamped ≥ 320×200; debounce to resize-end; ≥ 1 s between requests; skip a size and view equal to
+// the live ones; and request each distinct one at most once — which both stops re-asking a rejected
+// size and keeps a host-side rollback (accepted, rebuild failed, corrective ack restored the old
+// mode) from looping request → rollback → request. A clamped mode still moves its view.
 
 import Foundation
 import PunktfunkShared
@@ -32,16 +32,31 @@ public enum MatchWindow {
     }
 
     /// Whether to request `target` now (the debounce has already settled; spacing is the caller's
-    /// timer): `nil` to skip — equal to the live mode, or already requested once (a rejected size /
-    /// a host rollback must not loop). `target` is expected already-[normalize]d.
+    /// timer): `nil` to skip — equal to the live mode and view, or already requested once (a
+    /// rejected size / a host rollback must not loop). `target` is expected already-[normalize]d.
     public static func request(
-        target: (width: UInt32, height: UInt32),
-        current: (width: UInt32, height: UInt32),
-        lastRequested: (width: UInt32, height: UInt32)?
-    ) -> (width: UInt32, height: UInt32)? {
-        if target.width == current.width, target.height == current.height { return nil }
-        if let lr = lastRequested, lr.width == target.width, lr.height == target.height { return nil }
+        target: Ask, current: Ask, lastRequested: Ask?
+    ) -> Ask? {
+        if target == current || target == lastRequested { return nil }
         return target
+    }
+
+    /// A mode ask: its size and the view it is shown at, `0×0` for the mode itself.
+    public struct Ask: Equatable, Sendable {
+        public var width: UInt32
+        public var height: UInt32
+        public var viewWidth: UInt32 = 0
+        public var viewHeight: UInt32 = 0
+
+        public init(
+            _ size: (width: UInt32, height: UInt32),
+            view: (width: UInt32, height: UInt32)? = nil
+        ) {
+            width = size.width
+            height = size.height
+            viewWidth = view?.width ?? 0
+            viewHeight = view?.height ?? 0
+        }
     }
 }
 
@@ -67,7 +82,9 @@ public final class MatchWindowFollower {
 
     private var work: DispatchWorkItem?
     private var pendingSize: (width: Int, height: Int)?
-    private var lastRequested: (width: UInt32, height: UInt32)?
+    private var lastRequested: MatchWindow.Ask?
+    /// The view the host scales the live mode to, as this side last asked it.
+    private var liveView: (width: UInt32, height: UInt32)?
     private var lastRequestAt: Date?
     /// The last size we reported via [`onResizeTarget`] — dedups the per-layout stream of a drag so
     /// the UI is notified once per distinct target, and reset to `nil` when the window is back in
@@ -97,6 +114,7 @@ public final class MatchWindowFollower {
         minSpacing: TimeInterval = 1.0
     ) {
         self.connection = connection
+        self.liveView = connection.connectView
         self.enabled = enabled
         self.renderScale = RenderScale.sanitize(renderScale)
         self.maxDimension = maxDimension
@@ -180,18 +198,20 @@ public final class MatchWindowFollower {
             return
         }
         let target = targetMode(widthPx: size.width, heightPx: size.height)
+        let view = targetView(widthPx: size.width, heightPx: size.height)
         let mode = connection.currentMode()
         pendingSize = nil
         guard let req = MatchWindow.request(
-            target: target,
-            current: (mode.width, mode.height),
+            target: MatchWindow.Ask(target, view: view),
+            current: MatchWindow.Ask((mode.width, mode.height), view: liveView),
             lastRequested: lastRequested
         ) else { return }
         // Match window follows size. The rate rides along only where the screen sets it.
         connection.requestMode(
             width: req.width, height: req.height, refreshHz: refreshHz?() ?? mode.refreshHz,
-            view: targetView(widthPx: size.width, heightPx: size.height))
+            view: view)
         lastRequested = req
+        liveView = view
         lastRequestAt = Date()
     }
 }

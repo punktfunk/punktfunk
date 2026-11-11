@@ -450,9 +450,9 @@ struct StreamState {
     /// When the last `Reconfigure` was sent — ≥ 1 s between requests. The accept ack
     /// round-trips in milliseconds, so this also keeps at most ~one request outstanding.
     resize_sent_at: Option<Instant>,
-    /// Last size actually requested. Each distinct size at most once: a rejected size
-    /// is not re-asked until it changes, and a host-side rollback cannot loop forever.
-    resize_requested: Option<(u32, u32)>,
+    /// Last size and view actually requested. Each distinct ask at most once: a rejected
+    /// one is not re-asked until it changes, and a host-side rollback cannot loop forever.
+    resize_requested: Option<stream::SizeAsk>,
     /// Connector mode last shown in the HUD/title — a change refreshes both.
     shown_mode: Option<Mode>,
     /// The picture size and refresh the window title names.
