@@ -36,8 +36,9 @@ final class RingState: ObservableObject {
     /// The label under the ring: a slot's name, why it is unavailable, or "tap again".
     @Published var hint: String?
     @Published var lastTouch = Date()
-    /// The mode the Welcome carried, captured at first open — the Resolution row's first chip.
-    var native: (w: UInt32, h: UInt32, hz: UInt32)?
+    /// The mode this session's Welcome carried, set as it starts streaming: the Resolution row's
+    /// Native. Nil in the editor, which takes the live mode.
+    var native: RingNav.Mode?
     /// The wire pad whose `Select+A` opened the ring; `nil` for any other open.
     var opener: UInt32?
     /// The pad's highlight: a slot 0…5, or 6 for the centre (the initial one — `Select+A`
@@ -636,10 +637,7 @@ struct RingOverlay: View {
             .environment(\.colorScheme, .dark) // reads over any frame
         }
         .ignoresSafeArea()
-        .onAppear {
-            appeared = true
-            if state.native == nil { state.native = actions.currentMode() }
-        }
+        .onAppear { appeared = true }
         .onChange(of: state.navSeq) { _, _ in
             let pending = state.pendingNav
             state.pendingNav = []
@@ -880,7 +878,7 @@ extension RingOverlay {
         let a = actions
         let live = a.currentMode()
         let mode = RingNav.Mode(width: live.w, height: live.h, hz: live.hz)
-        let native = state.native.map { RingNav.Mode(width: $0.w, height: $0.h, hz: $0.hz) } ?? mode
+        let native = state.native ?? mode
         let resLabel: String = {
             if mode.width == native.width && mode.height == native.height {
                 return L10n.ringSheetNative(width: String(mode.width), height: String(mode.height))

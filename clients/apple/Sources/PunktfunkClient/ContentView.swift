@@ -475,7 +475,9 @@ struct ContentView: View {
                 showTouchExit = true // the off-tier exit disc's 8 s window, per session start
                 #endif
                 ring.close()
-                ring.native = nil // this session's Welcome mode, captured at its first open
+                ring.native = model.connection.map { // the sheet's Native: this session's Welcome
+                    RingNav.Mode(width: $0.width, height: $0.height, hz: $0.refreshHz)
+                }
                 // Host-action slots are pre-fetched here, never when the ring opens (§3.1).
                 if let host = model.activeHost { HostPowerStore.shared.refresh(host) }
                 // The remote's short Back opens the ring in the middle of the stage; a pad's

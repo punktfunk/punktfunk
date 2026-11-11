@@ -27,6 +27,16 @@ final class RingNavModeTests: XCTestCase {
         XCTAssertEqual(RingNav.nextMode(mode: res(1700, 900), native: uhd, dir: -1), res(1280, 720))
     }
 
+    /// R2-2: a session whose mode reads 0×0 (its handle was gone) has no Native; the rows cycle
+    /// the presets and never ask the host for a zero mode.
+    func testAZeroModeIsNeverNative() {
+        let zero = M(width: 0, height: 0, hz: 0)
+        XCTAssertEqual(RingNav.nextMode(mode: res(1280, 720), native: zero, dir: 1), res(2560, 1440))
+        XCTAssertEqual(RingNav.nextMode(mode: res(2560, 1440), native: zero, dir: -1), res(1280, 720))
+        XCTAssertEqual(RingNav.nextRefresh(mode: res(1280, 720, 60), native: zero, dir: 1).hz, 120)
+        XCTAssertEqual(RingNav.nextRefresh(mode: res(1280, 720, 120), native: zero, dir: 1).hz, 60)
+    }
+
     /// Refresh walks Native's rate, then 120 and 60 Hz, skipping one equal to Native's; the size
     /// stays.
     func testRefreshCyclesNativeThenThePresets() {
