@@ -733,24 +733,12 @@ final class SessionModel: ObservableObject {
 
     // MARK: - Microphone mute (in-stream, per session)
 
-    /// Whether this session has a mic uplink there is any point in muting: the mic must be on in
-    /// the session's RESOLVED settings (a preset can turn it on or off), the platform must have
-    /// an app-accessible input at all, and the OS must not have refused us one. Drives whether the
-    /// mute control is offered — a live-looking mute button over a session that sends no
-    /// microphone would be a lie. Same three conditions `SessionAudio` starts an uplink on
-    /// (`.notDetermined` counts: the prompt is pending and a grant starts the uplink mid-session).
+    /// Whether this session has a mic uplink there is any point in muting (`SessionMic`): drives
+    /// whether the mute control is offered.
     var micAvailable: Bool {
-        #if os(tvOS)
-        return false // no app-accessible microphone — SessionAudio never opens an uplink either
-        #else
-        // The session's grants must include MIC (per-client access §7 — hide the mic UI when
-        // ungranted; a mute button over a mic the host drops would be a lie twice over).
-        guard settings.micEnabled, connection?.canUseMic != false else { return false }
-        switch AVCaptureDevice.authorizationStatus(for: .audio) {
-        case .authorized, .notDetermined: return true
-        default: return false // denied / restricted — there is no uplink to mute
-        }
-        #endif
+        SessionMic.available(
+            enabled: settings.micEnabled, granted: connection?.canUseMic != false,
+            authorization: AVCaptureDevice.authorizationStatus(for: .audio))
     }
 
     /// Flip the user's mute. The in-stream surfaces (HUD button, Stream menu, ⌃⌥⇧A while
@@ -864,13 +852,10 @@ final class SessionModel: ObservableObject {
         }
     }
 
-    /// Push the EFFECTIVE mute — the user's choice OR the background keep-alive's privacy mute —
-    /// onto the audio engine. The two reasons are composed here and nowhere else: whichever one
-    /// changed, the other still holds, so returning from the background can't un-mute a user who
-    /// muted mid-stream, and a user unmuting while backgrounded (Live Activity, another window)
-    /// doesn't open the mic behind their back.
+    /// Push the effective mute (`SessionMic.muted`) onto the audio engine, whichever of its two
+    /// reasons changed.
     private func applyMicMute() {
-        audio?.setMicMuted(micMuted || isBackgrounded)
+        audio?.setMicMuted(SessionMic.muted(user: micMuted, backgrounded: isBackgrounded))
     }
 
     // MARK: - Per-client access (chip state + expiry warnings)
