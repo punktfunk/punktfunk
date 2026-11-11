@@ -17,11 +17,7 @@ import {
 	sessionEpoch,
 	verifyUiPassword,
 } from "../../util/auth";
-import {
-	recordLoginFailure,
-	recordLoginSuccess,
-	throttleRetryAfterMs,
-} from "../../util/loginThrottle";
+import { recordLoginSuccess, takeAttempt } from "../../util/loginThrottle";
 
 export default defineEventHandler(async (event) => {
 	if (!authConfigured()) {
@@ -35,8 +31,8 @@ export default defineEventHandler(async (event) => {
 	// entry this is the real peer; the shared "unknown" bucket is only a last-resort fallback.
 	const ip = peerAddress(event);
 
-	// Throttle BEFORE touching the password so a locked-out client can't keep the guess loop spinning.
-	const wait = throttleRetryAfterMs(ip);
+	// Counted before the first await, so a burst of parallel guesses meets the lockout it arms.
+	const wait = takeAttempt(ip);
 	if (wait > 0) {
 		setResponseHeader(event, "Retry-After", Math.ceil(wait / 1000));
 		throw createError({
@@ -48,7 +44,6 @@ export default defineEventHandler(async (event) => {
 	const body = await readBody<{ password?: string }>(event);
 	const password = String(body?.password ?? "");
 	if (!(await verifyUiPassword(password))) {
-		recordLoginFailure(ip);
 		throw createError({ statusCode: 401, statusMessage: "invalid password" });
 	}
 	recordLoginSuccess(ip);
