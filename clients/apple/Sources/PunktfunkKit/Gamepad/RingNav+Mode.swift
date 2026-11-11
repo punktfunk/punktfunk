@@ -43,5 +43,23 @@ extension RingNav {
         return Mode(width: mode.width, height: mode.height, hz: stops[wrap(i + dir, stops.count)])
     }
 
+    /// A mode the sheet asked the host for: the live mode it asked from, and the one it asked for.
+    public struct ModeAsk: Equatable, Sendable {
+        public var from: Mode
+        public var to: Mode
+
+        public init(from: Mode, to: Mode) {
+            self.from = from
+            self.to = to
+        }
+    }
+
+    /// The mode a press steps from: the last ask's target while the host still runs the mode it
+    /// was asked from, so two presses before the host switches step twice; else the live mode.
+    public static func origin(live: Mode, asked: ModeAsk?) -> Mode {
+        guard let asked, asked.from == live else { return live }
+        return asked.to
+    }
+
     private static func wrap(_ i: Int, _ n: Int) -> Int { (i % n + n) % n }
 }

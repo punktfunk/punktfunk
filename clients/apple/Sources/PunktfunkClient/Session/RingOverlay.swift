@@ -39,6 +39,9 @@ final class RingState: ObservableObject {
     /// The mode this session's Welcome carried, set as it starts streaming: the Resolution row's
     /// Native. Nil in the editor, which takes the live mode.
     var native: RingNav.Mode?
+    /// The sheet's last mode request, which the next one steps on from until the host switches.
+    /// Kept until the ring closes.
+    var asked: RingNav.ModeAsk?
     /// The wire pad whose `Select+A` opened the ring; `nil` for any other open.
     var opener: UInt32?
     /// The pad's highlight: a slot 0…5, or 6 for the centre (the initial one — `Select+A`
@@ -159,6 +162,7 @@ final class RingState: ObservableObject {
         highlight = nil
         twistArmed = false
         opener = nil
+        asked = nil
     }
 
     func touch() { lastTouch = Date() }
@@ -886,9 +890,13 @@ extension RingOverlay {
             return RingNav.resolutions.first { $0.width == mode.width && $0.height == mode.height }?.name
                 ?? "\(mode.width)×\(mode.height)"
         }()
-        func request(_ m: RingNav.Mode) { a.requestMode(m.width, m.height, m.hz) }
-        func adjustRes(_ dir: Int) { request(RingNav.nextMode(mode: mode, native: native, dir: dir)) }
-        func adjustHz(_ dir: Int) { request(RingNav.nextRefresh(mode: mode, native: native, dir: dir)) }
+        func request(_ next: (RingNav.Mode) -> RingNav.Mode) {
+            let target = next(RingNav.origin(live: mode, asked: state.asked))
+            state.asked = RingNav.ModeAsk(from: mode, to: target)
+            a.requestMode(target.width, target.height, target.hz)
+        }
+        func adjustRes(_ dir: Int) { request { RingNav.nextMode(mode: $0, native: native, dir: dir) } }
+        func adjustHz(_ dir: Int) { request { RingNav.nextRefresh(mode: $0, native: native, dir: dir) } }
         var rows: [SheetRowSpec] = []
         rows.append(SheetRowSpec(header: String(localized: L10n.ringGroupSession),
                                  label: String(localized: L10n.ringEndStream),

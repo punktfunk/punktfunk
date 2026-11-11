@@ -48,6 +48,19 @@ final class RingNavModeTests: XCTestCase {
         XCTAssertEqual(RingNav.nextRefresh(mode: res(1280, 720, 120), native: zero, dir: 1).hz, 60)
     }
 
+    /// R2-5: two presses before the host switches step twice. A press steps from the last ask
+    /// while the host still runs the mode it was asked from, and from the live mode once the
+    /// host moved anywhere. A Refresh press keeps a size still on its way.
+    func testAQuickSecondPressStepsFromTheFirstAsk() {
+        let ask = RingNav.ModeAsk(from: uhd, to: res(2560, 1440))
+        XCTAssertEqual(RingNav.origin(live: uhd, asked: nil), uhd)
+        let second = RingNav.origin(live: uhd, asked: ask)
+        XCTAssertEqual(RingNav.nextMode(mode: second, native: uhd, dir: 1), res(1920, 1080))
+        XCTAssertEqual(RingNav.origin(live: res(2560, 1440), asked: ask), res(2560, 1440))
+        XCTAssertEqual(RingNav.origin(live: res(1280, 720), asked: ask), res(1280, 720))
+        XCTAssertEqual(RingNav.nextRefresh(mode: second, native: uhd, dir: 1), res(2560, 1440, 120))
+    }
+
     /// Refresh walks Native's rate, then 120 and 60 Hz, skipping one equal to Native's; the size
     /// stays.
     func testRefreshCyclesNativeThenThePresets() {
