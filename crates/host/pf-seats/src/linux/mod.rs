@@ -32,6 +32,7 @@ pub mod handover;
 mod libraries;
 pub mod login;
 mod logind;
+pub mod loopback;
 mod pam;
 #[cfg(test)]
 mod person_tests;
