@@ -1052,7 +1052,12 @@ fn refuse_new(file: &ProfilesFile, name: &str) -> Result<(), EditError> {
 fn name_taken(profiles: &[Profile], name: &str, except: Option<&str>) -> bool {
     profiles
         .iter()
-        .any(|p| Some(p.id.as_str()) != except && p.display_name.eq_ignore_ascii_case(name))
+        .any(|p| Some(p.id.as_str()) != except && same_name(&p.display_name, name))
+}
+
+/// Whether two names are one, case folded as the seat ledger folds its rows' names.
+pub fn same_name(a: &str, b: &str) -> bool {
+    a.to_lowercase() == b.to_lowercase()
 }
 
 /// `#RRGGBB`, lowercased.
@@ -1067,11 +1072,7 @@ fn valid_accent(accent: String) -> Result<String, EditError> {
 
 /// `name`, or `name 2`, `name 3`…: display names are unique ignoring case.
 fn unique_name(profiles: &[Profile], name: &str) -> String {
-    let taken = |n: &str| {
-        profiles
-            .iter()
-            .any(|p| p.display_name.eq_ignore_ascii_case(n))
-    };
+    let taken = |n: &str| name_taken(profiles, n, None);
     if !taken(name) {
         return name.to_string();
     }

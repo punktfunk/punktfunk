@@ -801,4 +801,29 @@ mod seat_profiles {
         );
         assert_eq!(sup.asked().len(), 1, "{:?}", sup.asked());
     }
+
+    /// A seat's row keeps its name through its profile's rename, and the ledger takes no second
+    /// row by it: the host refuses that name before the supervisor, in its own words. The
+    /// owner's row, named for their login, holds no name.
+    #[tokio::test]
+    async fn a_name_a_seat_row_still_holds_is_refused_before_the_supervisor() {
+        let path = crate::test_support::scratch().join("profiles.json");
+        let store = Arc::new(Profiles::load_with(Some(path), None));
+        let mut owner = made("jane");
+        owner.id = pf_seats::SeatId::parse("0e".repeat(16)).unwrap();
+        owner.owner = true;
+        let sup = Arc::new(Fake::new(vec![made("Kid"), owner], |c| match c {
+            Command::Create(seat) => Ok(CommandResult::Created {
+                seat: made(&seat.name),
+            }),
+            _ => Err(refused("x", "y")),
+        }));
+        let app = door(store, sup.clone());
+        let (status, body) = send(&app, create("kid")).await;
+        assert_eq!(status, StatusCode::CONFLICT, "{body}");
+        assert_eq!(body["code"], "profile_name_taken");
+        assert!(sup.asked().is_empty(), "{:?}", sup.asked());
+        let (status, body) = send(&app, create("Jane")).await;
+        assert_eq!(status, StatusCode::CREATED, "{body}");
+    }
 }

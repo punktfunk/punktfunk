@@ -1268,6 +1268,14 @@ fn seat_profile(
     if !ledger.on {
         return Err(refused(seats_off()).into());
     }
+    // A row keeps the name it was made with through a rename, and the ledger takes no second.
+    if ledger
+        .seats
+        .iter()
+        .any(|s| !s.owner && crate::profiles::same_name(&s.name, name))
+    {
+        return Err(edit_error(EditError::NameTaken).into());
+    }
     let seat = match input.seat_account.clone().zip(input.seat_password.clone()) {
         Some((account, password)) => {
             adopt_seat(sup, &ledger.seats, name, &account, password, bound)

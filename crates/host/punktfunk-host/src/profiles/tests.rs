@@ -490,6 +490,20 @@ fn names_are_trimmed_capped_and_unique() {
     assert_eq!(unique_name(&taken, "enrico"), "enrico 2");
 }
 
+/// Names are one whatever their case, past ASCII too, as the seat ledger compares its rows.
+#[test]
+fn names_fold_case_as_the_seat_ledger_does() {
+    let mut file = box_file();
+    file.profiles
+        .push(profile("dddddddddddd", "Émile", OsAccount::Operator));
+    let (p, _) = store("fold", &file, None);
+    assert!(matches!(
+        p.vet_create(&new("émile")),
+        Err(EditError::NameTaken)
+    ));
+    assert_eq!(unique_name(&file.profiles, "ÉMILE"), "ÉMILE 2");
+}
+
 /// A light seat shares the owner's desktop and keeps what makes it the player's. A profile with
 /// a ledger row is a desktop of its own, and the owner stays the owner.
 #[test]
