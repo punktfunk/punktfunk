@@ -68,15 +68,16 @@ public struct HostFormDraft: Equatable, Sendable {
     }
 
     /// The Wake-on-LAN field's MACs: split on commas, semicolons and whitespace, keeping the
-    /// well-formed `aa:bb:cc:dd:ee:ff` ones in lower case. nil when none is valid, so clearing
-    /// the field clears the stored MACs.
+    /// well-formed ones as lower-case `aa:bb:cc:dd:ee:ff`. A hyphen separates octets as a colon
+    /// does. nil when none is valid, so clearing the field clears the stored MACs.
     public static func parseMacs(_ s: String) -> [String]? {
         let macs = s
             .split(whereSeparator: { ",; \n\t".contains($0) })
-            .map { $0.trimmingCharacters(in: .whitespaces).lowercased() }
+            .map { $0.lowercased().replacingOccurrences(of: "-", with: ":") }
             .filter { m in
-                let parts = m.split(separator: ":")
-                return parts.count == 6 && parts.allSatisfy { $0.count == 2 && UInt8($0, radix: 16) != nil }
+                let parts = m.split(separator: ":", omittingEmptySubsequences: false)
+                return parts.count == 6
+                    && parts.allSatisfy { $0.count == 2 && $0.allSatisfy(\.isHexDigit) }
             }
         return macs.isEmpty ? nil : macs
     }

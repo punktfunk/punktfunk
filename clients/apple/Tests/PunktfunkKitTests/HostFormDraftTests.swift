@@ -54,4 +54,15 @@ final class HostFormDraftTests: XCTestCase {
         XCTAssertEqual(host.pinnedSHA256?.count, 32, "a rename must not drop the pin")
         XCTAssertEqual(host.wakeMacs, ["aa:bb:cc:dd:ee:ff"])
     }
+
+    /// The Wake-on-LAN field takes a MAC as Windows prints it, and only hex octets.
+    func testMacsParseInBothSpellings() {
+        XCTAssertEqual(HostFormDraft.parseMacs("AA-BB-CC-DD-EE-FF"), ["aa:bb:cc:dd:ee:ff"])
+        XCTAssertEqual(
+            HostFormDraft.parseMacs("aa:bb:cc:dd:ee:ff, 11-22-33-44-55-66"),
+            ["aa:bb:cc:dd:ee:ff", "11:22:33:44:55:66"])
+        XCTAssertNil(HostFormDraft.parseMacs("+f:+f:+f:+f:+f:+f"))
+        XCTAssertNil(HostFormDraft.parseMacs("aa:bb:cc:dd:ee"))
+        XCTAssertNil(HostFormDraft.parseMacs(""))
+    }
 }
