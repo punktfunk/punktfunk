@@ -30,9 +30,14 @@ public struct TTLCache<Value> {
         return Ticket(key: key)
     }
 
-    /// A fetch's outcome: an answer replaces the value, nil keeps it.
+    /// A fetch's outcome: an answer replaces the value. A miss (nil) keeps the value and clears
+    /// the stamp, so the next beat asks again rather than waiting out the TTL.
     public mutating func land(_ ticket: Ticket, _ answer: Value?) {
-        if let answer { values[ticket.key] = answer }
+        if let answer {
+            values[ticket.key] = answer
+        } else {
+            askedAt[ticket.key] = nil
+        }
     }
 
     /// An answer the caller already holds, fresh as of `now`.

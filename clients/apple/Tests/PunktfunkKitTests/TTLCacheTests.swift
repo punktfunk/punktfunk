@@ -28,6 +28,16 @@ final class TTLCacheTests: XCTestCase {
         XCTAssertEqual(cache["a"], "")
     }
 
+    /// R3-5: a missed refresh keeps the last answer, and the next beat asks again.
+    func testAMissKeepsTheAnswerAndAsksAgain() {
+        var cache = TTLCache<[String]>(ttl: 300)
+        cache.land(cache.ask("a", now: at(0))!, ["power.sleep"])
+        let missed = cache.ask("a", now: at(300))!
+        cache.land(missed, nil)
+        XCTAssertEqual(cache["a"], ["power.sleep"])
+        XCTAssertNotNil(cache.ask("a", now: at(310)))
+    }
+
     func testAStoredAnswerIsFresh() {
         var cache = TTLCache<String>(ttl: 20)
         cache.store("Dota 2", for: "a", now: at(0))

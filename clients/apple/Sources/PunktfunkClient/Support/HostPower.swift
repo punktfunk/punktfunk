@@ -36,7 +36,7 @@ final class HostPowerStore: ObservableObject {
     private var cache = TTLCache<[HostAction]>(ttl: 300)
 
     /// What `host` last said this device may do to it. Empty until a refresh answers, and empty
-    /// for an older host, an unreachable one, or a device without the grant.
+    /// for an older host or a device without the grant. A refresh the host missed keeps it.
     func actions(for host: StoredHost) -> [HostAction] { cache[host.id.uuidString] ?? [] }
 
     /// Ask again unless the cached answer is still fresh. Cheap and idempotent — call it from
@@ -47,7 +47,7 @@ final class HostPowerStore: ObservableObject {
               let ticket = cache.ask(host.id.uuidString, now: Date())
         else { return }
         Task { @MainActor in
-            let found = await LibraryClient.actions(target)
+            let found = await LibraryClient.actionsIfAnswered(target)
             objectWillChange.send()
             cache.land(ticket, found)
         }

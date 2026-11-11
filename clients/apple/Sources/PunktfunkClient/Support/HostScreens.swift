@@ -12,12 +12,12 @@ private let log = ClientLog(category: "screens")
 final class HostScreenStore: ObservableObject {
     static let shared = HostScreenStore()
 
-    /// Each host's answer. 20 s, as the Rust clients: `in_use_by` moves as other devices start
-    /// and end streams.
-    private var cache = TTLCache<DisplayTargets>(ttl: 20)
+    /// Each host's answer, nil for one with no screens for this device. 20 s, as the Rust
+    /// clients: `in_use_by` moves as other devices start and end streams.
+    private var cache = TTLCache<DisplayTargets?>(ttl: 20)
 
     /// What `host` last answered; nil until it does, and for a host without the route.
-    func targets(for host: StoredHost) -> DisplayTargets? { cache[host.id.uuidString] }
+    func targets(for host: StoredHost) -> DisplayTargets? { cache[host.id.uuidString] ?? nil }
 
     /// Ask again unless the last answer is fresh. A miss keeps the rows already shown.
     func refresh(_ host: StoredHost, port: UInt16? = nil) {
@@ -26,8 +26,8 @@ final class HostScreenStore: ObservableObject {
               let ticket = cache.ask(host.id.uuidString, now: Date())
         else { return }
         Task { @MainActor in
-            guard let found = await LibraryClient.targets(target) else { return }
-            objectWillChange.send()
+            let found = await LibraryClient.targetsIfAnswered(target)
+            if found != nil { objectWillChange.send() }
             cache.land(ticket, found)
         }
     }

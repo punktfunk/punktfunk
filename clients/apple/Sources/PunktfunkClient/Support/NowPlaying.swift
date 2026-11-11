@@ -31,25 +31,27 @@ final class NowPlayingStore: ObservableObject {
     func refresh(_ host: StoredHost) {
         // The demo host serves no management API.
         guard !DemoMode.isDemo(host), case .success(let target) = MgmtTarget.make(host: host),
-              cache.ask(host.id.uuidString, now: Date()) != nil
+              let ticket = cache.ask(host.id.uuidString, now: Date())
         else { return }
         Task { @MainActor in
-            let games = await LibraryClient.running(target)
-            adopt(games, for: host)
+            let games = await LibraryClient.statusIfAnswered(target)?.games
+            objectWillChange.send()
+            cache.land(ticket, games.map(Self.title))
         }
     }
 
     /// Take an answer a caller already has — the library shelf fetches `/status` for its own
     /// Resume badges, and a second request for the same fact would be one the host is asked
     /// twice. Also stamps it fresh: this IS the freshest answer available.
-    ///
-    /// The first entry that is up and has a title to show, so a launch the host cannot track
-    /// (no catalog id, hence no badge on any shelf) still names itself on the card.
     func adopt(_ games: [RunningGame], for host: StoredHost) {
         objectWillChange.send()
-        cache.store(
-            games.first { $0.isUp && !$0.title.isEmpty }?.title ?? "", for: host.id.uuidString,
-            now: Date())
+        cache.store(Self.title(games), for: host.id.uuidString, now: Date())
+    }
+
+    /// The first entry that is up and has a title to show, so a launch the host cannot track
+    /// (no catalog id, hence no badge on any shelf) still names itself on the card.
+    private static func title(_ games: [RunningGame]) -> String {
+        games.first { $0.isUp && !$0.title.isEmpty }?.title ?? ""
     }
 
     /// Forget what this host said — the caller just ended a session on it, so the answer is
