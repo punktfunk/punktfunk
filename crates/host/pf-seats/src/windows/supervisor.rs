@@ -574,10 +574,26 @@ impl Rig {
         }
     }
 
+    /// [`Self::launch`], once the session is still the seat account's. Windows reuses a freed
+    /// id, so a child started into one that ended could run on another seat's desktop.
+    fn launch_live(&self) -> WinResult<(u32, &Launch)> {
+        let (session, launch) = self.launch()?;
+        match wts::any_for_account(&self.seat.account)? {
+            Some(found) if found.id == session => Ok((session, launch)),
+            _ => Err(backend_error(
+                "wts_changed",
+                format!(
+                    "session {session} no longer belongs to '{}'",
+                    self.seat.account
+                ),
+            )),
+        }
+    }
+
     /// Start the gate: one second of the host's own encode from a virtual display in the
     /// seat's session. It extends the display instead of isolating it.
     fn start_gate(&mut self) -> WinResult<()> {
-        let (session, launch) = self.launch()?;
+        let (session, launch) = self.launch_live()?;
         let job = self.keeper.as_ref().map(|(_, job)| job);
         let environment = process::seat_environment(
             launch.host_root.path(),
@@ -672,7 +688,7 @@ impl Rig {
     }
 
     fn start_host(&mut self) -> WinResult<()> {
-        let (session, launch) = self.launch()?;
+        let (session, launch) = self.launch_live()?;
         let host = process::spawn_in_session(
             self.keeper.as_ref().map(|(_, job)| job),
             session,

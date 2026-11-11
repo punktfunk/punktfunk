@@ -1418,10 +1418,12 @@ mod tests {
             (At::SigningIn, "wts_enumerate", true, false),
             (At::Entering, "seat_root", true, false),
             (At::Gating, "process_spawn", true, false),
+            (At::Gating, "wts_changed", true, false),
             (At::Collecting, "quality_empty", false, false),
             (At::Readying, "process_spawn", true, false),
             (At::Running, "process_wait", true, true),
             (At::HostDown, "process_spawn", true, true),
+            (At::HostDown, "wts_changed", true, true),
         ];
         for (at, code, retry, answered) in rows {
             let mut bench = bench(at);
