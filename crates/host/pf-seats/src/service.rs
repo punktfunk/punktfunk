@@ -221,6 +221,8 @@ impl<B: PlatformBackend> SeatService<B> {
         }
     }
 
+    /// Every seat as its backend reads it now. A state dir that can't take the refreshed states
+    /// still answers them: they are kept in memory, logged once, and saved with the next write.
     fn list(&self) -> Result<CommandResult, ApiError> {
         let mut current = self.lock();
         // Read under the ledger lock: a change marks its seat under it, before its backend runs.
@@ -245,8 +247,11 @@ impl<B: PlatformBackend> SeatService<B> {
             seat.runtime = self.observe(seat);
             self.learn_pin(seat);
         }
-        if next != *current {
-            self.commit(&mut current, next)?;
+        if next != *current
+            && let Err(error) = self.commit(&mut current, next.clone())
+        {
+            tracing::warn!(error = %error.message, "seat states not saved");
+            *current = next;
         }
         Ok(CommandResult::List {
             seats: current.seats.clone(),

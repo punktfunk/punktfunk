@@ -269,6 +269,31 @@ fn command_dispatch_persists_runtime_and_calls_only_the_backend_seam() {
     assert!(calls.iter().any(|call| call.starts_with("remove:")));
 }
 
+/// A state dir that takes no write still lists every seat as it is now.
+#[test]
+fn a_list_answers_when_the_ledger_cannot_be_saved() {
+    let temp = tempfile::tempdir().unwrap();
+    let backend = FakeBackend::default();
+    let service = SeatService::open(temp.path(), backend.clone()).unwrap();
+    let CommandResult::Created { seat } =
+        service.dispatch(create("Desk", "pf-desk", false)).unwrap()
+    else {
+        panic!("a seat is created")
+    };
+    let died = RuntimeStatus::failed("the unit ended");
+    backend
+        .state
+        .statuses
+        .lock()
+        .unwrap()
+        .insert(seat.id.to_string(), died.clone());
+    std::fs::create_dir(temp.path().join(format!("{LEDGER_FILE}.bak.tmp"))).unwrap();
+    let CommandResult::List { seats } = service.dispatch(Command::List).unwrap() else {
+        panic!("list answered something else")
+    };
+    assert_eq!(seats[0].runtime, died);
+}
+
 /// A running seat's row carries the pin of the certificate its host wrote, once it wrote one.
 #[test]
 fn a_running_seat_records_its_host_pin() {
