@@ -58,6 +58,9 @@ pub struct StreamConfig {
     /// The device's screen is a host monitor. The stream thread sets it once from the paired
     /// certificate's pick; ANNOUNCE knows no device and leaves it `false`.
     pub mirrored: bool,
+    /// The native session whose display this stream shares, set at PLAY. Its picture is fitted
+    /// into this config's size.
+    pub joined: Option<super::GsJoin>,
 }
 
 /// The negotiated values without the resolution's probe cells, for the log lines.
@@ -76,6 +79,7 @@ impl std::fmt::Debug for StreamConfig {
             .field("slices", &self.slices)
             .field("encrypt_video", &self.encrypt_video)
             .field("studio_asked", &self.studio_asked)
+            .field("joined", &self.joined.as_ref().map(|(mode, _)| mode))
             .finish_non_exhaustive()
     }
 }
@@ -215,7 +219,7 @@ pub fn start(
                     // (`session_status::publish_gamestream_game`).
                     game: None,
                     capture_health: live.capture_health.clone(),
-                    join: false,
+                    join: cfg.joined.is_some(),
                     controls: crate::session_status::SessionControls {
                         fingerprint: life.fingerprint.clone(),
                         ..crate::session_status::SessionControls::open()
@@ -391,18 +395,26 @@ fn run(
         #[cfg(not(target_os = "linux"))]
         let _ = (&gamescope_route, nested_launch_started);
         // GameStream holds a real display; without this, Windows `admit` budgets cannot see it.
-        // `None` identity is the anonymous slot. Dropped at the end of `run`.
+        // `None` identity is the anonymous slot. A joiner's row is the owner's display at the
+        // owner's mode. Dropped at the end of `run`.
+        let (row_mode, row_display) = match &cfg.joined {
+            Some((mode, display)) => (*mode, display.clone()),
+            None => (
+                (cfg.width, cfg.height, cfg.fps),
+                crate::vdisplay::admission::LiveDisplay {
+                    compositor: Some(compositor),
+                    route: gamescope_route.clone(),
+                    isolation: None,
+                    audio_sink: Default::default(),
+                },
+            ),
+        };
         let _admission_guard = crate::vdisplay::admission::register(
             None,
-            (cfg.width, cfg.height, cfg.fps),
+            row_mode,
             life.preempted.clone(),
             "gamestream".to_string(),
-            crate::vdisplay::admission::LiveDisplay {
-                compositor: Some(compositor),
-                route: gamescope_route.clone(),
-                isolation: None,
-                audio_sink: Default::default(),
-            },
+            row_display,
             None,
         );
         tracing::info!(
@@ -794,7 +806,8 @@ struct GsSource {
     lease: Option<crate::capture::OutputLease>,
 }
 
-/// Virtual-display source at the client's mode, or the monitor `device` streams. The app's own
+/// Virtual-display source at the client's mode, or the monitor `device` streams. A joiner
+/// shares the owner's display, on its compositor and route, at its mode. Else the app's own
 /// `compositor` wins; otherwise the native plane's
 /// [`crate::compositor_route::resolve_compositor`] picks, pin included. Only a connect
 /// (`revive`) may revive a session. Re-run on mid-stream capture loss to follow a Desktop↔Game
@@ -809,7 +822,10 @@ fn open_gs_virtual_source(
     revive: bool,
     device: Option<[u8; 32]>,
 ) -> Result<GsSource> {
-    let (compositor, gamescope_route) = if let Some(c) = app.and_then(|a| a.compositor) {
+    let owner = (cfg.joined.as_ref()).and_then(|(_, d)| Some((d.compositor?, d.route.clone())));
+    let (compositor, gamescope_route) = if let Some(owner) = owner {
+        owner
+    } else if let Some(c) = app.and_then(|a| a.compositor) {
         // Still resolve a route, or `create` falls through to a bare spawn on a managed box.
         let r = crate::vdisplay::resolve_gamescope_route(c, false);
         (c, r)
@@ -834,20 +850,25 @@ fn open_gs_virtual_source(
     vd.set_launch_command(launch.and_then(|t| t.command.clone()));
     // Same reason: a process env let either plane retarget the other's `create`.
     vd.set_gamescope_route(gamescope_route.clone());
+    vd.set_join_live(cfg.joined.is_some());
     // Register an unread stop flag so a later session can preempt (3 s grace, then force).
     // Anonymous slot 0 — only another slot-0 connect preempts it.
     let _idd_setup_guard = crate::windows::idd::setup_guard(
-        crate::session_plan::CaptureBackend::resolve(cfg.mirrored),
+        gs_session_plan(cfg, false).capture,
         None,
         (cfg.width, cfg.height),
         &std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
     )?;
+    let (width, height, refresh_hz) = cfg
+        .joined
+        .as_ref()
+        .map_or((cfg.width, cfg.height, cfg.fps), |(m, _)| *m);
     let vout = crate::vdisplay::registry::acquire(
         &mut vd,
         punktfunk_core::Mode {
-            width: cfg.width,
-            height: cfg.height,
-            refresh_hz: cfg.fps,
+            width,
+            height,
+            refresh_hz,
         },
         // Quit App / management stop / game exit skip linger; only a real drop lingers.
         quit.clone(),
@@ -907,7 +928,8 @@ fn gs_capture_output(
 /// Shared [`SessionPlan`](crate::session_plan::SessionPlan) at this plane's shape: 4:2:0 unless
 /// PyroWave negotiated 4:4:4 (stock Moonlight cannot decode it), depth 10 only with HDR, no
 /// cursor-forward (GameStream has no client cursor channel), exactly the slices the client asked
-/// for (a TV decoder wedges on more), and the device's screen ([`StreamConfig::mirrored`]).
+/// for (a TV decoder wedges on more), and the device's screen ([`StreamConfig::mirrored`]). A
+/// joined display is fitted into the client's size: Moonlight cannot be told another mode.
 fn gs_session_plan(cfg: &StreamConfig, cursor_blend: bool) -> crate::session_plan::SessionPlan {
     let mut plan = crate::session_plan::SessionPlan::resolve(
         &cfg.encoder,
@@ -921,7 +943,14 @@ fn gs_session_plan(cfg: &StreamConfig, cursor_blend: bool) -> crate::session_pla
     )
     .mirroring(cfg.mirrored);
     plan.studio_asked = cfg.studio_asked;
-    plan
+    if cfg.joined.is_none() {
+        return plan;
+    }
+    plan.reframe_to = Some((
+        punktfunk_core::video_fit::VideoFit::Fit,
+        (cfg.width, cfg.height),
+    ));
+    plan.sharing_live_display()
 }
 
 /// [`open_session_encoder`] for `frame` at the client's negotiated size, rate and depth, on the
@@ -1379,10 +1408,13 @@ fn stream_body(
     let frame = capturer
         .next_frame(pf_capture::FirstFrame::Default)
         .context("capture first frame")?;
-    // A mirror is sized by `open_encoder_fitted`. A virtual display was created at the
-    // negotiated size, so a mismatch is a backend fault — not fatal, the encoder opens at the
-    // captured size.
-    if !cfg.mirrored && (frame.width != cfg.width || frame.height != cfg.height) {
+    // A mirror and a joined display are sized by `open_encoder_fitted`. A virtual display was
+    // created at the negotiated size, so a mismatch is a backend fault — not fatal, the encoder
+    // opens at the captured size.
+    if !cfg.mirrored
+        && cfg.joined.is_none()
+        && (frame.width != cfg.width || frame.height != cfg.height)
+    {
         tracing::warn!(
             captured = ?(frame.width, frame.height),
             negotiated = ?(cfg.width, cfg.height),
@@ -2436,7 +2468,22 @@ mod tests {
             studio_asked: crate::session_plan::StudioAsk::default(),
             encoder: crate::encode::resolve(),
             mirrored: false,
+            joined: None,
         }
+    }
+
+    /// A joined display streams at the owner's size, so the plan fits it into the client's.
+    #[test]
+    fn a_joined_plan_fits_the_shared_picture_into_the_clients_size() {
+        assert_eq!(gs_session_plan(&cfg(1, false), false).reframe_to, None);
+        let joined = StreamConfig {
+            joined: Some(((3840, 2160, 120), Default::default())),
+            ..cfg(1, false)
+        };
+        assert_eq!(
+            gs_session_plan(&joined, false).reframe_to,
+            Some((punktfunk_core::video_fit::VideoFit::Fit, (1920, 1080)))
+        );
     }
 
     /// The plan the shared encoder open reads: 4:2:0 at the client's own slice count.

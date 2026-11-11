@@ -284,8 +284,8 @@ async fn launch_under(
     match launch(&st, &q) {
         Ok(mut session) => {
             let mode = (session.width, session.height, session.fps);
-            let _reservation = match admit_native(&st, conflict, mode).await {
-                Ok(reservation) => reservation,
+            let (_reservation, joined) = match admit_native(&st, conflict, mode).await {
+                Ok(admitted) => admitted,
                 Err(busy) => return busy,
             };
             if steal {
@@ -311,6 +311,7 @@ async fn launch_under(
             // Mint ping before RTSP SETUP. Media planes use it to tell this client's first
             // datagram from others at the same address.
             st.mint_av_ping();
+            *st.gs.joined.lock().unwrap_or_else(|e| e.into_inner()) = joined;
             *st.launch.lock().unwrap_or_else(|e| e.into_inner()) = Some(session);
             tracing::info!(
                 w = session.width,
@@ -330,17 +331,33 @@ async fn launch_under(
 }
 
 /// The launch against the native sessions in the display table, under the same policy: a
-/// refusal is the 503 to answer, a steal ends them first. The reservation holds this launch's
-/// place until it answers; this plane's own rows hold `gs.preempted`, so they never conflict.
+/// refusal is the 503 to answer, a steal ends them first, a join returns the owner's display.
+/// The reservation holds this launch's place until it answers; this plane's own rows hold
+/// `gs.preempted`, so they never conflict.
 async fn admit_native(
     st: &AppState,
     conflict: crate::vdisplay::policy::ModeConflict,
     mode: (u32, u32, u32),
-) -> std::result::Result<crate::vdisplay::admission::Reservation, Response> {
+) -> std::result::Result<
+    (
+        crate::vdisplay::admission::Reservation,
+        Option<super::GsJoin>,
+    ),
+    Response,
+> {
     use crate::vdisplay::admission::{admit_under, all_gone, Admission};
     let (native, reservation) = admit_under(conflict, None, mode, st.gs.preempted.clone());
     match native {
         Admission::Separate => {}
+        // Moonlight input takes the shared injector, which an isolated owner does not read.
+        Admission::Join(live, display) if display.isolation.is_none() => {
+            tracing::info!(
+                requested = %format_args!("{}x{}@{}", mode.0, mode.1, mode.2),
+                live = %format_args!("{}x{}@{}", live.0, live.1, live.2),
+                "GameStream launch JOIN — sharing the native session's display"
+            );
+            return Ok((reservation, Some((live, display))));
+        }
         Admission::Steal(victims) => {
             tracing::info!(
                 victims = victims.len(),
@@ -356,14 +373,18 @@ async fn admit_native(
                 tokio::time::sleep(std::time::Duration::from_millis(10)).await;
             }
         }
-        // This plane shares a native session's display no more than another GameStream
-        // client's (`gamestream_admission`).
-        Admission::Join(..) | Admission::Reject(_) => {
+        Admission::Join(..) => {
+            tracing::warn!(
+                "GameStream launch REJECTED — the display to share is an isolated session"
+            );
+            return Err((StatusCode::SERVICE_UNAVAILABLE, xml(error_xml(BUSY))).into_response());
+        }
+        Admission::Reject(_) => {
             tracing::warn!("GameStream launch REJECTED — a native session holds the display");
             return Err((StatusCode::SERVICE_UNAVAILABLE, xml(error_xml(BUSY))).into_response());
         }
     }
-    Ok(reservation)
+    Ok((reservation, None))
 }
 
 async fn h_resume(
@@ -597,10 +618,10 @@ enum GsDecision {
 /// Single-session mode-conflict. No session or same client → Serve. A different client
 /// applies `policy`; GameStream has no `separate`, so `steal`/`separate` both Steal.
 ///
-/// `join` cannot be honored here: this plane holds one launch on fixed media ports, so two
-/// clients cannot share a display the way the native one lets them. Refusing keeps the
-/// client that is already streaming, which is what asking for `join` asked for — stealing
-/// its session would be the opposite.
+/// `join` cannot be honored here: this plane holds one launch on fixed media ports, so a
+/// second Moonlight client cannot share the first one's display (a native session's it can,
+/// [`admit_native`]). Refusing keeps the client that is already streaming, which is what
+/// asking for `join` asked for — stealing its session would be the opposite.
 fn gamestream_admission(
     live: Option<LiveGs>,
     req_fp: Option<[u8; 32]>,
@@ -1314,6 +1335,63 @@ mod tests {
         assert!(!stop.load(SeqCst), "the native session keeps streaming");
         let plane = std::slice::from_ref(&st.gs.preempted);
         assert!(all_gone(plane), "no row of this plane");
+    }
+
+    /// Under `join` a launch shares a native session's display: it is served, that session
+    /// keeps streaming, and PLAY gets the owner's mode. An isolated owner refuses it.
+    #[tokio::test]
+    async fn a_launch_under_join_shares_a_native_clients_display() {
+        use crate::vdisplay::admission::{register, LiveDisplay};
+        use crate::vdisplay::policy::ModeConflict;
+        use std::sync::atomic::{AtomicBool, Ordering::SeqCst};
+        let _registry = crate::session_status::tests::REGISTRY.lock().await;
+        let launch = |st: Arc<AppState>| {
+            let q = HashMap::from([
+                ("rikey".to_string(), "22".repeat(16)),
+                ("rikeyid".to_string(), "9".to_string()),
+                ("mode".to_string(), "1920x1080x60".to_string()),
+            ]);
+            let peer = Some(Extension(PeerCertFingerprint(Some(fp_of(b"gs-joiner")))));
+            launch_under(st, peer, None, q, ModeConflict::Join)
+        };
+        let stop = Arc::new(AtomicBool::new(false));
+        let native = |display| {
+            let mode = (2560, 1440, 120);
+            register(
+                Some([0x4e; 32]),
+                mode,
+                stop.clone(),
+                "native".into(),
+                display,
+                None,
+            )
+        };
+
+        let isolation = crate::vdisplay::SessionIsolation {
+            id: "anon1".into(),
+            ei_relay: Default::default(),
+            sink: None,
+            mic_source: None,
+        };
+        let isolated = native(LiveDisplay {
+            isolation: Some(isolation),
+            ..LiveDisplay::default()
+        });
+        let st = test_state();
+        let resp = launch(st.clone()).await;
+        assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert!(
+            st.launch.lock().unwrap().is_none(),
+            "no session was created"
+        );
+        drop(isolated);
+
+        let _shared = native(LiveDisplay::default());
+        let st = test_state();
+        assert_eq!(launch(st.clone()).await.status(), StatusCode::OK);
+        assert!(!stop.load(SeqCst), "the native session keeps streaming");
+        let joined = st.gs.joined.lock().unwrap().clone();
+        assert_eq!(joined.map(|(mode, _)| mode), Some((2560, 1440, 120)));
     }
 
     /// A display stolen through admission ends the session on the control tick, as a drop,

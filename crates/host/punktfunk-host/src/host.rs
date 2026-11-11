@@ -715,6 +715,7 @@ mod session_tests {
                 studio_asked: crate::session_plan::StudioAsk::default(),
                 encoder: crate::encode::resolve(),
                 mirrored: false,
+                joined: None,
             });
         }
 

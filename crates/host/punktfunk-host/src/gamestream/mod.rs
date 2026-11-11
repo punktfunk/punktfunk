@@ -343,7 +343,13 @@ pub struct GsState {
     /// opened with the HDR offer; a stream whose negotiated `hdr` differs drops it and opens
     /// a fresh session at the right depth.
     pub video_cap: stream::CapturerSlot,
+    /// The native session this launch shares a screen with, set by every `/launch`.
+    pub joined: std::sync::Mutex<Option<GsJoin>>,
 }
+
+/// `mode_conflict: join` onto a native session: the owner's mode and display.
+#[cfg(feature = "gamestream")]
+pub type GsJoin = ((u32, u32, u32), crate::vdisplay::admission::LiveDisplay);
 
 #[cfg(feature = "gamestream")]
 impl GsState {
@@ -358,6 +364,7 @@ impl GsState {
             preempted: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
             video_hdr: VideoHdr::default(),
             video_cap: std::sync::Arc::new(std::sync::Mutex::new(None)),
+            joined: std::sync::Mutex::new(None),
         }
     }
 }

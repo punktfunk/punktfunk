@@ -91,8 +91,10 @@ On gamescope the game keeps running as long as its screen does.
 On a Windows host a device that shares the screen sees the pointer as part of the picture. It
 does not see Windows permission prompts or the lock screen; the first device still does.
 
-The same device reconnecting always resumes. A Moonlight host serves one session: **Shares the
-screen** turns the second client away, and the other two hand the host over.
+The same device reconnecting always resumes. A Moonlight device that shares the screen gets the
+picture fitted into the resolution it asked for, and the app picked in Moonlight doesn't start.
+Only one Moonlight device streams at a time: **Shares the screen** turns a second one away, and
+the other two hand the host over.
 
 ### Remember display settings
 
