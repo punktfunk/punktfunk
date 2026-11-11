@@ -9,6 +9,7 @@
 //! - [`queue`]: the frames in arrival order, each kept until its render finishes.
 //! - [`ledger`]: each pool buffer's life; a published buffer is held until encode lets go.
 //! - [`pacer`]: the paint requests that drive a lazy producer.
+//! - [`share`]: one stream feeding every session on a shared gamescope screen.
 
 mod capturer;
 mod config;
@@ -18,6 +19,7 @@ mod offers;
 mod pacer;
 mod plan;
 mod queue;
+mod share;
 mod thread;
 
 pub(crate) use capturer::PortalCapturer;
@@ -115,6 +117,8 @@ struct UserData {
     /// Arrivals awaiting their renders; write only through [`UserData::publish`].
     queue: FrameQueue,
     wake: SyncSender<()>,
+    /// Every capturer this stream feeds; `queue` and `wake` are its opener's.
+    viewers: std::sync::Arc<share::Viewers>,
     shared: super::StreamShared,
     cursor_slot: super::CursorSlot,
     importer: super::ImporterCell,
@@ -163,11 +167,17 @@ struct UserData {
 }
 
 impl UserData {
-    /// Queue `frame` behind `fence`, the render its pixels wait on, then a wakeup edge.
+    /// Queue `frame` behind `fence`, the render its pixels wait on, then a wakeup edge: for
+    /// the opener alone, or for every viewer once the stream is shared.
     ///
     /// Must not block: this runs inside `.process` and would stall the compositor. A full
     /// wakeup channel already has a pending edge; the queue is the truth.
     fn publish(&self, frame: CapturedFrame, fence: Option<queue::RenderFence>) {
+        if self.viewers.fanned() {
+            return self
+                .viewers
+                .publish((&self.queue, &self.wake), frame, fence);
+        }
         if let Ok(mut q) = self.queue.lock() {
             q.push(frame, fence, std::time::Instant::now());
         }
