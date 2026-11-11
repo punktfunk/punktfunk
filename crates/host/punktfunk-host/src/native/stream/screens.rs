@@ -240,12 +240,9 @@ impl ScreenSet {
             let mut f = base.first.lock().unwrap_or_else(|e| e.into_inner());
             (f.asked, f.mode, f.display_gen) = (self.first, first_mode, first_gen);
         }
-        // Shares go by the pixels each screen encodes, so a first picture that changed size moves
-        // them as a screen joining or leaving does.
-        let first_moved = self
-            .first_picture
-            .replace(first_picture)
-            .is_some_and(|p| p != first_picture);
+        // Shares go by the pixels each screen encodes, so a first picture that is new or changed
+        // size moves them as a screen joining or leaving does.
+        let first_moved = self.first_picture.replace(first_picture) != Some(first_picture);
         let mut newest = None;
         while let Ok(list) = self.rx.try_recv() {
             newest = Some(list);
