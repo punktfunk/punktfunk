@@ -65,4 +65,42 @@ final class HostFormDraftTests: XCTestCase {
         XCTAssertNil(HostFormDraft.parseMacs("aa:bb:cc:dd:ee"))
         XCTAssertNil(HostFormDraft.parseMacs(""))
     }
+
+    private static let record = StoredHost(
+        name: "Desk", address: "10.0.0.1", port: 9777, macAddresses: ["aa:bb:cc:dd:ee:ff"])
+
+    func testAFormLoadsARecordAsItShowsIt() {
+        XCTAssertEqual(
+            HostFormDraft(record: Self.record),
+            HostFormDraft(name: "Desk", address: "10.0.0.1", port: "9777", macs: "aa:bb:cc:dd:ee:ff"))
+    }
+
+    func testASaveWritesEachField() {
+        var host = Self.record
+        HostFormDraft(name: "Den", address: "10.0.0.2:5000", port: "9777", macs: "11-22-33-44-55-66")
+            .commit(to: &host)
+        XCTAssertEqual(host.name, "Den")
+        XCTAssertEqual(host.address, "10.0.0.2")
+        XCTAssertEqual(host.port, 5000)
+        XCTAssertEqual(host.wakeMacs, ["11:22:33:44:55:66"])
+    }
+
+    /// Name, address and port go in together or not at all.
+    func testABadPortKeepsTheRecordsNameAddressAndPort() {
+        var host = Self.record
+        HostFormDraft(name: "Den", address: "10.0.0.2", port: "99999", macs: "aa:bb:cc:dd:ee:ff")
+            .commit(to: &host)
+        XCTAssertEqual(host, Self.record)
+    }
+
+    func testUnreadableMacsKeepTheRecordsAndABlankFieldClearsThem() {
+        var host = Self.record
+        var form = HostFormDraft(record: host)
+        form.macs = "not a mac"
+        form.commit(to: &host)
+        XCTAssertEqual(host.wakeMacs, ["aa:bb:cc:dd:ee:ff"])
+        form.macs = "  "
+        form.commit(to: &host)
+        XCTAssertNil(host.macAddresses)
+    }
 }

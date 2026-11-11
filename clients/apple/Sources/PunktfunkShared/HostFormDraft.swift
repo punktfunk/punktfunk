@@ -16,11 +16,21 @@ public struct HostFormDraft: Equatable, Sendable {
     public var address: String
     /// The port field's raw text. Blank is legal and means the default.
     public var port: String
+    /// The Wake-on-LAN field's raw text (`parseMacs`).
+    public var macs: String
 
-    public init(name: String = "", address: String = "", port: String = "") {
+    public init(name: String = "", address: String = "", port: String = "", macs: String = "") {
         self.name = name
         self.address = address
         self.port = port
+        self.macs = macs
+    }
+
+    /// The fields as a form shows `record`.
+    public init(record: StoredHost) {
+        self.init(
+            name: record.name, address: record.address, port: String(record.port),
+            macs: record.wakeMacs.joined(separator: ", "))
     }
 
     /// What is wrong with the draft, in the order a form should send the user to fix it.
@@ -65,6 +75,14 @@ public struct HostFormDraft: Equatable, Sendable {
         host.name = trimmedName
         host.address = trimmedAddress
         host.port = resolvedPort ?? Self.defaultPort
+    }
+
+    /// A host page's save: name, address and port together when the draft can save, the MACs
+    /// when they parse or the field is blank. What the rules refuse keeps the record's value.
+    public func commit(to host: inout StoredHost) {
+        if canSave { apply(to: &host) }
+        let parsed = Self.parseMacs(macs)
+        if parsed != nil || macs.allSatisfy(\.isWhitespace) { host.macAddresses = parsed }
     }
 
     /// The Wake-on-LAN field's MACs: split on commas, semicolons and whitespace, keeping the
