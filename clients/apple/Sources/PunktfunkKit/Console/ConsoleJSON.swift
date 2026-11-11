@@ -21,23 +21,34 @@ public enum ConsoleJSON {
         host.pinnedSHA256.map { $0.map { String(format: "%02x", $0) }.joined() } ?? ""
     }
 
-    /// The saved host a console command names by fingerprint and `addr:port`.
+    /// The saved host a console command names. The fingerprint keys it: the record that pins
+    /// `fp`, else the unpaired one at `addr:port`, never a record pinned to another
+    /// fingerprint, which is the other system of a dual-boot box. With no `fp` the address
+    /// is all there is.
     public static func host(
         in hosts: [StoredHost], fp: String, addr: String, port: UInt16
     ) -> StoredHost? {
-        hosts.first {
-            (!fp.isEmpty && fingerprint($0) == fp) || ($0.address == addr && $0.port == port)
+        if !fp.isEmpty, let pinned = hosts.first(where: { fingerprint($0) == fp }) {
+            return pinned
+        }
+        return hosts.first {
+            $0.address == addr && $0.port == port && (fp.isEmpty || $0.pinnedSHA256 == nil)
         }
     }
 
     /// The saved host behind a row key: the fingerprint or `addr:port`, with a pinned card's
-    /// preset id behind a NUL.
+    /// preset id behind a NUL. The port sits behind the last colon, as an IPv6 address has
+    /// its own; an empty key names no host.
     public static func host(in hosts: [StoredHost], key: String) -> StoredHost? {
-        let base = key.split(separator: "\u{0}").first.map(String.init) ?? key
+        let base = key.split(separator: "\u{0}", omittingEmptySubsequences: false)
+            .first.map(String.init) ?? key
+        guard !base.isEmpty else { return nil }
         if let host = hosts.first(where: { fingerprint($0) == base }) { return host }
-        let parts = base.split(separator: ":")
-        guard parts.count == 2, let port = UInt16(parts[1]) else { return nil }
-        return hosts.first { $0.address == String(parts[0]) && $0.port == port }
+        guard let colon = base.lastIndex(of: ":"),
+              let port = UInt16(base[base.index(after: colon)...])
+        else { return nil }
+        let address = String(base[..<colon])
+        return hosts.first { $0.address == address && $0.port == port }
     }
 
     /// `HostRow.key` — the pinned fingerprint when there is one, else `addr:port`.
