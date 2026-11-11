@@ -25,7 +25,7 @@ Environment=PUNKTFUNK_UI_SECURE=1
 ExecStartPre=/bin/sh -c 'until [ -s /var/lib/punktfunk/mgmt-token ] && [ -s /var/lib/punktfunk/native-key.pem ]; do sleep 1; done'
 # The owner's console bind, which door-helper copies with the ports. First, so the files below
 # win any key they share. Without it the console answers on every interface.
-EnvironmentFile=-/var/lib/punktfunk/host.env
+EnvironmentFile=-/var/lib/punktfunk-seats/host.env
 EnvironmentFile=-/var/lib/punktfunk/mgmt-token
 EnvironmentFile=-/var/lib/punktfunk/web-password
 EnvironmentFile=-/var/lib/punktfunk/mgmt-endpoint
