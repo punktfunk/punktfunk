@@ -244,8 +244,8 @@ pub(super) async fn run_pump(mut args: WorkerArgs) {
     // older host reads the whole flags word as the pad index.
     let gamepad_snapshots = host_caps & crate::quic::HOST_CAP_GAMEPAD_STATE != 0;
     let pad_audio_arrivals = host_caps & crate::quic::HOST_CAP_PAD_AUDIO != 0;
-    // Key and mouse-button edges ride the control stream toward a host that reads them there,
-    // so a lost release cannot hold one down; an older host gets every event as a datagram.
+    // Key, mouse-button and text events ride the control stream toward a host that reads them
+    // there, so none is lost or reordered; an older host gets every event as a datagram.
     let reliable_edges = welcome.host_caps2 & crate::quic::HOST_CAP2_INPUT_EDGES != 0;
     tokio::spawn(input_task::run(
         conn.clone(),

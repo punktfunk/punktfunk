@@ -24,8 +24,9 @@ pub(crate) enum CtrlRequest {
     /// Who draws the pointer. Client-local = host excludes and forwards; host-composite = baked
     /// into the video. Latest-wins.
     CursorRender(crate::quic::CursorRenderMode),
-    /// A key press or release, toward a host that reads them off the control stream
-    /// (`HOST_CAP2_INPUT_EDGES`): QUIC resends what the datagram plane would lose.
+    /// A key or button press or release, or a character of text, toward a host that reads them
+    /// off the control stream (`HOST_CAP2_INPUT_EDGES`): QUIC resends what the datagram plane
+    /// would lose and keeps their order.
     InputEdge(crate::input::InputEvent),
     /// A captured Steam Controller 2's identity, ahead of its arrival.
     PadIdentity(crate::quic::PadIdentity),

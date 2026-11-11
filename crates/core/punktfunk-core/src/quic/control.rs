@@ -676,8 +676,9 @@ pub(crate) fn params_within(params: &[(String, String)], value_max: usize) -> bo
 }
 
 /// `client → host` ([`MSG_INPUT_EDGE`]): one input event whose loss would stick — a key or
-/// mouse-button press or release — on the control stream instead of the datagram plane, so
-/// QUIC resends it and keeps its order. Sent only toward [`HOST_CAP2_INPUT_EDGES`](super::HOST_CAP2_INPUT_EDGES).
+/// mouse-button press or release, or a character of text — on the control stream instead of
+/// the datagram plane, so QUIC resends it and keeps its order. Sent only toward
+/// [`HOST_CAP2_INPUT_EDGES`](super::HOST_CAP2_INPUT_EDGES).
 /// The payload is the datagram encoding unchanged, so the host feeds both paths into one
 /// queue; any kind decodes, and the grants gate it exactly as they gate the datagram.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

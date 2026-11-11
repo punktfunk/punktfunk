@@ -38,8 +38,8 @@ pub(super) struct MouseArgs {
     pub(super) normalized_scroll: bool,
     /// The session runs `FEATURE_SCROLL_AXIS_UNITS`: axis-unit scroll keeps its mark.
     pub(super) scroll_axis_units: bool,
-    /// The control stream's writer, toward a host that reads key and mouse-button edges
-    /// there (`HOST_CAP2_INPUT_EDGES`). `None` keeps every event on the datagram plane.
+    /// The control stream's writer, toward a host that reads key, mouse-button and text
+    /// events there (`HOST_CAP2_INPUT_EDGES`). `None` keeps every event on the datagram plane.
     pub(super) edges: Option<tokio::sync::mpsc::Sender<CtrlRequest>>,
 }
 
@@ -67,7 +67,8 @@ fn send_input(conn: &ClientConn, out: &mut ScrollOutput, args: &MouseArgs, ev: I
     let _ = conn.send_datagram(ev.wire());
 }
 
-/// The kinds whose loss sticks: a release the network drops holds the key or button.
+/// The kinds whose loss sticks: a dropped release holds the key or button, a dropped
+/// character is missing text. Text shares the lane so an IME's Backspaces stay ahead of it.
 fn is_edge(kind: InputKind) -> bool {
     matches!(
         kind,
@@ -75,6 +76,7 @@ fn is_edge(kind: InputKind) -> bool {
             | InputKind::KeyUp
             | InputKind::MouseButtonDown
             | InputKind::MouseButtonUp
+            | InputKind::TextInput
     )
 }
 
@@ -508,6 +510,74 @@ mod tests {
         tx.send(key_down(0x42)).unwrap();
         let fallback = next_event(&host_conn, &[]).await;
         assert_eq!((fallback.kind, fallback.code), (InputKind::KeyDown, 0x42));
+        task.abort();
+    }
+
+    fn text(c: char) -> InputEvent {
+        InputEvent {
+            kind: InputKind::TextInput,
+            code: c as u32,
+            ..key_down(0)
+        }
+    }
+
+    /// An IME's composition diff (Backspace twice, then the new syllable) reaches the control
+    /// lane in the order it was sent; none of it goes out as a datagram.
+    #[tokio::test]
+    async fn text_keeps_its_order_against_backspace_on_the_control_stream() {
+        let (_server, _client, client_conn, host_conn) = loopback().await;
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+        let (ctrl_tx, mut ctrl_rx) = tokio::sync::mpsc::channel(8);
+        let client = client(crate::quic::GRANT_ALL);
+        let args = MouseArgs {
+            edges: Some(ctrl_tx),
+            ..mouse_args(&client)
+        };
+        let task = tokio::spawn(run(client_conn, rx, no_touch(), true, false, args));
+
+        let diff = [
+            key_down(0x08),
+            key_up(0x08),
+            key_down(0x08),
+            key_up(0x08),
+            text('한'),
+            text('국'),
+        ];
+        for ev in diff {
+            tx.send(ev).unwrap();
+        }
+        for want in diff {
+            match tokio::time::timeout(Duration::from_secs(2), ctrl_rx.recv()).await {
+                Ok(Some(CtrlRequest::InputEdge(ev))) => assert_eq!(ev, want),
+                _ => panic!("{want:?} on the control lane"),
+            }
+        }
+        assert!(
+            tokio::time::timeout(Duration::from_millis(150), host_conn.read_datagram())
+                .await
+                .is_err(),
+            "no text as a datagram"
+        );
+        task.abort();
+    }
+
+    /// A host without `HOST_CAP2_INPUT_EDGES` still gets text as datagrams.
+    #[tokio::test]
+    async fn text_stays_a_datagram_toward_an_older_host() {
+        let (_server, _client, client_conn, host_conn) = loopback().await;
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+        let client = client(crate::quic::GRANT_ALL);
+        let task = tokio::spawn(run(
+            client_conn,
+            rx,
+            no_touch(),
+            true,
+            false,
+            mouse_args(&client),
+        ));
+
+        tx.send(text('漢')).unwrap();
+        assert_eq!(next_event(&host_conn, &[]).await, text('漢'));
         task.abort();
     }
 

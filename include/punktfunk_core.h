@@ -882,9 +882,9 @@
 
 // [`Welcome::host_caps2`](crate::quic::Welcome::host_caps2): the host reads
 // [`InputEdge`](super::control::InputEdge) off the control stream. Toward this bit the
-// client sends every key and mouse-button press and release there, where QUIC resends what
-// the network drops; a lost release on the datagram plane otherwise holds it until its next
-// edge. Motion, scroll and pads stay datagrams. Without the bit every event is a datagram.
+// client sends every key and mouse-button press and release and every character of text
+// there, where QUIC resends what the network drops and keeps text behind the Backspaces
+// before it. Motion, scroll and pads stay datagrams. Without the bit every event is a datagram.
 #define PUNKTFUNK_HOST_CAP2_INPUT_EDGES 64
 
 // [`Hello::video_codecs`]: H.264 / AVC. The software encode path emits H.264, so a client
