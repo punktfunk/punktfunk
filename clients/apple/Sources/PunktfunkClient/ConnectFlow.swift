@@ -114,19 +114,14 @@ struct ConnectFlow {
     }
 
     /// Ask the host who is playing, then run `go` with the profile to dial as and what opens it.
-    /// A box without profiles, a failed answer and a late one dial as before, with the saved pick.
+    /// `ConnectPlan.afterProfiles` decides what follows the list.
     private func askProfile(
         _ host: StoredHost, link: String?, go: @escaping @MainActor (ProfileDial) -> Void
     ) {
         let saved = (store.hosts.first { $0.id == host.id } ?? host).pickedProfile
         Task { @MainActor in
             let answer = await ProfileFetch.list(host, within: ProfileFetch.wait)
-            guard case .listed(let rows) = answer else {
-                let id = link ?? saved?.id
-                let name = id == saved?.id ? saved?.displayName : nil
-                go(ProfileDial(id: id, name: name, prompts: true))
-                return
-            }
+            let rows = answer.rows
             let unlocked: @MainActor (String?) -> Void = { id in
                 guard let row = rows?.first(where: { $0.id == id }) else {
                     go(ProfileDial(id: id, prompts: true))
@@ -136,19 +131,22 @@ struct ConnectFlow {
                     go(ProfileDial(id: id, name: row.displayName, unlock: unlock, prompts: true))
                 }
             }
-            let d = HostProfiles.pickerDecision(listed: rows, remembered: saved, link: link)
-            guard d.picker, let rows else {
-                store.setProfile(host.id, d.remember)
-                settleSeat(host, rows: rows, id: d.send, go: unlocked)
-                return
+            switch ConnectPlan.afterProfiles(
+                rows: rows, failed: answer.failed, saved: saved, link: link)
+            {
+            case .dial(let id, let name):
+                go(ProfileDial(id: id, name: name, prompts: true))
+            case .settle(let id, let remember):
+                store.setProfile(host.id, remember)
+                settleSeat(host, rows: rows, id: id, go: unlocked)
+            case .pick(let rows, let saved, let gone):
+                profileAsk = ProfileAsk(
+                    host: host, content: .choose(rows, saved: saved, gone: gone),
+                    pick: { pick in
+                        store.setProfile(host.id, pick)
+                        settleSeat(host, rows: rows, id: pick.id, afterSheet: true, go: unlocked)
+                    })
             }
-            profileAsk = ProfileAsk(
-                host: host,
-                content: .choose(rows, saved: rows.first { $0.id == saved?.id }?.id, gone: d.gone),
-                pick: { pick in
-                    store.setProfile(host.id, pick)
-                    settleSeat(host, rows: rows, id: pick.id, afterSheet: true, go: unlocked)
-                })
         }
     }
 
@@ -585,4 +583,10 @@ struct ConnectFlow {
         guard let hex, let data = Data(hexString: hex), data.count == 32 else { return nil }
         return data
     }
+}
+
+extension ProfileAnswer {
+    /// The list, nil for a box without profiles and for a failed answer.
+    fileprivate var rows: [ListedProfile]? { if case .listed(let rows) = self { rows } else { nil } }
+    fileprivate var failed: Bool { if case .failed = self { true } else { false } }
 }

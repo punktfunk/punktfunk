@@ -28,4 +28,30 @@ public enum ConnectPlan {
         }
         return .dial(allowTofu: true, asksProfile: false)
     }
+
+    /// What follows the host's profile list.
+    public enum AfterProfiles: Equatable {
+        /// No answer: dial `id`, named when it is the saved pick.
+        case dial(id: String?, name: String?)
+        /// No picker: save `remember`, then settle `id`'s seat and dial.
+        case settle(id: String?, remember: ProfilePick?)
+        /// Show the picker. `saved` is the remembered pick it still lists, `gone` the name of one
+        /// it dropped.
+        case pick([ListedProfile], saved: String?, gone: String?)
+    }
+
+    /// `rows` is the list, nil for a box without profiles; `failed`: no answer in time. `link` is
+    /// a link's `as=`, which wins for this connect. A failed answer dials as before: the link's
+    /// profile, else the saved pick.
+    public static func afterProfiles(
+        rows: [ListedProfile]?, failed: Bool, saved: ProfilePick?, link: String?
+    ) -> AfterProfiles {
+        if failed {
+            let id = link ?? saved?.id
+            return .dial(id: id, name: id == saved?.id ? saved?.displayName : nil)
+        }
+        let d = HostProfiles.pickerDecision(listed: rows, remembered: saved, link: link)
+        guard d.picker, let rows else { return .settle(id: d.send, remember: d.remember) }
+        return .pick(rows, saved: rows.first { $0.id == saved?.id }?.id, gone: d.gone)
+    }
 }
