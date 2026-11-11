@@ -562,7 +562,9 @@ pub(crate) fn open_session_encoder(
     )
 }
 
-/// [`open_session_encoder`] through `open_video`, which a test replaces.
+/// [`open_session_encoder`] through `open_video`, which a test replaces. The encoder runs where
+/// `capturer` says ([`SessionPlan::captured_by`](crate::session_plan::SessionPlan::captured_by)),
+/// whatever the plan predicted before the display opened.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn open_session_encoder_with(
     encoder: &crate::encode::Resolved,
@@ -583,6 +585,7 @@ pub(super) fn open_session_encoder_with(
     Box<dyn crate::encode::Encoder>,
     punktfunk_core::video_fit::Reframe,
 )> {
+    let plan = &plan.captured_by(capturer);
     let captured = (frame.width, frame.height);
     if plan.capture.encodes_remotely() {
         // Only the display driver frames on the far side, and only a view: a mirrored head and a
@@ -1026,6 +1029,66 @@ mod tests {
         if cfg!(target_os = "windows") {
             assert_eq!(plan(true).capture, CaptureBackend::Wgc);
         }
+    }
+
+    /// A capture whose encoder runs at its site. It delivers no frame and opens no encoder.
+    struct RemoteAt(pf_capture::EncoderSite);
+
+    impl Capturer for RemoteAt {
+        fn next_frame(
+            &mut self,
+            _: pf_capture::FirstFrame,
+        ) -> Result<crate::capture::CapturedFrame> {
+            anyhow::bail!("no frames")
+        }
+        fn remote_encoder(&self) -> Option<&dyn pf_capture::RemoteEncoder> {
+            Some(self)
+        }
+    }
+
+    impl pf_capture::RemoteEncoder for RemoteAt {
+        fn site(&self) -> pf_capture::EncoderSite {
+            self.0
+        }
+        fn open(
+            &self,
+            _: &pf_capture::DriverEncodeParams,
+        ) -> Result<Box<dyn crate::encode::Encoder>> {
+            anyhow::bail!("no encoder")
+        }
+    }
+
+    /// A joiner whose display open found nothing to join captures a display of its own: its
+    /// plan follows the capture that opened, not the join it was admitted to.
+    #[test]
+    fn a_joiner_plan_follows_the_capture_that_opened() {
+        use crate::session_plan::{CaptureBackend, SessionTopology};
+        use pf_capture::EncoderSite;
+        let joiner = resolve_plan(
+            &crate::encode::resolve(),
+            8,
+            false,
+            crate::encode::ChromaFormat::Yuv420,
+            crate::encode::Codec::H265,
+            crate::session_plan::StudioAsk::default(),
+            false,
+            1,
+            crate::vdisplay::Compositor::Kwin,
+            None,
+            0.0,
+            1200,
+            None,
+            true,
+            false,
+        );
+        let missed = joiner.captured_by(&RemoteAt(EncoderSite::Driver));
+        assert_eq!(missed.capture, CaptureBackend::IddPush);
+        assert_eq!(missed.topology, SessionTopology::SingleProcess);
+        let joined = missed.captured_by(&RemoteAt(EncoderSite::Worker));
+        assert_eq!(joined.capture, CaptureBackend::Wgc);
+        assert_eq!(joined.topology, SessionTopology::CaptureWorker);
+        let local = crate::capture::SyntheticCapturer::new(64, 32, 60);
+        assert_eq!(joiner.captured_by(&local).capture, joiner.capture);
     }
 
     /// A view the backend could not frame encodes the mode: PyroWave re-pins for those pixels,

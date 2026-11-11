@@ -559,10 +559,12 @@ impl StreamState {
 
     /// Bring the session up in phases. What the context settles comes first: the plan, the
     /// display and wire requests, a mode queued meanwhile, the facts and the shared handles.
-    /// Then the bring-up ramp, the display and its first pipeline, the launch and game lease,
-    /// the send thread, the registration, and the further screens on the assembled state. A
-    /// phase's result is a local until the struct is assembled, so one that fails drops what the
-    /// phases before it started: the lease, the pipeline, the display, the ramp.
+    /// Then the bring-up ramp, the display and its first pipeline, whose capture settles the
+    /// plan ([`SessionPlan::captured_by`](crate::session_plan::SessionPlan::captured_by)), the
+    /// launch and game lease, the send thread, the registration, and the further screens on the
+    /// assembled state. A phase's result is a local until the struct is assembled, so one that
+    /// fails drops what the phases before it started: the lease, the pipeline, the display, the
+    /// ramp.
     pub(super) fn new(ctx: SessionContext, prepared: Option<PreparedDisplay>) -> Result<Self> {
         let mut plan = session_plan(&ctx);
         let (cursor, vd_params) = display_request(&ctx, &plan);
@@ -589,6 +591,7 @@ impl StreamState {
             Some(pipe) => pipe,
             None => build_first(&mut display, &facts, plan, c.bit_depth, bitrate_kbps, &fec)?,
         };
+        plan = plan.captured_by(&*pipe.capturer);
         let live = first_live(
             pipe,
             &mut display,

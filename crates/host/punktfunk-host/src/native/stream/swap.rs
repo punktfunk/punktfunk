@@ -160,9 +160,10 @@ impl StreamState {
         }
     }
 
-    /// The capture side of a built pipeline, then its encoder. A new capturer numbers its
-    /// cursor shapes from 1 again, so the last forwarded one is forgotten, and the clipboard
-    /// follows the new capture's gamescope.
+    /// The capture side of a built pipeline, then its encoder. The plan settles on the new
+    /// capture: a joiner's rebuild can join or miss anew. A new capturer numbers its cursor
+    /// shapes from 1 again, so the last forwarded one is forgotten, and the clipboard follows
+    /// the new capture's gamescope.
     fn adopt_pipeline(&mut self, p: Pipeline) {
         let Pipeline {
             capturer,
@@ -181,6 +182,7 @@ impl StreamState {
         self.adopt_reframe(reframe);
         // The old capturer goes before the old encoder, as on teardown.
         self.live.capturer = capturer;
+        self.plan = self.plan.captured_by(&*self.live.capturer);
         self.live.asks = Default::default();
         if let Some(fwd) = self.display.cursor_fwd.as_mut() {
             *fwd = super::super::cursor_fwd::CursorForwarder::new();
