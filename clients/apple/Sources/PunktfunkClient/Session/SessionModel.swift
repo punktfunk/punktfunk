@@ -451,6 +451,8 @@ final class SessionModel: ObservableObject {
         guard phase == .idle else { return }
         guard !Self.activeHosts.contains(where: { $0.key != ObjectIdentifier(self) && $0.value == host.id })
         else {
+            // A redial refused here has no next attempt: the connect overlay must not wait on one.
+            redial = nil
             errorMessage = L10n.appleDialAlreadyStreamingHere(host: host.displayName)
             return
         }
