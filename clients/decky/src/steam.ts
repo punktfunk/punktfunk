@@ -25,6 +25,7 @@
 import { applyControllerConfig, gameArt, runnerInfo, saveIcon, shortcutArt } from "./backend";
 import { type CompatApps, compatToolOf } from "./compat";
 import { diag } from "./diag";
+import { isSafeClientBin, isSafeLaunchId } from "./launch-id";
 
 // SteamClient is a Steam-internal global injected into the CEF context; it is not fully typed
 // by @decky/ui, so declare the surface we use. Signatures verified against MoonDeck + the
@@ -928,28 +929,13 @@ export interface LaunchOpts {
   requestAccess?: boolean;
 }
 
-// Host refs and preset ids ride Steam launch options as env-prefix tokens (`PF_REF=<ref>`),
-// so they must be space/quote-free — Steam's tokenizer and the wrapper's env both break
-// otherwise. Real values are UUIDs or `addr:port`, so this rejects nothing in practice; it is
-// VALIDATION, never encoding (the client must receive the opaque token verbatim).
-const UNSAFE_TOKEN = /["'\\$`\s]/;
-export function isSafeLaunchId(id: string): boolean {
-  return (
-    id.length > 0 &&
-    id.length <= 128 &&
-    UNSAFE_TOKEN.exec(id) === null &&
-    /^[\x21-\x7e]+$/.test(id)
-  );
-}
-
 /**
- * Is a resolved native-client path safe to put in Steam's launch options? Same rule, separate
- * name because the failure is different: an unsafe id is a bug in our own data, an unsafe path
- * is just where the user installed the client — so the browse shortcut degrades to its flatpak
- * default rather than refusing to exist.
+ * Is a resolved native-client path safe to put in Steam's launch options? An unsafe id is a bug
+ * in our own data, an unsafe path is just where the user installed the client — so the browse
+ * shortcut degrades to its flatpak default rather than refusing to exist.
  */
 function safeClientBin(bin: string | undefined): bin is string {
-  return !!bin && isSafeLaunchId(bin);
+  return !!bin && isSafeClientBin(bin);
 }
 
 /**
@@ -1016,10 +1002,8 @@ function launchOptions(ref: string, runner: string, clientBin: string, opts: Lau
   // Set only for a NATIVE client install; absent, the wrapper takes its flatpak default, so every
   // existing Deck install produces byte-identical launch options to before.
   if (clientBin) {
-    // The one launch-option value that comes from the backend rather than a store id, and so
-    // the one that could carry a space: a path like `/home/deck/my apps/punktfunk-client` would
-    // split Steam's tokenizer and land its tail in front of %command% as a bogus env token.
-    if (!isSafeLaunchId(clientBin)) {
+    // The one launch-option value that is a path, not an id: a space would split Steam's tokenizer.
+    if (!isSafeClientBin(clientBin)) {
       throw new Error(`client path can't ride Steam's launch options: ${clientBin}`);
     }
     env.push(`PF_CLIENT_BIN=${clientBin}`);
