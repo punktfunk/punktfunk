@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { isImeEvent } from "./ime";
+import { digitsOnly, isImeEvent } from "./ime";
 
 const key = (isComposing: boolean, keyCode: number) => ({
 	nativeEvent: { isComposing },
@@ -16,4 +16,12 @@ test("Safari's Enter after compositionend still reads as the IME's", () => {
 
 test("a plain Enter is the player's", () => {
 	expect(isImeEvent(key(false, 13))).toBe(false);
+});
+
+test("full-width digits become ASCII and everything else drops", () => {
+	expect(digitsOnly("１２３４")).toBe("1234");
+	expect(digitsOnly("12３4")).toBe("1234");
+	expect(digitsOnly(" 12-34 ")).toBe("1234");
+	expect(digitsOnly("ａｂｃ")).toBe("");
+	expect(digitsOnly("")).toBe("");
 });

@@ -8,3 +8,7 @@ type KeyEventLike = { nativeEvent: { isComposing: boolean }; keyCode: number };
  */
 export const isImeEvent = (e: KeyEventLike): boolean =>
 	e.nativeEvent.isComposing || e.keyCode === 229;
+
+/** The digits of `value`. NFKC first: a CJK IME types full-width `１２３` by default. */
+export const digitsOnly = (value: string): string =>
+	value.normalize("NFKC").replace(/\D/g, "");
