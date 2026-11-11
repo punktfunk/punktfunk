@@ -681,43 +681,6 @@ fn held(path: &str, sid: &str, ace: Ace) -> bool {
 
 #[cfg(test)]
 mod tests {
-    /// An `HKLM` key names itself once, an `HKCU` key one per loaded account, anything
-    /// malformed nothing.
-    #[test]
-    fn named_keys_take_the_machine_and_each_account() {
-        let sids = [
-            "S-1-5-21-1-2-3-1001".to_string(),
-            "S-1-12-1-4-5".to_string(),
-        ];
-        let named = |k| super::named_keys_for(k, &sids);
-        assert_eq!(
-            named(r"HKLM\SOFTWARE\Valve\Steam"),
-            [r"MACHINE\SOFTWARE\Valve\Steam"]
-        );
-        assert_eq!(
-            named(r"hklm\SOFTWARE\WOW6432Node\Ubisoft"),
-            [r"MACHINE\SOFTWARE\WOW6432Node\Ubisoft"]
-        );
-        assert_eq!(
-            named(r"HKCU\System\GameConfigStore"),
-            [
-                r"USERS\S-1-5-21-1-2-3-1001\System\GameConfigStore",
-                r"USERS\S-1-12-1-4-5\System\GameConfigStore",
-            ]
-        );
-        for bad in [
-            r"HKLM\",
-            r"HKCU\Software\..\..\S-1-5-18",
-            r"HKLM\SOFTWARE\\Valve",
-            r"HKLM\SOFTWARE\..\SAM",
-            "HKLM\\SOFTWARE\\a\u{7}b",
-            r"HKU\S-1-5-18\Software",
-            r"SOFTWARE\Valve",
-        ] {
-            assert!(named(bad).is_empty(), "{bad}");
-        }
-    }
-
     /// A folder's SIDs share one walk; what a grant noted, or the folder still carries on a
     /// recheck, costs none; an ACE an installer stripped is placed again. Writes ACLs on a
     /// scratch tree, so it runs on a Windows box with `--ignored`.
@@ -1092,27 +1055,29 @@ pub(super) fn verify_next() {
 }
 
 /// Every directory a plugin declared or was granted carries an ACE for the runner's account,
-/// read or Modify, and every `HKLM` key it declared a read; what a gone plugin placed is
-/// stripped. With the sandbox on, the plugin's files capability gets the same plus its code,
-/// state and inbox: a container passes only an ACE its account and its capability both hold, so
-/// a root in a user profile needs both. An ACE an older host placed for the package SID is in
-/// the record and comes off here. A root under the host's own profile is nobody's `~` and gets
-/// nothing; a directory that does not exist yet waits for the next start. The record alone
-/// can't see an ACE that went from its folder, so [`verify_next`] and [`recheck_next`] read the
-/// folders: a plugin without the ACE on its own code can't start.
+/// read or Modify, and every launcher key it declared a read; what a gone plugin placed, or a
+/// key the policy refuses, is stripped. With the sandbox on, the plugin's files capability gets
+/// the same plus its code, state and inbox: a container passes only an ACE its account and its
+/// capability both hold, so a root in a user profile needs both. An ACE an older host placed
+/// for the package SID is in the record and comes off here. A root under the host's own
+/// profile is nobody's `~` and gets nothing; a directory that does not exist yet waits for the
+/// next start. The record alone can't see an ACE that went from its folder, so [`verify_next`]
+/// and [`recheck_next`] read the folders: a plugin without the ACE on its own code can't start.
 pub(super) fn converge_runner_roots(
     roots: &[access::RunnerRoot],
     home: &std::path::Path,
     manifests: &std::collections::BTreeMap<String, manifest::PluginManifest>,
 ) -> Result<bool> {
     let home = home.canonicalize().unwrap_or_else(|_| home.to_path_buf());
+    let sids = user_sids();
+    let declared: std::collections::BTreeMap<&String, std::collections::BTreeSet<String>> =
+        manifests
+            .iter()
+            .map(|(id, m)| (id, plugin_keys(id, &m.registry, &sids)))
+            .collect();
     let runner = Placed {
         paths: root_aces(roots, &home),
-        keys: manifests
-            .values()
-            .flat_map(|m| m.registry.iter())
-            .flat_map(|k| named_keys(k))
-            .collect(),
+        keys: declared.values().flatten().cloned().collect(),
     };
     let mut want = PlacedAces {
         grantees: [(
@@ -1130,7 +1095,7 @@ pub(super) fn converge_runner_roots(
             if m.per_account() {
                 paths.extend(profiles_root());
             }
-            let keys = m.registry.iter().flat_map(|k| named_keys(k)).collect();
+            let keys = declared[id].clone();
             want.grantees.insert(sid, Placed { paths, keys });
         }
     }
@@ -1404,36 +1369,36 @@ fn profiles_root() -> Option<(String, Ace)> {
         .then(|| (users.to_string_lossy().into_owned(), Ace::List))
 }
 
-/// A declared key as `SetNamedSecurityInfoW` names it: `HKLM\…` once as `MACHINE\…`, and
-/// `HKCU\…` as `USERS\<sid>\…` under every account whose hive is loaded, as `~` names every
-/// profile. Anything else names no key.
-fn named_keys(declared: &str) -> Vec<String> {
-    named_keys_for(declared, &user_sids())
-}
-
-fn named_keys_for(declared: &str, sids: &[String]) -> Vec<String> {
-    if let Some(rest) = key_under(declared, "HKLM\\") {
-        return vec![format!("MACHINE\\{rest}")];
+/// The keys plugin `id` declared, named in every loaded hive of `sids`. A key the policy refuses
+/// gets no ACE and one warning per run of this host.
+fn plugin_keys(
+    id: &str,
+    declared: &[String],
+    sids: &[String],
+) -> std::collections::BTreeSet<String> {
+    static WARNED: std::sync::Mutex<std::collections::BTreeSet<(String, String)>> =
+        std::sync::Mutex::new(std::collections::BTreeSet::new());
+    let mut keys = std::collections::BTreeSet::new();
+    for key in declared {
+        match super::registry_keys::named_keys_for(key, sids) {
+            Some(named) => keys.extend(named),
+            None => {
+                let first = WARNED
+                    .lock()
+                    .unwrap_or_else(|poison| poison.into_inner())
+                    .insert((id.to_string(), key.clone()));
+                if first {
+                    tracing::warn!(
+                        plugin = %id,
+                        %key,
+                        cause = "not a launcher's key under Software",
+                        "plugin registry key not granted"
+                    );
+                }
+            }
+        }
     }
-    match key_under(declared, "HKCU\\") {
-        Some(rest) => sids.iter().map(|s| format!("USERS\\{s}\\{rest}")).collect(),
-        None => Vec::new(),
-    }
-}
-
-/// The path below `hive` (`HKLM\`), when `declared` is a clean key there.
-fn key_under<'a>(declared: &'a str, hive: &str) -> Option<&'a str> {
-    let rest = declared
-        .get(..hive.len())
-        .filter(|p| p.eq_ignore_ascii_case(hive))
-        .map(|_| &declared[hive.len()..])?;
-    let clean = !rest.is_empty()
-        && rest.len() <= 255
-        && !rest.chars().any(char::is_control)
-        && rest
-            .split('\\')
-            .all(|c| !c.is_empty() && c != "." && c != ".." && !c.contains(['/', '*', '?']));
-    clean.then_some(rest)
+    keys
 }
 
 /// The loaded hives of real accounts: local and domain (`S-1-5-21-…`) and Entra ID

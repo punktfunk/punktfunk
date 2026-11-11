@@ -25,6 +25,8 @@ pub mod access;
 #[cfg(any(test, target_os = "windows"))]
 mod ace_plan;
 pub mod manifest;
+#[cfg(any(test, target_os = "windows"))]
+mod registry_keys;
 pub(crate) mod walks;
 #[cfg(target_os = "windows")]
 mod windows;
