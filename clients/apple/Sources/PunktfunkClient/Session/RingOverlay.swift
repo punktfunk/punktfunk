@@ -12,30 +12,45 @@
 // the way tvOS dims its own: the mouse and the real keyboard already do that work.
 
 #if os(iOS) || os(visionOS) || os(tvOS) || os(macOS)
+import Combine
 import PunktfunkKit
 import PunktfunkShared
 import SwiftUI
 
-/// The ring's open/closed state and what it is showing. One per session; the overlay reads it.
+/// The change signal of `RingState`'s drawing fields, which only the overlay watches.
+final class RingFrame: ObservableObject {
+    let objectWillChange = ObservableObjectPublisher()
+}
+
+/// The ring's open/closed state and what it is showing. One per session. Opening and closing
+/// publish here, for the stream scene and the root view; every field that changes while the
+/// ring is up notifies `frame` instead, so a twist or a pad step redraws only the overlay.
 @MainActor
 final class RingState: ObservableObject {
-    /// 0 closed … 1 open — driven by the twist until `committed`.
-    @Published var progress: CGFloat = 0
+    let frame = RingFrame()
     @Published var committed = false
     /// The wind-in after a close: the overlay stays mounted while the discs ease back.
     @Published var closing = false
-    @Published var clockwise = true
+    /// 0 closed … 1 open — driven by the twist until `committed`. Leaving or reaching 0 flips
+    /// `visible`, so that edge publishes here too.
+    var progress: CGFloat = 0 {
+        willSet {
+            frame.objectWillChange.send()
+            if (newValue > 0) != (progress > 0) { objectWillChange.send() }
+        }
+    }
+    var clockwise = true { willSet { frame.objectWillChange.send() } }
     /// Stream-view points; the ring is centred here, clamped so it stays on screen.
-    @Published var centre = CGPoint.zero
+    var centre = CGPoint.zero { willSet { frame.objectWillChange.send() } }
     /// Opened with no point of its own (a chord, a menu item): the overlay puts it in the middle
     /// of the stage instead, so it never depends on a pointer that may be locked or off-window.
-    @Published var centred = false
-    @Published var sheet = false
+    var centred = false { willSet { frame.objectWillChange.send() } }
+    var sheet = false { willSet { frame.objectWillChange.send() } }
     /// A destructive slot awaiting its second press (the slot id).
-    @Published var armed: String?
+    var armed: String? { willSet { frame.objectWillChange.send() } }
     /// The label under the ring: a slot's name, why it is unavailable, or "tap again".
-    @Published var hint: String?
-    @Published var lastTouch = Date()
+    var hint: String? { willSet { frame.objectWillChange.send() } }
+    var lastTouch = Date() { willSet { frame.objectWillChange.send() } }
     /// The mode this session's Welcome carried, set as it starts streaming: the Resolution row's
     /// Native. Nil in the editor, which takes the live mode.
     var native: RingNav.Mode?
@@ -46,20 +61,16 @@ final class RingState: ObservableObject {
     var opener: UInt32?
     /// The pad's highlight: a slot 0…5, or 6 for the centre (the initial one — `Select+A`
     /// then A opens the sheet in two presses). `nil` until a pad moves it.
-    @Published var highlight: Int?
+    var highlight: Int? { willSet { frame.objectWillChange.send() } }
     /// The sheet row the pad is on.
-    @Published var sheetCursor = 0
+    var sheetCursor = 0 { willSet { frame.objectWillChange.send() } }
     /// The in-flight wind-in, so a second close cannot clear `closing` under the first.
     private var closeTask: Task<Void, Never>?
-    /// Pad presses awaiting the overlay (`RingOverlay` drains them); `navSeq` makes each an event.
-    ///
-    /// A QUEUE, not a slot: capture emits several of these from one poll — a stick crossing a
-    /// sector boundary in the same frame as an A press — and SwiftUI coalesces the `navSeq` bumps
-    /// into one update, so a single slot delivered only the last of them. The dropped ones were
-    /// the presses: the highlight moved and nothing fired, and the same race ate B, so the ring
-    /// refused to close. Only an open ring queues; `close` drops what is left.
+    /// Pad presses awaiting the overlay, which drains them on each `navSeq` change. A queue: one
+    /// capture poll can carry a stick sector and an A press, and SwiftUI folds their two bumps
+    /// into one update. Only an open ring queues; `close` drops what is left.
     var pendingNav: [RingNav] = []
-    @Published var navSeq = 0
+    var navSeq = 0 { willSet { frame.objectWillChange.send() } }
 
     func nav(_ n: RingNav) {
         guard committed else { return }
@@ -70,11 +81,11 @@ final class RingState: ObservableObject {
     // Haptic triggers: `.sensoryFeedback` fires on change, so each is a counter. The vocabulary
     // is one tick when the twist arms, a thump at commit, a tap per press, a firm "no" on a
     // dimmed button, and a warning when a destructive slot arms.
-    @Published var armTick = 0
-    @Published var commitTick = 0
-    @Published var pressTick = 0
-    @Published var refuseTick = 0
-    @Published var warnTick = 0
+    var armTick = 0 { willSet { frame.objectWillChange.send() } }
+    var commitTick = 0 { willSet { frame.objectWillChange.send() } }
+    var pressTick = 0 { willSet { frame.objectWillChange.send() } }
+    var refuseTick = 0 { willSet { frame.objectWillChange.send() } }
+    var warnTick = 0 { willSet { frame.objectWillChange.send() } }
     private var twistArmed = false
 
     var visible: Bool { committed || progress > 0 || closing }
@@ -491,10 +502,20 @@ private let slotLag: CGFloat = 0.06
 /// The ring and its sheet. Sits above the stream view; a tap on the scrim outside closes it.
 struct RingOverlay: View {
     @ObservedObject var state: RingState
+    /// `state`'s drawing fields, which publish here and not on `state`.
+    @ObservedObject private var frame: RingFrame
     let cfg: OverlayConfig
     let actions: RingActions
     /// Set by the settings editor; nil in-stream.
-    var editing: RingEditing? = nil
+    var editing: RingEditing?
+
+    init(state: RingState, cfg: OverlayConfig, actions: RingActions, editing: RingEditing? = nil) {
+        self.state = state
+        frame = state.frame
+        self.cfg = cfg
+        self.actions = actions
+        self.editing = editing
+    }
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     #if os(visionOS)
     /// On the Vision Pro's screen the ring is an attachment over the picture, with no scrim.
@@ -641,7 +662,7 @@ struct RingOverlay: View {
                         .position(x: cx, y: cy + ringRadius + slotSize)
                 }
                 if state.sheet {
-                    RingSheet(state: state, rows: sheetRows())
+                    RingSheet(state: state, frame: state.frame, rows: sheetRows())
                         .frame(maxHeight: geo.size.height * 0.6)
                         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
                         .padding(.bottom, 16)
@@ -999,6 +1020,8 @@ extension RingOverlay {
 /// The sheet as a scrollable glass panel; the pad's cursor row is tinted.
 private struct RingSheet: View {
     @ObservedObject var state: RingState
+    /// Publishes the cursor's moves.
+    @ObservedObject var frame: RingFrame
     let rows: [SheetRowSpec]
 
     var body: some View {
