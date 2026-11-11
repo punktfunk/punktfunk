@@ -26,7 +26,7 @@ pub const KWIN_POOL_MAX: i32 = 4;
 /// Encode-backend facts the Linux zero-copy negotiation needs, resolved once
 /// by the host facade and passed in so capture never calls back into encode.
 #[cfg(target_os = "linux")]
-#[derive(Clone, Default)]
+#[derive(Clone, Default, PartialEq)]
 pub struct ZeroCopyPolicy {
     /// VAAPI (AMD/Intel): hand raw dmabufs through instead of the EGL→CUDA
     /// import (`encode::linux_zero_copy_is_vaapi`).
@@ -193,6 +193,9 @@ pub struct VirtualOutputOpts {
     /// Read the pointer from gamescope's nested Xwaylands: its node carries no
     /// `SPA_META_Cursor`. `None` everywhere else.
     pub gamescope_cursor: Option<crate::GamescopeCursorTargets>,
+    /// Sessions may share this node's screen: an open takes its frames from the stream
+    /// already on the node, since a reliable producer feeds one PipeWire link only.
+    pub share: bool,
     /// Capture this output directly first. Skipped without zero-copy (it delivers dmabufs
     /// only) or under `PUNKTFUNK_DIRECT_CAPTURE=0`.
     pub direct: Option<DirectOutput>,

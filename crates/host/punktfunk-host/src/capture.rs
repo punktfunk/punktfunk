@@ -309,6 +309,8 @@ pub fn capture_virtual_output(
             stream_hz,
             gamescope_cursor,
             direct,
+            // gamescope has one stream for every session on its screen.
+            share: gamescope && crate::vdisplay::policy::prefs().get().any_join(),
             ..Default::default()
         },
         // No route here. A wrong "foreign" only keeps the LINEAR offer.

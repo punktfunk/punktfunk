@@ -553,6 +553,14 @@ pub fn fp_hex(fp: Option<[u8; 32]>) -> Option<String> {
 }
 
 impl DisplayPolicy {
+    /// Some device may be admitted onto a live screen: the host's policy or any device's own
+    /// says `join`.
+    pub fn any_join(&self) -> bool {
+        let join = Some(ModeConflict::Join);
+        Some(self.effective().mode_conflict) == join
+            || self.clients.values().any(|o| o.mode_conflict == join)
+    }
+
     /// This device's overlay, if it has one.
     pub fn overlay_for(&self, fp: Option<&str>) -> Option<&ClientOverlay> {
         self.clients.get(fp?)

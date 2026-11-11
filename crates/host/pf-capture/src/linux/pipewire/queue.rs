@@ -93,13 +93,23 @@ impl Arrivals {
     /// consumer takes that one alone, and the producer needs the buffers of the rest to
     /// send anything newer. Frames still rendering stay; one of them is the next to finish.
     pub(super) fn push(&mut self, frame: CapturedFrame, fence: Option<RenderFence>, now: Instant) {
+        self.push_shared(frame, fence.map(Arc::new), now);
+    }
+
+    /// [`Self::push`] under a fence other queues wait on too.
+    pub(super) fn push_shared(
+        &mut self,
+        frame: CapturedFrame,
+        fence: Option<Arc<RenderFence>>,
+        now: Instant,
+    ) {
         self.supersede(now);
         while self.q.len() >= MAX_PENDING {
             self.q.pop_front();
         }
         self.q.push_back(Pending {
             frame,
-            fence: fence.map(Arc::new),
+            fence,
             arrived: now,
         });
     }
