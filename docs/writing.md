@@ -388,6 +388,9 @@ Good: `Select the card to pair it.`
 - No upper-casing in code: Turkish and German change letters.
   Bad: `g.title.uppercase()` Good: the heading as it should read.
 
+Chinese, Japanese and Korean add rules of their own: `docs/l10n.md` "Chinese, Japanese and
+Korean".
+
 ---
 
 ## 5. Checklist (every PR)
