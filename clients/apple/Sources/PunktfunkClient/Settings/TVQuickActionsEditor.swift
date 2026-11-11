@@ -335,7 +335,7 @@ private struct TVShortcutEditor: View {
         }
         .fullScreenCover(isPresented: $editingName) {
             TVTextEntry(title: String(localized: L10n.ringShortcutName), text: draft.label) { typed in
-                draft.label = typed
+                draft.label = typed.trimmingCharacters(in: .whitespaces)
                 editingName = false
             }
         }

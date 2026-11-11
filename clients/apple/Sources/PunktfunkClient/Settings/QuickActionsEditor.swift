@@ -394,7 +394,10 @@ private struct ShortcutEditor: View {
                 ToolbarItem(placement: .cancellationAction) { Button(L10n.commonCancel) { dismiss() } }
                 ToolbarItem(placement: .confirmationAction) {
                     Button(draft.isNew ? L10n.commonAdd : L10n.commonSave) {
-                        save(draft)
+                        // A name of spaces is no name: the row then shows the chord.
+                        var named = draft
+                        named.label = draft.label.trimmingCharacters(in: .whitespaces)
+                        save(named)
                         dismiss()
                     }
                     // A modifier alone is a combination: Win opens the host's Start menu.
