@@ -317,8 +317,7 @@ private struct ShortcutEditor: View {
     let delete: () -> Void
     @Environment(\.dismiss) private var dismiss
 
-    private var mods: [String] { draft.keys.filter { modifierKeys.contains($0) } }
-    private var key: String? { draft.keys.first { !modifierKeys.contains($0) } }
+    private var chord: Chord { Chord.parse(keys: draft.keys) }
 
     var body: some View {
         NavigationStack {
@@ -341,8 +340,8 @@ private struct ShortcutEditor: View {
                 }
                 Section(String(localized: L10n.ringShortcutModifiers)) {
                     HStack(spacing: 8) {
-                        ForEach(modifierKeys, id: \.self) { m in
-                            let on = mods.contains(m)
+                        ForEach(Chord.modifiers, id: \.self) { m in
+                            let on = chord.mods.contains(m)
                             Button(keyLegend(m)) { toggle(m) }
                                 .buttonStyle(.bordered)
                                 .tint(on ? Color.brand : Color.secondary)
@@ -351,14 +350,14 @@ private struct ShortcutEditor: View {
                         }
                     }
                 }
-                ForEach(keyGroups, id: \.id) { group in
+                ForEach(Chord.keyGroups, id: \.id) { group in
                     Section(group.title) {
                         // Word keys (Backspace, PgDn, PrtSc) get wider cells; every cap keeps
                         // one line at one height and shrinks its text rather than growing.
                         let wide = group.keys.contains { keyLegend($0).count > 2 }
                         LazyVGrid(columns: [GridItem(.adaptive(minimum: wide ? 80 : 44), spacing: 6)], spacing: 6) {
                             ForEach(group.keys, id: \.self) { k in
-                                let on = key == k
+                                let on = chord.key == k
                                 Button {
                                     pick(k)
                                 } label: {
@@ -407,19 +406,16 @@ private struct ShortcutEditor: View {
         }
     }
 
-    /// Modifiers first in keyboard order, then the key — the order the chord is sent.
-    private func rebuild(mods: [String], key: String?) {
-        draft.keys = modifierKeys.filter { mods.contains($0) } + (key.map { [$0] } ?? [])
-    }
-
     private func toggle(_ m: String) {
-        var next = mods
-        if let i = next.firstIndex(of: m) { next.remove(at: i) } else { next.append(m) }
-        rebuild(mods: next, key: key)
+        var c = chord
+        c.toggle(m)
+        draft.keys = c.keys
     }
 
     private func pick(_ k: String) {
-        rebuild(mods: mods, key: k)
+        var c = chord
+        c.key = k
+        draft.keys = c.keys
     }
 }
 #endif

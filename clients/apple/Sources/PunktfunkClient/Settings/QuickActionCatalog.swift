@@ -1,6 +1,7 @@
 // The dial editors' shared vocabulary: the catalogue of actions by group with each entry's note
-// on this platform, the shortcut keys, and the ring's inert preview commands. The touch/desktop
-// editor (QuickActionsEditor) and the TV's (TVQuickActionsEditor) both read it.
+// on this platform, the shortcut draft, and the ring's inert preview commands. The touch/desktop
+// editor (QuickActionsEditor) and the TV's (TVQuickActionsEditor) both read it; the keys a
+// shortcut can hold are `Chord`'s.
 
 import PunktfunkKit
 import PunktfunkShared
@@ -100,21 +101,6 @@ private let noTouchNote: String? = nil
 private let keyboardNote: String? = nil
 private let micNote: String? = nil
 #endif
-
-let modifierKeys = ["ctrl", "alt", "shift", "win"]
-
-/// The keys a chord can end on, as the keyboard the editor draws lays them out — every name
-/// `keyVk` knows, grouped the way a keyboard groups them.
-let keyGroups: [(id: String, title: String, keys: [String])] = [
-    ("function", String(localized: L10n.ringKeyGroupFunction), ["escape"] + (1...12).map { "f\($0)" }),
-    ("letters", String(localized: L10n.ringKeyGroupLetters), "qwertyuiopasdfghjklzxcvbnm".map(String.init)),
-    ("numbers", String(localized: L10n.ringKeyGroupNumbers), (1...9).map(String.init) + ["0"]),
-    ("editing", String(localized: L10n.ringKeyGroupEditing),
-     ["tab", "space", "enter", "backspace", "delete", "insert"]),
-    ("navigation", String(localized: L10n.ringKeyGroupNavigation),
-     ["home", "end", "pageup", "pagedown", "up", "down", "left", "right"]),
-    ("other", String(localized: L10n.ringKeyGroupOther), ["printscreen", "pause", "capslock"]),
-]
 
 /// A shortcut being edited, new or existing.
 struct ShortcutDraft: Identifiable, Hashable {

@@ -415,7 +415,7 @@ private final class ShortcutRecorder: ObservableObject {
 
     /// The stored name of a key's VK, from the names the key grid knows.
     static func keyName(_ vk: UInt32) -> String? {
-        keyGroups.flatMap(\.keys).first { keyVk($0) == vk }
+        Chord.keyGroups.flatMap(\.keys).first { keyVk($0) == vk }
     }
 }
 
@@ -568,7 +568,7 @@ private struct ChooseGrid: View {
                 }
             }
         }
-        ForEach(keyGroups, id: \.id) { group in
+        ForEach(Chord.keyGroups, id: \.id) { group in
             Section(group.title) {
                 let wide = group.keys.contains { keyLegend($0).count > 2 }
                 LazyVGrid(columns: [GridItem(.adaptive(minimum: wide ? 80 : 44), spacing: 6)], spacing: 6) {

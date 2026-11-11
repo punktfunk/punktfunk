@@ -282,8 +282,7 @@ private struct TVShortcutEditor: View {
     @Environment(\.dismiss) private var dismiss
     @State private var editingName = false
 
-    private var mods: [String] { draft.keys.filter { modifierKeys.contains($0) } }
-    private var key: String? { draft.keys.first { !modifierKeys.contains($0) } }
+    private var chord: Chord { Chord.parse(keys: draft.keys) }
 
     var body: some View {
         ScrollView {
@@ -296,12 +295,12 @@ private struct TVShortcutEditor: View {
                 ) { editingName = true }
                 heading(String(localized: L10n.ringShortcutModifiers))
                 HStack(spacing: 24) {
-                    ForEach(modifierKeys, id: \.self) { m in
-                        chip(keyLegend(m), on: mods.contains(m)) { toggle(m) }
+                    ForEach(Chord.modifiers, id: \.self) { m in
+                        chip(keyLegend(m), on: chord.mods.contains(m)) { toggle(m) }
                     }
                 }
                 .focusSection()
-                ForEach(keyGroups, id: \.id) { group in
+                ForEach(Chord.keyGroups, id: \.id) { group in
                     heading(group.title)
                     let wide = group.keys.contains { keyLegend($0).count > 2 }
                     LazyVGrid(
@@ -309,7 +308,7 @@ private struct TVShortcutEditor: View {
                         alignment: .leading, spacing: 20
                     ) {
                         ForEach(group.keys, id: \.self) { k in
-                            chip(keyLegend(k), on: key == k) { pick(k) }
+                            chip(keyLegend(k), on: chord.key == k) { pick(k) }
                         }
                     }
                     .focusSection()
@@ -363,19 +362,16 @@ private struct TVShortcutEditor: View {
         }
     }
 
-    /// Modifiers first in keyboard order, then the key — the order the chord is sent.
-    private func rebuild(mods: [String], key: String?) {
-        draft.keys = modifierKeys.filter { mods.contains($0) } + (key.map { [$0] } ?? [])
-    }
-
     private func toggle(_ m: String) {
-        var next = mods
-        if let i = next.firstIndex(of: m) { next.remove(at: i) } else { next.append(m) }
-        rebuild(mods: next, key: key)
+        var c = chord
+        c.toggle(m)
+        draft.keys = c.keys
     }
 
     private func pick(_ k: String) {
-        rebuild(mods: mods, key: k)
+        var c = chord
+        c.key = k
+        draft.keys = c.keys
     }
 }
 #endif
