@@ -611,7 +611,10 @@ final class SessionModel: ObservableObject {
                     let wake = PunktfunkConnection.wakeRedialDelay(
                         after: error, autoWake: self.lastDial?.autoWake ?? false,
                         sinceFirst: self.sinceFirstWake)
-                    if self.redialWhileWaking(self.lastDial, after: wake) { return }
+                    if let wake, let plan = self.lastDial {
+                        self.redialWhileWaking(plan, after: wake)
+                        return
+                    }
                     if let message = ConnectOffer.failureMessage(
                         error, hostName: host.displayName, pinned: pin != nil,
                         requestAccess: requestAccess, callerRecovers: onUnreachable != nil)
@@ -1012,72 +1015,38 @@ final class SessionModel: ObservableObject {
         pictureText = ""
     }
 
-    /// Called (via the main actor) when the pump hits end-of-session.
+    /// Called (via the main actor) when the pump hits end-of-session: reads why off the ended
+    /// connection, tears the session down, then takes the `SessionEndRoute` those facts name.
     func sessionEnded() {
         guard let conn = connection else { return }
         let name = activeHost?.displayName ?? "host"
         // WHY it ended, asked while the connection is still up — `disconnect` tears it down.
         let reason = conn.sessionEndReason
-        // A typed mid-session rejection outranks the coarse reason: an access-expiry close
-        // (per-client access §4) files under `.hostError` there, and "ended with an error"
-        // is the wrong sentence for "your access expired".
         let rejection = conn.endRejection
-        // The host's own words when it sent any: it can name the monitor it was told to
-        // capture and no longer has, which our generic line cannot.
-        let said = conn.endRejectionMessage
-        // Where a game exit sends us: back into the library this session started from, so the
-        // next title is a tap away. A plain desktop connect has no shelf, and so no way back.
-        let host = activeHost
-        // The SHELF is what says this came from the library, not the launch id: a Resume off a
-        // shelf launches nothing and still has somewhere to go back to.
-        let shelf = launchedShelf
         let endLine = "session ended by \(name) reason=\(reason) "
             + "rejection=\(rejection.map { String(describing: $0) } ?? "-")"
         sessionLog.info("\(endLine, privacy: .public)")
-        // A session the player accepted pins its redial to the host. One lost at the trust prompt
-        // has no pin and is not dialed again: that redial would stream without the prompt.
-        let pin = phase.lossRedialPin(
-            dialed: lastDial?.host.pinnedSHA256, live: conn.hostFingerprint)
-        let lostDial = pin.flatMap { pin in
-            lastDial.map { plan -> Redial in
-                var plan = plan
-                plan.host.pinnedSHA256 = pin
-                return plan
-            }
-        }
-        let wake = conn.wakeRedialDelay(
-            autoWake: lastDial?.autoWake ?? false, sinceFirst: sinceFirstWake)
+        // The shelf, not the launch id, says this came from the library: a Resume launches nothing.
+        let shelf = activeHost == nil ? nil : launchedShelf
+        let route = SessionEndRoute.decide(
+            phase: phase, reason: reason, rejection: rejection, said: conn.endRejectionMessage,
+            wakeDelay: conn.wakeRedialDelay(
+                autoWake: lastDial?.autoWake ?? false, sinceFirst: sinceFirstWake),
+            dialed: lastDial?.host, live: conn.hostFingerprint, shelf: shelf != nil)
         disconnect(deliberate: false) // host/network ended it — keep the linger for a reconnect
-        if redialWhileWaking(lastDial, after: wake) { return }
-        if reason == .lost, rejection == nil, let lostDial {
-            redialAfterLoss(lostDial)
-            return
-        }
-        if let rejection {
-            // The host's sentence, else the shared typed-rejection wording
-            // ("Your access to this host has expired…").
-            errorMessage = L10n.dialHostReason(host: name, reason: said ?? rejection.userMessage)
-            return
-        }
-        switch reason {
-        case .gameExited:
-            // The player quit their own game. Not a failure, and they are probably after the next
-            // title — so no banner, and back to the library it came from.
-            if host != nil, let shelf {
-                returnToLibrary = shelf
-            }
-        case .hostEnded, .local:
-            // Someone asked for this: an operator "End" on the host, or our own close racing in.
-            // Say it plainly, without the error framing.
-            errorMessage = L10n.appleEndedByHost(host: name)
-        case .hostError:
-            errorMessage = L10n.appleEndedHostError(host: name)
-        case .lost:
-            errorMessage = L10n.appleEndedLost(host: name)
+        switch route {
+        case .wakeRedial(let wait):
+            if let plan = lastDial { redialWhileWaking(plan, after: wait) }
+        case .lossRedial(let pin):
+            guard var plan = lastDial else { return }
+            plan.host.pinnedSHA256 = pin
+            redialAfterLoss(plan)
+        case .message(let message):
+            errorMessage = message.text(host: name)
+        case .library:
+            returnToLibrary = shelf
         case .none:
-            // No verdict (an older core, or the close raced the read): keep the wording this path
-            // has always used rather than inventing one.
-            errorMessage = L10n.appleEndedUnknown(host: name)
+            break
         }
     }
 
@@ -1110,10 +1079,9 @@ final class SessionModel: ObservableObject {
     private var sinceFirstWake: Duration? { lastDial?.wakeSince.map { ContinuousClock.Instant.now - $0 } }
 
     /// Dial `plan` again after `wait`, the core's answer for a woken host that answered before
-    /// it could stream. True when that redial is on its way; the connect overlay stays up for it,
-    /// and Cancel ends it. A refusal past the window shows as it always has.
-    private func redialWhileWaking(_ plan: Redial?, after wait: Duration?) -> Bool {
-        guard let wait, var next = plan else { return false }
+    /// it could stream. The connect overlay stays up for the redial, and Cancel ends it.
+    private func redialWhileWaking(_ plan: Redial, after wait: Duration) {
+        var next = plan
         next.wakeSince = next.wakeSince ?? .now
         redial = next
         let seq = connectSeq
@@ -1128,7 +1096,6 @@ final class SessionModel: ObservableObject {
                 shelf: next.shelf,
                 allowTofu: next.allowTofu, autoWake: next.autoWake, wakeSince: next.wakeSince)
         }
-        return true
     }
 
     /// Resize overlay START (main actor — from the Match-window follower's `onResizeTarget`): the
