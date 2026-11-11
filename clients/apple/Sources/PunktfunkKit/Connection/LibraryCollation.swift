@@ -64,13 +64,14 @@ public enum LibrarySortKey: String, CaseIterable, Hashable, Sendable {
 }
 
 /// The two arrangements of the gamepad library. Persisted as `punktfunk.libraryView`
-/// (`shelf|grid`, the desktop's `library_view`); unknown → shelf.
+/// (`shelf|grid`, the desktop's `library_view`); unset and unknown → grid, as the console that
+/// draws the library reads it.
 public enum LibraryArrangement: String, CaseIterable, Hashable, Sendable {
     case shelf = "shelf"
     case grid = "grid"
 
     public init(stored: String?) {
-        self = LibraryArrangement(rawValue: stored ?? "") ?? .shelf
+        self = LibraryArrangement(rawValue: stored ?? "") ?? .grid
     }
 
     public var stored: String { rawValue }

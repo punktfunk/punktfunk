@@ -65,7 +65,7 @@ struct SettingsView: View {
     @AppStorage(DefaultsKey.tenBitSdr) var tenBitSdr = SettingDefault.tenBitSdr
     /// The gamepad library's arrangement — a device preference, stored as the cross-client
     /// `library_view` value.
-    @AppStorage(DefaultsKey.libraryView) var libraryViewRaw = LibraryArrangement.shelf.stored
+    @AppStorage(DefaultsKey.libraryView) var libraryViewRaw = LibraryArrangement.grid.stored
     @AppStorage(DefaultsKey.startIn) var startInRaw = SettingDefault.startIn
     @AppStorage(DefaultsKey.defaultHost) var defaultHostID = ""
     /// The default host's name for Start in's caption, nil with none (`readStartInHost`).

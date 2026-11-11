@@ -156,8 +156,10 @@ final class LibraryCollationTests: XCTestCase {
 
         XCTAssertEqual(LibraryArrangement(stored: "grid"), .grid)
         XCTAssertEqual(LibraryArrangement(stored: "shelf"), .shelf)
-        XCTAssertEqual(LibraryArrangement(stored: "carousel"), .shelf)
-        XCTAssertEqual(LibraryArrangement(stored: nil), .shelf)
+        // The console reads unset and unknown as the grid (`LibraryView::parse`), and draws it.
+        XCTAssertEqual(LibraryArrangement(stored: "carousel"), .grid)
+        XCTAssertEqual(LibraryArrangement(stored: ""), .grid)
+        XCTAssertEqual(LibraryArrangement(stored: nil), .grid)
     }
 
     /// The desktop model's `running_titles_lead_without_breaking_the_launcher_prefix`: launchers
