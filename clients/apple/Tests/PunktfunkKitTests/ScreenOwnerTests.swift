@@ -26,6 +26,15 @@ final class ScreenOwnerTests: XCTestCase {
             fullscreenAlways: always)
     }
 
+    /// A session lost at the trust prompt never hands its redial the host's fingerprint.
+    func testALossAtTheTrustPromptPinsNothing() {
+        let live = Data([7]), dialed = Data([9])
+        XCTAssertNil(SessionPhase.awaitingTrust(fingerprint: live).lossRedialPin(dialed: nil, live: live))
+        XCTAssertEqual(SessionPhase.streaming.lossRedialPin(dialed: nil, live: live), live)
+        XCTAssertEqual(SessionPhase.streaming.lossRedialPin(dialed: dialed, live: live), live)
+        XCTAssertEqual(SessionPhase.connecting.lossRedialPin(dialed: dialed, live: live), dialed)
+    }
+
     /// Without the console the app draws everything, prompts included.
     func testWithoutTheConsoleTheAppOwnsTheScreen() {
         for phase in Self.phases {

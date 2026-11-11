@@ -1032,11 +1032,16 @@ final class SessionModel: ObservableObject {
         let endLine = "session ended by \(name) reason=\(reason) "
             + "rejection=\(rejection.map { String(describing: $0) } ?? "-")"
         sessionLog.info("\(endLine, privacy: .public)")
-        // The streamed session proved the host's identity, so its redial is pinned to it.
-        let lostDial = lastDial.map { plan -> Redial in
-            var plan = plan
-            plan.host.pinnedSHA256 = conn.hostFingerprint
-            return plan
+        // A session the player accepted pins its redial to the host. One lost at the trust prompt
+        // has no pin and is not dialed again: that redial would stream without the prompt.
+        let pin = phase.lossRedialPin(
+            dialed: lastDial?.host.pinnedSHA256, live: conn.hostFingerprint)
+        let lostDial = pin.flatMap { pin in
+            lastDial.map { plan -> Redial in
+                var plan = plan
+                plan.host.pinnedSHA256 = pin
+                return plan
+            }
         }
         let wake = conn.wakeRedialDelay(
             autoWake: lastDial?.autoWake ?? false, sinceFirst: sinceFirstWake)
