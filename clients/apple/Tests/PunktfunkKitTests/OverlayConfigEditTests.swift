@@ -1,5 +1,6 @@
 // The ring editors' edits on `OverlayConfig`: both the touch and the TV editor call these.
 
+import PunktfunkKit
 import XCTest
 @testable import PunktfunkShared
 
@@ -65,5 +66,20 @@ final class OverlayConfigEditTests: XCTestCase {
         let before = bindings
         cfg.removeShortcut("s1", bindings: &bindings)
         XCTAssertEqual(bindings, before, "no binding sent s1")
+    }
+
+    /// R7-6: a stored opacity or scale outside the sliders' ranges reads clamped into them, so
+    /// the slider's percentage never meets an infinity.
+    func testParseClampsThePadSlidersToTheirRanges() {
+        func pad(_ opacity: String, _ scale: String) -> PadConfig {
+            OverlayConfig.parse(#"{"v":2,"ring":[],"pad":{"opacity":\#(opacity),"scale":\#(scale)}}"#).pad
+        }
+        XCTAssertEqual(pad("1e39", "-3").opacity, 1, "a Float infinity")
+        XCTAssertEqual(pad("1e39", "-3").scale, 0.6)
+        XCTAssertEqual(pad("0", "9").opacity, 0.15)
+        XCTAssertEqual(pad("0", "9").scale, 1.6)
+        XCTAssertEqual(pad("0.3", "1.2"), PadConfig(opacity: 0.3, scale: 1.2))
+        XCTAssertEqual(PadConfig.opacityRange, VirtualPad.opacityRange, "the slider's range")
+        XCTAssertEqual(PadConfig.scaleRange, VirtualPad.scaleRange, "the slider's range")
     }
 }

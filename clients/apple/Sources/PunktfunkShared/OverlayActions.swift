@@ -198,6 +198,10 @@ public struct PadTweak: Equatable, Sendable {
 /// the same for a narrow (upright) layer — the two classes the preset already lays out
 /// differently.
 public struct PadConfig: Equatable, Sendable {
+    /// The two sliders' ranges; `OverlayConfig.parse` clamps a stored value into them.
+    public static let opacityRange: ClosedRange<Float> = 0.15...1
+    public static let scaleRange: ClosedRange<Float> = 0.6...1.6
+
     public var layout = "full"
     public var opacity: Float = 0.45
     public var scale: Float = 1
@@ -292,7 +296,8 @@ public struct OverlayConfig: Equatable, Sendable {
         }
     }
 
-    /// Parse the setting; an empty or unparseable blob is the platform default.
+    /// Parse the setting; an empty or unparseable blob is the platform default, and a pad
+    /// slider's value outside its range is clamped into it.
     public static func parse(_ json: String?, platform: RingPlatform = .touch) -> OverlayConfig {
         guard let json, !json.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
               let data = json.data(using: .utf8),
@@ -314,8 +319,12 @@ public struct OverlayConfig: Equatable, Sendable {
         let padIn = obj["pad"] as? [String: Any] ?? [:]
         var pad = PadConfig()
         if let l = padIn["layout"] as? String, !l.isEmpty { pad.layout = l }
-        if let o = padIn["opacity"] as? Double { pad.opacity = Float(o) }
-        if let s = padIn["scale"] as? Double { pad.scale = Float(s) }
+        // Into the sliders' ranges: a slider's percentage traps on an infinity.
+        func clamped(_ v: Double, _ r: ClosedRange<Float>) -> Float {
+            Float.minimum(Float.maximum(Float(v), r.lowerBound), r.upperBound)
+        }
+        if let o = padIn["opacity"] as? Double { pad.opacity = clamped(o, PadConfig.opacityRange) }
+        if let s = padIn["scale"] as? Double { pad.scale = clamped(s, PadConfig.scaleRange) }
         func tweaks(_ key: String) -> [String: PadTweak] {
             guard let m = padIn[key] as? [String: Any] else { return [:] }
             var out: [String: PadTweak] = [:]
