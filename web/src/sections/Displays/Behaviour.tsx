@@ -38,6 +38,7 @@ import { type PolicyPatch, PolicyQuestions } from "./PolicyQuestions";
 /** Default first (the safe baseline), then the situational ones. */
 const PRESET_ORDER = [
 	"default",
+	"play-together",
 	"shared-desktop",
 	"hotdesk",
 	"workstation",
@@ -300,6 +301,7 @@ const PRESET_SUMMARY: Record<string, () => string> = {
 	"shared-desktop": () => m.display_preset_shared_desktop_hint(),
 	hotdesk: () => m.display_preset_hotdesk_hint(),
 	workstation: () => m.display_preset_workstation_hint(),
+	"play-together": () => m.display_preset_play_together_hint(),
 };
 
 export const presetSummary = (id: string, host: string): string =>
@@ -312,4 +314,5 @@ export const presetLabel = (id: string): string =>
 		"shared-desktop": m.display_preset_shared_desktop(),
 		hotdesk: m.display_preset_hotdesk(),
 		workstation: m.display_preset_workstation(),
+		"play-together": m.display_preset_play_together(),
 	})[id] ?? id;

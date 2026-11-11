@@ -204,8 +204,8 @@ async fn display_settings_surface() {
     let presets = body["presets"].as_array().expect("presets array");
     assert_eq!(
         presets.len(),
-        5,
-        "all five named presets are surfaced for the console picker"
+        6,
+        "every named preset is surfaced for the console picker"
     );
     assert!(
         body["effective"]["keep_alive"].is_object(),

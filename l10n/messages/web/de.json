@@ -226,9 +226,10 @@
 	"host_conflicts_help": "Ein anderer Server belegt Punktfunks Ports; es antwortet der zuerst gestartete. Beende ihn und starte neu.",
 	"display_preset_default": "Standard",
 	"display_preset_gaming_rig": "Headless-Box",
-	"display_preset_shared_desktop": "Geteilter Desktop",
+	"display_preset_shared_desktop": "Schreibtisch-PC",
 	"display_preset_hotdesk": "Hot-Desk",
 	"display_preset_workstation": "Workstation",
+	"display_preset_play_together": "Zusammen spielen",
 	"display_keep_alive_seconds": "Sekunden",
 	"display_release_all": "Alle gehaltenen freigeben",
 	"display_game_session": "Dedizierte Spiel-Sitzungen",
@@ -1623,5 +1624,6 @@
 	"display_preset_gaming_rig_hint": "Für einen Host ohne Monitor: Das Spiel läuft weiter, wenn du gehst, und wer sich als Nächstes verbindet, übernimmt.",
 	"display_preset_hotdesk_hint": "Eine Person zur Zeit, mit sofortigem Wiederverbinden zwischen deinen Geräten; alle anderen erfahren, dass er belegt ist.",
 	"display_preset_shared_desktop_hint": "Für einen Host, an dem du auch selbst sitzt: Deine Monitore bleiben an, und weitere Zuschauer bekommen einen eigenen Bildschirm.",
-	"display_preset_workstation_hint": "Dein Alltagsrechner mit mehreren Monitoren: Anzeigen kehren an ihren Platz zurück, und der Desktop gehört dir allein."
+	"display_preset_workstation_hint": "Dein Alltagsrechner mit mehreren Monitoren: Anzeigen kehren an ihren Platz zurück, und der Desktop gehört dir allein.",
+	"display_preset_play_together_hint": "Zum gemeinsamen Spielen oder Zuschauen: Alle, die sich verbinden, sehen denselben Bildschirm und können ihn bedienen."
 }
