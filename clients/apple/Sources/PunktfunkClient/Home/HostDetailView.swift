@@ -362,8 +362,9 @@ struct HostDetailView: View {
     }
 }
 
-/// The Connection section's fields under the host form's rules: a field saves when focus leaves it
-/// or on Return, a TV row when its keyboard closes. What the rules refuse snaps back to the record.
+/// The Connection section's fields under the host form's rules: a field saves when focus leaves it,
+/// on Return and when the page closes, a TV row when its keyboard closes. What the rules refuse
+/// snaps back to the record.
 private struct HostConnectionFields: View {
     let host: StoredHost
     let onSave: (StoredHost) -> Void
@@ -443,6 +444,8 @@ private struct HostConnectionFields: View {
             prompt: String(localized: L10n.hostsFieldNamePlaceholder))
             .onChange(of: host) { _, saved in if focused == nil { load(saved) } }
             .onChange(of: focused) { save() }
+            // Leaving the page with a field focused moves no focus. Untouched, a save writes nothing.
+            .onDisappear(perform: save)
         row(
             String(localized: L10n.hostsFieldAddress), .address,
             prompt: String(localized: L10n.hostsFieldAddressPlaceholder))
