@@ -3,6 +3,7 @@
 //! and Apple (C ABI) both speak it, so Kotlin and Swift encode one contract. A push that
 //! answers a command carries the command's `req` verbatim.
 
+use crate::screens::EditField;
 use crate::store::PresetEntry;
 use crate::{
     Console, ConsoleEntry, ConsoleOptions, DeviceScreen, HostRow, Key, LibraryGame, LibraryPhase,
@@ -303,6 +304,8 @@ impl Event {
 /// The last of each edge-triggered event the host was handed, so a repeat is silence.
 pub struct Published {
     was_editing: bool,
+    /// The open field's label, digits and secure flags; its text changes as it is typed.
+    opened: Option<(String, bool, bool)>,
     /// Last string handed to the screen reader. Repeating one is worse than silence.
     spoken: Option<String>,
     saved_gen: u64,
@@ -312,6 +315,7 @@ impl Published {
     pub fn new(console: &Console, store: &SnapshotStore) -> Published {
         Published {
             was_editing: console.editing(),
+            opened: None,
             spoken: None,
             saved_gen: store.saved_gen(),
         }
@@ -328,13 +332,11 @@ impl Published {
             emit(Event::Action(a));
         }
         let editing = console.editing();
-        if editing != self.was_editing {
-            self.was_editing = editing;
-            if let Some(field) = editing.then(|| console.edit_field()).flatten() {
-                emit(Event::EditField(field));
-            }
-            emit(Event::Editing(editing));
-        }
+        self.field(
+            editing,
+            editing.then(|| console.edit_field()).flatten(),
+            &mut emit,
+        );
         let announce = console.focus_announcement();
         if announce != self.spoken {
             self.spoken = announce;
@@ -347,6 +349,23 @@ impl Published {
             self.saved_gen = current_gen;
             emit(Event::Settings(Box::new(settings)));
         }
+    }
+
+    /// Raise `field` when editing starts or stops, and when one field hands over to the next
+    /// while editing goes on (a custom width, then its height). Typing into it raises nothing.
+    fn field(&mut self, editing: bool, field: Option<EditField>, emit: &mut impl FnMut(Event)) {
+        let opened = field
+            .as_ref()
+            .map(|f| (f.label.clone(), f.digits, f.secure));
+        if editing == self.was_editing && opened == self.opened {
+            return;
+        }
+        self.was_editing = editing;
+        self.opened = opened;
+        if let Some(field) = field {
+            emit(Event::EditField(field));
+        }
+        emit(Event::Editing(editing));
     }
 }
 
@@ -510,6 +529,44 @@ mod tests {
             Event::EditField(field).to_json(),
             r#"{"edit_text":{"label":"PIN","text":"12","digits":true,"secure":false}}"#
         );
+    }
+
+    /// A host's keyboard closes on each field it finished, so a field that opens while
+    /// editing goes on is raised again. Typing into the open one is not.
+    #[test]
+    fn a_field_that_hands_over_reopens_the_hosts_keyboard() {
+        let mut published = Published {
+            was_editing: false,
+            opened: None,
+            spoken: None,
+            saved_gen: 0,
+        };
+        let field = |label: &str, text: &str| {
+            Some(EditField {
+                label: label.into(),
+                text: text.into(),
+                digits: true,
+                secure: false,
+            })
+        };
+        let mut step = |editing, field| {
+            let mut out = Vec::new();
+            published.field(editing, field, &mut |e: Event| out.push(e.to_json()));
+            out
+        };
+        let open = |label: &str| {
+            vec![
+                format!(
+                    r#"{{"edit_text":{{"label":"{label}","text":"","digits":true,"secure":false}}}}"#
+                ),
+                r#"{"editing":true}"#.to_string(),
+            ]
+        };
+        assert_eq!(step(true, field("Width", "")), open("Width"));
+        assert!(step(true, field("Width", "1920")).is_empty());
+        assert_eq!(step(true, field("Height", "")), open("Height"));
+        assert_eq!(step(false, None), [r#"{"editing":false}"#]);
+        assert!(step(false, None).is_empty());
     }
 
     #[test]
