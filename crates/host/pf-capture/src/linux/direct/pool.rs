@@ -6,7 +6,7 @@
 //! No new build dependency: every Mesa/NVIDIA install ships it.
 
 use anyhow::{bail, Context, Result};
-use pf_zerocopy::gbm::{GbmBo, GbmDevice, GBM_BO_USE_RENDERING};
+use pf_zerocopy::gbm::{GbmBo, GbmDevice, GBM_BO_USE_RENDERING, GBM_BO_USE_SCANOUT};
 use std::os::fd::{AsRawFd, OwnedFd};
 use std::rc::Rc;
 use std::sync::{Arc, Mutex};
@@ -90,6 +90,7 @@ fn alloc(
         }
         GbmBo::alloc(device, width, height, fourcc, &[], GBM_BO_USE_RENDERING)
     })?;
+    let bo = padded_linear(device, width, height, fourcc, bo);
     // A multi-plane bo cannot travel our single-fd frame contract.
     if bo.planes > 1 {
         bail!(
@@ -98,6 +99,25 @@ fn alloc(
         );
     }
     Ok(bo)
+}
+
+/// The row pitch every reader of a LINEAR buffer steps as given: iHD rounds an import up to 64
+/// bytes and NVIDIA's Vulkan to 32, and a rounded pitch shears the picture.
+const LINEAR_PITCH: u32 = 64;
+
+/// `bo`, or a LINEAR buffer with rows on [`LINEAR_PITCH`] in its place. Mesa packs a
+/// rendering-only LINEAR buffer at the row width and pads one a plane can scan out; this
+/// capture has no CPU lane to de-pad through. A driver that refuses or packs both keeps `bo`.
+fn padded_linear(device: &Rc<GbmDevice>, width: u32, height: u32, fourcc: u32, bo: GbmBo) -> GbmBo {
+    let packed = |b: &GbmBo| b.modifier == 0 && b.stride % LINEAR_PITCH != 0;
+    if !packed(&bo) {
+        return bo;
+    }
+    let flags = GBM_BO_USE_RENDERING | GBM_BO_USE_SCANOUT;
+    match GbmBo::alloc(device, width, height, fourcc, &[0], flags) {
+        Ok(b) if b.planes == 1 && b.modifier == 0 && !packed(&b) => b,
+        _ => bo,
+    }
 }
 
 /// Which buffers the encoder still holds, and the pipe that wakes the loop when one
@@ -136,5 +156,28 @@ pub(super) struct BufHold {
 impl Drop for BufHold {
     fn drop(&mut self) {
         self.list.put(self.idx);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Hardware: a LINEAR buffer at a width whose packed row is off 64 bytes comes back with
+    /// padded rows. `PF_GBM_NODE` names the render node; Mesa's Intel driver is the case.
+    #[test]
+    #[ignore = "requires a Mesa render node that pads scanout buffers (Intel)"]
+    fn a_linear_buffer_gets_padded_rows() {
+        let node = std::env::var("PF_GBM_NODE").unwrap_or_else(|_| "/dev/dri/renderD128".into());
+        let file = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&node)
+            .expect("open the render node");
+        let device = Rc::new(GbmDevice::open(file).expect("gbm device"));
+        let xr24 = u32::from_le_bytes(*b"XR24");
+        let bo = alloc(&device, 1690, 1056, xr24, &[0]).expect("allocate");
+        assert_eq!(bo.modifier, 0);
+        assert_eq!(bo.stride % LINEAR_PITCH, 0, "stride {}", bo.stride);
     }
 }
