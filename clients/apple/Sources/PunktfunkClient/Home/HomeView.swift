@@ -389,19 +389,12 @@ struct HomeView: View {
     }
     #endif
 
-    /// A host action picked from a card's menu: explain an unavailable one, confirm a
-    /// destructive one, run the rest.
+    /// A host action picked from a card's menu, on its `HostOffers.route`.
     private func hostAction(_ action: HostAction, on host: StoredHost) {
-        guard action.available else {
-            hostActionResult = (
-                false,
-                action.unavailableReason ?? L10n.hostcardActionUnavailableBody(action: action.label))
-            return
-        }
-        if action.danger {
-            confirmHostAction = PendingHostAction(host: host, action: action)
-        } else {
-            runHostAction(action, on: host)
+        switch HostOffers.route(action: action) {
+        case .explain(let why): hostActionResult = (false, why)
+        case .confirm: confirmHostAction = PendingHostAction(host: host, action: action)
+        case .run: runHostAction(action, on: host)
         }
     }
 

@@ -1,6 +1,7 @@
-// What a saved host's card and page offer. `HostActions` builds a card's acts from
-// `HostOffers.resolve`, so the grid, the host page and the Mac's host window offer one set. Pure,
-// so `swift test` checks every row (`HostOffersTests`).
+// What a saved host's card and page offer, and what a tap on a power action does. `HostActions`
+// builds a card's acts from `HostOffers.resolve`, so the grid, the host page and the Mac's host
+// window offer one set; each surface switches over `HostOffers.route`. Pure, so `swift test`
+// checks every row (`HostOffersTests`).
 
 import PunktfunkShared
 
@@ -33,5 +34,24 @@ public struct HostOffers: OptionSet, Sendable {
         if !online && canWake { offers.insert(.wake) }
         if paired && !isDemo && host.pickedProfile != nil { offers.insert(.switchProfile) }
         return offers
+    }
+
+    /// What a tap on a host power action does.
+    public enum PowerRoute: Equatable, Sendable {
+        /// The host can't run it now: the sentence to show.
+        case explain(String)
+        /// It loses whatever runs on that machine: ask first.
+        case confirm
+        case run
+    }
+
+    /// Explain an unavailable action, confirm a destructive one, run the rest.
+    public static func route(action: HostAction) -> PowerRoute {
+        guard action.available else {
+            return .explain(
+                action.unavailableReason
+                    ?? L10n.hostcardActionUnavailableBody(action: action.label))
+        }
+        return action.danger ? .confirm : .run
     }
 }

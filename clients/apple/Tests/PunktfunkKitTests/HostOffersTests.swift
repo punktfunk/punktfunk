@@ -53,4 +53,24 @@ final class HostOffersTests: XCTestCase {
             [.browse, .speedTest, .sendLogs])
         XCTAssertEqual(offers(host(paired: false), pinned: true), [])
     }
+
+    func testAnUnavailableActionIsExplainedInTheHostsWords() {
+        let busy = HostAction(
+            id: "power.sleep", title: "Sleep", danger: true, available: false,
+            unavailableReason: "Another device is streaming")
+        XCTAssertEqual(HostOffers.route(action: busy), .explain("Another device is streaming"))
+    }
+
+    func testAnUnavailableActionWithoutAReasonGetsTheAppsSentence() {
+        let action = HostAction(id: "power.sleep", title: "Sleep", available: false)
+        XCTAssertEqual(
+            HostOffers.route(action: action),
+            .explain(L10n.hostcardActionUnavailableBody(action: action.label)))
+    }
+
+    func testADestructiveActionAsksFirst() {
+        let restart = HostAction(id: "power.reboot", title: "Restart", danger: true)
+        XCTAssertEqual(HostOffers.route(action: restart), .confirm)
+        XCTAssertEqual(HostOffers.route(action: HostAction(id: "power.sleep", title: "Sleep")), .run)
+    }
 }
