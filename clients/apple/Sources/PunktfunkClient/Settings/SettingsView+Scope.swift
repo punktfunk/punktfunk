@@ -165,6 +165,12 @@ enum SettingsFields {
     }
 }
 
+/// `SettingsView.effective` for one body pass, so the hundred-odd reads of a pass resolve the
+/// layers once. A reference in `@State`: filling it while `body` runs never invalidates the view.
+final class SettingsPass {
+    var settings: EffectiveSettings?
+}
+
 extension SettingsView {
     // MARK: - The layer being edited
 
@@ -173,9 +179,13 @@ extension SettingsView {
     /// True while a preset is being edited — the gate every tier-G/H row is hidden behind.
     var inPresetScope: Bool { activePreset != nil }
 
-    /// What every row displays (`SettingsScope.resolve`).
+    /// What every row displays (`SettingsScope.resolve`), resolved once per body pass and kept
+    /// in `pass` until the next pass or the next write.
     var effective: EffectiveSettings {
-        SettingsScope.resolve(globals: globals, scope: scope, catalog: presets.catalog)
+        if let settings = pass.settings { return settings }
+        let settings = SettingsScope.resolve(globals: globals, scope: scope, catalog: presets.catalog)
+        pass.settings = settings
+        return settings
     }
 
     /// The globals as this view's `@AppStorage` sees them, so SwiftUI tracks each of them.
@@ -234,6 +244,7 @@ extension SettingsView {
         Binding(
             get: { effective[keyPath: field.effective] },
             set: { newValue in
+                pass.settings = nil
                 switch SettingsScope.route(scope: scope, catalog: presets.catalog, field: field) {
                 case .defaults(let key):
                     // @AppStorage observes this key, so the write re-renders the whole surface.
@@ -275,6 +286,7 @@ extension SettingsView {
     /// picker shows the inherited value.
     func resetOverride(_ name: String) {
         guard let id = scope.presetID else { return }
+        pass.settings = nil
         presets.clearOverride(id, field: name)
         #if os(iOS) || os(visionOS) || os(macOS)
         if name == OverlayField.resolution { customMode = false }

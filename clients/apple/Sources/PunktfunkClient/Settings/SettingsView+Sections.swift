@@ -1022,6 +1022,8 @@ extension SettingsView {
                         options: StartIn.allCases.map { (label: $0.label, tag: $0.stored) },
                         selection: $startInRaw)
                 }
+                .onAppear { readStartInHost() }
+                .onChange(of: defaultHostID) { readStartInHost() }
             }
         }
     }
@@ -1029,11 +1031,17 @@ extension SettingsView {
     /// Names the host the setting resolves to, so the row explains itself — and says when it
     /// resolves to nothing, which is what every value does with no default host.
     private var startInFooter: String {
-        let hosts = StartScreen.savedHosts()
-        guard let host = StartScreen.defaultHost(id: defaultHostID, hosts: hosts).host else {
+        guard let name = startInHost else {
             return String(localized: L10n.playerStartInNoHostHint)
         }
-        return L10n.playerStartInHostHint(host: host.displayName)
+        return L10n.playerStartInHostHint(host: name)
+    }
+
+    /// Decodes the host store when the row appears and when the pick moves, not on every pass.
+    /// An appear runs before the first frame, so the caption never shows the empty case first.
+    private func readStartInHost() {
+        startInHost = StartScreen.defaultHost(id: defaultHostID, hosts: StartScreen.savedHosts())
+            .host?.displayName
     }
 
     // MARK: - Input

@@ -15,6 +15,8 @@ struct SettingsView: View {
     // preset's overrides. A TV picks it in its Editing pane.
     @ObservedObject var presets = PresetStore.shared
     @State var scope: SettingsScope = .defaults
+    /// The resolved layer, emptied by each body pass and each write (SettingsView+Scope).
+    @State var pass = SettingsPass()
     /// The preset editor (create / duplicate / edit), when it is open, and the preset a delete
     /// is being confirmed for.
     @State var presetDraft: PresetDraft?
@@ -66,6 +68,8 @@ struct SettingsView: View {
     @AppStorage(DefaultsKey.libraryView) var libraryViewRaw = LibraryArrangement.shelf.stored
     @AppStorage(DefaultsKey.startIn) var startInRaw = SettingDefault.startIn
     @AppStorage(DefaultsKey.defaultHost) var defaultHostID = ""
+    /// The default host's name for Start in's caption, nil with none (`readStartInHost`).
+    @State var startInHost: String?
     @AppStorage(DefaultsKey.fullscreenWhileStreaming) var fullscreenWhileStreaming =
         SettingDefault.fullscreenWhileStreaming
     @AppStorage(DefaultsKey.fullscreenAlways) var fullscreenAlways = SettingDefault.fullscreenAlways
@@ -207,14 +211,16 @@ struct SettingsView: View {
     #endif
 
     var body: some View {
+        // Every input of `effective` re-runs `body`, so each pass resolves the layers afresh.
+        pass.settings = nil
         #if os(tvOS)
         // No inline text entry on a TV: values are picked from pushed lists, as in the system
         // Settings app.
-        tvBody
+        return tvBody
         #elseif os(macOS)
-        macBody.onChange(of: scope) { clearCustomFlags() }
+        return macBody.onChange(of: scope) { clearCustomFlags() }
         #else
-        iosBody.onChange(of: scope) { clearCustomFlags() }
+        return iosBody.onChange(of: scope) { clearCustomFlags() }
         #endif
     }
 
