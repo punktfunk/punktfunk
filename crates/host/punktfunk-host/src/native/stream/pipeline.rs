@@ -585,11 +585,13 @@ pub(super) fn open_session_encoder_with(
 )> {
     let captured = (frame.width, frame.height);
     if plan.capture.encodes_remotely() {
-        // Only a view is framed on the far side; a mirrored head encodes at its own size.
+        // Only the display driver frames on the far side, and only a view: a mirrored head and a
+        // capture worker's joiner encode at their own size.
+        let driver = plan.capture == crate::session_plan::CaptureBackend::IddPush;
         return crate::session_plan::open_encoder_fitted(
             captured,
             negotiated,
-            plan.reframe_to,
+            plan.reframe_to.filter(|_| driver),
             false,
             |framing| {
                 crate::windows::idd::open_driver_encoder(
