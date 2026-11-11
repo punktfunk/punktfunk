@@ -161,6 +161,17 @@ final class RingState: ObservableObject {
     }
 
     func touch() { lastTouch = Date() }
+
+    /// The pad's part of this state, as `RingNav.step` reads and leaves it.
+    var navState: RingNav.State {
+        get { RingNav.State(highlight: highlight, sheet: sheet, cursor: sheetCursor, armed: armed) }
+        set {
+            highlight = newValue.highlight
+            sheet = newValue.sheet
+            sheetCursor = newValue.cursor
+            armed = newValue.armed
+        }
+    }
 }
 
 /// What the ring can do this session — the shell's live state and commands behind each slot.
@@ -573,8 +584,8 @@ struct RingOverlay: View {
                                highlighted: state.highlight == k) {
                         if let editing {
                             editing.pick(k)
-                        } else if let slot, let s {
-                            fire(s, slot)
+                        } else if slot != nil {
+                            fire(k)
                         }
                     }
                     .offset(drag?.k == k ? drag?.offset ?? .zero : .zero)
@@ -659,85 +670,55 @@ struct RingOverlay: View {
         #endif
     }
 
-    /// The pad (design §2.6): the left stick AIMS — its sector is the highlight, so the ring
-    /// follows the thumb — while the D-pad steps, Right clockwise, Left anticlockwise, Up to 12
-    /// o'clock, Down to 6; Y returns the highlight to the centre, A fires it (the centre opens
-    /// the sheet), B closes. In the sheet, Up/Down walk the rows and Left/Right adjust one.
+    /// A pad or remote press (design §2.6), decided by `RingNav.step` over the discs, or the
+    /// sheet's rows while it is up.
     private func handleNav(_ n: RingNav) {
         state.touch()
-        if state.sheet {
-            let rows = sheetRows()
-            switch n {
-            // A sheet is a list, not a dial: the six sectors fold onto its four directions.
-            case .sector(let k):
-                if let k { handleNav(k == 0 ? .up : k == 3 ? .down : k < 3 ? .right : .left) }
-            case .up: state.sheetCursor = max(state.sheetCursor - 1, 0); state.pressTick &+= 1
-            case .down: state.sheetCursor = min(state.sheetCursor + 1, max(rows.count - 1, 0)); state.pressTick &+= 1
-            case .left, .right:
-                if let adjust = rows[safe: state.sheetCursor]?.adjust {
-                    adjust(n == .left ? -1 : 1)
-                    state.pressTick &+= 1
-                } else {
-                    state.refuseTick &+= 1
-                }
-            case .confirm:
-                if let row = rows[safe: state.sheetCursor] {
-                    if row.enabled { state.pressTick &+= 1 } else { state.refuseTick &+= 1 }
-                    row.tap()
-                }
-            case .back: state.sheet = false; state.pressTick &+= 1
-            case .centre: break
+        let rows = state.sheet ? sheetRows() : []
+        let facts = state.sheet ? rows.map(\.nav) : ringRows()
+        apply(RingNav.step(state: state.navState, event: n, rows: facts), rows)
+    }
+
+    /// A finger on disc `k`: the pad's A on that disc.
+    private func fire(_ k: Int) {
+        state.touch()
+        apply(RingNav.fire(state: state.navState, slot: k, rows: ringRows()), [])
+    }
+
+    /// The six discs as `RingNav` reads them; nil for an empty slot.
+    private func ringRows() -> [RingNav.Row?] {
+        cfg.ring.map { slot in
+            slot.map {
+                let s = spec($0, cfg, actions)
+                return RingNav.Row(id: s.id, enabled: s.enabled, twoPress: s.armed)
             }
-            return
-        }
-        let h = state.highlight ?? 6
-        switch n {
-        // The weapon-wheel idiom: the thumb's sector is the slot, neutral is the centre.
-        case .sector(let k):
-            let next = k ?? 6
-            guard state.highlight != next else { return }
-            state.highlight = next
-            state.pressTick &+= 1
-        case .right: state.highlight = h >= 6 ? 0 : (h + 1) % 6; state.pressTick &+= 1
-        case .left: state.highlight = h >= 6 ? 5 : (h + 5) % 6; state.pressTick &+= 1
-        case .up: state.highlight = 0; state.pressTick &+= 1
-        case .down: state.highlight = 3; state.pressTick &+= 1
-        case .centre: state.highlight = 6; state.pressTick &+= 1
-        case .confirm:
-            if h >= 6 {
-                state.pressTick &+= 1
-                state.sheetCursor = 0
-                state.sheet = true
-            } else if let slot = cfg.ring[h] {
-                fire(spec(slot, cfg, actions), slot)
-            } else {
-                state.refuseTick &+= 1
-            }
-        case .back: state.close()
         }
     }
 
-    private func fire(_ s: SlotSpec, _ slot: SlotId) {
-        state.touch()
-        guard s.enabled else {
-            state.refuseTick &+= 1
-            state.armed = nil
-            state.hint = s.reason
-            return
-        }
-        if s.armed, state.armed != s.id {
-            state.warnTick &+= 1
-            state.armed = s.id
-            state.hint = confirmHint(s)
-            return
-        }
-        state.pressTick &+= 1
-        state.armed = nil
-        state.hint = nil
-        perform(slot, cfg, actions, state)
-        if s.toggle {
-            let after = spec(slot, cfg, actions)
-            state.hint = "\(after.label): \(after.state)"
+    /// Takes a step's state, then performs its effects in order. A toggle that ran leaves the
+    /// ring open with its new state as the hint.
+    private func apply(_ step: (state: RingNav.State, effects: [RingNav.Effect]), _ rows: [SheetRowSpec]) {
+        state.navState = step.state
+        for effect in step.effects {
+            switch effect {
+            case .haptic(.press): state.pressTick &+= 1
+            case .haptic(.refuse): state.refuseTick &+= 1
+            case .haptic(.warn): state.warnTick &+= 1
+            case .explain(let k): state.hint = cfg.ring[k].map { spec($0, cfg, actions).reason }
+            case .ask(let k): state.hint = cfg.ring[k].map { confirmHint(spec($0, cfg, actions)) }
+            case .fire(let k):
+                guard let slot = cfg.ring[k] else { break }
+                state.hint = nil
+                let toggle = spec(slot, cfg, actions).toggle
+                perform(slot, cfg, actions, state)
+                if toggle {
+                    let after = spec(slot, cfg, actions)
+                    state.hint = "\(after.label): \(after.state)"
+                }
+            case .adjust(let dir): rows[safe: state.sheetCursor]?.adjust?(dir)
+            case .tap: rows[safe: state.sheetCursor]?.tap()
+            case .close: state.close()
+            }
         }
     }
 
@@ -872,6 +853,8 @@ private struct SheetRowSpec {
     /// Left/Right on a pad: cycle a value (the resolution rows); a tap cycles forward.
     var adjust: ((Int) -> Void)? = nil
     var tap: () -> Void
+
+    var nav: RingNav.Row { RingNav.Row(enabled: enabled, adjustable: adjust != nil) }
 
     static func scrollInversion(_ actions: RingActions) -> SheetRowSpec {
         let granted = actions.pointerGranted()
