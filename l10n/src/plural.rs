@@ -2,8 +2,8 @@
 //!
 //! [`categories`] is the set a language's plural message must cover: what `Intl.PluralRules`
 //! and Android report, so Paraglide and `<plurals>` agree with this crate. [`category`] picks
-//! one for a count. A language without a rule here has only `other`. The tests pin each rule to
-//! CLDR's examples.
+//! one for a count. A language without a rule here is read as `other` and cannot ship. The tests
+//! pin each rule to CLDR's examples.
 
 /// A CLDR plural category, in CLDR's order.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -45,6 +45,8 @@ impl Category {
 
 #[derive(Clone, Copy)]
 enum Rule {
+    /// Japanese, Korean, Chinese and the like: one form for every count.
+    Other,
     One,
     OneMillion,
     ZeroOneMillion,
@@ -58,6 +60,7 @@ fn rule(lang: &str) -> Option<Rule> {
     let primary = subtags.next().unwrap_or("").to_ascii_lowercase();
     let region = subtags.next().unwrap_or("");
     Some(match primary.as_str() {
+        "ja" | "ko" | "zh" | "vi" | "th" | "id" | "ms" => Rule::Other,
         "en" | "de" | "nl" | "sv" | "da" | "nb" | "fi" | "tr" => Rule::One,
         "pt" if region.eq_ignore_ascii_case("pt") => Rule::OneMillion,
         "es" | "it" => Rule::OneMillion,
@@ -73,6 +76,7 @@ fn rule(lang: &str) -> Option<Rule> {
 pub fn categories(lang: &str) -> Option<&'static [Category]> {
     use Category::*;
     Some(match rule(lang)? {
+        Rule::Other => &[Other],
         Rule::One => &[One, Other],
         Rule::OneMillion | Rule::ZeroOneMillion => &[One, Many, Other],
         Rule::Polish | Rule::Czech | Rule::EastSlavic => &[One, Few, Many, Other],
@@ -168,9 +172,19 @@ mod tests {
     }
 
     #[test]
+    fn other_only() {
+        for lang in [
+            "ja", "ko", "zh", "vi", "th", "id", "ms", "ja-JP", "zh-Hant", "zh_Hans",
+        ] {
+            expect(lang, [Other; 12]);
+            assert_eq!(categories(lang), Some(&[Other][..]), "{lang}");
+        }
+    }
+
+    #[test]
     fn unknown_language_is_other() {
-        assert_eq!(categories("ja"), None);
-        assert_eq!(category("ja", 1), Other);
+        assert_eq!(categories("ar"), None);
+        assert_eq!(category("ar", 1), Other);
     }
 
     #[test]

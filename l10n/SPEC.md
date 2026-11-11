@@ -60,6 +60,9 @@ A count is a plural message, in exactly this shape:
 | en, de, nl, sv, da, nb, fi, tr | one, other |
 | es, fr, it, pt | one, many, other |
 | pl, cs, ru, uk | one, few, many, other |
+| ja, ko, zh, vi, th, id, ms | other |
+
+A message in an other-only language has one arm, `n=*`.
 
 A language without a rule in `src/plural.rs` cannot ship.
 

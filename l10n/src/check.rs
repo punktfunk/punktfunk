@@ -712,8 +712,29 @@ mod tests {
         )
         .is_none());
         assert!(categories("ru", &pl(r#""n=one": "a", "n=other": "d""#)).is_some());
-        assert!(categories("ja", &pl(r#""n=other": "d""#)).is_none());
+        assert!(categories("ar", &pl(r#""n=one": "a", "n=other": "d""#)).is_none());
         assert!(categories("en", &plain("x")).is_none());
+    }
+
+    #[test]
+    fn other_only_plural() {
+        let pl = |arms: &str| {
+            let src = format!(
+                r#"[{{"declarations": ["local n = count: plural"], "selectors": ["n"], "match": {{{arms}}}}}]"#
+            );
+            parse_message(&json::parse(&src).unwrap(), false).unwrap()
+        };
+        for lang in ["ja", "ko", "zh-Hans", "zh-Hant"] {
+            assert!(categories(lang, &pl(r#""n=*": "d""#)).is_none(), "{lang}");
+            assert!(
+                categories(lang, &pl(r#""n=other": "d""#)).is_none(),
+                "{lang}"
+            );
+            assert_eq!(
+                categories(lang, &pl(r#""n=one": "a", "n=other": "d""#)).unwrap(),
+                format!("{lang} plurals need other; this has one, other")
+            );
+        }
     }
 
     #[test]
@@ -765,10 +786,11 @@ mod tests {
 
     #[test]
     fn shipped_languages_have_rules() {
-        assert!(shipped_rules(&["en".into(), "pl".into()]).is_empty());
+        let ok = ["en", "pl", "ja", "zh-Hant"].map(String::from);
+        assert!(shipped_rules(&ok).is_empty());
         assert_eq!(
-            shipped_rules(&["ja".into()]),
-            ["locales.json: ja ships without a plural rule in src/plural.rs"]
+            shipped_rules(&["ar".into()]),
+            ["locales.json: ar ships without a plural rule in src/plural.rs"]
         );
     }
 
