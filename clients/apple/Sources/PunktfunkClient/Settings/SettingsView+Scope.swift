@@ -20,32 +20,6 @@
 import PunktfunkKit
 import SwiftUI
 
-/// Which layer the settings surface is editing.
-enum SettingsScope: Equatable, Hashable {
-    /// The global defaults every preset inherits from — the only scope before this feature.
-    case defaults
-    /// One preset's overrides, by id.
-    case preset(String)
-
-    var presetID: String? {
-        if case .preset(let id) = self { return id }
-        return nil
-    }
-}
-
-/// One presetable setting, in the one place that knows all three of its faces: the
-/// `UserDefaults` key its global lives under, the overlay slot an override lives in, and the
-/// serialized name a per-row reset carries. Keeping them together is what stops a row from
-/// writing an override the reset button can't find.
-struct SettingsField<Value> {
-    /// The overlay's serialized field name — also the reset key. `resolution` is the one alias,
-    /// covering the width/height/match-window tri-state a single control drives.
-    let name: String
-    let key: String
-    let overlay: WritableKeyPath<SettingsOverlay, Value?>
-    let effective: KeyPath<EffectiveSettings, Value>
-}
-
 /// The catalog of presetable rows. A plain namespace rather than statics on the generic
 /// `SettingsField` itself: members of a generic type can't have their parameter inferred from the
 /// member alone, so every call site would need to spell the type out anyway.
@@ -194,18 +168,18 @@ enum SettingsFields {
 extension SettingsView {
     // MARK: - The layer being edited
 
-    var activePreset: StreamPreset? {
-        scope.presetID.flatMap { presets.preset(id: $0) }
-    }
+    var activePreset: StreamPreset? { scope.preset(in: presets.catalog) }
 
     /// True while a preset is being edited — the gate every tier-G/H row is hidden behind.
     var inPresetScope: Bool { activePreset != nil }
 
-    /// What every row displays: the globals as this view's `@AppStorage` sees them (so SwiftUI
-    /// tracks each of them), with the edited preset's overrides on top. A row the preset doesn't
-    /// override therefore reads as the LIVE global, which is what inherit-by-default has to look
-    /// like.
+    /// What every row displays (`SettingsScope.resolve`).
     var effective: EffectiveSettings {
+        SettingsScope.resolve(globals: globals, scope: scope, catalog: presets.catalog)
+    }
+
+    /// The globals as this view's `@AppStorage` sees them, so SwiftUI tracks each of them.
+    private var globals: EffectiveSettings {
         var base = EffectiveSettings()
         base.width = width
         base.height = height
@@ -249,28 +223,24 @@ extension SettingsView {
         #if os(iOS) || os(visionOS)
         base.touchMode = touchMode
         #endif
-        guard let preset = activePreset else { return base }
-        return base.applying(preset.overrides)
+        return base
     }
 
     // MARK: - Scoped bindings
 
-    /// A control's binding for whichever layer is being edited: `UserDefaults` in defaults scope,
-    /// the preset's overlay in preset scope.
-    ///
-    /// The setter always WRITES on touch. It never compares the new value against the global to
-    /// decide whether to record an override — that comparison is exactly the "copy the settings"
-    /// behaviour the design rejects, and it would silently drop a deliberate pin.
+    /// A control's binding for whichever layer is being edited, written where
+    /// `SettingsScope.route` sends it. The setter always writes on touch.
     func scoped<Value>(_ field: SettingsField<Value>) -> Binding<Value> {
         Binding(
             get: { effective[keyPath: field.effective] },
             set: { newValue in
-                guard let id = scope.presetID else {
+                switch SettingsScope.route(scope: scope, field: field) {
+                case .defaults(let key):
                     // @AppStorage observes this key, so the write re-renders the whole surface.
-                    UserDefaults.standard.set(newValue, forKey: field.key)
-                    return
+                    UserDefaults.standard.set(newValue, forKey: key)
+                case .override(let id):
+                    presets.setOverride(id, field.overlay, newValue)
                 }
-                presets.setOverride(id, field.overlay, newValue)
             })
     }
 
