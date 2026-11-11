@@ -25,6 +25,7 @@ import {
 	DialogHeader,
 	DialogTitle,
 } from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
 	Select,
@@ -43,6 +44,8 @@ import {
 	type Fields,
 	fieldsOf,
 	gameEntry,
+	HZ_RANGE,
+	LINES_RANGE,
 	linesLabel,
 	type Patch,
 	padLabel,
@@ -52,6 +55,7 @@ import {
 	setList,
 	storeOf,
 	usageOf,
+	wholeIn,
 } from "./overrides";
 
 /** `Select` values beside the set ids, which are 12 hex and never these. */
@@ -150,7 +154,60 @@ function choices<T extends string | number>(
 
 const picked = (v: string) => (v === DEVICE ? null : v);
 
-/** Resolution with its screen option, refresh rate, HDR and controller. */
+/** The `Select` value of a list with Custom: a stored value the list lacks reads Custom. */
+function listValue(
+	list: readonly number[],
+	stored: number | undefined,
+	custom: boolean,
+): string {
+	if (custom || (stored != null && !list.includes(stored))) return CUSTOM;
+	return stored != null ? String(stored) : DEVICE;
+}
+
+/**
+ * A custom value in `range`, written on blur or Enter rather than per keystroke as `InputNumber`
+ * does: each write goes to the host and locks the row until it answers.
+ */
+const CustomNumber: FC<{
+	id: string;
+	label: string;
+	unit: string;
+	value: number | undefined;
+	range: readonly [number, number];
+	onCommit: (n: number) => void;
+	disabled: boolean;
+}> = ({ id, label, unit, value, range, onCommit, disabled }) => {
+	// Null shows the stored value; typing holds a draft until it commits.
+	const [draft, setDraft] = useState<string | null>(null);
+	const commit = () => {
+		const n = draft == null ? null : wholeIn(draft, range);
+		setDraft(null);
+		if (n != null && n !== value) onCommit(n);
+	};
+	return (
+		<div className="flex items-center gap-2">
+			<Input
+				id={id}
+				type="number"
+				inputMode="numeric"
+				min={range[0]}
+				max={range[1]}
+				step={1}
+				placeholder={`${range[0]}–${range[1]}`}
+				aria-label={label}
+				className="w-24"
+				value={draft ?? value ?? ""}
+				onChange={(e) => setDraft(e.target.value)}
+				onBlur={commit}
+				onKeyDown={(e) => e.key === "Enter" && e.currentTarget.blur()}
+				disabled={disabled}
+			/>
+			<span className="text-sm text-muted-foreground">{unit}</span>
+		</div>
+	);
+};
+
+/** Resolution with its screen option, refresh rate (each a preset or Custom…), HDR, controller. */
 export const StreamFields: FC<{
 	id: string;
 	value: Fields;
@@ -159,17 +216,25 @@ export const StreamFields: FC<{
 	/** The source these values come from, for a game that has none of its own. */
 	from?: string | undefined;
 }> = ({ id, value, onSet, disabled, from }) => {
+	// Custom with nothing typed yet stores nothing; the pick holds until a value does.
+	const [customLines, setCustomLines] = useState(false);
+	const [customHz, setCustomHz] = useState(false);
 	const note = (set: boolean) =>
 		from && set ? m.library_stream_from({ source: from }) : undefined;
 	const hdr = value.hdr == null ? DEVICE : value.hdr ? "on" : "off";
+	const linesPick = listValue(RESOLUTIONS, value.lines, customLines);
+	const hzPick = listValue(REFRESH_RATES, value.hz, customHz);
+	const custom: [string, string] = [CUSTOM, m.library_stream_custom_value()];
 	return (
 		<div className="grid gap-4 @md:grid-cols-2">
 			<Choice
 				id={`${id}-lines`}
 				label={m.library_stream_resolution()}
-				value={value.lines != null ? String(value.lines) : DEVICE}
-				options={choices(RESOLUTIONS, value.lines, linesLabel)}
+				value={linesPick}
+				options={[...choices(RESOLUTIONS, null, linesLabel), custom]}
 				onPick={(v) => {
+					setCustomLines(v === CUSTOM);
+					if (v === CUSTOM) return;
 					const lines = picked(v);
 					onSet(
 						lines == null
@@ -180,6 +245,17 @@ export const StreamFields: FC<{
 				disabled={disabled}
 				note={note(value.lines != null)}
 			>
+				{linesPick === CUSTOM && (
+					<CustomNumber
+						id={`${id}-lines-custom`}
+						label={m.library_stream_resolution()}
+						unit="p"
+						value={value.lines}
+						range={LINES_RANGE}
+						onCommit={(n) => onSet({ lines: n })}
+						disabled={disabled}
+					/>
+				)}
 				{value.lines != null && (
 					<div className="flex items-center gap-2">
 						<Checkbox
@@ -197,17 +273,32 @@ export const StreamFields: FC<{
 			<Choice
 				id={`${id}-hz`}
 				label={m.library_stream_refresh()}
-				value={value.hz != null ? String(value.hz) : DEVICE}
-				options={choices(REFRESH_RATES, value.hz, (hz) =>
-					m.library_stream_hz({ hz }),
-				)}
+				value={hzPick}
+				options={[
+					...choices(REFRESH_RATES, null, (hz) => m.library_stream_hz({ hz })),
+					custom,
+				]}
 				onPick={(v) => {
+					setCustomHz(v === CUSTOM);
+					if (v === CUSTOM) return;
 					const hz = picked(v);
 					onSet({ hz: hz == null ? null : Number(hz) });
 				}}
 				disabled={disabled}
 				note={note(value.hz != null)}
-			/>
+			>
+				{hzPick === CUSTOM && (
+					<CustomNumber
+						id={`${id}-hz-custom`}
+						label={m.library_stream_refresh()}
+						unit="Hz"
+						value={value.hz}
+						range={HZ_RANGE}
+						onCommit={(n) => onSet({ hz: n })}
+						disabled={disabled}
+					/>
+				)}
+			</Choice>
 			<Choice
 				id={`${id}-hdr`}
 				label={m.library_stream_hdr()}

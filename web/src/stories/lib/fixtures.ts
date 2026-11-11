@@ -253,7 +253,7 @@ export const library: GameEntry[] = [
 	},
 ];
 
-/** Game overrides: two shared overrides, a game on each kind of entry, a source default. */
+/** Game overrides: three shared overrides, a game on each kind of entry, a source default. */
 export const overridesDoc: OverridesDoc = {
 	version: 1,
 	sets: {
@@ -264,6 +264,7 @@ export const overridesDoc: OverridesDoc = {
 			gamepad: "dualsense",
 		},
 		"0f1e2d3c4b5a": { name: "4K", lines: 2160, beyond_screen: true },
+		"9e8d7c6b5a4f": { name: "Handheld", lines: 800, hz: 72 },
 	},
 	games: {
 		"steam:1245620": { set: "a1b2c3d4e5f6" },

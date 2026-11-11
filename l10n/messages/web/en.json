@@ -538,6 +538,7 @@
 	"library_stream_device": "Device decides",
 	"library_stream_same_as_source": "Same as {source}",
 	"library_stream_custom": "Custom",
+	"library_stream_custom_value": "Custom…",
 	"library_stream_new": "New shared override…",
 	"library_stream_resolution": "Resolution",
 	"library_stream_beyond": "Also on smaller screens",
