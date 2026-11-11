@@ -25,24 +25,43 @@ pub(crate) struct EpochAnchor {
     seen: Option<u8>,
     /// The format of each recent epoch, newest last.
     booked: Vec<(u8, VideoFormat)>,
+    /// The mode ABR prices: the delivered refresh at the size the host encodes. The pump seeds
+    /// it from the handshake.
+    pub(crate) priced: Mode,
 }
 
+/// What an epoch delivers: its mode, and the mode ABR prices when that moved.
+pub(crate) type Delivery = (Mode, Option<Mode>);
+
 impl EpochAnchor {
-    /// A config arrived. `Some(mode)` when its epoch is already on screen.
-    pub(crate) fn config(&mut self, cfg: StreamConfig) -> Option<Mode> {
+    /// A config arrived. `Some` when its epoch is already on screen.
+    pub(crate) fn config(&mut self, cfg: StreamConfig) -> Option<Delivery> {
         self.book(cfg.epoch, cfg.format());
         if self.seen == Some(cfg.epoch) {
             self.pending = None;
-            return Some(cfg.mode);
+            return Some(self.deliver(&cfg));
         }
         self.pending = Some(cfg);
         None
     }
 
-    /// The first frame of `epoch` arrived. `Some(mode)` when its config came first.
-    pub(crate) fn frame(&mut self, epoch: u8) -> Option<Mode> {
+    /// The first frame of `epoch` arrived. `Some` when its config came first.
+    pub(crate) fn frame(&mut self, epoch: u8) -> Option<Delivery> {
         self.seen = Some(epoch);
-        Some(self.pending.take_if(|c| c.epoch == epoch)?.mode)
+        let cfg = self.pending.take_if(|c| c.epoch == epoch)?;
+        Some(self.deliver(&cfg))
+    }
+
+    /// `cfg`'s mode, and its encoded picture at that refresh when it moved [`Self::priced`].
+    fn deliver(&mut self, cfg: &StreamConfig) -> Delivery {
+        let (width, height) = cfg.picture.unwrap_or((cfg.mode.width, cfg.mode.height));
+        let priced = Mode {
+            width,
+            height,
+            ..cfg.mode
+        };
+        let moved = std::mem::replace(&mut self.priced, priced) != priced;
+        (cfg.mode, moved.then_some(priced))
     }
 
     /// `epoch` decodes as `format` from here on. A later booking of the same epoch replaces it.
@@ -173,13 +192,16 @@ fn family(codec: u8) -> u8 {
     }
 }
 
-/// Point the mode slot at `mode`. A change tells the pump, which resets mode-scoped ABR state.
-pub(super) fn apply(slot: &Mutex<Mode>, events: &PumpTx, mode: Mode) {
+/// Point the mode slot at `mode`. A moved priced picture tells the pump, which resets
+/// mode-scoped ABR state.
+pub(super) fn apply(slot: &Mutex<Mode>, events: &PumpTx, (mode, priced): Delivery) {
     let mut m = slot.lock().unwrap_or_else(|e| e.into_inner());
     if *m != mode {
         *m = mode;
-        let _ = events.send(PumpEvent::Mode(mode));
         tracing::info!(?mode, "host delivered mode switch");
+    }
+    if let Some(priced) = priced {
+        let _ = events.send(PumpEvent::Mode(priced));
     }
 }
 
@@ -206,11 +228,11 @@ mod tests {
         let mut a = EpochAnchor::default();
         assert_eq!(a.frame(0), None);
         assert_eq!(a.config(cfg(1, 1280)), None, "no frame of epoch 1 yet");
-        assert_eq!(a.frame(1).map(|m| m.width), Some(1280));
+        assert_eq!(a.frame(1).map(|(m, _)| m.width), Some(1280));
         assert_eq!(a.frame(1), None, "applied once");
 
         assert_eq!(a.frame(2), None, "a frame ahead of its config");
-        assert_eq!(a.config(cfg(2, 1920)).map(|m| m.width), Some(1920));
+        assert_eq!(a.config(cfg(2, 1920)).map(|(m, _)| m.width), Some(1920));
     }
 
     /// A config for an epoch whose frames never came is replaced by the next one.
@@ -219,7 +241,7 @@ mod tests {
         let mut a = EpochAnchor::default();
         assert_eq!(a.config(cfg(3, 800)), None);
         assert_eq!(a.config(cfg(4, 1024)), None);
-        assert_eq!(a.frame(4).map(|m| m.width), Some(1024));
+        assert_eq!(a.frame(4).map(|(m, _)| m.width), Some(1024));
     }
 
     /// Under format epochs a frame waits until its epoch's config is in; without them it never
@@ -359,17 +381,33 @@ mod tests {
         );
     }
 
+    /// The pump hears an epoch whose encoded picture moved, at its mode's refresh, and nothing
+    /// for one that encodes what the last one did, whatever its mode.
     #[test]
-    fn applying_the_same_mode_tells_the_pump_nothing() {
+    fn a_moved_picture_tells_the_pump() {
+        let mut a = EpochAnchor {
+            priced: cfg(0, 1280).mode,
+            ..EpochAnchor::default()
+        };
         let slot = Mutex::new(cfg(0, 1280).mode);
         let (tx, rx) = std::sync::mpsc::channel();
-        apply(&slot, &tx, cfg(0, 1280).mode);
-        assert_eq!(rx.try_iter().count(), 0);
-        apply(&slot, &tx, cfg(0, 1920).mode);
-        assert_eq!(
-            rx.try_iter().collect::<Vec<_>>(),
-            [PumpEvent::Mode(cfg(0, 1920).mode)]
-        );
+        let scaled = |epoch, width| StreamConfig {
+            picture: Some((640, 360)),
+            ..cfg(epoch, width)
+        };
+        a.frame(0);
+        apply(&slot, &tx, a.config(cfg(0, 1280)).unwrap());
+        assert_eq!(rx.try_iter().count(), 0, "the handshake's own picture");
+        apply(&slot, &tx, a.config(scaled(0, 1280)).unwrap());
+        let priced = Mode {
+            width: 640,
+            height: 360,
+            refresh_hz: 60,
+        };
+        assert_eq!(rx.try_iter().collect::<Vec<_>>(), [PumpEvent::Mode(priced)]);
+        a.frame(1);
+        apply(&slot, &tx, a.config(scaled(1, 1920)).unwrap());
+        assert_eq!(rx.try_iter().count(), 0, "a new mode at the same picture");
         assert_eq!(slot.lock().unwrap().width, 1920);
     }
 }

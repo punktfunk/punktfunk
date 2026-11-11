@@ -628,6 +628,7 @@ fn run_screen(base: ScreenBase, mut run: ScreenRun) {
             stream: run.stream,
             epoch,
             mode: delivered,
+            picture: crate::session_plan::picture_field(delivered, pipe.reframe.out),
             ..Default::default()
         };
         cfg.set_format(super::state::format_of(

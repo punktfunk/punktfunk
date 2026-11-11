@@ -335,6 +335,9 @@ pub struct ServerHello {
     pub profile: Option<String>,
     /// The screen this session streams. `None` from a host that does not say.
     pub screen: Option<ScreenEcho>,
+    /// The size the host encodes the first screen at when it scales the mode down for the
+    /// client's view. `None` encodes the mode, as an older host always does.
+    pub picture: Option<(u32, u32)>,
 }
 
 impl V2Message for ServerHello {
@@ -354,7 +357,8 @@ impl V2Message for ServerHello {
             })
             .bytes(4, &features);
         f = w.mode.put(f, 5);
-        f.u8(6, w.fec.scheme as u8)
+        f = f
+            .u8(6, w.fec.scheme as u8)
             .u8(7, w.fec.fec_percent)
             .u16(8, w.fec.max_data_per_block)
             .u16(9, w.shard_payload)
@@ -380,7 +384,8 @@ impl V2Message for ServerHello {
             })
             .when(self.screen.is_some(), |f| {
                 f.bytes(28, self.screen.as_ref().map_or(&[][..], ScreenEcho::wire))
-            })
+            });
+        self.picture.put(f, 29)
     }
 
     fn from_body(body: &[u8]) -> Result<Self> {
@@ -414,7 +419,7 @@ impl V2Message for ServerHello {
         };
         let (mut session_id, mut clock_origin_ns, mut suite) = (None, 0, None);
         let mut features = FeatureSet::default();
-        let (mut profile, mut screen) = (None, None);
+        let (mut profile, mut screen, mut picture) = (None, None, None);
         let mut seen = Vec::new();
         let mut r = FieldReader::new(body);
         while let Some((tag, v)) = r.next_field()? {
@@ -470,6 +475,7 @@ impl V2Message for ServerHello {
                 26 => w.audio_layout = u8_of(v)?,
                 27 => profile = label(v, PROFILE_ID_MAX),
                 28 => screen = ScreenEcho::of_wire(v),
+                29 => picture = <Option<(u32, u32)> as FieldValue>::get(v)?,
                 _ => {}
             }
         }
@@ -498,6 +504,7 @@ impl V2Message for ServerHello {
             features,
             profile,
             screen,
+            picture,
         })
     }
 }
@@ -681,7 +688,7 @@ mod tests {
             let twice = ClientHello::from_body(&once.fields().into_body()).unwrap();
             prop_assert_eq!(twice, once);
 
-            let sh = ServerHello { welcome: w, session_id: [7; 16], clock_origin_ns: 1, suite: None, features: FeatureSet::default(), profile: None, screen: None };
+            let sh = ServerHello { welcome: w, session_id: [7; 16], clock_origin_ns: 1, suite: None, features: FeatureSet::default(), profile: None, screen: None, picture: None };
             let once = ServerHello::from_body(&sh.fields().into_body()).unwrap();
             let twice = ServerHello::from_body(&once.fields().into_body()).unwrap();
             prop_assert_eq!(twice, once);
@@ -951,6 +958,7 @@ mod tests {
             features: FeatureSet::default().with(reg::FEATURE_STREAM_CONFIG),
             profile: None,
             screen: None,
+            picture: Some((1920, 1080)),
         };
         assert_eq!(
             ServerHello::from_body(&sh.fields().into_body()).unwrap(),

@@ -171,17 +171,26 @@ pub(super) async fn run_pump(mut args: WorkerArgs) {
     // Unchanged across a mode switch; the pump recomputes the stream-shape cap from them.
     let bit_depth = welcome.bit_depth;
     let chroma_format = welcome.chroma_format;
-    // ABR holds the probe-measured link ceiling to this. Computed here (Welcome
-    // geometry); the data pump stays codec-agnostic. PyroWave's is the host's pin,
-    // and its floor the same rule at `BPP_FLOOR`.
+    // ABR holds the probe-measured link ceiling to this. Computed here, at the picture the
+    // host encodes; the data pump stays codec-agnostic. PyroWave's is the host's pin, and its
+    // floor the same rule at `BPP_FLOOR`.
+    let (width, height) = negotiated
+        .picture
+        .unwrap_or((welcome.mode.width, welcome.mode.height));
+    let priced = crate::config::Mode {
+        width,
+        height,
+        ..welcome.mode
+    };
+    shared.anchor.lock().unwrap().priced = priced;
     let pyrowave = welcome.codec == crate::quic::CODEC_PYROWAVE;
     let stream_cap_kbps = if pyrowave {
         resolved_bitrate_kbps
     } else {
         crate::abr::stream_ceiling_kbps(
-            welcome.mode.width,
-            welcome.mode.height,
-            welcome.mode.refresh_hz,
+            priced.width,
+            priced.height,
+            priced.refresh_hz,
             welcome.codec,
             welcome.bit_depth,
             welcome.chroma_format,
@@ -189,7 +198,7 @@ pub(super) async fn run_pump(mut args: WorkerArgs) {
     };
     let pyrowave_floor_kbps = pyrowave.then(|| {
         crate::pyrowave::kbps_for(
-            &welcome.mode,
+            &priced,
             welcome.chroma_format == crate::quic::CHROMA_IDC_444,
             welcome.bit_depth,
             crate::pyrowave::BPP_FLOOR,

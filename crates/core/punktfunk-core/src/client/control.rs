@@ -51,4 +51,6 @@ pub(crate) struct Negotiated {
     pub(crate) screen: Option<crate::quic::v2::hello::ScreenEcho>,
     /// The host counts axis-unit scroll (`FEATURE_SCROLL_AXIS_UNITS`).
     pub(crate) scroll_axis_units: bool,
+    /// The size the host encodes the Welcome's mode at; `None` encodes the mode.
+    pub(crate) picture: Option<(u32, u32)>,
 }

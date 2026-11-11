@@ -374,6 +374,11 @@ pub(crate) fn picture(
     }
 }
 
+/// The `picture` field a client prices its bitrate on: `None` at `mode`'s own size.
+pub(crate) fn picture_field(mode: punktfunk_core::Mode, picture: (u32, u32)) -> Option<(u32, u32)> {
+    (picture != (mode.width, mode.height)).then_some(picture)
+}
+
 pub(crate) fn resolve_topology(capture: CaptureBackend) -> SessionTopology {
     if capture == CaptureBackend::Wgc {
         SessionTopology::CaptureWorker

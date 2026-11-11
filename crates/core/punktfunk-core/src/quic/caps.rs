@@ -561,6 +561,7 @@ mod tests {
                 features: Default::default(),
                 profile: None,
                 screen: None,
+                picture: None,
             };
             ServerHello::from_body(&sh.fields().into_body())
                 .unwrap()

@@ -595,12 +595,15 @@ pub struct StreamConfig {
     /// What the host's operator pinned with `PUNKTFUNK_DELIVERY`: `0` nothing, then auto,
     /// wake, burst, smooth, capped.
     pub host_forced_shape: u8,
+    /// The size the epoch encodes at when the host scales `mode` down for the client's view.
+    /// `None` encodes `mode`, as an older host always does.
+    pub picture: Option<(u32, u32)>,
 }
 
 v2_message!(StreamConfig = reg::MSG_STREAM_CONFIG,
     { 1 => epoch, 2 => mode, 3 => codec, 4 => bit_depth, 5 => color, 6 => chroma_format,
       7 => host_iface_kind, 8 => host_link_mbps, 9 => host_sndbuf_kb, 10 => host_forced_shape,
-      11 => stream });
+      11 => stream, 12 => picture });
 
 /// Screens one session carries at most, the first included.
 pub const SCREENS_MAX: usize = 4;
@@ -1025,6 +1028,7 @@ mod tests {
             host_link_mbps: 2_500,
             host_sndbuf_kb: 4_096,
             host_forced_shape: 2,
+            picture: Some((1920, 1080)),
         });
         round_trip(StreamConfig {
             stream: 2,

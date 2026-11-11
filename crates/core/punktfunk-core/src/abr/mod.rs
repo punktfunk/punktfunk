@@ -497,10 +497,11 @@ impl Driver {
         self.probe.on_dropped();
     }
 
-    /// The accepted mode changed. Encoder and decoder knees and the rolling
-    /// baselines are properties of the mode; the probe-measured link ceiling
-    /// is not, and survives. Automatic PyroWave re-derives its floor, and its
-    /// cap keeps the pin's bits per pixel: both scale with the pixel rate.
+    /// The accepted mode changed, at the size the host encodes it. Encoder and
+    /// decoder knees and the rolling baselines are properties of the mode; the
+    /// probe-measured link ceiling is not, and survives. Automatic PyroWave
+    /// re-derives its floor, and its cap keeps the pin's bits per pixel: both
+    /// scale with the pixel rate.
     pub fn on_mode_switch(&mut self, width: u32, height: u32, refresh_hz: u32) {
         self.abr.on_mode_switch();
         self.abr.set_frame_budget(refresh_hz);

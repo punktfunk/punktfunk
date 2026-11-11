@@ -311,15 +311,19 @@ enum Tell {
     Correct(Reconfigured),
 }
 
-/// A config for an epoch, mode or format the client does not hold yet, else a correction when
-/// the client was told another mode. `stream_config` is what the client holds.
+/// A config for an epoch, mode, encoded picture or format the client does not hold yet, else a
+/// correction when the client was told another mode. `stream_config` is what the client holds.
 fn tell(
     stream_config: &mut Option<v2msg::StreamConfig>,
     d: &super::wiring::Delivered,
 ) -> Option<Tell> {
+    let picture = crate::session_plan::picture_field(d.mode, d.encoded);
     match stream_config {
-        Some(cfg) if (cfg.epoch, cfg.mode, cfg.format()) != (d.epoch, d.mode, d.format) => {
-            (cfg.epoch, cfg.mode) = (d.epoch, d.mode);
+        Some(cfg)
+            if (cfg.epoch, cfg.mode, cfg.picture, cfg.format())
+                != (d.epoch, d.mode, picture, d.format) =>
+        {
+            (cfg.epoch, cfg.mode, cfg.picture) = (d.epoch, d.mode, picture);
             cfg.set_format(d.format);
             Some(Tell::Config(*cfg))
         }
@@ -1217,8 +1221,9 @@ mod tests {
         assert!(!take_newer(u32::MAX, &mut w, u32::MAX));
     }
 
-    /// A client that takes configs hears each new epoch once; one that does not hears only
-    /// the corrections. Both name the display's mode, never the smaller size it is encoded at.
+    /// A client that takes configs hears each new epoch, or a new encoded size, once; one that
+    /// does not hears only the corrections. Both name the display's mode; a config adds the
+    /// smaller size it is encoded at.
     #[test]
     fn a_delivered_mode_is_a_config_or_a_correction() {
         use super::super::wiring::Delivered;
@@ -1237,6 +1242,7 @@ mod tests {
         let mut held = Some(v2msg::StreamConfig {
             epoch: 0,
             mode: mode(1280),
+            picture: Some((640, 360)),
             ..Default::default()
         });
         held.as_mut().unwrap().set_format(Default::default());
@@ -1245,7 +1251,16 @@ mod tests {
             panic!("a new epoch is configured")
         };
         assert_eq!((cfg.epoch, cfg.mode.width), (1, 1920));
+        assert_eq!(cfg.picture, Some((960, 360)));
         assert_eq!(tell(&mut held, &d(1, 1920, true)), None, "already held");
+        let unscaled = Delivered {
+            encoded: (1920, 720),
+            ..d(1, 1920, false)
+        };
+        let Some(Tell::Config(cfg)) = tell(&mut held, &unscaled) else {
+            panic!("a new encoded size is configured")
+        };
+        assert_eq!(cfg.picture, None);
 
         let mut none = None;
         assert_eq!(tell(&mut none, &d(1, 1920, false)), None);

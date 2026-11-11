@@ -293,8 +293,8 @@ impl DataPump {
                 .lock()
                 .unwrap_or_else(|e| e.into_inner())
                 .frame(frame.epoch);
-            if let Some(mode) = delivered {
-                super::anchor::apply(&self.shared.mode, &self.events_tx, mode);
+            if let Some(delivery) = delivered {
+                super::anchor::apply(&self.shared.mode, &self.events_tx, delivery);
             }
         }
         // The decoder's RFI for this gap reads what the skipped frame lacks now.

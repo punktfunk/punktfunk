@@ -410,6 +410,7 @@ async fn dial(
                 profile: server.profile.clone(),
                 screen: server.screen.clone(),
                 scroll_axis_units: server.features.has(registry::FEATURE_SCROLL_AXIS_UNITS),
+                picture: server.picture,
             },
         ))))
     };
