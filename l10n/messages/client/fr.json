@@ -986,6 +986,8 @@
 	"player_overlay_actions": "Actions rapides",
 	"player_cursor_gestures": "Appui long pour clic droit",
 	"player_cursor_gestures_hint": "Maintenez {button} pour un clic droit, sur une télécommande sans second bouton ; désactivé, {button} fait un simple clic gauche.",
+	"player_game_picture": "Mode d’image Jeu",
+	"player_game_picture_hint": "Passe le téléviseur en mode d’image Jeu pendant que vous jouez, puis rétablit le vôtre.",
 	"player_gamepad": "Type de manette",
 	"player_gamepad_hint": "La manette virtuelle que crée l’hôte ; Automatique reproduit la vôtre.",
 	"player_gamepad_auto": "Automatique",

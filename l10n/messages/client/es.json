@@ -986,6 +986,8 @@
 	"player_overlay_actions": "Acciones rápidas",
 	"player_cursor_gestures": "Pulsación larga para clic derecho",
 	"player_cursor_gestures_hint": "Mantén {button} para hacer clic derecho en un mando a distancia sin segundo botón; desactivado, {button} hace clic izquierdo.",
+	"player_game_picture": "Modo de imagen Juego",
+	"player_game_picture_hint": "Pone el televisor en el modo de imagen Juego mientras juegas y después vuelve al tuyo.",
 	"player_gamepad": "Tipo de mando",
 	"player_gamepad_hint": "El mando virtual que crea el host; Automático reproduce el tuyo.",
 	"player_gamepad_auto": "Automático",

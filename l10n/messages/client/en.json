@@ -1057,6 +1057,8 @@
 	"player_overlay_actions": "Quick actions",
 	"player_cursor_gestures": "Long press to right-click",
 	"player_cursor_gestures_hint": "Hold {button} for a right click, on a remote with no second button; off, {button} is a plain left click.",
+	"player_game_picture": "Game picture mode",
+	"player_game_picture_hint": "Switches the TV to its Game picture mode while you stream, then back to your own.",
 	"player_gamepad": "Controller type",
 	"player_gamepad_hint": "The virtual controller the host creates — Automatic matches yours.",
 	"player_gamepad_auto": "Automatic",

@@ -713,6 +713,7 @@
 	"player_mouse_mode_keys_hint": "Second line of the mouse input hint. keys is the mouse-mode chord from the client's shortcut table, e.g. Ctrl+Alt+Shift+M or ⌃⌥⇧M.",
 	"player_inhibit_shortcuts_hint": "keys lists the system shortcuts this client captures, from its shortcut table, e.g. Alt+Tab, Super, … or ⌘Space, ⌘Tab.",
 	"player_cursor_gestures_hint": "TV remote setting. button is the remote's confirm key the client names, e.g. OK.",
+	"player_game_picture": "TV setting. Game is the TV's own picture mode; use the name its picture menu shows.",
 	"player_guide_gesture_hint": "button is the controller's Select/View/Share button as the client names it.",
 	"about_stream_controls": "Row in About that opens the keys, controller chords and gestures that work in a stream.",
 	"about_licenses": "Row in About that opens the licenses screen.",

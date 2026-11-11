@@ -134,6 +134,9 @@ pub enum RowId {
     /// Long-press the remote's OK to send a right click. webOS only — it exists because a
     /// Magic Remote has no second button.
     CursorGestures,
+    /// The TV's Game picture mode for the length of a stream. webOS only: the client sets the
+    /// panel's own picture mode over its system bus.
+    GamePicture,
     /// Action row: jumps to the Controllers tab.
     Controllers,
     /// Action row: asks the host to open the platform licences screen.
@@ -186,6 +189,7 @@ pub fn advanced(id: RowId) -> bool {
             | RowId::StatsSize
             | RowId::ExitHint
             | RowId::ReduceUiResolution
+            | RowId::GamePicture
     )
 }
 
@@ -213,6 +217,7 @@ pub(super) mod device_keys {
 mod webos_keys {
     pub const AUDIO_ROUTE: &str = "webos.audio_route";
     pub const CURSOR_GESTURES: &str = "webos.cursor_gestures";
+    pub const GAME_PICTURE: &str = "webos.game_picture";
     pub const REDUCE_UI_RES: &str = "webos.reduce_ui_resolution";
 }
 
@@ -410,6 +415,7 @@ impl RowId {
             RowId::DsCapture => Extra::Bool(device_keys::DS_CAPTURE, true),
             RowId::SpatialAudio => Extra::Bool(device_keys::SPATIAL_AUDIO, true),
             RowId::CursorGestures => Extra::Bool(webos_keys::CURSOR_GESTURES, false),
+            RowId::GamePicture => Extra::Bool(webos_keys::GAME_PICTURE, true),
             RowId::GamepadUi => Extra::Bool(GAMEPAD_UI_KEY, true),
             RowId::BackgroundKeepAlive => Extra::Bool(BACKGROUND_KEEP_ALIVE_KEY, false),
             RowId::AudioRoute => {
@@ -561,6 +567,7 @@ pub(super) const TABS: [(Section, &[RowId]); 7] = [
             RowId::Decoder,
             RowId::LowLatency,
             RowId::KeepAwake,
+            RowId::GamePicture,
         ],
     ),
     (
@@ -953,8 +960,9 @@ pub fn row_on(id: RowId, platform: crate::platform::Platform) -> bool {
         // has to answer. Android's router, webOS's slot table and the browser's Gamepad API give
         // every controller its own wire slot, so there is nothing to pick.
         RowId::Pad => &[Desktop],
-        // That client's own audio plane and its remote's missing second button.
-        RowId::AudioRoute | RowId::CursorGestures => &[WebOS],
+        // That client's own audio plane, its remote's missing second button, and the panel's
+        // own picture mode.
+        RowId::AudioRoute | RowId::CursorGestures | RowId::GamePicture => &[WebOS],
         RowId::FullscreenMode => &[Apple],
         // Where the console owns the settings file. A host app keeps its own store and reset.
         RowId::ResetSettings => &[Desktop],
@@ -1196,6 +1204,7 @@ pub(super) fn row_icon(id: RowId) -> &'static str {
         RowId::Compositor => "panel-right",
         RowId::Codec => "film",
         RowId::Hdr | RowId::KeepAwake => "sun",
+        RowId::GamePicture => "tv",
         RowId::PresentPriority | RowId::SmoothBuffer | RowId::LowLatency => "clock",
         RowId::Decoder | RowId::AudioRoute => "cpu",
         RowId::Chroma444 | RowId::TenBitSdr => "eye",
@@ -1649,6 +1658,7 @@ fn row_spec_base(id: RowId, ctx: &Ctx, presets: &[(String, String)]) -> RowSpec 
         RowId::DsCapture => (None, m::player_ds_capture(), extra()),
         RowId::AudioRoute => (None, m::player_audio_route(), extra()),
         RowId::CursorGestures => (None, m::player_cursor_gestures(), extra()),
+        RowId::GamePicture => (None, m::player_game_picture(), extra()),
         RowId::GamepadUi => (None, m::player_gamepad_ui_enabled(), extra()),
         RowId::GamepadUiMode => (
             None,
@@ -1826,6 +1836,7 @@ pub fn detail(id: RowId, ctx: &Ctx) -> Cow<'static, str> {
         RowId::DsCapture => m::player_ds_capture_hint().into(),
         RowId::AudioRoute => m::player_audio_route_hint().into(),
         RowId::CursorGestures => m::player_cursor_gestures_hint("OK").into(),
+        RowId::GamePicture => m::player_game_picture_hint().into(),
         // The other UI is named, not called "the other UI": the sentence has to tell
         // the reader where "off" lands, and that is a different place per client.
         RowId::GamepadUi => match platform {
@@ -2134,6 +2145,7 @@ pub fn adjust(id: RowId, delta: i32, wrap: bool, ctx: &mut Ctx) -> bool {
         | RowId::Sc2Passthrough
         | RowId::DsCapture
         | RowId::CursorGestures
+        | RowId::GamePicture
         | RowId::AudioRoute
         | RowId::GamepadUi
         | RowId::BackgroundKeepAlive

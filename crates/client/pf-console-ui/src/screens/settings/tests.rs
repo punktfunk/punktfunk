@@ -225,6 +225,7 @@ fn catalog_key(id: RowId) -> Option<&'static str> {
         RowId::QuickActions => "overlay_actions",
         RowId::ShortcutsPage => "shortcuts",
         RowId::CursorGestures => "cursor_gestures",
+        RowId::GamePicture => "game_picture",
         RowId::PadType => "gamepad",
         RowId::PadRumble => "pad_rumble",
         RowId::PhoneRumble => "rumble_on_phone",
@@ -1704,6 +1705,7 @@ fn platform_row_split_hides_only_the_other_platforms_concepts() {
             RowId::Screen,
             RowId::SecondScreen,
             RowId::LowLatency,
+            RowId::GamePicture,
             RowId::SpatialAudio,
             RowId::AudioRoute,
             RowId::CursorGestures,
@@ -1734,6 +1736,7 @@ fn platform_row_split_hides_only_the_other_platforms_concepts() {
             RowId::Vsync,
             RowId::AllowVrr,
             RowId::Decoder,
+            RowId::GamePicture,
             RowId::SpatialAudio,
             RowId::AudioRoute,
             RowId::InhibitShortcuts,
@@ -2059,7 +2062,7 @@ fn every_row_has_exactly_one_tab() {
             seen.push(*id);
         }
     }
-    assert_eq!(seen.len(), 73, "{seen:?}");
+    assert_eq!(seen.len(), 74, "{seen:?}");
     assert!(
         !seen.contains(&RowId::AdvancedChanged),
         "built per tab, never listed"
