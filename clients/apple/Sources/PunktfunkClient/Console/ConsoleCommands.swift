@@ -250,7 +250,8 @@ extension ConsoleModel {
     /// The shelf's catalog, its cached copy first so the grid is never empty while the fetch
     /// runs, then what the host answers; a sleeping host is woken when auto-wake is on.
     /// `refreshOnly` asks about running titles alone. The list and phase go up under the last
-    /// `FetchLibrary`'s `req`; a refetch this model starts reuses it, and only for its host.
+    /// `FetchLibrary`'s `req`; a refetch this model starts reuses it, and `openShelf` says
+    /// whether a fetch or an answer still belongs to the shelf the console has open.
     /// The host is the record `fp` pins, else the unpinned one at `addr:port` (the stream port):
     /// never one pinned to another fingerprint, the other OS of a dual-boot box.
     func fetchLibrary(
@@ -259,9 +260,9 @@ extension ConsoleModel {
         let placeholder = store.hosts.first {
             $0.pinnedSHA256 == nil && $0.address == addr && $0.port == port
         }
-        guard let host = host(fp: fp, addr: "", port: 0) ?? placeholder else { return }
-        // The console has moved off this host: no shelf to refill.
-        if !refreshOnly, fetchReq.fp != fp { return }
+        guard let host = host(fp: fp, addr: "", port: 0) ?? placeholder,
+              openShelf.accepts(refreshOnly ? .refresh : .list, fp: fp)
+        else { return }
         if !refreshOnly { fetchSerial += 1 }
         let serial = fetchSerial
         let req = fetchReq.req
@@ -293,7 +294,7 @@ extension ConsoleModel {
         if refreshOnly {
             Task { [weak self] in
                 let status = await LibraryClient.status(target)
-                self?.pushStatus(status, serial: serial)
+                self?.pushStatus(status, serial: serial, fp: fp)
             }
             return
         }
@@ -308,8 +309,7 @@ extension ConsoleModel {
             target: target, hostID: host.id.uuidString, wakeMacs: host.wakeMacs, autoWake: autoWake)
         fetching = Task { [weak self] in
             for await event in events {
-                // A newer fetch owns the shelf by the time a slow host answers.
-                guard let self, serial == self.fetchSerial else { return }
+                guard let self, openShelf.accepts(.answer(serial: serial), fp: fp) else { return }
                 switch event {
                 case .cached(let cached):
                     bridge.push(.libraryCached, ConsoleJSON.libraryGames(req, cached.games))
@@ -332,17 +332,21 @@ extension ConsoleModel {
                             req, title: String(localized: L10n.libLoadFailed),
                             body: error.errorDescription ?? "", canRetry: true))
                 case .status(let games, let downloads, let grants):
-                    pushStatus((games, downloads, grants), serial: serial)
+                    pushStatus((games, downloads, grants), serial: serial, fp: fp)
                 }
             }
         }
     }
 
-    /// What the host runs and downloads, unless a newer fetch owns the shelf.
+    /// The shelf the console has open: the last `FetchLibrary`'s host and its list fetch.
+    private var openShelf: FetchGuard { FetchGuard(fp: fetchReq.fp, serial: fetchSerial) }
+
+    /// What the host runs and downloads, while the shelf it was read for is open.
     private func pushStatus(
-        _ status: (games: [RunningGame], downloads: [HostDownload], grants: UInt32?), serial: Int
+        _ status: (games: [RunningGame], downloads: [HostDownload], grants: UInt32?),
+        serial: Int, fp: String
     ) {
-        guard serial == fetchSerial else { return }
+        guard openShelf.accepts(.answer(serial: serial), fp: fp) else { return }
         bridge.push(.libraryDownloads, ConsoleJSON.downloads(status.downloads, grants: status.grants))
         bridge.push(.libraryRunning, ConsoleJSON.runningGames(status.games))
     }
