@@ -1219,6 +1219,8 @@ final class SessionModel: ObservableObject {
             var began = Date()
             while !Task.isCancelled {
                 let status = await LibraryClient.status(target)
+                // A cancelled read comes back empty, which reads as "nothing to wait for".
+                guard !Task.isCancelled else { return }
                 let game = status.games.first { $0.appID == hold.id }
                 let state = game?.state
                 let download = status.downloads.first { $0.appID == hold.id }
