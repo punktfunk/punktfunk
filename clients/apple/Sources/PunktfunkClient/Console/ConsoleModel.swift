@@ -505,9 +505,15 @@ final class ConsoleModel: ObservableObject, ConsoleViewDelegate {
         bridge.key(.return)
     }
 
+    /// The console's spoken cue, for VoiceOver. High priority on a Mac, so it interrupts speech
+    /// as the UIKit announcement does.
     private func announce(_ text: String) {
         #if canImport(UIKit)
         UIAccessibility.post(notification: .announcement, argument: text)
+        #elseif canImport(AppKit)
+        NSAccessibility.post(
+            element: NSApplication.shared, notification: .announcementRequested,
+            userInfo: [.announcement: text, .priority: NSAccessibilityPriorityLevel.high.rawValue])
         #endif
     }
 
