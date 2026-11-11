@@ -173,30 +173,30 @@ struct TVQuickActionsEditor: View {
         return s.enabled ? String(localized: L10n.appleTvRingSlotHint) : s.reason
     }
 
-    private func set(_ k: Int, _ id: String) {
+    /// Writes the blob as `change` leaves the config.
+    private func edit(_ change: (inout OverlayConfig) -> Void) {
         var c = cfg
-        c.ring[k] = SlotId.parse(id)
+        change(&c)
         blob = c.toJSON()
     }
 
+    private func set(_ k: Int, _ id: String) {
+        edit { $0.assign(k, id: id) }
+    }
+
+    /// Puts the lifted disc down on slot `b`; on its own slot it changes nothing.
     private func swapSlots(_ a: Int, _ b: Int) {
         moving = nil
         guard a != b else { return }
-        var c = cfg
-        c.ring.swapAt(a, b)
-        blob = c.toJSON()
+        edit { $0.swap(a, b) }
     }
 
     private func save(_ d: ShortcutDraft) {
-        var c = cfg
-        c.saveShortcut(OverlayShortcut(id: d.id, label: d.label, keys: d.keys))
-        blob = c.toJSON()
+        edit { $0.saveShortcut(OverlayShortcut(id: d.id, label: d.label, keys: d.keys)) }
     }
 
     private func remove(_ id: String) {
-        var c = cfg
-        c.removeShortcut(id)
-        blob = c.toJSON()
+        edit { $0.removeShortcut(id) }
     }
 }
 

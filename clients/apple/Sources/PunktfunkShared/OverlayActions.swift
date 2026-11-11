@@ -239,6 +239,16 @@ public struct OverlayConfig: Equatable, Sendable {
         shortcuts.first { $0.id == id }
     }
 
+    /// Put the action `id` names in slot `k`; an empty or unknown id empties it.
+    public mutating func assign(_ k: Int, id: String) {
+        ring[k] = SlotId.parse(id)
+    }
+
+    /// Trade two slots' actions: a disc dragged onto another.
+    public mutating func swap(_ a: Int, _ b: Int) {
+        ring.swapAt(a, b)
+    }
+
     /// Add or replace a shortcut. A new one takes the first empty slot, as the editors promise.
     public mutating func saveShortcut(_ sc: OverlayShortcut) {
         if let i = shortcuts.firstIndex(where: { $0.id == sc.id }) {

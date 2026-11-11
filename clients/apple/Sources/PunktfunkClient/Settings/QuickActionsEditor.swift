@@ -74,7 +74,8 @@ struct QuickActionsEditor: View {
                         DialCatcher(onDial: { ring.handle($0) }) { ring.sheet = false }
                         #endif
                         RingOverlay(state: ring, cfg: cfg, actions: previewRingActions,
-                                    editing: RingEditing(pick: { picking = PickSlot(k: $0) }, swap: swap))
+                                    editing: RingEditing(pick: { picking = PickSlot(k: $0) },
+                                                         swap: { a, b in edit { $0.swap(a, b) } }))
                     }
                     .environment(\.colorScheme, .dark)
                     .onAppear {
@@ -171,7 +172,7 @@ struct QuickActionsEditor: View {
         .navigationTitle(L10n.ringEditorTitle)
         .sheet(item: $picking) { p in
             SlotPicker(groups: groups, current: cfg.ring[p.k]?.id ?? "") { id in
-                set(p.k, id)
+                edit { $0.assign(p.k, id: id) }
                 picking = nil
             }
             // A macOS sheet sizes to its content, and a List's content is no size at all.
@@ -197,34 +198,23 @@ struct QuickActionsEditor: View {
 
     private var groups: [SlotGroup] { slotGroups(for: cfg) }
 
-    private func set(_ k: Int, _ id: String) {
+    /// Writes the blob as `change` leaves the config.
+    private func edit(_ change: (inout OverlayConfig) -> Void) {
         var c = cfg
-        c.ring[k] = SlotId.parse(id)
+        change(&c)
         blob = c.toJSON()
     }
 
     private func setPad(_ change: (inout PadConfig) -> Void) {
-        var c = cfg
-        change(&c.pad)
-        blob = c.toJSON()
-    }
-
-    private func swap(_ a: Int, _ b: Int) {
-        var c = cfg
-        c.ring.swapAt(a, b)
-        blob = c.toJSON()
+        edit { change(&$0.pad) }
     }
 
     private func save(_ d: ShortcutDraft) {
-        var c = cfg
-        c.saveShortcut(OverlayShortcut(id: d.id, label: d.label, keys: d.keys))
-        blob = c.toJSON()
+        edit { $0.saveShortcut(OverlayShortcut(id: d.id, label: d.label, keys: d.keys)) }
     }
 
     private func remove(_ id: String) {
-        var c = cfg
-        c.removeShortcut(id)
-        blob = c.toJSON()
+        edit { $0.removeShortcut(id) }
     }
 }
 
