@@ -522,6 +522,13 @@ struct ConnectFlow {
         }
     }
 
+    /// Cancel on the approval wait: a wait the dial raised ends that dial. A request-access wait
+    /// only closes; `requestAccess` drops its late answer.
+    func cancelApproval(_ req: ApprovalRequest) {
+        guard req.viaDial, model.phase == .connecting else { return }
+        model.disconnect()
+    }
+
     /// Explicit wake-only (a host card's or the library's "Wake Host"): fire the packet and wait
     /// for the host to come online, then run `onOnline`, but don't connect.
     func wakeOnly(_ host: StoredHost, onOnline: @escaping () -> Void = {}) {

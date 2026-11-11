@@ -236,13 +236,13 @@ struct ContentView: View {
                 Text(model.errorMessage ?? "")
             }
             // The delegated-approval wait: the host holds the request until the operator approves
-            // it. Cancel returns the UI at once; `ConnectFlow.requestAccess` drops the late answer.
+            // it. Cancel returns the UI at once and ends a dial the host parked (`cancelApproval`).
             .alert(
                 L10n.pairWaitingForApproval,
                 isPresented: awaitingApprovalPresented,
                 presenting: awaitingApproval
-            ) { _ in
-                Button(L10n.commonCancel, role: .cancel) {}
+            ) { req in
+                Button(L10n.commonCancel, role: .cancel) { flow.cancelApproval(req) }
             } message: { req in
                 Text(L10n.dialApproveNoPin(host: req.host.displayName))
             }
