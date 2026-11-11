@@ -340,6 +340,7 @@ struct ContentView: View {
                         host: host, advertisedFingerprint: nil, viaDial: true)
                 }
             }
+            model.currentRecord = { [store] id in store.hosts.first { $0.id == id } }
             DemoMode.resume(in: store)
             autoConnectIfAsked()
             // An intent that ran before this window subscribed. Ahead of the start screen,

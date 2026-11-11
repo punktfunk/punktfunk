@@ -1,7 +1,7 @@
 // What a failed dial leads to: the caller's profile handlers, a redial of a host still waking,
 // an alert, or the caller's own recovery (the wake wait). `SessionModel.connect` takes one
-// recovery for a failed dial and performs it. Pure, so `swift test` covers every branch
-// (`DialRecoveryTests`).
+// recovery for a failed dial and performs it; every redial dials `StoredHost.redialed`. Pure, so
+// `swift test` covers every branch (`DialRecoveryTests`).
 
 import Foundation
 import PunktfunkShared
@@ -50,5 +50,16 @@ public indirect enum DialRecovery: Equatable {
         default:
             return rest
         }
+    }
+}
+
+public extension StoredHost {
+    /// The record a redial of this dial dials: the store's `current` one, so an address or a port
+    /// that moved since the first dial is followed, else this copy. `pin` replaces the record's
+    /// pin: a lost session's redial keeps the pin that session proved.
+    func redialed(current: StoredHost?, pin: Data? = nil) -> StoredHost {
+        var host = current ?? self
+        if let pin { host.pinnedSHA256 = pin }
+        return host
     }
 }

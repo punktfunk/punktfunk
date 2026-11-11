@@ -292,6 +292,9 @@ final class SessionModel: ObservableObject {
     var onRingNav: ((RingNav) -> Void)?
     /// A connect the host parked for its operator: the view shows the approval wait.
     var onAwaitingApproval: ((StoredHost) -> Void)?
+    /// The saved record for a host as it is now, which a redial dials. Unset, a redial dials the
+    /// copy its first dial took.
+    var currentRecord: (@MainActor (StoredHost.ID) -> StoredHost?)?
 
     /// The ring is up: the pad belongs to it (flushed on the host, edges become navigation).
     func setRingOpen(_ open: Bool) {
@@ -1068,9 +1071,10 @@ final class SessionModel: ObservableObject {
         }
     }
 
-    /// Dial a lost session again on the schedule every client shares, with the dial that started
-    /// it; the host resumes the session it still holds. A redial that can't reach the host is the
-    /// next attempt, and a spent schedule says the connection is lost.
+    /// Dial a lost session again on the schedule every client shares: the dial that started it,
+    /// to the host's record as it is now, pinned as the session proved. The host resumes the
+    /// session it still holds. A redial that can't reach the host is the next attempt, and a
+    /// spent schedule says the connection is lost.
     private func redialAfterLoss(_ plan: Redial) {
         guard let wait = PunktfunkConnection.SessionEndReason.lost.redialDelay(attempt: plan.attempt)
         else {
@@ -1086,7 +1090,9 @@ final class SessionModel: ObservableObject {
             try? await Task.sleep(for: wait)
             guard let self, self.redial?.attempt == next.attempt, self.phase == .idle else { return }
             self.connect(
-                to: next.host, effective: next.effective, gamepad: next.gamepad,
+                to: next.host.redialed(
+                    current: self.currentRecord?(next.host.id), pin: next.host.pinnedSHA256),
+                effective: next.effective, gamepad: next.gamepad,
                 overrides: next.overrides, launchID: next.launchID, profileID: next.profileID,
                 shelf: next.shelf,
                 onUnreachable: { [weak self] in self?.redialAfterLoss(next) })
@@ -1096,9 +1102,10 @@ final class SessionModel: ObservableObject {
     /// Time since the host this dial is for first refused as a host still waking.
     private var sinceFirstWake: Duration? { lastDial?.wakeSince.map { ContinuousClock.Instant.now - $0 } }
 
-    /// Dial `plan` again after `wait`, the core's answer for a woken host that answered before
-    /// it could stream. The connect overlay stays up for the redial, and Cancel ends it. The
-    /// launch hold still up rides into the redial; one the player dismissed stays down.
+    /// Dial `plan` again after `wait`, to the host's record as it is now: the core's answer for
+    /// a woken host that answered before it could stream. The connect overlay stays up for the
+    /// redial, and Cancel ends it. The launch hold still up rides into the redial; one the player
+    /// dismissed stays down.
     private func redialWhileWaking(_ plan: Redial, after wait: Duration) {
         var next = plan
         next.wakeSince = next.wakeSince ?? .now
@@ -1110,7 +1117,8 @@ final class SessionModel: ObservableObject {
             guard let self, self.connectSeq == seq, self.redial != nil, self.phase == .idle
             else { return }
             self.connect(
-                to: next.host, effective: next.effective, gamepad: next.gamepad,
+                to: next.host.redialed(current: self.currentRecord?(next.host.id)),
+                effective: next.effective, gamepad: next.gamepad,
                 overrides: next.overrides, launchID: next.launchID, profileID: next.profileID,
                 shelf: next.shelf,
                 allowTofu: next.allowTofu, autoWake: next.autoWake, wakeSince: next.wakeSince,

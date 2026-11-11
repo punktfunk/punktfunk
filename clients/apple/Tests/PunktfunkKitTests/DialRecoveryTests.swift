@@ -75,4 +75,21 @@ final class DialRecoveryTests: XCTestCase {
         ]
         for recovery in drops { XCTAssertFalse(recovery.keepsLaunchHold, "\(recovery)") }
     }
+
+    /// R1-3: a redial dials the store's record as it is now; a loss redial keeps its proven pin.
+    func testARedialDialsTheCurrentRecord() {
+        let proven = Data([7])
+        let dialed = StoredHost(name: "Den", address: "10.0.0.2", pinnedSHA256: proven)
+        var moved = dialed
+        moved.move(to: "10.0.0.9", port: 9800)
+        moved.pinnedSHA256 = Data([1])
+        let wake = dialed.redialed(current: moved)
+        XCTAssertEqual(wake, moved)
+        let loss = dialed.redialed(current: moved, pin: proven)
+        XCTAssertEqual(loss.address, "10.0.0.9")
+        XCTAssertEqual(loss.port, 9800)
+        XCTAssertEqual(loss.pinnedSHA256, proven)
+        // A host the store no longer has dials the copy.
+        XCTAssertEqual(dialed.redialed(current: nil), dialed)
+    }
 }
