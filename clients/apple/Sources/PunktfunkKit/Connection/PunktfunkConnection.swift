@@ -1651,14 +1651,16 @@ public final class PunktfunkConnection: @unchecked Sendable {
             }
         }
 
-        /// `lines` led by the size the picture decodes at when that is not the host's `mode`:
-        /// `1920×1080@60 · host renders 3840×2160`. Only a line opening with the mode changes, so
-        /// Compact, which names no size, stays as it is.
+        /// `lines` led by the size the picture decodes at when the host scaled `mode` down to it:
+        /// `1920×1080@60 · host renders 3840×2160`. A decoder's padded output is no such picture.
+        /// Only a line opening with the mode changes, so Compact, which names no size, stays as it is.
         public static func naming(
             picture: (width: UInt32, height: UInt32)?,
             mode: (width: UInt32, height: UInt32, refreshHz: UInt32), in lines: [HudLine]
         ) -> [HudLine] {
-            guard let p = picture, (p.width, p.height) != (mode.width, mode.height) else { return lines }
+            guard let p = picture, p.width <= mode.width, p.height <= mode.height,
+                (p.width, p.height) != (mode.width, mode.height)
+            else { return lines }
             let lead = "\(mode.width)×\(mode.height)@\(mode.refreshHz)"
             return lines.map { line in
                 guard line.text == lead || line.text.hasPrefix(lead + " · ") else { return line }

@@ -30,6 +30,7 @@ final class HudLineTests: XCTestCase {
         }
         XCTAssertEqual(name(nil), lines)
         XCTAssertEqual(name((3_840, 2_160)), lines)
+        XCTAssertEqual(name((3_840, 2_176)), lines, "padded output")
         let host = L10n.overlayHostRenders(width: "3840", height: "2160")
         XCTAssertEqual(name((1_920, 1_080)).map(\.text), [
             "1920×1080@60 · \(host) · 120 fps · 24.3 Mb/s", "120 fps · 24.3 Mb/s",

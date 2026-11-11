@@ -1218,8 +1218,10 @@ fn text(role: Role, text: String) -> HudLine {
 
 #[cfg(any(test, feature = "l10n"))]
 fn mode(s: &StatsSnapshot) -> Vec<String> {
-    let host = (s.width, s.height);
-    match s.picture.filter(|&p| p != host) {
+    // Only a picture the host scaled down: a decoder's padded output is not one.
+    let smaller =
+        |(w, h): (u32, u32)| w <= s.width && h <= s.height && (w, h) != (s.width, s.height);
+    match s.picture.filter(|&p| smaller(p)) {
         Some((w, h)) => vec![
             format!("{w}×{h}@{}", s.refresh_hz),
             m::overlay_host_renders(s.width, s.height),
@@ -2390,6 +2392,12 @@ mod tests {
         let compact = first(&s, StatsVerbosity::Compact, false);
         s.picture = Some((3840, 2160));
         assert_eq!(first(&s, StatsVerbosity::Normal, false), plain);
+        s.picture = Some((3840, 2176));
+        assert_eq!(
+            first(&s, StatsVerbosity::Normal, false),
+            plain,
+            "padded output"
+        );
         s.picture = Some((1920, 1080));
         for advanced in [false, true] {
             let scaled = format(&s, StatsVerbosity::Detailed, advanced);
