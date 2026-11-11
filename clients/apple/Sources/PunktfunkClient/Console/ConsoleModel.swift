@@ -567,20 +567,10 @@ final class ConsoleModel: ObservableObject, ConsoleViewDelegate {
     }
 
     func host(fp: String, addr: String, port: UInt16) -> StoredHost? {
-        store.hosts.first {
-            let own = $0.pinnedSHA256?.map { String(format: "%02x", $0) }.joined() ?? ""
-            return (!fp.isEmpty && own == fp) || ($0.address == addr && $0.port == port)
-        }
+        ConsoleJSON.host(in: store.hosts, fp: fp, addr: addr, port: port)
     }
 
-    /// A row key is the fingerprint or `addr:port`, with a pinned card's preset id behind a NUL.
     func host(key: String) -> StoredHost? {
-        let base = key.split(separator: "\u{0}").first.map(String.init) ?? key
-        if let host = store.hosts.first(where: {
-            ($0.pinnedSHA256?.map { String(format: "%02x", $0) }.joined() ?? "") == base
-        }) { return host }
-        let parts = base.split(separator: ":")
-        guard parts.count == 2, let port = UInt16(parts[1]) else { return nil }
-        return store.hosts.first { $0.address == String(parts[0]) && $0.port == port }
+        ConsoleJSON.host(in: store.hosts, key: key)
     }
 }

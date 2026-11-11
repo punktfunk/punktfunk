@@ -21,6 +21,25 @@ public enum ConsoleJSON {
         host.pinnedSHA256.map { $0.map { String(format: "%02x", $0) }.joined() } ?? ""
     }
 
+    /// The saved host a console command names by fingerprint and `addr:port`.
+    public static func host(
+        in hosts: [StoredHost], fp: String, addr: String, port: UInt16
+    ) -> StoredHost? {
+        hosts.first {
+            (!fp.isEmpty && fingerprint($0) == fp) || ($0.address == addr && $0.port == port)
+        }
+    }
+
+    /// The saved host behind a row key: the fingerprint or `addr:port`, with a pinned card's
+    /// preset id behind a NUL.
+    public static func host(in hosts: [StoredHost], key: String) -> StoredHost? {
+        let base = key.split(separator: "\u{0}").first.map(String.init) ?? key
+        if let host = hosts.first(where: { fingerprint($0) == base }) { return host }
+        let parts = base.split(separator: ":")
+        guard parts.count == 2, let port = UInt16(parts[1]) else { return nil }
+        return hosts.first { $0.address == String(parts[0]) && $0.port == port }
+    }
+
     /// `HostRow.key` — the pinned fingerprint when there is one, else `addr:port`.
     public static func rowKey(_ fingerprint: String, _ address: String, _ port: UInt16) -> String {
         fingerprint.isEmpty ? "\(address):\(port)" : fingerprint
