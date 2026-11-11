@@ -2,6 +2,7 @@
 
 use ndk::media::media_codec::{AsyncNotifyCallback, MediaCodec, MediaCodecDirection};
 use ndk::native_window::NativeWindow;
+use pf_bitstream::h265::poc_widen::PocWidener;
 use punktfunk_core::client::{Decoded, NativeClient};
 use punktfunk_core::error::PunktfunkError;
 use punktfunk_core::reanchor::{AnchorEvidence, DecoderClass, LocalRecovery};
@@ -461,6 +462,10 @@ fn run_codec(
         &ctx.codec.name().unwrap_or_default(),
     );
     let mut state = State::new(sink, Intake::new(class, await_keyframe));
+    state.widen = poc_widener(
+        client.video_format().codec,
+        &ctx.codec.name().unwrap_or_default(),
+    );
     if await_keyframe {
         client.recovery_lost();
     }
@@ -982,6 +987,8 @@ struct Pass {
 /// The loop's working state: every value a pass mutates.
 struct State {
     sink: Box<dyn Sink>,
+    /// Recodes each fed AU with a 16-bit POC ([`poc_widener`]). `None` on other decoders.
+    widen: Option<PocWidener>,
     /// The codec's input side: the slots it offered, the parked deliveries, the open AU.
     inputs: Feed,
     ready: Vec<OutputReady>,
@@ -1096,6 +1103,22 @@ fn admission(codec: u8, decoder: &str) -> Option<DecoderClass> {
     Some(class)
 }
 
+/// The POC widener for this session: HEVC on an Amlogic decoder, which loses a long-term
+/// reference behind a POC lsb wrap and then shows nothing until the next IDR.
+/// `debug.punktfunk.poc_widen` = `on` / `off` overrides the pick.
+fn poc_widener(codec: u8, decoder: &str) -> Option<PocWidener> {
+    let forced = match sysprop(c"debug.punktfunk.poc_widen").as_deref() {
+        Some("on") => Some(true),
+        Some("off") => Some(false),
+        _ => None,
+    };
+    if !crate::codec_format::widens_poc(codec, decoder, forced) {
+        return None;
+    }
+    log::info!("decode: 16-bit POC recode for {decoder}");
+    Some(PocWidener::new())
+}
+
 /// One feeder delivery as the intake rules see it.
 fn delivery(f: &Frame) -> Delivery {
     Delivery {
@@ -1123,6 +1146,7 @@ impl State {
     fn new(sink: Box<dyn Sink>, intake: Intake) -> State {
         State {
             sink,
+            widen: None,
             inputs: Feed::default(),
             ready: Vec::new(),
             fed: 0,
@@ -1328,7 +1352,19 @@ impl State {
                 self.inputs.no_buffer(idx, frame);
                 break;
             };
-            let au = &frame.data;
+            // The widener sees exactly what the codec is fed, in feed order.
+            let mut wide = None;
+            if let Some(w) = self.widen.as_mut() {
+                wide = frame.part.is_none().then(|| w.widen(&frame.data)).flatten();
+                if wide.is_none() {
+                    log::warn!("decode: this HEVC stream takes no 16-bit POC — fed as it came");
+                    self.widen = None;
+                    let _ = ctx.client.request_keyframe();
+                } else if w.refresh_due() {
+                    let _ = ctx.client.request_keyframe();
+                }
+            }
+            let au: &[u8] = wide.as_deref().unwrap_or(&frame.data);
             if au.len() > dst.len() {
                 self.oversized_dropped += 1;
                 log::warn!(

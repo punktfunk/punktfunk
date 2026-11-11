@@ -232,17 +232,17 @@ fn locate_used_flags(rbsp: &[u8], nal_type: u8, sps: &Sps, pps: &Pps) -> Option<
     Some(UsedFlagBits { s0, s1 })
 }
 
-struct Bits<'a> {
-    data: &'a [u8],
-    pos: usize,
+pub(super) struct Bits<'a> {
+    pub(super) data: &'a [u8],
+    pub(super) pos: usize,
 }
 
 impl Bits<'_> {
-    fn flag(&mut self) -> Option<bool> {
+    pub(super) fn flag(&mut self) -> Option<bool> {
         Some(self.u(1)? == 1)
     }
 
-    fn u(&mut self, n: u32) -> Option<u32> {
+    pub(super) fn u(&mut self, n: u32) -> Option<u32> {
         let mut v = 0u32;
         for _ in 0..n {
             if self.pos / 8 >= self.data.len() {
@@ -254,7 +254,7 @@ impl Bits<'_> {
         Some(v)
     }
 
-    fn ue(&mut self) -> Option<u32> {
+    pub(super) fn ue(&mut self) -> Option<u32> {
         let mut zeros = 0;
         while self.u(1)? == 0 {
             zeros += 1;
@@ -266,11 +266,11 @@ impl Bits<'_> {
     }
 }
 
-fn read_bit(data: &[u8], bit: usize) -> bool {
+pub(super) fn read_bit(data: &[u8], bit: usize) -> bool {
     data[bit / 8] & (0x80 >> (bit % 8)) != 0
 }
 
-fn ceil_log2(n: u32) -> u32 {
+pub(super) fn ceil_log2(n: u32) -> u32 {
     if n <= 1 {
         0
     } else {
@@ -279,7 +279,7 @@ fn ceil_log2(n: u32) -> u32 {
 }
 
 /// Strip `emulation_prevention_three_byte`s (7.3.1.1).
-fn unescape(payload: &[u8]) -> Vec<u8> {
+pub(super) fn unescape(payload: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(payload.len());
     let mut zeros = 0usize;
     for &byte in payload {
@@ -295,7 +295,7 @@ fn unescape(payload: &[u8]) -> Vec<u8> {
 
 /// Re-insert them. Deterministic over the RBSP, so the untouched slice data re-escapes to
 /// its original bytes.
-fn escape(rbsp: &[u8]) -> Vec<u8> {
+pub(super) fn escape(rbsp: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(rbsp.len() + 8);
     let mut zeros = 0usize;
     for &byte in rbsp {
