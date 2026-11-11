@@ -252,7 +252,7 @@ pub(super) fn ensure_games(state: &Path, gid: u32) -> Result<(), BackendError> {
 /// `name` in `at`, created if absent, as a handle. A link or file there is never followed. With
 /// `replace` it is removed and a folder made in its place; without, the open fails. `games`
 /// is opened without: only root can have linked it, onto a bigger disk say.
-fn dir_in(at: &OwnedFd, name: &str, replace: bool) -> std::io::Result<OwnedFd> {
+pub(super) fn dir_in(at: &OwnedFd, name: &str, replace: bool) -> std::io::Result<OwnedFd> {
     let make = || match rustix::fs::mkdirat(at, name, Mode::from_raw_mode(0o2775 as _)) {
         Ok(()) | Err(Errno::EXIST) => Ok(()),
         Err(e) => Err(e),
