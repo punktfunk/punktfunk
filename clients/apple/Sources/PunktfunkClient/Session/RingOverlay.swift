@@ -57,11 +57,12 @@ final class RingState: ObservableObject {
     /// sector boundary in the same frame as an A press — and SwiftUI coalesces the `navSeq` bumps
     /// into one update, so a single slot delivered only the last of them. The dropped ones were
     /// the presses: the highlight moved and nothing fired, and the same race ate B, so the ring
-    /// refused to close.
+    /// refused to close. Only an open ring queues; `close` drops what is left.
     var pendingNav: [RingNav] = []
     @Published var navSeq = 0
 
     func nav(_ n: RingNav) {
+        guard committed else { return }
         pendingNav.append(n)
         navSeq &+= 1
     }
@@ -163,6 +164,7 @@ final class RingState: ObservableObject {
         twistArmed = false
         opener = nil
         asked = nil
+        pendingNav = []
     }
 
     func touch() { lastTouch = Date() }
@@ -642,10 +644,11 @@ struct RingOverlay: View {
         }
         .ignoresSafeArea()
         .onAppear { appeared = true }
+        // A press that closes the ring drops the rest of its batch with it.
         .onChange(of: state.navSeq) { _, _ in
             let pending = state.pendingNav
             state.pendingNav = []
-            for n in pending { handleNav(n) }
+            for n in pending where state.committed { handleNav(n) }
         }
         .animation(reduceMotion ? .easeOut(duration: 0.12) : .smooth(duration: 0.25), value: state.sheet)
         // Idle: the exit disc's 8 s rule, for the same latency reason — unless the sheet is up.
