@@ -728,7 +728,7 @@ const PENDING_EVERY: std::time::Duration = std::time::Duration::from_secs(10);
 
 /// [`wait_for_approval`], then a session slot like any fresh client's (waits if busy).
 ///
-/// `Ok(Ok(_))` is an approval with its slot. `Ok(Err(reason))` is the refusal to send.
+/// `Ok(Ok(_))` is an admission with its slot. `Ok(Err(reason))` is the refusal to send.
 /// `Err` means the client left before a decision.
 pub(crate) async fn park_knock(
     conn: &link::SessionLink,
@@ -742,8 +742,6 @@ pub(crate) async fn park_knock(
     if let Err(reason) = wait_for_approval(conn, send, np, label, fp_hex, profile).await? {
         return Ok(Err(reason));
     }
-    tracing::info!(name = %label, fingerprint = %fp_hex,
-        "device approved in console — admitting session (no reconnect)");
     Ok(Ok(slot_while_connected(conn, sem).await?))
 }
 
@@ -760,10 +758,16 @@ async fn slot_while_connected(
     }
 }
 
+/// How long a seat host waits for a device the box admitted to reach its copy of the box's
+/// pairings. The supervisor copies them every 2 s; the box redirects at once.
+const TRUST_COPY_WAIT: std::time::Duration = std::time::Duration::from_secs(3);
+
 /// Park an unpaired knock until the console decides, holding no session slot. A
-/// `punktfunk/2` client hears `Pending` on `v2` meanwhile, every [`PENDING_EVERY`].
+/// `punktfunk/2` client hears `Pending` on `v2` meanwhile, every [`PENDING_EVERY`]. A seat host
+/// parks nothing: it admits a device once the box's pairing reaches it, within
+/// [`TRUST_COPY_WAIT`], and refuses one the box never paired.
 ///
-/// `Ok(Ok(()))` is an approval. `Ok(Err(reason))` is the refusal to send. `Err` means the
+/// `Ok(Ok(()))` is an admission. `Ok(Err(reason))` is the refusal to send. `Err` means the
 /// client left before a decision.
 pub(crate) async fn wait_for_approval(
     conn: &link::SessionLink,
@@ -775,6 +779,11 @@ pub(crate) async fn wait_for_approval(
 ) -> Result<Result<(), punktfunk_core::reject::RejectReason>> {
     use punktfunk_core::reject::RejectReason;
     if np.pairing_refused() {
+        if np.admits_within(fp_hex, TRUST_COPY_WAIT).await {
+            tracing::info!(name = %label, fingerprint = %fp_hex,
+                "the box's pairing reached this seat — admitting session");
+            return Ok(Ok(()));
+        }
         tracing::info!(name = %label, fingerprint = %fp_hex,
             "unpaired device knocked on a seat — it pairs with the box");
         return Ok(Err(RejectReason::PairingNotArmed));
@@ -811,7 +820,11 @@ pub(crate) async fn wait_for_approval(
         }
     };
     let reason = match decision {
-        PairingDecision::Approved => return Ok(Ok(())),
+        PairingDecision::Approved => {
+            tracing::info!(name = %label, fingerprint = %fp_hex,
+                "device approved in console — admitting session (no reconnect)");
+            return Ok(Ok(()));
+        }
         PairingDecision::Denied => RejectReason::Denied,
         // The device can knock again.
         PairingDecision::TimedOut => RejectReason::ApprovalTimeout,
