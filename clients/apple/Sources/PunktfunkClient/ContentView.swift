@@ -741,14 +741,19 @@ struct ContentView: View {
         #endif
     }
 
+    /// The wake wait that ends in a connect. A wake alone starts no session, so a link may.
+    private var wakeToConnect: HostWaker.Waking? {
+        waker.waking.flatMap { $0.connectsAfter ? $0 : nil }
+    }
+
     /// What a link sees of this window: busy with its session, or with a redial, a wake or a
     /// profile fetch on its way to one. The host a redial or a wake is for counts as the live one.
     private var linkSession: DeepLinkRouter.SessionState {
         DeepLinkRouter.SessionState(
             isIdle: LinkIdle.isIdle(
                 phase: model.phase, redialPending: model.redial != nil,
-                waking: waker.waking != nil, preDialFetch: flowLife.fetching),
-            activeHostID: model.activeHost?.id ?? model.redial?.host.id ?? waker.waking?.hostID,
+                waking: wakeToConnect != nil, preDialFetch: flowLife.fetching),
+            activeHostID: model.activeHost?.id ?? model.redial?.host.id ?? wakeToConnect?.hostID,
             activeHostName: model.activeHost?.displayName)
     }
 
