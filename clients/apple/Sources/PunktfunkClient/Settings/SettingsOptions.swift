@@ -62,8 +62,7 @@ enum SettingsOptions {
     /// Virtual-pad types — the `tag` is the wire value (`PunktfunkConnection.GamepadType` raw).
     /// This picks the pad the HOST presents to the game, so it does not depend on what this
     /// device can capture. Keep in step with pf-console-ui's `PAD_TYPES` and the Linux shell's
-    /// `GAMEPADS`: a preset written on one client opens on another, and a tag missing here has
-    /// no index in the picker.
+    /// `GAMEPADS`: a preset written on one client opens on another.
     static let padTypes: [(label: String, tag: Int)] = [
         (String(localized: L10n.playerGamepadAuto), 0),
         ("Xbox 360", 1),
@@ -71,7 +70,16 @@ enum SettingsOptions {
         ("DualSense", 2),
         ("DualShock 4", 4),
         ("Steam Deck", 6),
+        (PunktfunkConnection.GamepadType.steamController2.padName, 9),
     ]
+
+    /// `padTypes`, plus [current] when the list lacks it (a type another client offers), so the
+    /// picker keeps a row for the stored value. A tag no type has reads "—", as on the console.
+    static func padTypes(current: Int) -> [(label: String, tag: Int)] {
+        guard !padTypes.contains(where: { $0.tag == current }) else { return padTypes }
+        let type = UInt32(exactly: current).flatMap(PunktfunkConnection.GamepadType.init(rawValue:))
+        return padTypes + [(type?.padName ?? "—", current)]
+    }
 
     /// System-button routing (the cross-client `system_buttons` key): where the guide
     /// (Xbox/PS) and share presses land while streaming. Auto = forward on Apple.

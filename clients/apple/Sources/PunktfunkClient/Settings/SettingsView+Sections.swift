@@ -1434,7 +1434,8 @@ extension SettingsView {
             }
             described(L10n.playerGamepadHint, field: "gamepad") {
                 settingPicker(
-                    L10n.playerGamepad, options: SettingsOptions.padTypes,
+                    L10n.playerGamepad,
+                    options: SettingsOptions.padTypes(current: effective.gamepadType),
                     selection: scoped(SettingsFields.gamepadType))
                     .disabled(!effective.gamepadForwarding)
             }
