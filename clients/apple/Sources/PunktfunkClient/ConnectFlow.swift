@@ -278,6 +278,8 @@ struct ConnectFlow {
                 do {
                     try await ProfileFetch.wake(host, id: first.id)
                 } catch {
+                    // A cancelled wait says nothing and leaves a newer wait's sheet alone.
+                    guard !Task.isCancelled, seatWait === wait else { return }
                     seatWait = nil
                     model.errorMessage = LibraryClient.wakeFailedLine(first.displayName, error)
                     return
