@@ -879,7 +879,8 @@ final class SessionModel: ObservableObject {
     /// called by the 1 Hz stats tick, which is also what makes a mid-session `AccessUpdate`
     /// (a console edit) reach the chip and the capture gates within a second. Every write is
     /// guarded: `notices` publishes on any assignment, and a full-and-permanent session (every
-    /// old host) must publish nothing.
+    /// old host) must publish nothing. The capture release and the T−5 m / T−1 m toasts (§7)
+    /// are `AccessWarning`'s; engaging a capture is gated at the stream views.
     private func updateAccessState() {
         guard let conn = connection else { return }
         let grants = conn.accessGrants
@@ -889,36 +890,19 @@ final class SessionModel: ObservableObject {
         if notices.accessRemainingSecs != remaining { notices.accessRemainingSecs = remaining }
         let limited = level != .fullControl || remaining != 0
         if notices.accessLimited != limited { notices.accessLimited = limited }
-        // A mid-session edit that removed BOTH input classes releases an engaged capture:
-        // holding a frozen cursor and swallowed keys over input the host now drops is
-        // exactly the "keyboard does nothing and nobody says why" failure §7 exists to
-        // prevent. (Engage is gated at the stream views; this is the live-revoke half.)
-        if mouseCaptured,
-           grants & (PunktfunkConnection.grantPointer | PunktfunkConnection.grantKeyboard) == 0 {
+        if AccessWarning.releasesCapture(captured: mouseCaptured, grants: grants) {
             NotificationCenter.default.post(name: .punktfunkReleaseCapture, object: nil)
         }
-        // The T−5 m / T−1 m warning toasts (§7). Derived from the countdown CROSSING the
-        // marks rather than from the AccessUpdate messages alone: the host's warnings
-        // re-anchor the same countdown, so this shows them when they arrive AND still fires
-        // on plain clock progress if a warning datagram never lands. One shot each; an edit
-        // that extends the deadline back above a mark re-arms it.
-        guard remaining != 0 else { return }
-        if remaining > 300 {
-            // The 1 m latch never stands without the 5 m one.
-            if notices.accessWarned5m {
-                notices.accessWarned5m = false
-                notices.accessWarned1m = false
-            }
-        } else if remaining > 60 {
-            if notices.accessWarned1m { notices.accessWarned1m = false }
-            if !notices.accessWarned5m {
-                notices.accessWarned5m = true
-                flash(\.accessWarning, L10n.grantEndsIn(time: Self.accessCountdown(remaining)))
-            }
-        } else if !notices.accessWarned1m {
-            notices.accessWarned1m = true
-            notices.accessWarned5m = true
-            flash(\.accessWarning, String(localized: L10n.grantEndsSoon))
+        let (warned, toast) = AccessWarning.step(
+            remaining: remaining,
+            warned: AccessWarning(fiveMinutes: notices.accessWarned5m, oneMinute: notices.accessWarned1m))
+        if notices.accessWarned5m != warned.fiveMinutes { notices.accessWarned5m = warned.fiveMinutes }
+        if notices.accessWarned1m != warned.oneMinute { notices.accessWarned1m = warned.oneMinute }
+        switch toast {
+        case .endsIn(let secs)?:
+            flash(\.accessWarning, L10n.grantEndsIn(time: Self.accessCountdown(secs)))
+        case .endsSoon?: flash(\.accessWarning, String(localized: L10n.grantEndsSoon))
+        case nil: break
         }
     }
 
