@@ -425,7 +425,9 @@ func spec(_ slot: SlotId, _ cfg: OverlayConfig, _ a: RingActions) -> SlotSpec {
         case "power.shutdown": icon = "power"
         default: icon = "bolt.fill"
         }
-        return SlotSpec(id: "host:\(id)", label: act?.label ?? id, icon: icon,
+        // One the host doesn't list keeps this app's word for it, as a listed one does.
+        let label = act?.label ?? SlotId.hostWord(id).map { String(localized: $0) } ?? id
+        return SlotSpec(id: "host:\(id)", label: label, icon: icon,
                         enabled: act?.available == true,
                         reason: act?.unavailableReason ?? String(localized: L10n.ringHostNotOffered),
                         armed: act?.danger ?? true)
