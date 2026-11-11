@@ -654,7 +654,7 @@ struct LibraryView: View {
             game: game, artLoader: artLoader, selected: isKeyCursor(game),
             isRunning: shelf.running[game.id] != nil,
             badge: TileBadge.forTitle(game.install, download: shelf.downloads[game.id]),
-            caption: caption, host: host, frameID: frameID)
+            caption: caption, host: host, frameID: frameID, artRound: shelf.artRound)
     }
 
     /// A title's own acts, one level below a host card's (design §2.5).
@@ -1066,6 +1066,8 @@ struct GameCard: View {
     var host: StoredHost? = nil
     /// The key the poster publishes its rect under (`TileFrames`); the entry's id when nil.
     var frameID: String? = nil
+    /// The shelf's art round (`PosterImage.round`).
+    var artRound = 0
 
     #if os(tvOS)
     @Environment(\.isFocused) private var focused
@@ -1150,7 +1152,7 @@ struct GameCard: View {
     private var poster: some View {
         PosterImage(
             candidates: game.art.posterCandidates, title: game.title, loader: artLoader,
-            icon: game.iconToken, frameID: frameID ?? game.id)
+            icon: game.iconToken, frameID: frameID ?? game.id, round: artRound)
             .aspectRatio(2.0 / 3.0, contentMode: .fit)
             .frame(maxWidth: .infinity)
             .clipShape(RoundedRectangle(cornerRadius: Self.coverRadius, style: .continuous))

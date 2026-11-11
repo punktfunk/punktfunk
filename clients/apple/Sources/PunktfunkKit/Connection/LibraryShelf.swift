@@ -73,6 +73,9 @@ public enum LibraryShelf {
         /// `/status` downloads by library id, and this device's grants there.
         public var downloads: [String: HostDownload] = [:]
         public var grants: UInt32?
+        /// Moves on each time the host answers the catalog: a poster whose art all failed, while
+        /// the host slept or before a reload, tries it again.
+        public var artRound = 0
 
         public init() {}
 
@@ -120,6 +123,7 @@ public enum LibraryShelf {
             next.games = games
             next.servedFromCacheAt = nil
             next.errorText = nil
+            next.artRound += 1
         case .failed(let error, _):
             // Titles on screen outrank the error; the staleness note carries the situation.
             if next.games.isEmpty { next.errorText = LibraryLoad.failure(error) }

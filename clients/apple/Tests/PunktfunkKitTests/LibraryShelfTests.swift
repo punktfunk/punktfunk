@@ -150,6 +150,21 @@ final class LibraryShelfTests: XCTestCase {
         XCTAssertEqual(state.staleness, .offline)
     }
 
+    /// R5-4: the host answering the catalog starts spent posters over; the cache doesn't.
+    func testEachFetchedCatalogMovesTheArtRoundOn() {
+        let cached = CachedLibrary(games: [entry("a", "Alpha")], fetchedAt: Date())
+        let waking = reduce(loading, [.cached(cached), .waking])
+        XCTAssertEqual(waking.artRound, 0)
+        let fetched = reduce(waking, [.fetched([entry("a", "Alpha")])])
+        XCTAssertEqual(fetched.artRound, 1)
+        let reloaded = reduce(fetched, [
+            .status(games: [], downloads: [], grants: nil), .cached(cached),
+            .failed(.unreachable("timed out"), hadCache: true),
+        ])
+        XCTAssertEqual(reloaded.artRound, 1)
+        XCTAssertEqual(reduce(reloaded, [.fetched([entry("a", "Alpha")])]).artRound, 2)
+    }
+
     func testAFailureOnAnEmptyShelfSaysWhyAndAFetchClearsIt() {
         let failed = reduce(loading, [.failed(.unauthorized, hadCache: false)])
         XCTAssertEqual(failed.errorText, LibraryLoad.failure(.unauthorized))
