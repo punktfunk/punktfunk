@@ -37,6 +37,9 @@ struct QuickActionsEditor: View {
     /// The `shortcuts` blob the edited layer streams with: a new shortcut skips every id a
     /// binding there names.
     var bindings: Binding<String> = .constant("")
+    /// The edited layer holds that blob itself, so removing a shortcut drops its bindings there.
+    /// False where the layer inherits them: another layer's bindings are never written.
+    var ownsBindings = false
     /// Back to the platform ring: drops the override in preset scope, clears the global
     /// otherwise.
     let reset: () -> Void
@@ -219,7 +222,10 @@ struct QuickActionsEditor: View {
     }
 
     private func remove(_ id: String) {
-        edit { $0.removeShortcut(id) }
+        var sent = Shortcuts.parse(bindings.wrappedValue)
+        let before = sent
+        edit { $0.removeShortcut(id, bindings: &sent) }
+        if ownsBindings, sent != before { bindings.wrappedValue = sent.toJSON() }
     }
 }
 

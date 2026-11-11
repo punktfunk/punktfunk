@@ -259,8 +259,11 @@ public struct OverlayConfig: Equatable, Sendable {
         }
     }
 
-    /// Remove a shortcut, emptying every slot that sent it: `parse` would, on the next read.
-    public mutating func removeShortcut(_ id: String) {
+    /// Remove a shortcut, emptying every slot that sent it (`parse` would, on the next read) and
+    /// dropping each of `bindings` that sent it. The caller writes `bindings` back only to the
+    /// layer that holds this ring.
+    public mutating func removeShortcut(_ id: String, bindings: inout Shortcuts) {
+        bindings.bindings.removeAll { $0.action == .slot(.shortcut(id)) }
         shortcuts.removeAll { $0.id == id }
         ring = ring.map { slot in
             if case .shortcut(let sid) = slot, sid == id { return nil }

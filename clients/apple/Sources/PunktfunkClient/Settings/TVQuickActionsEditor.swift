@@ -20,6 +20,9 @@ struct TVQuickActionsEditor: View {
     let shortcuts: ShortcutsEditor
     /// The pad chord that opens the dial, from the live shortcuts; nil when none does.
     let padOpener: String?
+    /// The edited layer holds the Shortcuts page's blob itself, so removing a shortcut drops
+    /// its bindings there. False where the layer inherits them: another layer is never written.
+    var ownsBindings = false
     /// Back to the TV dial: drops the override in preset scope, clears the global otherwise.
     let reset: () -> Void
     @State private var picking: Int?
@@ -198,7 +201,10 @@ struct TVQuickActionsEditor: View {
     }
 
     private func remove(_ id: String) {
-        edit { $0.removeShortcut(id) }
+        var sent = Shortcuts.parse(shortcuts.blob)
+        let before = sent
+        edit { $0.removeShortcut(id, bindings: &sent) }
+        if ownsBindings, sent != before { shortcuts.blob = sent.toJSON() }
     }
 }
 

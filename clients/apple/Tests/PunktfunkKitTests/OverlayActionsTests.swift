@@ -117,7 +117,8 @@ extension OverlayActionsTests {
         cfg.saveShortcut(OverlayShortcut(id: "s1", label: "Menu", keys: ["escape"]))
         XCTAssertEqual(cfg.shortcuts.count, 1, "saving an existing id replaces it")
         XCTAssertEqual(cfg.shortcut("s1")?.label, "Menu")
-        cfg.removeShortcut("s1")
+        var bindings = Shortcuts()
+        cfg.removeShortcut("s1", bindings: &bindings)
         XCTAssertTrue(cfg.shortcuts.isEmpty)
         XCTAssertNil(cfg.ring[5], "the slot that sent it is empty")
     }

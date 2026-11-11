@@ -45,11 +45,25 @@ final class OverlayConfigEditTests: XCTestCase {
         var (cfg, bindings) = threeShortcuts()
         XCTAssertEqual(cfg.shortcuts.map(\.id), ["s1", "s2", "s3"])
         var other = bindings
-        cfg.removeShortcut("s3")
+        var unused = Shortcuts()
+        cfg.removeShortcut("s3", bindings: &unused)
         XCTAssertEqual(cfg.nextShortcutID(bindings: bindings), "s4", "the binding is in another layer")
         other.bindings.removeAll()
         XCTAssertEqual(cfg.nextShortcutID(bindings: other), "s3", "no binding names it")
         bindings.bindings[0].action = .slot(.shortcut("s9"))
         XCTAssertEqual(cfg.nextShortcutID(bindings: bindings), "s10")
+    }
+
+    /// R7-1: with both blobs in one layer, removing a shortcut takes the bindings that send it.
+    func testRemovingAShortcutDropsTheBindingsThatSendIt() {
+        var (cfg, bindings) = threeShortcuts()
+        cfg.removeShortcut("s3", bindings: &bindings)
+        XCTAssertNil(cfg.shortcut("s3"))
+        XCTAssertFalse(cfg.ring.contains(.shortcut("s3")))
+        XCTAssertEqual(bindings.bindings.map(\.action), [.ring], "the other bindings stay")
+        XCTAssertEqual(cfg.nextShortcutID(bindings: bindings), "s3", "nothing sends it any more")
+        let before = bindings
+        cfg.removeShortcut("s1", bindings: &bindings)
+        XCTAssertEqual(bindings, before, "no binding sent s1")
     }
 }
