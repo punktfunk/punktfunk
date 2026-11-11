@@ -239,8 +239,8 @@ pub(super) fn turn_on(host_path: &Path, allow_rdp_from_network: bool) -> WinResu
 }
 
 /// Restore the listener and the firewall scope `turn_on` changed, then remove the Seats key.
-/// Nothing to do without the key. Each restore forgets its value as it finishes, so the key
-/// is opened for writing.
+/// Nothing to do without the key. The listener goes off before the firewall widens. Each
+/// restore forgets its value as it finishes, so the key is opened for writing.
 pub(super) fn turn_off() -> WinResult<()> {
     let hklm = RegKey::predef(HKEY_LOCAL_MACHINE);
     let Ok(seats) =
@@ -248,10 +248,6 @@ pub(super) fn turn_off() -> WinResult<()> {
     else {
         return Ok(());
     };
-    close_rdp_rules(&seats)?;
-    if narrowed(&seats) {
-        restore_scopes(&seats)?;
-    }
     if seats.get_value::<u32, _>(LISTENER_WAS_OFF).ok() == Some(1) {
         deny_listener(true).map_err(|cause| {
             refuse(
@@ -261,6 +257,10 @@ pub(super) fn turn_off() -> WinResult<()> {
             )
             .said("rdp_listener_off")
         })?;
+    }
+    close_rdp_rules(&seats)?;
+    if narrowed(&seats) {
+        restore_scopes(&seats)?;
     }
     super::seat_listener::remove();
     // The box's Steam shortcuts go back first: they name the Seats key's record of them.
@@ -466,7 +466,6 @@ fn apply(host_path: &Path, allow_rdp_from_network: bool) -> WinResult<()> {
         })?;
     }
     install_driver(&dir, true)?;
-    allow_listener(&seats)?;
     // A choice made earlier narrowed the rules; allowing the network now puts them back.
     let was_narrowed = narrowed(&seats);
     record_scopes(&seats)?;
@@ -496,6 +495,8 @@ fn apply(host_path: &Path, allow_rdp_from_network: bool) -> WinResult<()> {
         .map_err(|cause| {
             refuse("seats_key", "Couldn't turn seats on.", cause).said("seats_key_on")
         })?;
+    // Listen last: the firewall has its final scope by now.
+    allow_listener(&seats)?;
     if let Err(cause) = super::seat_listener::ensure(host_path) {
         tracing::warn!(%cause, "seat listener not ready — seats start without pad audio");
     }
