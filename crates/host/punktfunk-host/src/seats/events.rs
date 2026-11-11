@@ -18,11 +18,18 @@ use std::time::Duration;
 /// Event kinds the door hands to the owner's host: what happens on the door alone.
 const RELAYED: &[&str] = &["pairing.*", "access.*", "host.*", "action.*", "update.*"];
 
-/// Whether `kind` is the door's own, handed to the owner's host.
-fn relayed(kind: &str) -> bool {
-    RELAYED
-        .iter()
-        .any(|pattern| crate::events::kind_matches(pattern, kind))
+/// Whether `kind` is the door's own, handed to the owner's host. A `packaged` install updates
+/// through the owner's host (`mgmt::update`), so there `update.*` is the owner's row's.
+fn relayed(kind: &str, packaged: bool) -> bool {
+    !(packaged && crate::events::kind_matches("update.*", kind))
+        && RELAYED
+            .iter()
+            .any(|pattern| crate::events::kind_matches(pattern, kind))
+}
+
+/// Whether the owner's host applies this box's updates: an install the root helper updates.
+fn packaged() -> bool {
+    crate::update::helper_kind(crate::update::detect::detect().0)
 }
 
 /// How often the door looks for a running seat it has no tail on.
@@ -116,7 +123,7 @@ fn tail(
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .insert(id.clone(), ev.seq);
-        let what = take(&ev);
+        let what = take(&ev, seat.owner, packaged());
         if what == Take::Skip {
             continue;
         }
@@ -139,10 +146,11 @@ enum Take {
 }
 
 /// One that names a seat already was relayed there, and the door's own kinds start here: both
-/// skipped. A game goes on to the plugins.
-fn take(ev: &HostEvent) -> Take {
+/// skipped. An update is taken from the owner's row alone. A game goes on to the plugins.
+fn take(ev: &HostEvent, from_owner: bool, packaged: bool) -> Take {
     let kind = ev.kind.name();
-    if ev.seat.is_some() || relayed(kind) {
+    let update = crate::events::kind_matches("update.*", kind);
+    if ev.seat.is_some() || relayed(kind, packaged) || (update && !from_owner) {
         Take::Skip
     } else if crate::events::kind_matches("game.*", kind) {
         Take::HandOn
@@ -299,7 +307,7 @@ pub(crate) async fn relay_to_owner() {
             Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
             Err(tokio::sync::broadcast::error::RecvError::Closed) => return,
         };
-        if ev.seat.is_some() || !relayed(ev.kind.name()) {
+        if ev.seat.is_some() || !relayed(ev.kind.name(), packaged()) {
             continue;
         }
         let wakes = ev.kind.name() == WAKES;
@@ -386,7 +394,7 @@ mod tests {
             "host.started",
             "update.applied",
         ] {
-            assert!(relayed(kind), "{kind}");
+            assert!(relayed(kind, false), "{kind}");
         }
         for kind in [
             "session.started",
@@ -397,8 +405,23 @@ mod tests {
             "settings.changed",
             "display.created",
         ] {
-            assert!(!relayed(kind), "{kind}");
+            assert!(!relayed(kind, false), "{kind}");
         }
+    }
+
+    /// A packaged install updates through the owner's host, so the door takes the owner's row's
+    /// `update.*` and keeps its own. A Deck build updates on the door, and the reverse holds.
+    #[test]
+    fn a_packaged_box_takes_its_updates_from_the_owner_s_row() {
+        let applied: HostEvent = serde_json::from_value(serde_json::json!({"seq": 1, "ts_ms": 1,
+            "schema": 1, "kind": "update.applied", "from": "0.46.0", "to": "0.47.0"}))
+        .unwrap();
+        assert_eq!(take(&applied, true, true), Take::Emit);
+        assert_eq!(take(&applied, false, true), Take::Skip, "another seat's");
+        assert!(!relayed("update.applied", true));
+        assert!(relayed("pairing.pending", true));
+        assert_eq!(take(&applied, true, false), Take::Skip, "a Deck build");
+        assert!(relayed("update.applied", false));
     }
 
     /// A seat's games go on to the plugins; anything already tagged with a seat came from a
@@ -420,6 +443,7 @@ mod tests {
         let knock = serde_json::json!({"seq": 1, "ts_ms": 1, "schema": 1,
             "kind": "pairing.pending",
             "device": {"name": "Deck", "fingerprint": "ab", "plane": "native"}});
+        let take = |ev: &HostEvent| super::take(ev, false, false);
         assert_eq!(take(&ev(game("game.launching"), None)), Take::HandOn);
         assert_eq!(take(&ev(game("game.exited"), None)), Take::HandOn);
         assert_eq!(take(&ev(library.clone(), None)), Take::Emit);
