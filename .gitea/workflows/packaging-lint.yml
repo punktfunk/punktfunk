@@ -55,6 +55,10 @@ jobs:
       - name: Steam Deck rebuild check
         run: bash scripts/ci/check-steamdeck-rebuild.sh
 
+      # The owner's row reads host.env with its own reader, which must read what systemd reads.
+      - name: seat-session env reader
+        run: bash packaging/linux/seat-session --self-test
+
       # The Steam Frame adapter hook against a fake /sys, iw and nmcli stubbed.
       - name: Frame adapter hook
         run: sh scripts/ci/check-frame-adapter-hook.sh
