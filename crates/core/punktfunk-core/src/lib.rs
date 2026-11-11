@@ -68,6 +68,8 @@ pub mod resolutions;
 /// The rumble policy every client runs. Outside `client` because the browser, which has no
 /// quinn, runs it too.
 pub mod rumble;
+/// cbindgen:ignore
+pub mod search;
 pub mod session;
 pub mod stats;
 /// cbindgen:ignore
