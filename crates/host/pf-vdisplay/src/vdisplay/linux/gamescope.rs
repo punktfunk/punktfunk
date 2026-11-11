@@ -123,6 +123,14 @@ fn forget_host_short_sessions() {
     }
 }
 
+/// `systemctl --user <verb> <unit>` on a Game Mode unit, as the host. Its stop counts a Steam under
+/// 60 s old and its start acts on the count, so the counters are cleared on both sides.
+fn host_session_verb(verb: &str, unit: &str) {
+    forget_host_short_sessions();
+    systemctl_user(&[verb, unit]);
+    forget_host_short_sessions();
+}
+
 /// Steam's reboot / power-off requests, which [`SESSION_PLUS_BIN`] honours only after Steam exits.
 /// A run the host kills first leaves them behind, and the box's next Game Mode exit would obey.
 const POWER_SENTINELS: [&str; 2] = [
@@ -798,7 +806,8 @@ fn await_steamos_node(
 
 /// Attach at the client's resolution: reuse if the box session already matches; otherwise restart
 /// the box's own autologin unit. Never spawn a competing one. Steam restarts only on a real change.
-/// A unit that exits after the restart ends the wait, as the 45 s deadline does.
+/// A unit that exits after the restart ends the wait, as the 45 s deadline does. Each restart is
+/// the host's, so it never counts toward Game Mode's crash reset.
 fn ensure_box_gamescope_mode(mode: Mode, hdr: bool) -> Result<u32> {
     let target = (mode.width, mode.height);
     // Three-state: collapsing unknown with a known size would restart the box's session.
@@ -927,7 +936,7 @@ fn ensure_box_gamescope_mode(mode: Mode, hdr: bool) -> Result<u32> {
     };
     // Also reloads a removal: a drop-in systemd has not reloaded still applies at next start.
     systemctl_user(&["daemon-reload"]);
-    systemctl_user(&["restart", &unit]);
+    host_session_verb("restart", &unit);
     let mut deadline = Instant::now() + Duration::from_secs(45);
     loop {
         if any_output_size_is(&scoped_argvs(Scope::Unit(&unit)), target) {
@@ -947,7 +956,7 @@ fn ensure_box_gamescope_mode(mode: Mode, hdr: bool) -> Result<u32> {
             if bound {
                 note_bind_hazard(&unit);
                 disarm_session_plus_dropin(); // also clears the flag: there is nothing left to undo
-                systemctl_user(&["restart", &unit]);
+                host_session_verb("restart", &unit);
                 bound = false;
                 deadline = Instant::now() + Duration::from_secs(45);
                 continue;
@@ -994,6 +1003,7 @@ fn running_autologin_gamescope_unit() -> Option<String> {
 /// Steam first, asked to quit: a SIGKILL mid-write loses `config.vdf` or `registry.vdf`. Then
 /// SIGKILL, not SIGTERM: gamescope's SIGTERM handler leaks the NVIDIA GPU context, after which
 /// every later `vkCreateDevice` fails until reboot. Then `stop` + `reset-failed` so relaunch is clean.
+/// The run it ends is the host's, so Game Mode's crash counters forget it.
 fn kill_unit(unit: &str) {
     if let Some(pid) = steam_pid_in_unit(unit) {
         if !shut_steam_down(pid, STEAM_STOP_WAIT) {
@@ -1020,6 +1030,7 @@ fn kill_unit(unit: &str) {
         Command::new("systemctl").args(["--user", "reset-failed", unit]),
         UNIT_VERB_BUDGET,
     );
+    forget_host_short_sessions();
 }
 
 /// Point the libei injector at the EIS socket of the gamescope in `scope` (it reads the relay
@@ -1343,7 +1354,6 @@ fn unit_gone(unit: &str) -> bool {
 fn stop_session(unit_name: &str) {
     kill_unit(unit_name);
     let _ = std::fs::remove_file(ei_socket_file());
-    forget_host_short_sessions();
     for sentinel in POWER_SENTINELS {
         let _ = std::fs::remove_file(sentinel);
     }
