@@ -11,10 +11,7 @@ impl ControlTask {
         if let Some(ev) = v2msg::decode_input_event(ty, &body) {
             self.on_input_edge(ev).await
         } else if let Ok(req) = decode::<Reconfigure>(ty, &body) {
-            match req.exclude_codecs {
-                0 => self.on_reconfigure(req.mode).await,
-                exclude => self.on_codec_ask(exclude).await,
-            }
+            self.on_reconfigure(req).await
         } else if let Ok(id) = decode::<punktfunk_core::quic::PadIdentity>(ty, &body) {
             self.on_pad_identity(id)
         } else if let Ok(req) = decode::<v2msg::Screens>(ty, &body) {
@@ -85,46 +82,32 @@ impl ControlTask {
         }
     }
 
-    /// A mode switch, acked at once with the mode the client now holds, then handed to the
-    /// stream thread. Refused when the backend cannot live-reconfigure, the mode cannot land,
-    /// or the last switch was under [`MIN_SWITCH_INTERVAL`] ago.
-    async fn on_reconfigure(&mut self, mode: punktfunk_core::Mode) -> Step {
+    /// A `Reconfigure` as [`reconfigure_ask`] reads it: a codec ask goes on as one; a mode
+    /// switch is acked at once with the mode the client now holds, then handed to the stream
+    /// thread with its view. A refused switch hands nothing on.
+    async fn on_reconfigure(&mut self, req: Reconfigure) -> Step {
         let now = std::time::Instant::now();
-        // Same bound as the handshake: `> 0` alone acked a mode that cannot land.
-        let valid = crate::encode::validate_refresh(mode.refresh_hz).is_ok()
-            && crate::encode::validate_dimensions(self.task.codec, mode.width, mode.height).is_ok();
         let too_soon = self
             .last_accepted_switch
             .is_some_and(|t| now.duration_since(t) < MIN_SWITCH_INTERVAL);
-        let ok = if !self.task.live_reconfig_ok {
-            // Gamescope, synthetic and per-client-mode identity: the client keeps scaling.
-            tracing::info!(
-                ?mode,
-                "mode switch rejected (backend cannot live-reconfigure)"
-            );
-            false
-        } else if !valid {
-            tracing::warn!(?mode, "mode switch rejected (invalid dimensions)");
-            false
-        } else if too_soon {
-            tracing::warn!(?mode, "mode switch rejected (rate-limited)");
-            false
-        } else {
-            true
+        let t = &self.task;
+        let accepted = match reconfigure_ask(&req, t.codec, t.live_reconfig_ok, too_soon) {
+            Ask::Codec(exclude) => return self.on_codec_ask(exclude).await,
+            Ask::Mode(asked) => Some(asked),
+            Ask::Refused => None,
         };
-        if ok {
-            self.active = mode;
+        if accepted.is_some() {
+            self.active = req.mode;
             self.last_accepted_switch = Some(now);
-            tracing::info!(?mode, "mode switch accepted");
         }
         let ack = Reconfigured {
-            accepted: ok,
+            accepted: accepted.is_some(),
             mode: self.active,
             exclude_codecs: 0,
         };
         self.send(&ack).await?;
-        if ok {
-            self.task.ends.reconfig_tx.send(mode)?;
+        if let Some(asked) = accepted {
+            self.task.ends.reconfig_tx.send(asked)?;
         }
         Ok(())
     }
@@ -307,5 +290,101 @@ impl ControlTask {
             let _ = tx.try_send(fb);
         }
         Ok(())
+    }
+}
+
+/// What a `Reconfigure` asks of the stream thread.
+#[derive(Debug, PartialEq)]
+enum Ask {
+    /// A mode switch, with the view kept for it by the handshake's rule
+    /// ([`kept_view`](crate::native::handshake::kept_view)). The same mode with another view is a
+    /// switch too.
+    Mode(crate::native::wiring::ModeAsk),
+    /// These `CODEC_*` bits off. The mode and view stay as they run.
+    Codec(u8),
+    /// A mode switch refused.
+    Refused,
+}
+
+/// What `req` asks for a session encoding `codec`. A mode switch is refused when the backend
+/// cannot `live_reconfig`, the mode cannot land, or the last switch was `too_soon`
+/// ([`MIN_SWITCH_INTERVAL`]).
+fn reconfigure_ask(
+    req: &Reconfigure,
+    codec: crate::encode::Codec,
+    live_reconfig: bool,
+    too_soon: bool,
+) -> Ask {
+    let mode = req.mode;
+    if req.exclude_codecs != 0 {
+        return Ask::Codec(req.exclude_codecs);
+    }
+    // Same bound as the handshake: `> 0` alone acked a mode that cannot land.
+    let valid = crate::encode::validate_refresh(mode.refresh_hz).is_ok()
+        && crate::encode::validate_dimensions(codec, mode.width, mode.height).is_ok();
+    if !live_reconfig {
+        // Gamescope, synthetic and per-client-mode identity: the client keeps scaling.
+        tracing::info!(
+            ?mode,
+            "mode switch rejected (backend cannot live-reconfigure)"
+        );
+        Ask::Refused
+    } else if !valid {
+        tracing::warn!(?mode, "mode switch rejected (invalid dimensions)");
+        Ask::Refused
+    } else if too_soon {
+        tracing::warn!(?mode, "mode switch rejected (rate-limited)");
+        Ask::Refused
+    } else {
+        let view = crate::native::handshake::kept_view(req.view, &mode, codec);
+        tracing::info!(?mode, ?view, "mode switch accepted");
+        Ask::Mode((mode, view))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A mode ask hands on its view only while its mode can be scaled to it; a codec ask
+    /// leaves the mode and view alone; a refused switch hands nothing on.
+    #[test]
+    fn a_reconfigure_hands_on_its_kept_view() {
+        use crate::encode::Codec::H265;
+        let mode = punktfunk_core::Mode {
+            width: 2048,
+            height: 1152,
+            refresh_hz: 60,
+        };
+        let req = |view, exclude_codecs| Reconfigure {
+            mode,
+            exclude_codecs,
+            view,
+        };
+        let ask = |req: Reconfigure| reconfigure_ask(&req, H265, true, false);
+        assert_eq!(
+            ask(req(Some((1366, 768)), 0)),
+            Ask::Mode((mode, Some((1366, 768))))
+        );
+        for dropped in [(2048, 1152), (2560, 1440), (1366, 1440)] {
+            let got = ask(req(Some(dropped), 0));
+            assert_eq!(got, Ask::Mode((mode, None)), "{dropped:?}");
+        }
+        let hevc = punktfunk_core::quic::CODEC_HEVC;
+        assert_eq!(ask(req(Some((1366, 768)), hevc)), Ask::Codec(hevc));
+        let viewed = req(Some((1366, 768)), 0);
+        let refused = |live, too_soon, r: &Reconfigure| {
+            reconfigure_ask(r, H265, live, too_soon) == Ask::Refused
+        };
+        assert!(refused(false, false, &viewed), "no live reconfigure");
+        assert!(refused(true, true, &viewed), "too soon");
+        let odd = Reconfigure {
+            mode: punktfunk_core::Mode {
+                width: 2047,
+                ..mode
+            },
+            ..viewed
+        };
+        assert!(refused(true, false, &odd), "a mode that cannot land");
     }
 }

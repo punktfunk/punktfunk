@@ -1205,6 +1205,7 @@
 	],
 	"overlay_lost": "lost {value}",
 	"overlay_host_override": "set by the host for this game",
+	"overlay_host_renders": "host renders {width}×{height}",
 	"overlay_received": "received {value}",
 	"overlay_decoded": "decoded {value}",
 	"overlay_presented": "presented {value}",

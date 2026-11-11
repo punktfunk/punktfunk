@@ -11,11 +11,12 @@ use sdl3::rect::Rect;
 use sdl3::video::{Display, Window};
 
 /// The client's monitors as the stream's screens: the window's display first at `mode`, each
-/// other at its own native mode. Empty when SDL cannot say.
+/// other at its own native mode, scaled as [`scaled_ask`] says. Empty when SDL cannot say.
 pub(super) fn client_screens(
     video: &sdl3::VideoSubsystem,
     window: &Window,
     mode: Mode,
+    (render_scale, max_dim): (f64, u32),
 ) -> Vec<(Screen, Display)> {
     let (Ok(first), Ok(displays)) = (window.get_display(), video.displays()) else {
         return Vec::new();
@@ -39,7 +40,8 @@ pub(super) fn client_screens(
         if out.len() == SCREENS_MAX {
             break;
         }
-        let own = native_mode(m.w, m.h, m.pixel_density, m.refresh_rate);
+        let native = native_mode(m.w, m.h, m.pixel_density, m.refresh_rate);
+        let (own, view) = scaled_ask(native, render_scale, max_dim);
         let (x, y) = offset_px(origin, bounds, mode, own);
         out.push((
             Screen {
@@ -48,12 +50,29 @@ pub(super) fn client_screens(
                 x,
                 y,
                 primary: primary == Some(d),
+                view,
                 ..Default::default()
             },
             d,
         ));
     }
     out
+}
+
+/// A further monitor's mode at `native` and the view beside it: above 1x its pixels × the render
+/// scale, shown at its own, as screen 0's are. At 1x and below, its own pixels and no view.
+fn scaled_ask(native: Mode, render_scale: f64, max_dim: u32) -> (Mode, Option<(u32, u32)>) {
+    match super::stream::window_mode(native.width, native.height, render_scale, max_dim) {
+        ((width, height), Some(view)) => (
+            Mode {
+                width,
+                height,
+                ..native
+            },
+            Some(view),
+        ),
+        _ => (native, None),
+    }
 }
 
 /// Where `at` sits from `origin`, both in desktop coordinates, in the pixels of `mode` shown
@@ -454,7 +473,8 @@ impl Shell {
         let Some(connector) = st.connector.as_ref() else {
             return;
         };
-        let planned = client_screens(&self.sdl_video, &self.window, connector.mode());
+        let scale = (self.opts.render_scale, self.opts.render_scale_max_dim);
+        let planned = client_screens(&self.sdl_video, &self.window, connector.mode(), scale);
         let ask = st.screens.plan(&planned, connector.screen_layout().0);
         tracing::info!(
             screens = ask.len(),
@@ -487,7 +507,8 @@ impl Shell {
         if !wants {
             return Vec::new();
         }
-        let planned = client_screens(&self.sdl_video, &self.window, mode);
+        let scale = (self.opts.render_scale, self.opts.render_scale_max_dim);
+        let planned = client_screens(&self.sdl_video, &self.window, mode, scale);
         if planned.len() < 2 {
             return Vec::new();
         }
@@ -531,6 +552,32 @@ mod tests {
                 fhd
             ),
             (-1920, 0)
+        );
+    }
+
+    /// Above 1x a further monitor asks for its pixels × the scale, shown at its own; at 1x and
+    /// below, and where the codec wall leaves nothing to shrink, its own pixels and no view.
+    #[test]
+    fn a_further_monitor_supersamples_like_the_first() {
+        let qhd = Mode {
+            width: 2560,
+            height: 1440,
+            refresh_hz: 144,
+        };
+        let at = |w, h| Mode {
+            width: w,
+            height: h,
+            ..qhd
+        };
+        assert_eq!(
+            scaled_ask(qhd, 1.5, 8192),
+            (at(3840, 2160), Some((2560, 1440)))
+        );
+        assert_eq!(scaled_ask(qhd, 1.0, 8192), (qhd, None));
+        assert_eq!(scaled_ask(qhd, 0.5, 8192), (qhd, None));
+        assert_eq!(
+            scaled_ask(at(4096, 2304), 2.0, 4096),
+            (at(4096, 2304), None)
         );
     }
 

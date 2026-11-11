@@ -85,6 +85,34 @@ pub unsafe extern "C" fn punktfunk_connection_request_mode(
     })
 }
 
+/// [`punktfunk_connection_request_mode`] with the size this caller shows the picture at, when
+/// smaller than the mode: the host scales the picture to it before encoding. `0` on either
+/// view axis names none: a new size is then encoded as it is, which is how a caller back at 1x
+/// clears the view, and the size last asked keeps its view, so a rate change leaves the scale.
+///
+/// # Safety
+/// `c` is a valid connection handle.
+#[cfg(feature = "quic")]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn punktfunk_connection_request_mode_view(
+    c: *const PunktfunkConnection,
+    width: u32,
+    height: u32,
+    refresh_hz: u32,
+    view_width: u32,
+    view_height: u32,
+) -> PunktfunkStatus {
+    with_conn!(c => {
+        let mode = punktfunk_core::config::Mode {
+            width,
+            height,
+            refresh_hz,
+        };
+        let view = (view_width > 0 && view_height > 0).then_some((view_width, view_height));
+        status_of(c.inner.request_mode_view(mode, view))
+    })
+}
+
 /// The decoder needs an IDR; infinite GOP sends none unasked. With a decoder reporting
 /// through `punktfunk_connection_recovery_*` the core arms the freeze and sends one ask per
 /// 100 ms window. Before the first report, and after a reset, the ask goes at once: throttle.

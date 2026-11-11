@@ -62,18 +62,29 @@ impl StreamState {
         // swap chain after the arrival, so an open in that window fails for a display about to be
         // fine: retry to its own deadline rather than drop the resize to a full rebuild.
         let wire_seq_base = self.clock.next_au();
+        let new_size = (new_mode.width, new_mode.height);
         let pre_opened = if self.plan.capture == crate::session_plan::CaptureBackend::IddPush {
             let opened = loop {
-                match crate::capture::open_driver_encoder(
-                    &self.plan,
-                    &*self.live.capturer,
-                    (new_mode.width, new_mode.height),
-                    effective_hz,
-                    enc_of.enc_kbps(bitrate_kbps) as u64 * 1000,
-                    self.bit_depth,
-                    self.facts.client_hdr,
-                    wire_seq_base,
-                ) {
+                // Framed for the plan's view, as the new-size frames will be.
+                let fitted = crate::session_plan::open_encoder_fitted(
+                    new_size,
+                    new_size,
+                    self.plan.reframe_to,
+                    false,
+                    |framing| {
+                        crate::capture::open_driver_encoder(
+                            &self.plan,
+                            &*self.live.capturer,
+                            framing,
+                            effective_hz,
+                            enc_of.enc_kbps(bitrate_kbps) as u64 * 1000,
+                            self.bit_depth,
+                            self.facts.client_hdr,
+                            wire_seq_base,
+                        )
+                    },
+                );
+                match fitted {
                     Ok(e) => break Some(e),
                     Err(e) => {
                         if std::time::Instant::now() >= open_deadline
@@ -95,7 +106,9 @@ impl StreamState {
         // The driver-encode capturer reads the display's progress off the encoder, and these loops
         // are the one place that polls it without the stream loop's own tick. SET_ENCODE retired
         // `enc`'s section, so the clocks are the pre-opened encoder's or they never move.
-        let live: &dyn crate::encode::Encoder = pre_opened.as_deref().unwrap_or(&*self.live.enc);
+        let live: &dyn crate::encode::Encoder = pre_opened
+            .as_ref()
+            .map_or(&*self.live.enc, |(enc, _)| &**enc);
         // A pixel-less delivery carries the asked size even while DWM still composes the old
         // one into the old swap chain, which the pool refuses frame by frame.
         let pool_took =
@@ -178,10 +191,7 @@ impl StreamState {
         };
         trace.mark("first_new_frame");
         let (enc, reframe) = match pre_opened {
-            Some(e) => (
-                e,
-                punktfunk_core::video_fit::Reframe::full((new_frame.width, new_frame.height)),
-            ),
+            Some(opened) => opened,
             None => match open_session_encoder(
                 &self.facts.encoder,
                 &self.plan,

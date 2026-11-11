@@ -55,6 +55,8 @@ class ConnectRequestVectorTest {
         profile = text("profile"),
         pyrowaveBppX100 = getInt("pyrowaveBppX100"),
         studioRange = getBoolean("studioRange"),
+        viewWidth = getInt("viewWidth"),
+        viewHeight = getInt("viewHeight"),
     )
 
     /** One JSON value, whatever the key order or number spelling. */

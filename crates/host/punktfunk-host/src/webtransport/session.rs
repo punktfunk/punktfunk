@@ -444,6 +444,7 @@ mod tests {
             profile: None,
             access_only: false,
             screens: Vec::new(),
+            view: None,
         }
     }
 

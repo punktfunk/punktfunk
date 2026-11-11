@@ -1388,7 +1388,7 @@ fn row_spec_base(id: RowId, ctx: &Ctx, presets: &[(String, String)]) -> RowSpec 
                 ..RowSpec::default()
             };
         }
-        // The rate the quality needs at the mode a connect would ask; the link's warning under it.
+        // The rate the quality needs at the picture the host encodes; the link's warning under it.
         RowId::PyroWaveQuality => {
             let (rate, warning) = ctx
                 .settings

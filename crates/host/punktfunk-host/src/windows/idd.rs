@@ -195,11 +195,14 @@ fn capture_external_output(
 /// display composes now, and record it under the name of what opened. The heap is sized from
 /// the opening rate; ABR climbs past twice it eat the burst margin. `client_hdr` replaces the
 /// capturer's HDR baseline, as the stream loop does, so the first IDR carries the client's panel.
+/// `framing` is the picture asked of each surface, sent with the open: a far side that frames
+/// takes the crop and scales to `framing.out`, any other opens at `framing.source`, and the caps
+/// say which happened.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn open_driver_encoder(
     plan: &crate::session_plan::SessionPlan,
     capturer: &dyn Capturer,
-    size: (u32, u32),
+    framing: punktfunk_core::video_fit::Reframe,
     fps: u32,
     bitrate_bps: u64,
     bit_depth: u8,
@@ -230,7 +233,9 @@ pub(crate) fn open_driver_encoder(
         full_range: plan.full_range(hdr, bit_depth),
         colour,
         client_hdr,
-        size,
+        size: framing.source,
+        crop: framing.crop,
+        out: framing.out,
         fps,
         bitrate_bps,
         slices: plan.slices,

@@ -2623,4 +2623,62 @@ mod tests {
         );
         assert!(params.hud_preset().is_none());
     }
+
+    /// Above 1x the connect names the chosen size as its view beside the scaled mode; 1x and
+    /// below name none. An override that brings the mode down to the view drops it.
+    #[test]
+    fn the_connect_names_the_view_above_1x() {
+        let h = host(
+            "Desk",
+            "192.168.1.50",
+            "11111111-2222-4333-8444-555555555555",
+            &"ab".repeat(32),
+        );
+        let params = |render_scale: f64, lines: Option<u32>| {
+            let settings = Settings {
+                width: 1366,
+                height: 768,
+                render_scale,
+                ..Default::default()
+            };
+            let mut plan = ConnectPlan::resolve(
+                &h,
+                Some("steam:570"),
+                None,
+                &PresetsFile::default(),
+                &settings,
+            );
+            plan.overrides = lines.map(|l| GameOverrides {
+                lines: Some(l),
+                ..Default::default()
+            });
+            let p = plan.session_params(
+                [9; 32],
+                Probes {
+                    mode: Mode {
+                        width: 1920,
+                        height: 1080,
+                        refresh_hz: 60,
+                    },
+                    identity: ("client".into(), "desk".into()),
+                    vulkan: None,
+                    force_software: Arc::default(),
+                    gamepad: GamepadPref::Auto,
+                    hdr_enabled: false,
+                    display_hdr: None,
+                    hevc_444_hardware: false,
+                    stats_verbosity: StatsVerbosity::Normal,
+                },
+            );
+            ((p.mode.width, p.mode.height), p.view)
+        };
+        let view = Some((1366, 768));
+        assert_eq!(params(1.5, None), ((2048, 1152), view));
+        assert_eq!(params(2.0, None), ((2732, 1536), view));
+        assert_eq!(params(1.0, None), ((1366, 768), None));
+        assert_eq!(params(0.5, None), ((682, 384), None));
+        assert_eq!(params(2.0, Some(1080)), ((1920, 1080), view));
+        assert_eq!(params(2.0, Some(768)), ((1366, 768), None));
+        assert_eq!(params(2.0, Some(720)), ((1280, 720), None));
+    }
 }

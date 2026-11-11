@@ -460,8 +460,11 @@ pub(super) struct Negotiated {
     pub(super) gamescope_route: Option<crate::vdisplay::GamescopeRoute>,
     pub(super) prep: Option<super::stream::PrepHandle>,
     /// Admitted by `mode_conflict: join`: the owner's display, which this session shares, and
-    /// the size this client asked for.
+    /// the size this client shows it at.
     pub(super) joined: Option<(crate::vdisplay::admission::LiveDisplay, (u32, u32))>,
+    /// The size this client shows its own display at, smaller than `hello.mode` ([`kept_view`]).
+    /// `None` for a joiner and a mirror.
+    pub(super) view: Option<(u32, u32)>,
     /// This connect's row in the admission table, until the planes register it. Dropped with
     /// the handshake when the session never gets that far.
     pub(super) reservation: std::sync::Mutex<Option<crate::vdisplay::admission::Reservation>>,
@@ -473,6 +476,53 @@ pub(super) struct Negotiated {
     pub(super) encoder: Arc<crate::encode::Resolved>,
     /// The session streams a host monitor: the device's screen as `ServerHello` stated it.
     pub(super) mirrored: bool,
+}
+
+impl Negotiated {
+    /// The Welcome's mode at the size the encoder means to take it to, as the Welcome priced it.
+    pub(super) fn picture(&self) -> punktfunk_core::Mode {
+        let view = self.view.or(joined_view(&self.joined));
+        crate::session_plan::picture(self.hello.mode, view)
+    }
+}
+
+/// The client's `view` while it is a size `mode` can be scaled to: one a mode could be, no
+/// larger than `mode` on either axis and smaller on one. Anything else encodes the mode.
+pub(super) fn kept_view(
+    view: Option<(u32, u32)>,
+    mode: &punktfunk_core::Mode,
+    codec: crate::encode::Codec,
+) -> Option<(u32, u32)> {
+    let (w, h) = view?;
+    let kept = crate::encode::validate_dimensions(codec, w, h).is_ok()
+        && w <= mode.width
+        && h <= mode.height
+        && (w < mode.width || h < mode.height);
+    if !kept {
+        tracing::debug!(view = ?(w, h), ?mode, "client view not kept — encoding the mode");
+    }
+    kept.then_some((w, h))
+}
+
+/// The size a joiner shows the owner's display at.
+pub(super) fn joined_view(
+    joined: &Option<(crate::vdisplay::admission::LiveDisplay, (u32, u32))>,
+) -> Option<(u32, u32)> {
+    joined.as_ref().map(|(_, view)| *view)
+}
+
+/// What the session's encoder frames for: a joiner's view at its own fit, else the client's
+/// `view` at Fit. `None` encodes the picture as captured.
+pub(super) fn reframe_to(
+    video_fit: u8,
+    joined_view: Option<(u32, u32)>,
+    view: Option<(u32, u32)>,
+) -> Option<(punktfunk_core::video_fit::VideoFit, (u32, u32))> {
+    use punktfunk_core::video_fit::VideoFit;
+    match joined_view {
+        Some(v) => Some((VideoFit::from_wire(video_fit), v)),
+        None => view.map(|v| (VideoFit::Fit, v)),
+    }
 }
 
 /// How long the host holds the connection after a `Redirect` for the client to read it and
@@ -525,6 +575,8 @@ struct Terms {
     codec_bit: u8,
     codec: crate::encode::Codec,
     joined: Option<(crate::vdisplay::admission::LiveDisplay, (u32, u32))>,
+    /// [`Negotiated::view`].
+    view: Option<(u32, u32)>,
     compositor: Option<crate::vdisplay::Compositor>,
     gamescope_route: Option<crate::vdisplay::GamescopeRoute>,
     encoder: Arc<crate::encode::Resolved>,
@@ -561,7 +613,9 @@ pub(super) async fn negotiate(
     let (codec_bit, codec) = pick_codec(&hello, &encoder)?;
     settle_bitrate(&mut hello, codec_bit);
     cap_mode(&n, &mut hello, codec);
-    let (joined, reservation) = admit_mode(&n, &mut hello, codec).await?;
+    // Against the mode this client gets, before a join hands it the owner's.
+    let view = kept_view(n.first.view, &hello.mode, codec);
+    let (joined, reservation) = admit_mode(&n, &mut hello, codec, view).await?;
 
     crate::encode::validate_dimensions(codec, hello.mode.width, hello.mode.height)
         .context("client-requested mode")?;
@@ -575,6 +629,8 @@ pub(super) async fn negotiate(
     }
     let screen = session_screen(&n, joined.is_some()).await?;
     let mirrored = matches!(screen, Some(ScreenEcho::Monitor(_)));
+    // A joiner's view rides `joined`; a mirrored head keeps its own fit.
+    let view = view.filter(|_| joined.is_none() && !mirrored);
 
     // Library launch is resolved after Welcome into `SessionContext.launch`. Do not write
     // `PUNKTFUNK_GAMESCOPE_APP`: process env races concurrent sessions and only gamescope's bare spawn reads it.
@@ -610,10 +666,12 @@ pub(super) async fn negotiate(
     // client's quality when it sent one.
     let pyrowave_bpp = session_pyrowave_bpp(n.first.pyrowave_bpp_x100);
     let slices = crate::session_plan::client_slices(hello.video_caps, n.first.slices);
+    // Priced at the picture the encoder means to take, as every build of the session prices it.
+    let picture = crate::session_plan::picture(hello.mode, view.or(joined_view(&joined)));
     let bitrate_kbps = resolve_bitrate_kbps_for(
         codec,
         hello.bitrate_kbps,
-        &hello.mode,
+        &picture,
         chroma,
         bit_depth,
         pyrowave_bpp,
@@ -636,6 +694,7 @@ pub(super) async fn negotiate(
         codec_bit,
         codec,
         joined,
+        view,
         compositor,
         gamescope_route,
         encoder,
@@ -684,6 +743,7 @@ pub(super) async fn negotiate(
         gamescope_route: t.gamescope_route,
         prep,
         joined: t.joined,
+        view: t.view,
         reservation: std::sync::Mutex::new(Some(reservation)),
         features: server_hello.features,
         resolved: n.resolved,
@@ -904,13 +964,9 @@ fn prepare_at_welcome(
         shard_payload: welcome.shard_payload,
         encoder: t.encoder.clone(),
         mirrored: t.mirrored,
-        // A joiner's view and fit, as `SessionContext::reframe_to` carries them.
-        reframe_to: t.joined.as_ref().map(|(_, view)| {
-            (
-                punktfunk_core::video_fit::VideoFit::from_wire(t.hello.video_fit),
-                *view,
-            )
-        }),
+        // As `SessionContext::reframe_to` and `join_live` carry them.
+        reframe_to: reframe_to(t.hello.video_fit, joined_view(&t.joined), t.view),
+        join_live: t.joined.is_some(),
     };
     super::stream::spawn_display_prep(
         prep,
@@ -1062,13 +1118,15 @@ fn game_override_terms(
 }
 
 /// Mode-conflict before Welcome: stop this client's own earlier sessions, then join, steal or
-/// refuse a live one. `Some` = joined: the owner's display and the size this client asked for.
-/// Same-client reconnect never conflicts. The reservation is this connect's place in the live
-/// set from here on: a later client conflicts with it, and a steal raises this session's `stop`.
+/// refuse a live one. `Some` = joined: the owner's display and the size this client shows it
+/// at, its kept `view` or else the mode it asked for. Same-client reconnect never conflicts. The
+/// reservation is this connect's place in the live set from here on: a later client conflicts
+/// with it, and a steal raises this session's `stop`.
 async fn admit_mode(
     n: &Negotiation<'_>,
     hello: &mut Hello,
     codec: crate::encode::Codec,
+    view: Option<(u32, u32)>,
 ) -> Result<(
     Option<(crate::vdisplay::admission::LiveDisplay, (u32, u32))>,
     crate::vdisplay::admission::Reservation,
@@ -1109,7 +1167,7 @@ async fn admit_mode(
                 live = %format_args!("{}x{}@{}", m.0, m.1, m.2),
                 "mode-conflict: JOIN — admitting at the live display's mode"
             );
-            let view = (hello.mode.width, hello.mode.height);
+            let view = view.unwrap_or((hello.mode.width, hello.mode.height));
             hello.mode.width = m.0;
             hello.mode.height = m.1;
             hello.mode.refresh_hz = m.2;
@@ -1693,6 +1751,44 @@ mod tests {
             height,
             refresh_hz,
         }
+    }
+
+    /// A view is kept only as a size a mode could be, inside the mode and smaller on one axis.
+    #[test]
+    fn a_view_is_kept_only_inside_its_mode() {
+        use crate::encode::Codec::{PyroWave, H265};
+        let at_1_5x = mode(2048, 1152, 120);
+        let kept = |view, codec| kept_view(Some(view), &at_1_5x, codec);
+        assert_eq!(kept((1366, 768), H265), Some((1366, 768)), "fine");
+        assert_eq!(
+            kept((2048, 768), H265),
+            Some((2048, 768)),
+            "smaller on one axis"
+        );
+        assert_eq!(kept((2048, 1152), H265), None, "equal: the mode");
+        assert_eq!(kept((2560, 1440), H265), None, "too large");
+        assert_eq!(kept((1366, 1440), H265), None, "too large on one axis");
+        assert_eq!(kept((1367, 768), H265), None, "odd");
+        assert_eq!(kept((0, 768), H265), None, "zero");
+        assert_eq!(kept((120, 100), PyroWave), None, "under the codec's floor");
+        assert_eq!(kept_view(None, &at_1_5x, H265), None);
+    }
+
+    /// A joiner frames for its own view at its fit, whatever view the client also named; any
+    /// other session for its view at Fit, or not at all.
+    #[test]
+    fn a_joiner_frames_for_its_view_and_a_viewer_at_fit() {
+        use punktfunk_core::video_fit::VideoFit;
+        let crop = VideoFit::Crop.wire();
+        assert_eq!(
+            reframe_to(crop, Some((1280, 720)), Some((1024, 576))),
+            Some((VideoFit::Crop, (1280, 720)))
+        );
+        assert_eq!(
+            reframe_to(crop, None, Some((1366, 768))),
+            Some((VideoFit::Fit, (1366, 768)))
+        );
+        assert_eq!(reframe_to(crop, None, None), None);
     }
 
     /// The host lowers what a client asked for and never raises it: it knows no panel, so a

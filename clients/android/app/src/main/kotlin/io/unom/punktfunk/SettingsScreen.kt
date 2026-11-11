@@ -1566,7 +1566,7 @@ private fun ToggleRow(
 
 /**
  * PyroWave quality in Bitrate's place: 0.5 to 2 by tenths, never shown as bits per pixel. The
- * caption is the rate it needs at the mode a connect would ask; the warning follows while this
+ * caption is the rate it needs at the picture the host encodes; the warning follows while this
  * device's link is short of it.
  */
 @Composable

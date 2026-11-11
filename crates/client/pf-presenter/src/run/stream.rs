@@ -92,6 +92,7 @@ impl StreamState {
             resize_sent_at: None,
             resize_requested: None,
             shown_mode: None,
+            titled: None,
             resize_overlay: ResizeIndicator::default(),
             last_video: None,
             screens: Default::default(),
@@ -125,9 +126,10 @@ impl StreamState {
     }
 }
 
-/// Replace the params' requested w/h with the window's physical pixel size —
-/// even-floored (the host's `validate_dimensions` rejects odd) and clamped to a
-/// sane minimum — keeping the resolved refresh. Fullscreen, the window is the display.
+/// Replace the params' requested w/h with the window's physical pixel size × the render
+/// scale — even-floored (the host's `validate_dimensions` rejects odd) and clamped to a
+/// sane minimum — keeping the resolved refresh. Above 1x the view is the window's own
+/// pixels. Fullscreen, the window is the display.
 pub(super) fn apply_match_window(
     params: &mut SessionParams,
     window: &sdl3::video::Window,
@@ -135,19 +137,35 @@ pub(super) fn apply_match_window(
     max_dim: u32,
 ) {
     let (pw, ph) = window.size_in_pixels();
-    // × the render scale (even + codec-clamped) so match-window supersamples like the
-    // fixed-mode path; 1.0 leaves the window's native pixels.
-    let (w, h) = punktfunk_core::render_scale::apply(pw, ph, render_scale, max_dim);
+    let ((w, h), view) = window_mode(pw, ph, render_scale, max_dim);
     params.mode.width = w;
     params.mode.height = h;
+    params.view = view;
     tracing::info!(
         w,
         h,
+        ?view,
         "match-window: requesting the scaled window pixel size"
     );
 }
 
-/// Follow the live mode slot (any accepted ack — follower, another trigger, or rollback).
+/// The mode a `pw`×`ph` pixel window asks for at `render_scale`, and the view beside it:
+/// `None` at 1x and below, which also clears a view asked for before.
+pub(super) fn window_mode(
+    pw: u32,
+    ph: u32,
+    render_scale: f64,
+    max_dim: u32,
+) -> ((u32, u32), Option<(u32, u32)>) {
+    use punktfunk_core::render_scale::{apply, view};
+    (
+        apply(pw, ph, render_scale, max_dim),
+        view(pw, ph, render_scale, max_dim),
+    )
+}
+
+/// Follow the live mode slot (any accepted ack — follower, another trigger, or rollback), and
+/// title the window with the picture on screen.
 pub(super) fn hud_mode_tick(
     st: &mut StreamState,
     window: &mut sdl3::video::Window,
@@ -157,10 +175,16 @@ pub(super) fn hud_mode_tick(
         return;
     };
     let m = c.mode();
+    // The title names the picture on screen: a host that scales sends less than its mode.
+    let picture = st.last_video.unwrap_or((m.width, m.height));
+    if st.titled != Some((picture, m.refresh_hz)) {
+        st.titled = Some((picture, m.refresh_hz));
+        let (w, h) = picture;
+        let _ = window.set_title(&format!("{title_base} · {w}×{h}@{}", m.refresh_hz));
+    }
     if st.shown_mode.is_some_and(|prev| prev != m) {
         st.mode_line = format!("{}×{}@{}", m.width, m.height, m.refresh_hz);
         tracing::info!(mode = %st.mode_line, "stream mode switched");
-        let _ = window.set_title(&format!("{title_base} · {}", st.mode_line));
         // A switch is a full host-side rebuild: the interval the cushion is bounded by
         // can change, and the gap must re-anchor the cadence estimate rather than slew over.
         st.source_interval_ns = frame_interval_ns(m.refresh_hz, 0);
@@ -170,9 +194,10 @@ pub(super) fn hud_mode_tick(
 }
 
 /// Fire the debounced `Reconfigure` once ~400 ms pass with no further resize events.
-/// Physical pixels, even-floored, clamped ≥ 320×200; ≥ 1 s between requests (the accept
-/// ack round-trips in milliseconds, so the spacing also keeps ~one request outstanding);
-/// each distinct size requested at most once (rejected sizes and host-side rollbacks).
+/// Physical pixels × the render scale, even-floored, clamped ≥ 320×200, with the view
+/// [`window_mode`] pairs with them; ≥ 1 s between requests (the accept ack round-trips in
+/// milliseconds, so the spacing also keeps ~one request outstanding); each distinct size
+/// requested at most once (rejected sizes and host-side rollbacks).
 pub(super) fn resize_tick(
     st: &mut StreamState,
     window: &mut sdl3::video::Window,
@@ -185,10 +210,9 @@ pub(super) fn resize_tick(
         return; // not connected yet — the pending stamp survives until we are
     };
     let m = c.mode();
-    // × the render scale so a resize under Match-window targets the same supersampled
-    // space the live mode is in. resize_decision re-normalizes idempotently.
+    // resize_decision re-normalizes idempotently.
     let (pw, ph) = window.size_in_pixels();
-    let pixel_size = punktfunk_core::render_scale::apply(pw, ph, render_scale, max_dim);
+    let (pixel_size, view) = window_mode(pw, ph, render_scale, max_dim);
     match resize_decision(
         Instant::now(),
         &mut st.resize_pending,
@@ -207,21 +231,22 @@ pub(super) fn resize_tick(
                 persist(lw, lh);
             }
             let Some((w, h)) = target else { return };
-            tracing::info!(w, h, "window resized — requesting mode switch");
-            if c.request_mode(Mode {
+            tracing::info!(w, h, ?view, "window resized — requesting mode switch");
+            let mode = Mode {
                 width: w,
                 height: h,
                 refresh_hz: m.refresh_hz,
-            })
-            .is_err()
-            {
+            };
+            if c.request_mode_view(mode, view).is_err() {
                 tracing::warn!("mode-switch request dropped — control channel closed");
             }
+            // A redial asks for the connector's mode; the view rides beside it.
+            st.params.view = view;
             st.resize_requested = Some((w, h));
             st.resize_sent_at = Some(Instant::now());
             // Scrim + spinner until a frame at this size lands: the live drag stays
             // sharp; only the host's rebuild gap is covered.
-            st.resize_overlay.steering(w, h, Instant::now());
+            st.resize_overlay.steering((w, h), view, Instant::now());
         }
     }
 }
@@ -271,18 +296,19 @@ pub(super) fn resize_decision(
 /// on. A scrim + spinner from request until the sharp new-resolution frame is on screen.
 ///
 /// Driven by signals the presenter already has (no new protocol):
-/// * START — [`resize_tick`] reports the size it just requested (`steering`).
-/// * END — decode reports each frame's dimensions; when they reach the target
-///   (`decoded`). The accepted-switch ack alone cannot end it: the ack round-trips in
-///   milliseconds, ahead of the host's rebuild.
+/// * START — [`resize_tick`] reports the mode and view it just requested (`steering`).
+/// * END — decode reports each frame's dimensions; when they reach either (`decoded`): a
+///   host that reads the view encodes it, any other host the mode. The accepted-switch ack
+///   alone cannot end it: the ack round-trips in milliseconds, ahead of the host's rebuild.
 /// * TIMEOUT — a switch that never delivers the exact target (reject, cap, or
 ///   corrective ack); `tick` clears it after [`ResizeIndicator::TIMEOUT`].
 ///
 /// Pure + clock-injected so the transition logic is unit-tested without a live session.
 #[derive(Default)]
 pub(super) struct ResizeIndicator {
-    /// Size the follower is steering toward — `Some` ⇔ show the scrim + spinner.
-    target: Option<(u32, u32)>,
+    /// The mode and the view the follower is steering toward — `Some` ⇔ show the scrim +
+    /// spinner. Without a view both are the mode.
+    target: Option<[(u32, u32); 2]>,
     /// When the current active span began — the timeout is measured from here.
     since: Option<Instant>,
 }
@@ -295,18 +321,20 @@ impl ResizeIndicator {
         self.target.is_some()
     }
 
-    /// A switch to `w`×`h` was just requested. The timeout re-arms only when the target
-    /// actually changes, so a drag through several sizes never trips it mid-gesture.
-    pub(super) fn steering(&mut self, w: u32, h: u32, now: Instant) {
-        if self.target != Some((w, h)) {
+    /// A switch to `mode`, shown at `view`, was just requested. The timeout re-arms only when
+    /// the target actually changes, so a drag through several sizes never trips it
+    /// mid-gesture.
+    pub(super) fn steering(&mut self, mode: (u32, u32), view: Option<(u32, u32)>, now: Instant) {
+        let target = [mode, view.unwrap_or(mode)];
+        if self.target != Some(target) {
             self.since = Some(now);
         }
-        self.target = Some((w, h));
+        self.target = Some(target);
     }
 
-    /// A decoded frame at `w`×`h`. Clears once it matches the steered target.
+    /// A decoded frame at `w`×`h`. Clears once it matches the steered mode or view.
     pub(super) fn decoded(&mut self, w: u32, h: u32) {
-        if self.target == Some((w, h)) {
+        if self.target.is_some_and(|t| t.contains(&(w, h))) {
             self.target = None;
             self.since = None;
         }
@@ -1000,18 +1028,24 @@ impl Shell {
                     cap.set_touch_mode(next);
                 }
             }
+            // The ring picks the host's mode itself: a new size is shown at it, with no view. A
+            // rate pick keeps the size, and core keeps its view.
             RingCommand::RequestMode {
                 width,
                 height,
                 refresh_hz,
             } => {
                 if let Some(c) = &st.connector {
+                    let live = c.mode();
                     if let Err(e) = c.request_mode(punktfunk_core::config::Mode {
                         width,
                         height,
                         refresh_hz,
                     }) {
                         tracing::warn!(error = %e, "ring: mode request");
+                    }
+                    if (live.width, live.height) != (width, height) {
+                        st.params.view = None;
                     }
                 }
             }
@@ -1170,7 +1204,7 @@ mod tests {
         let mut ind = ResizeIndicator::default();
         assert!(!ind.active());
 
-        ind.steering(1000, 600, t0);
+        ind.steering((1000, 600), None, t0);
         assert!(ind.active());
 
         // A stale old-mode frame still draining does not lift it.
@@ -1184,7 +1218,7 @@ mod tests {
 
         // A switch whose target frame never arrives (rejected / host-capped) times out.
         let mut ind = ResizeIndicator::default();
-        ind.steering(1000, 600, t0);
+        ind.steering((1000, 600), None, t0);
         ind.tick(t0 + ResizeIndicator::TIMEOUT - ms(1));
         assert!(ind.active(), "still within the timeout window");
         ind.tick(t0 + ResizeIndicator::TIMEOUT);
@@ -1198,9 +1232,9 @@ mod tests {
 
         // A drag through sizes re-arms the timeout, so a slow gesture never trips it.
         let mut ind = ResizeIndicator::default();
-        ind.steering(1000, 600, t0);
+        ind.steering((1000, 600), None, t0);
         let near = t0 + ResizeIndicator::TIMEOUT - ms(1);
-        ind.steering(1200, 700, near); // new target → timeout re-armed from `near`
+        ind.steering((1200, 700), None, near); // new target → timeout re-armed from `near`
         ind.tick(t0 + ResizeIndicator::TIMEOUT + ms(1)); // past A's window, within B's
         assert!(
             ind.active(),
@@ -1210,12 +1244,45 @@ mod tests {
         // Re-steering the same size does not re-arm (a repeated identical request cannot
         // hold the scrim open forever).
         let mut ind = ResizeIndicator::default();
-        ind.steering(1000, 600, t0);
-        ind.steering(1000, 600, t0 + ms(500)); // same target, later — `since` unchanged
+        ind.steering((1000, 600), None, t0);
+        ind.steering((1000, 600), None, t0 + ms(500)); // same target, later — `since` unchanged
         ind.tick(t0 + ResizeIndicator::TIMEOUT);
         assert!(
             !ind.active(),
             "an unchanged target keeps the original timeout"
         );
+    }
+
+    /// Above 1x a window asks for its pixels × the scale and names its own pixels as the
+    /// view; at 1x and below it names none, which clears a view asked for before.
+    #[test]
+    fn a_match_window_ask_pairs_the_mode_with_its_view() {
+        assert_eq!(
+            window_mode(1600, 900, 2.0, 8192),
+            ((3200, 1800), Some((1600, 900)))
+        );
+        assert_eq!(
+            window_mode(1366, 768, 1.5, 8192),
+            ((2048, 1152), Some((1366, 768)))
+        );
+        assert_eq!(window_mode(1600, 900, 1.0, 8192), ((1600, 900), None));
+        assert_eq!(window_mode(1600, 900, 0.5, 8192), ((800, 450), None));
+        // The codec wall leaves the mode no larger than the window: nothing to shrink.
+        assert_eq!(window_mode(4096, 2304, 2.0, 4096), ((4096, 2304), None));
+    }
+
+    /// A host that reads the view sends a frame at it, any other host one at the mode:
+    /// either lifts the scrim, a stale frame at the old size does not.
+    #[test]
+    fn resize_indicator_lifts_on_the_view_or_the_mode() {
+        let t0 = Instant::now();
+        for frame in [(1600, 900), (3200, 1800)] {
+            let mut ind = ResizeIndicator::default();
+            ind.steering((3200, 1800), Some((1600, 900)), t0);
+            ind.decoded(1920, 1080);
+            assert!(ind.active(), "an old-size frame keeps the scrim up");
+            ind.decoded(frame.0, frame.1);
+            assert!(!ind.active(), "{frame:?} lifts the scrim");
+        }
     }
 }

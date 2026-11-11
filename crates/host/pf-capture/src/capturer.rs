@@ -343,7 +343,12 @@ pub struct SessionFacts {
     pub colour: ColourFacts,
     /// The client's panel, which replaces the source's HDR baseline in the first IDR.
     pub client_hdr: Option<HdrMeta>,
+    /// The surface size the far side opens at.
     pub size: (u32, u32),
+    /// The picture asked of each surface: `x, y, w, h` of it, scaled to `out`. The whole
+    /// surface at `size` is no framing.
+    pub crop: [u32; 4],
+    pub out: (u32, u32),
     pub fps: u32,
     pub bitrate_bps: u64,
     pub slices: u32,
@@ -360,8 +365,14 @@ pub struct DriverEncodeParams {
     /// `0` 4:2:0, `1` 4:4:4.
     pub chroma: u32,
     pub bit_depth: u32,
+    /// The surface size: what a far side that reads no framing opens at.
     pub width: u32,
     pub height: u32,
+    /// The framing as `SET_ENCODE`'s v10 tail carries it
+    /// ([`pf_driver_proto::encode::SetEncodeRequest::framing`]); zero is none.
+    pub encode_width: u32,
+    pub encode_height: u32,
+    pub src_rect: [u32; 4],
     pub fps: u32,
     pub bitrate_kbps: u32,
     pub hdr: bool,
@@ -386,7 +397,8 @@ impl DriverEncodeParams {
     /// `SET_ENCODE` for a session: the resolved backend first, then Media Foundation, so a
     /// missing `amfrt64.dll` or a declined native open does not end an H.26x session. MF only
     /// inside its 8-bit 4:2:0 ceiling: the plan is negotiated, so a wider one would open and
-    /// then refuse every frame. PyroWave pairs only with itself; software is refused.
+    /// then refuse every frame. PyroWave pairs only with itself; software is refused. The
+    /// whole surface at its own size sends no framing, so that request is a v9 host's.
     pub fn for_session(facts: SessionFacts) -> Result<Self> {
         use pf_driver_proto::encode::{backend as be, codec as cc};
         let backend = match (facts.codec, facts.backend) {
@@ -400,6 +412,13 @@ impl DriverEncodeParams {
         let fallback =
             u32::from(!matches!(backend, be::PYROWAVE | be::MEDIA_FOUNDATION) && mf_fits)
                 * be::MEDIA_FOUNDATION;
+        let (w, h) = facts.size;
+        let unframed = facts.crop == [0, 0, w, h] && facts.out == facts.size;
+        let (encode, src_rect) = if unframed {
+            ((0, 0), [0; 4])
+        } else {
+            (facts.out, facts.crop)
+        };
         Ok(DriverEncodeParams {
             codec: match facts.codec {
                 Codec::H264 => cc::H264,
@@ -409,8 +428,11 @@ impl DriverEncodeParams {
             },
             chroma: u32::from(facts.chroma.is_444()),
             bit_depth: u32::from(facts.bit_depth),
-            width: facts.size.0,
-            height: facts.size.1,
+            width: w,
+            height: h,
+            encode_width: encode.0,
+            encode_height: encode.1,
+            src_rect,
             fps: facts.fps,
             bitrate_kbps: (facts.bitrate_bps / 1000).min(u64::from(u32::MAX)) as u32,
             hdr: facts.hdr,
@@ -487,12 +509,37 @@ mod tests {
             colour: ColourFacts::default(),
             client_hdr: None,
             size: (1920, 1080),
+            crop: [0, 0, 1920, 1080],
+            out: (1920, 1080),
             fps: 60,
             bitrate_bps: 20_000_000,
             slices: 1,
             wire_chunk: None,
             wire_seq_base: 7,
         }
+    }
+
+    /// The whole surface at its own size sends no framing; anything else sends the surface's
+    /// size where a v9 driver reads it and the framing in the tail.
+    #[test]
+    fn the_request_carries_the_framing_only_when_there_is_one() {
+        let f = facts(Codec::H265, Some(be::NVENC), false, 8);
+        let p = DriverEncodeParams::for_session(f).unwrap();
+        assert_eq!((p.width, p.height), (1920, 1080));
+        assert_eq!(
+            (p.encode_width, p.encode_height, p.src_rect),
+            (0, 0, [0; 4])
+        );
+        let framed = SessionFacts {
+            size: (3840, 2160),
+            crop: [0, 0, 3840, 2160],
+            out: (1920, 1080),
+            ..f
+        };
+        let p = DriverEncodeParams::for_session(framed).unwrap();
+        assert_eq!((p.width, p.height), (3840, 2160));
+        assert_eq!((p.encode_width, p.encode_height), (1920, 1080));
+        assert_eq!(p.src_rect, [0, 0, 3840, 2160]);
     }
 
     #[test]

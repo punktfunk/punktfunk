@@ -169,7 +169,7 @@ internal object CompanionMemory {
     }
 }
 
-/** The panel's header: the host and the title on one line, the mode on the next. */
+/** The panel's header: the host and the title on one line, the picture's size and rate on the next. */
 internal data class PanelHeader(val title: String, val detail: String = "")
 
 /**

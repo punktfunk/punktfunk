@@ -198,11 +198,22 @@ object NativeBridge {
 
     /**
      * Ask the host to switch the live session to [width]×[height] at [refreshHz] with no reconnect.
-     * Non-blocking: on acceptance the stream continues at the new mode from a keyframe that carries
-     * its own parameter sets; a rejection leaves the session unchanged. `false` when the request
-     * could not be queued (a `0` handle, a closed session, or a non-positive dimension).
+     * [viewWidth]×[viewHeight] is the size the picture is shown at when the mode is larger (render
+     * scale above 1x): a host that reads it encodes that instead. `0`×`0` names none: a new
+     * size clears an earlier view, the same size keeps it. Non-blocking: on acceptance the stream
+     * continues at the new mode from a keyframe that carries its own parameter sets; a rejection
+     * leaves the session unchanged.
+     * `false` when the request could not be queued (a `0` handle, a closed session, or a
+     * non-positive dimension).
      */
-    external fun nativeRequestMode(handle: Long, width: Int, height: Int, refreshHz: Int): Boolean
+    external fun nativeRequestMode(
+        handle: Long,
+        width: Int,
+        height: Int,
+        refreshHz: Int,
+        viewWidth: Int,
+        viewHeight: Int,
+    ): Boolean
 
     /** Tear down a session handle returned by [nativeConnect]. No-op on `0`. */
     external fun nativeClose(handle: Long)

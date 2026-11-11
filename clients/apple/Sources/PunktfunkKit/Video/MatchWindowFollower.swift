@@ -4,8 +4,9 @@
 // resize-end, spaces requests ≥ 1 s apart, and asks the connection to switch the host's virtual
 // display + encoder to match (`PunktfunkConnection.requestMode`) — so a windowed macOS session or
 // an iPad Stage Manager / Split View scene streams native-resolution pixels instead of scaling.
-// The decode/present side needs nothing: VideoToolbox recreates its session on the keyframe-derived
-// format-description change (the first new-mode AU is an IDR with fresh parameter sets).
+// Above 1x render scale the window's own pixels ride along as the view. The decode/present side
+// needs nothing: VideoToolbox recreates its session on the keyframe-derived format-description
+// change (the first new-mode AU is an IDR with fresh parameter sets).
 //
 // The trigger discipline is the shared cross-client one (mirrors the session binary's
 // `resize_decision`): physical pixels rounded DOWN to even (the host rejects odd dimensions) and
@@ -44,6 +45,11 @@ public enum MatchWindow {
     }
 }
 
+/// A Match-window resize toward a mode, with the view it is shown at above 1x render scale.
+public typealias ResizeTarget = (
+    _ width: UInt32, _ height: UInt32, _ view: (width: UInt32, height: UInt32)?
+) -> Void
+
 /// Owns the debounce timer + serialization state and drives `PunktfunkConnection.requestMode` from
 /// the stream view's layout callbacks. Main-actor: the views feed it on the main thread and it reads
 /// the connection's live mode there. Enabled per session from the `matchWindow` setting.
@@ -69,10 +75,11 @@ public final class MatchWindowFollower {
     private var lastSteered: (width: UInt32, height: UInt32)?
 
     /// Fired (on the main actor) the instant the window starts differing from the live mode — i.e.
-    /// a resize is under way and a `Reconfigure` for `(width, height)` is imminent. Drives the
-    /// resize overlay's INSTANT feedback (blur + spinner) BEFORE the debounced request leaves; the
-    /// overlay clears when a decoded frame reaches this size (or on a timeout). Deduped per target.
-    public var onResizeTarget: ((_ width: UInt32, _ height: UInt32) -> Void)?
+    /// a resize is under way and a `Reconfigure` for `(width, height)`, shown at `view`, is
+    /// imminent. Drives the resize overlay's INSTANT feedback (blur + spinner) BEFORE the debounced
+    /// request leaves; the overlay clears when a decoded frame reaches the mode or the view (or on
+    /// a timeout). Deduped per target.
+    public var onResizeTarget: ResizeTarget?
 
     /// The refresh to ask for along with a size; nil keeps the live one. A foldable's two screens
     /// can run at different rates, and a session streaming the native rate follows the screen.
@@ -99,9 +106,17 @@ public final class MatchWindowFollower {
 
     /// The host-valid mode for a live window size: the window's physical pixels × the render scale,
     /// aspect-preserved, even, and clamped to the codec ceiling — the match-window twin of
-    /// ContentView's `scaledMode()`. Reduces to `MatchWindow.normalize` when the scale is 1.0.
+    /// `EffectiveSettings.streamMode`. Reduces to `MatchWindow.normalize` when the scale is 1.0.
     private func targetMode(widthPx: Int, heightPx: Int) -> (width: UInt32, height: UInt32) {
         RenderScale.apply(
+            baseWidth: widthPx, baseHeight: heightPx,
+            scale: renderScale, maxDimension: maxDimension)
+    }
+
+    /// The window's own pixels as the view beside `targetMode` above 1x; nil at 1x and below,
+    /// which also clears a view asked for before.
+    private func targetView(widthPx: Int, heightPx: Int) -> (width: UInt32, height: UInt32)? {
+        RenderScale.view(
             baseWidth: widthPx, baseHeight: heightPx,
             scale: renderScale, maxDimension: maxDimension)
     }
@@ -144,7 +159,8 @@ public final class MatchWindowFollower {
         }
         if lastSteered?.width == target.width, lastSteered?.height == target.height { return }
         lastSteered = target
-        onResizeTarget?(target.width, target.height)
+        onResizeTarget?(
+            target.width, target.height, targetView(widthPx: widthPx, heightPx: heightPx))
     }
 
     private func schedule() {
@@ -173,7 +189,8 @@ public final class MatchWindowFollower {
         ) else { return }
         // Match window follows size. The rate rides along only where the screen sets it.
         connection.requestMode(
-            width: req.width, height: req.height, refreshHz: refreshHz?() ?? mode.refreshHz)
+            width: req.width, height: req.height, refreshHz: refreshHz?() ?? mode.refreshHz,
+            view: targetView(widthPx: size.width, heightPx: size.height))
         lastRequested = req
         lastRequestAt = Date()
     }

@@ -10,7 +10,7 @@
 //   * START — the Match-window follower reports the size it is steering toward (instant, on the
 //     first resize layout, before the debounced request even leaves).
 //   * END — the decode pipeline reports each new-mode IDR's dimensions; when they reach the target
-//     the new picture is here.
+//     mode or its view the new picture is here.
 //   * TIMEOUT — the safety net for a switch that never delivers the exact target: the host rejected
 //     it (gamescope), capped it to an advertised mode, or a corrective ack landed a different size.
 //
@@ -24,8 +24,10 @@ import Foundation
 public struct ResizeIndicator {
     /// Whether the blur + spinner should be shown.
     public private(set) var active = false
-    /// The size the follower is steering toward — cleared once a decoded frame reaches it.
+    /// The size the follower is steering toward, and the view it is shown at (the size itself when
+    /// none was asked for) — cleared once a decoded frame reaches either.
     private var target: (width: UInt32, height: UInt32)?
+    private var view: (width: UInt32, height: UInt32)?
     /// When the current `active` span began — the timeout is measured from here.
     private var since: TimeInterval?
     /// How long to keep the overlay up if the target frame never arrives (rejected / capped switch).
@@ -33,22 +35,33 @@ public struct ResizeIndicator {
 
     public init(timeout: TimeInterval = 2.5) { self.timeout = timeout }
 
-    /// The follower is steering toward `width`×`height` — a resize is under way. Show the overlay now
-    /// (instant feedback). Called only for a genuine change (the follower skips a target equal to the
-    /// live mode), possibly many times as a drag moves through sizes; the timeout re-arms whenever the
-    /// target actually changes so a slow drag never trips it mid-gesture.
-    public mutating func steering(width: UInt32, height: UInt32, now: TimeInterval) {
-        if !active || target?.width != width || target?.height != height {
+    /// The follower is steering toward `width`×`height`, shown at `view` — a resize is under way.
+    /// Show the overlay now (instant feedback). Called only for a genuine change (the follower skips
+    /// a target equal to the live mode), possibly many times as a drag moves through sizes; the
+    /// timeout re-arms whenever the target actually changes so a slow drag never trips it
+    /// mid-gesture.
+    public mutating func steering(
+        width: UInt32, height: UInt32, view: (width: UInt32, height: UInt32)? = nil,
+        now: TimeInterval
+    ) {
+        let view = view ?? (width, height)
+        let same = target.map { $0 == (width, height) } == true
+            && self.view.map { $0 == view } == true
+        if !active || !same {
             since = now
         }
         target = (width, height)
+        self.view = view
         active = true
     }
 
     /// A decoded frame arrived at `width`×`height` (a new-mode IDR). Clears the overlay once it
-    /// matches the steered target — the sharp new-resolution picture is on glass.
+    /// matches the steered mode or view: a host that reads the view encodes it, any other host the
+    /// mode.
     public mutating func decoded(width: UInt32, height: UInt32) {
-        guard active, let t = target, t.width == width, t.height == height else { return }
+        let frame = (width, height)
+        guard active, target.map({ $0 == frame }) == true || view.map({ $0 == frame }) == true
+        else { return }
         active = false
         since = nil
     }

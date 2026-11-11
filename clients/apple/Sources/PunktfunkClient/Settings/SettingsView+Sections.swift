@@ -525,9 +525,9 @@ extension SettingsView {
         }
     }
 
-    /// Render-scale picker + the resulting host resolution. > 1 supersamples (sharper, at more
-    /// bandwidth AND client decode); < 1 renders under native (lighter). The presenter resamples the
-    /// decoded frame to this display, so the multiplier is where the sharpness/cost trade-off lives.
+    /// Render-scale picker + the resulting host resolution. > 1 supersamples (sharper, at more host
+    /// work; a host that cannot scale the picture down also costs bandwidth and client decode);
+    /// < 1 renders under native (lighter), and the presenter upscales.
     /// Any percent from 50 to 400 can be typed: "Custom…" shows the field, a TV has its own row.
     @ViewBuilder var renderScaleRow: some View {
         #if os(tvOS)
@@ -717,23 +717,23 @@ extension SettingsView {
         effective.codec == "pyrowave" && MetalWaveletDecoder.supported
     }
 
-    /// The mode a connect would ask for. Native is an attached monitor's on iPhone and iPad, else
-    /// this display's.
-    private func connectMode(_ s: EffectiveSettings) -> (width: UInt32, height: UInt32, hz: UInt32) {
+    /// The picture a connect would have the host encode (`streamPicture`). Native is an attached
+    /// monitor's on iPhone and iPad, else this display's.
+    private func connectPicture(_ s: EffectiveSettings) -> (width: UInt32, height: UInt32, hz: UInt32) {
         #if os(iOS)
-        if let mode = ExternalDisplay.streamMode(s) { return mode }
+        if let native = ExternalDisplay.nativeMode { return s.streamPicture(native: native) }
         #endif
-        return s.streamMode(native: NativeDisplay.mode)
+        return s.streamPicture(native: NativeDisplay.mode)
     }
 
     /// PyroWave quality in Bitrate's place: 0.5 to 2 by tenths, read as the rate it needs at the
-    /// mode a connect would ask, warned when this device's link is short of it. The TV lists
-    /// those rates.
+    /// picture a connect would have the host encode, warned when this device's link is short of
+    /// it. The TV lists those rates.
     @ViewBuilder private var pyrowaveQualityRows: some View {
         if pyroWaveRate {
             let s = effective
-            let mode = connectMode(s)
-            let lines = PyroWaveQuality.lines(s, mode: mode, link: PyroWaveQuality.localLink())
+            let picture = connectPicture(s)
+            let lines = PyroWaveQuality.lines(s, mode: picture, link: PyroWaveQuality.localLink())
             let field = scoped(SettingsFields.pyrowaveBpp)
             let quality = Binding(
                 get: { PyroWaveQuality.snapped(field.wrappedValue) },
@@ -746,7 +746,7 @@ extension SettingsView {
                     options: PyroWaveQuality.rungs.map { bpp in
                         var at = s
                         at.pyrowaveBpp = bpp
-                        let kbps = PyroWaveQuality.kbps(at, mode: mode)
+                        let kbps = PyroWaveQuality.kbps(at, mode: picture)
                         return (label: PyroWaveQuality.rateLabel(kbps: kbps), tag: bpp)
                     },
                     selection: quality)

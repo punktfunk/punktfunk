@@ -13,13 +13,17 @@ use crate::config::Mode;
 /// data plane is unchanged. The first new-mode frame is an IDR with in-band
 /// parameter sets — that is all a decoder needs.
 ///
-/// `exclude_codecs` non-zero is a codec ask instead, and `mode` is ignored: drop these
-/// `CODEC_*` bits and stream on in another codec, from a new epoch. Only under
+/// `exclude_codecs` non-zero is a codec ask instead, and `mode` and `view` are ignored: drop
+/// these `CODEC_*` bits and stream on in another codec, from a new epoch. Only under
 /// [`FEATURE_FORMAT_EPOCH`](super::v2::registry::FEATURE_FORMAT_EPOCH).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Reconfigure {
     pub mode: Mode,
     pub exclude_codecs: u8,
+    /// The size the client shows the picture at, when smaller than `mode`: the host builds the
+    /// display at `mode` and scales the picture to `view` before encoding. `None` encodes
+    /// `mode`, so a client back at 1x clears it.
+    pub view: Option<(u32, u32)>,
 }
 
 /// `host → client` answer to [`Reconfigure`]. `accepted = false`: request

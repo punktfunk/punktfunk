@@ -28,11 +28,10 @@ data class Settings(
      *  as the rate it needs ([PyroWaveQuality]), never as bits per pixel. */
     val pyrowaveBpp: Double = 1.6,
     /**
-     * Render-resolution multiplier: the client asks the host to render/encode at `chosen mode ×
-     * renderScale` and the compositor downscales the larger decoded frame to the SurfaceView
-     * (`> 1` supersamples for sharpness, at more bandwidth AND decode; `< 1` renders under native
-     * for a lighter host/link). `1.0` = Native. Applied at connect via [RenderScale.apply], clamped
-     * even + to the codec's max dimension. Mirrors the Apple/Linux clients' render scale.
+     * Render-resolution multiplier: the client asks the host to render at `chosen mode ×
+     * renderScale` ([RenderScale.apply]). Above 1x it names the chosen mode as the view
+     * ([RenderScale.view]): a host that reads it encodes that, any other host the larger mode,
+     * which the compositor shrinks. Below 1x the compositor upscales. `1.0` = Native.
      */
     val renderScale: Double = 1.0,
     /**
@@ -694,6 +693,20 @@ object RenderScale {
         }
         return Pair(evenFloor(w, 320), evenFloor(h, 200))
     }
+
+    /**
+     * The size the picture is shown at, for the host to encode instead of the mode [apply] asks
+     * for: the base at 1x. Null at or below 1x, or when the codec clamp leaves the mode no larger
+     * than the view. Twin of core's `render_scale::view`.
+     */
+    fun view(baseW: Int, baseH: Int, scale: Double, maxDim: Int): Pair<Int, Int>? {
+        val view = apply(baseW, baseH, 1.0, maxDim)
+        return view.takeIf { sanitize(scale) > 1.0 && it != apply(baseW, baseH, scale, maxDim) }
+    }
+
+    /** [view] while a [w]×[h] mode is still larger: at least the view on both axes, not equal. */
+    fun viewUnder(w: Int, h: Int, view: Pair<Int, Int>?): Pair<Int, Int>? =
+        view?.takeIf { w >= it.first && h >= it.second && (w to h) != it }
 
     private fun evenFloor(value: Double, minimum: Int): Int {
         val v = maxOf(kotlin.math.floor(value).toInt(), minimum).coerceAtLeast(0)

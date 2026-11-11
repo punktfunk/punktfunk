@@ -100,6 +100,8 @@ pub(crate) struct FarSide {
     pub news: VecDeque<Result<Vec<TransportEvent>>>,
     pub secure: bool,
     pub exited: bool,
+    /// The far side stamps `frames_input` at each open, as a v10 driver does.
+    pub frames_input: bool,
     /// Every planted section by its value, as the far side maps it.
     planted: Vec<(u64, AuView<'static>)>,
     /// The open encoder over the last adopted section.
@@ -186,7 +188,11 @@ impl FarSide {
             bail!("SET_ENCODE names no planted section");
         };
         self.generation += 1;
-        self.encoder = Some(Producer::attach(view, self.generation));
+        let drv = Producer::attach(view, self.generation);
+        if self.frames_input {
+            drv.stamp32(offset_of!(au::AuHeader, frames_input), 1);
+        }
+        self.encoder = Some(drv);
         (self.wire_seq, self.source_seq, self.published) = (req.wire_seq_base, 0, 0);
         reply.backend_opened = backend::AMF;
         reply.applied_bitrate_kbps = req.bitrate_kbps;
@@ -322,6 +328,9 @@ pub(crate) fn params(width: u32, height: u32, hdr: bool, wire_seq_base: u32) -> 
         wire_chunk_bytes: 0,
         backends: [backend::AMF, 0, 0, 0],
         wire_seq_base,
+        encode_width: 0,
+        encode_height: 0,
+        src_rect: [0; 4],
     }
 }
 

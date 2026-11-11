@@ -7,19 +7,25 @@ import AppKit
 import PunktfunkCore
 import PunktfunkShared
 
-/// One screen of a session on this Mac: the record the host is asked for, and the display it
-/// stands for.
+/// One screen of a session on this Mac: the record the host is asked for, the size it is shown at
+/// when smaller (zero for none), and the display it stands for.
 struct DisplayScreen {
     let record: PunktfunkScreen
+    let view: PunktfunkScreenView
     let display: CGDirectDisplayID
 }
 
 extension ScreenAsk {
-    /// A host screen per display of this Mac, screen 0 the main one at `mode`; none with one.
+    /// A host screen per display of this Mac, screen 0 the main one at `mode`, the others at the
+    /// render `scale` under the codec's per-axis ceiling; none with one.
     @MainActor
-    public static func ofThisMac(mode: (width: UInt32, height: UInt32, hz: UInt32)) -> ScreenAsk {
+    public static func ofThisMac(
+        mode: (width: UInt32, height: UInt32, hz: UInt32),
+        scale: (factor: Double, maxDimension: Int)
+    ) -> ScreenAsk {
         guard NSScreen.screens.count > 1, let main = NSScreen.main else { return .none }
-        return ScreenAsk(records: NSScreen.sessionScreens(first: main, mode: mode).map(\.record))
+        let planned = NSScreen.sessionScreens(first: main, mode: mode, scale: scale)
+        return ScreenAsk(records: planned.map(\.record), views: planned.map(\.view))
     }
 }
 
@@ -31,30 +37,39 @@ extension NSScreen {
     }
 
     /// The session's screens on this Mac: `first` at `mode`, then each other display at its panel
-    /// pixels and top refresh, at most `PUNKTFUNK_SCREENS_MAX` in all.
+    /// pixels and top refresh, at most `PUNKTFUNK_SCREENS_MAX` in all. Above 1x a further display
+    /// asks for its panel × `scale` and is shown at its panel (`RenderScale.screenAsk`).
     @MainActor
     static func sessionScreens(
-        first: NSScreen, mode: (width: UInt32, height: UInt32, hz: UInt32)
+        first: NSScreen, mode: (width: UInt32, height: UInt32, hz: UInt32),
+        scale: (factor: Double, maxDimension: Int)
     ) -> [DisplayScreen] {
         guard let firstID = first.displayID else { return [] }
         let primary = NSScreen.screens.first?.displayID
         var head = PunktfunkScreen()
         (head.width, head.height, head.refresh_hz) = (mode.width, mode.height, mode.hz)
         head.primary = firstID == primary ? 1 : 0
-        var out = [DisplayScreen(record: head, display: firstID)]
+        var out = [DisplayScreen(record: head, view: PunktfunkScreenView(), display: firstID)]
         for screen in NSScreen.screens {
             guard out.count < Int(PUNKTFUNK_SCREENS_MAX), let id = screen.displayID, id != firstID
             else { continue }
             let panel = screen.panelPixelSize
+            let ask = RenderScale.screenAsk(
+                baseWidth: panel.width, baseHeight: panel.height, scale: scale.factor,
+                maxDimension: scale.maxDimension)
             let at = offset(
-                of: screen.frame, size: panel, from: first.frame, mode: (mode.width, mode.height))
+                of: screen.frame, size: (Int(ask.mode.width), Int(ask.mode.height)),
+                from: first.frame, mode: (mode.width, mode.height))
             var r = PunktfunkScreen()
             r.index = UInt8(out.count)
-            (r.width, r.height) = (UInt32(panel.width), UInt32(panel.height))
+            r.width = ask.mode.width
+            r.height = ask.mode.height
             r.refresh_hz = UInt32(max(screen.maximumFramesPerSecond, 1))
             (r.x, r.y) = at
             r.primary = id == primary ? 1 : 0
-            out.append(DisplayScreen(record: r, display: id))
+            let view = PunktfunkScreenView(
+                width: ask.view?.width ?? 0, height: ask.view?.height ?? 0)
+            out.append(DisplayScreen(record: r, view: view, display: id))
         }
         return out
     }

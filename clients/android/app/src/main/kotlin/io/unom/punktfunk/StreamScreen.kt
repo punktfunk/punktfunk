@@ -392,7 +392,7 @@ fun StreamScreen(
         onSessionEnded(reason)
     }
 
-    KeepAliveEffects(session, hostRecord, keepAliveSpan, { endAway(it) }, onSessionEnded)
+    KeepAliveEffects(session, hostRecord, keepAliveSpan, decodedSize, { endAway(it) }, onSessionEnded)
 
     // "Keep screen awake": asked every few seconds, since with the setting off the answer
     // follows the player's input. With it on the answer never changes.
@@ -417,9 +417,10 @@ fun StreamScreen(
     // measure against it, so none of them knows a fold happened.
     var padSize by remember { mutableStateOf(IntSize.Zero) }
     val split = fold?.takeIf { hingeCompanion || (padShown && !companionUp) }
-    // A live mode switch: the asked-for mode shows at once, the host's answer half a second later.
-    fun switchMode(w: Int, h: Int, hz: Int) {
-        if (NativeBridge.nativeRequestMode(handle, w, h, hz)) {
+    // A live mode switch, shown at [view] when the mode is larger: the asked-for mode shows at
+    // once, the host's answer half a second later. No view at a new size clears the one asked before.
+    fun switchMode(w: Int, h: Int, hz: Int, view: Pair<Int, Int>? = null) {
+        if (NativeBridge.nativeRequestMode(handle, w, h, hz, view?.first ?: 0, view?.second ?: 0)) {
             requestedMode = intArrayOf(w, h, hz)
             scope.launch {
                 delay(500)
@@ -431,20 +432,20 @@ fun StreamScreen(
     var modePicked by remember(handle) { mutableStateOf(false) }
 
     /**
-     * What Automatic resolves for layout [l] on this pair, asked when it differs from the live
-     * mode: live where the host takes the switch, else from the next connect, which resolves
-     * against the same screen ([pictureDisplay]) and the kept layout ([pictureSpanned]).
+     * What Automatic resolves for layout [l] on this pair, and its view, asked when the mode
+     * differs from the live one: live where the host takes the switch, else from the next connect,
+     * which resolves against the same screen ([pictureDisplay]) and the kept layout
+     * ([pictureSpanned]).
      */
     fun askModeFor(l: ScreenLayout) {
         val automatic = initialSettings.width <= 0 || initialSettings.height <= 0 || initialSettings.hz <= 0
         if (companionDisplay == null || modePicked || !automatic) return
         // ponytail: the picture screen follows the KEPT layout, so a launch that spans over a
         // kept swap asks at the second screen's width; the next cycle sets it right.
-        val (baseW, baseH, hz) = initialSettings.effectiveMode(context, spanned = l == ScreenLayout.SPANNED)
-        val (w, h) = RenderScale.apply(
-            baseW, baseH, initialSettings.renderScale, RenderScale.maxDimension(initialSettings.codec),
-        )
-        if (!intArrayOf(w, h, hz).contentEquals(requestedMode)) switchMode(w, h, hz)
+        val base = initialSettings.effectiveMode(context, spanned = l == ScreenLayout.SPANNED)
+        val (mode, view) = initialSettings.streamAsk(base, null) { base }
+        val (w, h, hz) = mode
+        if (!intArrayOf(w, h, hz).contentEquals(requestedMode)) switchMode(w, h, hz, view)
     }
 
     /** The pair's next layout, remembered, and the mode that goes with it. */
@@ -541,6 +542,8 @@ fun StreamScreen(
             }
         },
         currentMode = { requestedMode },
+        // The ring picks the host's mode itself: a new size is shown at it, a rate pick keeps
+        // the view.
         requestMode = { w, h, hz ->
             modePicked = true
             switchMode(w, h, hz)
@@ -579,8 +582,9 @@ fun StreamScreen(
             header = PanelHeader(
                 title = listOfNotNull(hostRecord?.name, streamedGame?.title ?: session.launchHold?.game?.title)
                     .joinToString(" · ").ifEmpty { "Punktfunk" },
+                // The size that arrives: a host that scales sends less than its mode.
                 detail = requestedMode.takeIf { it.size >= 3 && it[0] > 0 }
-                    ?.let { "${it[0]}×${it[1]} · ${it[2]} Hz" }.orEmpty(),
+                    ?.let { m -> (decodedSize ?: m).let { "${it[0]}×${it[1]} · ${m[2]} Hz" } }.orEmpty(),
             ),
             history = statsHistory,
             stats = statsLines,

@@ -16,6 +16,7 @@
 #![allow(clippy::too_many_arguments)]
 
 use super::vk_csc::{bind_rgb, csc_layout, csc_push, CursorPlane, LinearSrc, WordsCache};
+use super::vk_reframe::Reframe;
 use super::vk_ring::{Action, Observation, Ring};
 use super::vk_util::{
     color_range, find_mem_preferring, import_failure_feeds_latch, imported_acquire_barrier,
@@ -1176,7 +1177,7 @@ pub struct VulkanVideoEncoder {
     /// CSC. Fixed per session (picture format is baked into the video session).
     rgb: Option<RgbDirect>,
     /// The host's crop and scale ahead of the CSC ([`Encoder::set_input_crop`]). CSC sessions only.
-    reframe: Option<reframe_stage::Reframe>,
+    reframe: Option<Reframe>,
     /// Row-based intra refresh is enabled on the session and its device. `None` = unavailable.
     intra_refresh: Option<IntraRefreshCaps>,
     /// Wave in flight, if any. Set at frame-build, read by the record paths for that same
@@ -2754,7 +2755,7 @@ impl Encoder for VulkanVideoEncoder {
         }
         // SAFETY: fresh handles on this encoder's live device, released in `Drop` or above.
         self.reframe = Some(unsafe {
-            reframe_stage::Reframe::new(
+            Reframe::new(
                 &self.device,
                 &self.mem_props,
                 rect,
@@ -2940,10 +2941,6 @@ impl Drop for VulkanVideoEncoder {
         });
     }
 }
-
-// The host's crop and scale ahead of the CSC.
-#[path = "vk_reframe.rs"]
-mod reframe_stage;
 
 // The per-frame record. `#[path]` child sees this file's private items.
 #[path = "vk_record.rs"]

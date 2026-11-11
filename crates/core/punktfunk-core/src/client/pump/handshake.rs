@@ -286,6 +286,7 @@ async fn dial(
             profile: p.profile.clone(),
             access_only: false,
             screens: p.screens.clone(),
+            view: p.view,
         };
         v2io::send(&mut send, &hello).await?;
         if let Some(unlock) = unlock {

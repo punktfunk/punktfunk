@@ -376,7 +376,8 @@ pub extern "system" fn Java_io_unom_punktfunk_kit_NativeBridge_nativeVideoDrain(
 /// `NativeBridge.nativeVideoStatsLines(handle, tier, advanced, panelHz, panelModeHz, preset):
 /// String?` — close the overlay window and return it formatted by `punktfunk_core::hud`, one
 /// `<role>\t<text>` per line, or `null` when no decode thread runs. `panelHz` is the rate this app
-/// may render at and `panelModeHz` the panel's mode (0 = unknown). Poll ~1 Hz; each call closes
+/// may render at and `panelModeHz` the panel's mode (0 = unknown). A picture smaller than the
+/// host's mode leads the mode line ([`punktfunk_core::hud::StatsSnapshot::picture`]). Poll ~1 Hz; each call closes
 /// the window. Not android-gated — pure `jni` + connector reads, so it links on the host build too.
 #[unsafe(no_mangle)]
 #[allow(clippy::too_many_arguments)]
@@ -429,6 +430,8 @@ pub extern "system" fn Java_io_unom_punktfunk_kit_NativeBridge_nativeVideoStatsL
             });
         }
         h.stats.keep_sample(sample_of(&s, judder));
+        let decoded = h.decoded_size.load(std::sync::atomic::Ordering::Relaxed);
+        s.picture = super::unpack_surface_size(decoded).map(|(pw, ph)| (pw as u32, ph as u32));
         let lines = hud::format(&s, StatsVerbosity::from_index(tier.max(0) as u32), advanced);
         env.new_string(hud::encode_lines(&lines))
     })

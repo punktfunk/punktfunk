@@ -8,7 +8,7 @@
     "crates/client/pf-client-core": 15,
     "crates/client/pf-client-video": 19,
     "crates/client/pf-console-ui": 1,
-    "crates/client/punktfunk-ffi": 106,
+    "crates/client/punktfunk-ffi": 107,
     "crates/codec/pf-libva": 7,
     "crates/codec/pf-v4l2": 4,
     "crates/codec/pf-vkdecode": 5,

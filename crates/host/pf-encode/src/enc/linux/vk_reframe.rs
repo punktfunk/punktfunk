@@ -29,7 +29,7 @@ struct Slot {
 }
 
 #[derive(Default)]
-pub(super) struct Reframe {
+pub(crate) struct Reframe {
     crop: [u32; 4],
     out: (u32, u32),
     pipe: vk::Pipeline,
@@ -41,7 +41,7 @@ pub(super) struct Reframe {
 
 impl Reframe {
     /// Build the stage for `slots` ring slots. On error everything built so far is released.
-    pub(super) unsafe fn new(
+    pub(crate) unsafe fn new(
         device: &ash::Device,
         mem_props: &vk::PhysicalDeviceMemoryProperties,
         crop: [u32; 4],
@@ -150,7 +150,7 @@ impl Reframe {
     }
 
     /// Whether a `width × height` capture holds the crop.
-    pub(super) fn covers(&self, width: u32, height: u32) -> bool {
+    pub(crate) fn covers(&self, width: u32, height: u32) -> bool {
         let [x, y, w, h] = self.crop;
         x + w <= width && y + h <= height
     }
@@ -161,7 +161,7 @@ impl Reframe {
     /// `src`; `idle` fills that binding where no pass reads it. Returns the slot's picture,
     /// left `SHADER_READ_ONLY_OPTIMAL` for the CSC.
     #[allow(clippy::too_many_arguments)]
-    pub(super) unsafe fn record(
+    pub(crate) unsafe fn record(
         &self,
         device: &ash::Device,
         cmd: vk::CommandBuffer,
@@ -342,7 +342,7 @@ impl Reframe {
     }
 
     /// Release everything. The device must be idle for this stage; null handles are skipped.
-    pub(super) unsafe fn destroy(&mut self, device: &ash::Device) {
+    pub(crate) unsafe fn destroy(&mut self, device: &ash::Device) {
         for s in self.slots.drain(..) {
             s.tmp.destroy(device);
             s.dst.destroy(device);

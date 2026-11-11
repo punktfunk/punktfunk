@@ -70,7 +70,7 @@ mod windows {
         pub(crate) fn open_driver_encoder(
             _plan: &crate::session_plan::SessionPlan,
             _capturer: &dyn crate::capture::Capturer,
-            _size: (u32, u32),
+            _framing: punktfunk_core::video_fit::Reframe,
             _fps: u32,
             _bitrate_bps: u64,
             _bit_depth: u8,

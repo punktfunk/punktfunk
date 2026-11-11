@@ -10,8 +10,8 @@ use super::cursor::settle_portal_cursor;
 #[cfg(target_os = "linux")]
 use super::pipeline::reattach_pipeline;
 use super::pipeline::{
-    build_pipeline, build_pipeline_with_retry, is_permanent_build_error, open_session_encoder,
-    BuildRequest, Pipeline,
+    build_pipeline, build_pipeline_with_retry, is_permanent_build_error, open_session_encoder_with,
+    rate_at_encoded, BuildRequest, Pipeline,
 };
 use super::rebuild_plan::{
     self, Build, DisplayChange, Rate, RebuildAsk, RebuildFacts, RebuildPlan, Screens, Tell,
@@ -319,7 +319,7 @@ impl StreamState {
     /// build. The live mode asked again still tells the control task what is delivered (S5-6).
     pub(super) fn rebuild(&mut self, ask: RebuildAsk) -> Result<Rebuilt> {
         let Some(plan) = rebuild_plan::plan(&ask, &self.rebuild_facts()) else {
-            if let RebuildAsk::Mode(asked) = ask {
+            if let RebuildAsk::Mode(asked, _) = ask {
                 self.publish_delivered_mode(asked);
             }
             return Ok(Rebuilt::Unchanged);
@@ -355,8 +355,9 @@ impl StreamState {
         }
     }
 
-    /// Snapshot what the plan changes, take the ask's payload, and apply its display change: a
-    /// switch's env, route and cursor plan, or a codec's.
+    /// Snapshot what the plan changes, take the ask's payload — a mode ask's view goes into the
+    /// session plan — and apply its display change: a switch's env, route and cursor plan, or a
+    /// codec's.
     fn prepare(&mut self, plan: &RebuildPlan, ask: RebuildAsk) -> Prepared {
         let d = &self.display;
         let mut prep = Prepared {
@@ -386,8 +387,9 @@ impl StreamState {
                 }
                 prep.launch = sw.launch;
             }
-            RebuildAsk::Mode(new_mode) => {
-                tracing::info!(?new_mode, "rebuilding pipeline for mode switch")
+            RebuildAsk::Mode(new_mode, view) => {
+                tracing::info!(?new_mode, ?view, "rebuilding pipeline for mode switch");
+                self.plan.reframe_to = view.map(|v| (punktfunk_core::video_fit::VideoFit::Fit, v));
             }
             RebuildAsk::TopologyReassert(_) => tracing::info!(
                 "exclusive-topology eviction bounced the virtual display's modes — rebuilding \
@@ -480,7 +482,7 @@ impl StreamState {
             }
         }
         match (&plan.build, plan.display) {
-            (Build::Encoder, _) => self.build_encoder(plan),
+            (Build::Encoder, _) => self.build_encoder(plan, crate::encode::open_video),
             (Build::CaptureLoss, _) => {
                 let pipe = self.build_after_loss(prep.keepalive.take())?;
                 Ok(Built::pipeline(pipe, None))
@@ -510,22 +512,39 @@ impl StreamState {
         }
     }
 
-    /// The encoder alone, on the live capture at the delivered refresh, at the plan's rate.
-    fn build_encoder(&mut self, plan: &RebuildPlan) -> Result<Built> {
+    /// The encoder alone, on the live capture at the delivered refresh, through `open_video`, at
+    /// the plan's rate. A rate the plan priced follows the size the encoder opened at
+    /// ([`rate_at_encoded`]), as a full build's does; an asked one stands.
+    fn build_encoder(
+        &mut self,
+        plan: &RebuildPlan,
+        open_video: impl FnMut(
+            &crate::encode::Resolved,
+            crate::encode::OpenParams,
+        ) -> Result<Box<dyn crate::encode::Encoder>>,
+    ) -> Result<Built> {
         let ed = self.enc_now();
         let wire_seq_base = self.clock.next_au();
-        let (enc, reframe) = open_session_encoder(
+        let priced = self.plan.picture(plan.mode);
+        let (auto, cap) = (self.facts.bitrate_auto, self.facts.knobs.pyrowave_max_kbps);
+        let kbps_for = |w, h| match plan.epilogue.rate {
+            Rate::Built => rate_at_encoded(plan.rate_kbps, auto, priced, (w, h), &self.plan, cap),
+            Rate::Applied => plan.rate_kbps,
+        };
+        let (enc, reframe) = open_session_encoder_with(
             &self.facts.encoder,
             &self.plan,
             &*self.live.capturer,
             &self.live.frame,
             (self.facts.negotiated.width, self.facts.negotiated.height),
             self.delivered_mode().refresh_hz,
-            |_, _| ed.enc_kbps(plan.rate_kbps) as u64 * 1000,
+            |w, h| ed.enc_kbps(kbps_for(w, h)) as u64 * 1000,
             self.bit_depth,
             self.facts.client_hdr,
             wire_seq_base,
+            open_video,
         )?;
+        let rate_kbps = kbps_for(reframe.out.0, reframe.out.1);
         let next = Next::Encoder {
             enc,
             reframe,
@@ -533,7 +552,7 @@ impl StreamState {
         };
         Ok(Built {
             next,
-            rate_kbps: plan.rate_kbps,
+            rate_kbps,
             vd: None,
         })
     }
@@ -731,14 +750,15 @@ impl StreamState {
         }
     }
 
-    /// The client's latest accepted mode: in place on Windows IDD-push, else a full rebuild; the
-    /// mode the session already runs rebuilds nothing. A failed rebuild stays on the current
-    /// mode and tells the client so. PyroWave re-resolves its pin for the new mode.
+    /// The client's latest accepted mode and view: in place on Windows IDD-push, else a full
+    /// rebuild; a new view alone reopens the encoder; the mode and view the session already runs
+    /// rebuild nothing. A failed rebuild stays on what runs and tells the client so. PyroWave
+    /// re-resolves its pin for the new picture.
     pub(super) fn on_mode_switch(&mut self) {
-        let Some(new_mode) = self.ends.reconfig.try_iter().last() else {
+        let Some((new_mode, view)) = self.ends.reconfig.try_iter().last() else {
             return;
         };
-        if let Ok(Rebuilt::Kept(e)) | Err(e) = self.rebuild(RebuildAsk::Mode(new_mode)) {
+        if let Ok(Rebuilt::Kept(e)) | Err(e) = self.rebuild(RebuildAsk::Mode(new_mode, view)) {
             tracing::warn!(error = %format!("{e:#}"), ?new_mode,
                 "mode-switch rebuild failed — staying on the current mode");
         }
@@ -965,7 +985,8 @@ mod tests {
             run: |f| {
                 let (tx, rx) = std::sync::mpsc::channel();
                 f.st.ends.reconfig = rx;
-                tx.send(f.st.live.cur_mode).expect("the loop's end is open");
+                tx.send((f.st.live.cur_mode, None))
+                    .expect("the loop's end is open");
                 f.st.on_mode_switch();
             },
             gap: Some(false),
@@ -979,7 +1000,7 @@ mod tests {
             run: |f| {
                 let (tx, rx) = std::sync::mpsc::channel();
                 f.st.ends.reconfig = rx;
-                tx.send(wide()).expect("the loop's end is open");
+                tx.send((wide(), None)).expect("the loop's end is open");
                 f.st.on_mode_switch();
             },
             gap: Some(true),
@@ -1208,7 +1229,7 @@ mod tests {
         },
         PerformRow {
             name: "mode switch: the mode adopted, the delivered one told",
-            ask: || RebuildAsk::Mode(mode(WIDE, 60)),
+            ask: || RebuildAsk::Mode(mode(WIDE, 60), None),
             setup: |_| {},
             script: Script::Pipeline(WIDE, 20_000),
             built: Some(true),
@@ -1292,6 +1313,40 @@ mod tests {
             frame_open: false,
         },
         PerformRow {
+            name: "a view alone: the encoder reopens, the client hears the mode it holds",
+            ask: || RebuildAsk::Mode(ASKED, Some((8, 8))),
+            setup: |_| {},
+            script: Script::Encoder,
+            built: Some(true),
+            compositor: Compositor::Kwin,
+            mode: ASKED,
+            rate_kbps: 20_000,
+            told: &[(DELIVERED, false), (DELIVERED, true)],
+            codec: None,
+            rate_told: None,
+            keyframes: 0,
+            gap: true,
+            seen_reassert_gen: Some(9),
+            frame_open: false,
+        },
+        PerformRow {
+            name: "failed view change: the view kept, the mode told as a correction",
+            ask: || RebuildAsk::Mode(ASKED, Some((8, 8))),
+            setup: |_| {},
+            script: Script::Fails,
+            built: Some(false),
+            compositor: Compositor::Kwin,
+            mode: ASKED,
+            rate_kbps: 20_000,
+            told: &[(DELIVERED, true)],
+            codec: None,
+            rate_told: None,
+            keyframes: 0,
+            gap: true,
+            seen_reassert_gen: Some(9),
+            frame_open: true,
+        },
+        PerformRow {
             name: "bitrate: the rate runs, the epoch stays, the frame closes on commit",
             ask: || RebuildAsk::Bitrate(10_000),
             setup: |_| {},
@@ -1327,7 +1382,7 @@ mod tests {
         },
         PerformRow {
             name: "failed mode switch: the mode kept is told as a correction (44692a0dc)",
-            ask: || RebuildAsk::Mode(mode(WIDE, 60)),
+            ask: || RebuildAsk::Mode(mode(WIDE, 60), None),
             setup: |_| {},
             script: Script::Fails,
             built: Some(false),
@@ -1491,6 +1546,59 @@ mod tests {
                 "{name}: the new display's launch"
             );
         }
+    }
+
+    /// A mode ask's view is in the plan its build opens on; a codec ask keeps it; a later ask
+    /// without one clears it.
+    #[test]
+    fn the_view_rides_the_mode_ask_into_the_plan() {
+        use punktfunk_core::video_fit::VideoFit;
+        let mut f = super::super::swap::tests::fake();
+        let keyframes = Arc::new(AtomicU32::new(0));
+        let mut opened_for = Vec::new();
+        for ask in [
+            RebuildAsk::Mode(ASKED, Some((8, 8))),
+            RebuildAsk::Format(crate::encode::Codec::H264),
+            RebuildAsk::Mode(ASKED, None),
+        ] {
+            let plan = rebuild_plan::plan(&ask, &f.st.rebuild_facts()).expect("a rebuild");
+            let built = f.st.perform(plan, ask, |st, plan, _, _| {
+                opened_for.push(st.plan.reframe_to);
+                script(Script::Encoder, plan.rate_kbps, &keyframes)
+            });
+            assert!(matches!(built, Ok(Rebuilt::Built)));
+        }
+        let view = Some((VideoFit::Fit, (8, 8)));
+        assert_eq!(opened_for, [view, view, None]);
+        assert_eq!(f.st.plan.codec, crate::encode::Codec::H264);
+    }
+
+    /// A new view whose encoder cannot frame it runs PyroWave at the size it opened at, and
+    /// opens at that rate.
+    #[test]
+    fn an_encoder_that_cannot_frame_the_view_reprices_pyrowave() {
+        use crate::native::bitrate::pyrowave_mode_kbps;
+        let mut f = super::super::swap::tests::fake();
+        let full = mode((1920, 1080), 60);
+        f.st.live.frame = frame((1920, 1080));
+        f.st.live.cur_mode = full;
+        f.st.plan.codec = crate::encode::Codec::PyroWave;
+        f.st.plan.pyrowave_bpp = 4.0;
+        let ask = RebuildAsk::Mode(full, Some((1280, 720)));
+        let plan = rebuild_plan::plan(&ask, &f.st.rebuild_facts()).expect("an encoder rebuild");
+        let at_mode = pyrowave_mode_kbps(None, &full, &f.st.plan, None);
+        assert!(plan.rate_kbps < at_mode, "the plan priced the view");
+        let enc_bps = u64::from(f.st.enc_now().enc_kbps(at_mode)) * 1000;
+        let mut opened = Vec::new();
+        let built = f.st.perform(plan, ask, |st, plan, _, _| {
+            st.build_encoder(plan, |_, p| {
+                opened.push(((p.width, p.height), p.bitrate_bps));
+                Ok(Box::new(super::super::swap::tests::NullEnc))
+            })
+        });
+        assert!(matches!(built, Ok(Rebuilt::Built)));
+        assert_eq!(f.st.live.bitrate_kbps, at_mode);
+        assert_eq!(opened.last(), Some(&((1920, 1080), enc_bps)));
     }
 
     use crate::vdisplay::Compositor;

@@ -15,7 +15,7 @@ use std::time::Duration;
 
 use pf_driver_proto::encode::DRV_STATUS_OPENED;
 use pf_driver_proto::encode::au::{self, AuHeader};
-use pf_driver_proto::encode::{self as wire, SetEncodeReply};
+use pf_driver_proto::encode::{self as wire, SetEncodeReply, SetEncodeRequest};
 use pf_encode_session::drive::{Drive, MAX_INFLIGHT, Rates};
 use pf_encode_session::open::open_listed;
 use pf_encode_session::section::SessionThread;
@@ -97,10 +97,12 @@ fn block_after() -> Option<u64> {
 }
 
 /// The thread body: open, build or reuse the monitor's pool, report, then drive until stopped.
-/// The pool is reused — retained slot included — when it already fits this session's device,
-/// size and input kind; anything else is a fresh pool installed on the monitor. The session
-/// opens on the pool's newest frame or the monitor's seed, and its sequence is in the header
-/// before the reply. The open line names the frame path (`pool` or `bypass`) and that frame.
+/// The backend opens at the request's encode size; the pool takes the monitor's surfaces and is
+/// reused — retained slot included — when it already fits this session's device, framing and
+/// input kind; anything else is a fresh pool installed on the monitor. The session opens on the
+/// pool's newest frame or the monitor's seed, and its sequence and `frames_input` are in the
+/// header before the reply. The open line names the frame path (`pool` or `bypass`), the
+/// framing when it scales, and that frame.
 fn run(stop: HANDLE, ctx: ThreadCtx, live: Arc<AtomicBool>) {
     let _mmcss = Mmcss::distribution("encode");
     let section = &ctx.session.section;
@@ -117,7 +119,16 @@ fn run(stop: HANDLE, ctx: ThreadCtx, live: Arc<AtomicBool>) {
         Ok(d) => d,
         Err(f) => return fail(wire::SET_ENCODE_NO_DEVICE, f),
     };
-    let opened = open_listed(&ctx.session.request, &adapter, &device, &crate::log::knob);
+    // `set_encode` refused a request without one; a reset reopens the same request.
+    let Some(framing) = ctx.session.request.framing() else {
+        return fail(wire::SET_ENCODE_POOL, (-2, "framing"));
+    };
+    let request = SetEncodeRequest {
+        width: framing.encode.0,
+        height: framing.encode.1,
+        ..ctx.session.request
+    };
+    let opened = open_listed(&request, &adapter, &device, &crate::log::knob);
     let (mut enc, spec, reply) = match opened {
         Ok(x) => x,
         Err(reply) => {
@@ -130,22 +141,21 @@ fn run(stop: HANDLE, ctx: ThreadCtx, live: Arc<AtomicBool>) {
     if !live.load(Ordering::Acquire) {
         return;
     }
-    let size = (spec.width, spec.height);
     // `PFVD_POOL_BYPASS` (machine environment, read per open): `0` copies every frame.
     let bypass = wire::zero_copy(
         spec.backend,
-        spec.kind.composed(),
+        spec.kind.composed() && !framing.scales(),
         crate::log::knob("PFVD_POOL_BYPASS").as_deref(),
     );
     let reused = monitor
         .pool()
-        .filter(|p| p.matches(&ctx.device, spec.kind, size, spec.full_range, bypass));
+        .filter(|p| p.matches(&ctx.device, spec.kind, framing, spec.full_range, bypass));
     let pool = match reused {
         Some(p) => p,
         None => match Pool::build(
             &ctx.device,
             spec.kind,
-            size,
+            framing,
             spec.full_range,
             monitor.source_seq.clone(),
             monitor.cursor_cell(),
@@ -169,11 +179,16 @@ fn run(stop: HANDLE, ctx: ThreadCtx, live: Arc<AtomicBool>) {
         .and_then(|m| m.refresh_rates.first().copied())
         .unwrap_or(spec.fps);
     drop(monitor);
+    let scaled = framing.scales().then(|| {
+        let (w, h) = framing.source;
+        format!(" from {:?} of {w}x{h}", framing.crop)
+    });
     dbglog!(
-        "[pf-vd] encode: backend {} open {}x{} {:?} mode={} first_frame={} (target {})",
+        "[pf-vd] encode: backend {} open {}x{}{} {:?} mode={} first_frame={} (target {})",
         reply.backend_opened,
         spec.width,
         spec.height,
+        scaled.unwrap_or_default(),
         spec.kind,
         if pool.bypass() { "bypass" } else { "pool" },
         first.map_or("none".into(), |s| format!("seq {s}")),
@@ -189,6 +204,7 @@ fn run(stop: HANDLE, ctx: ThreadCtx, live: Arc<AtomicBool>) {
         reply.backend_opened,
     );
     section.store_u32(offset_of!(AuHeader, encoder_state), au::ENCODER_OPEN);
+    section.store_u32(offset_of!(AuHeader, frames_input), 1);
     // The rate the backend opened at seeds the header stamp, so a retarget the backend
     // declines before it ever accepts one still reads back as the rate that is encoding.
     let opened_kbps = reply.applied_bitrate_kbps;

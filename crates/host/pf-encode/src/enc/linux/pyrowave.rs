@@ -8,7 +8,8 @@
 //! (DRM modifiers, cached per buffer) or CPU RGB; a CSC shader writes luma + interleaved
 //! chroma planes that pyrowave samples via R/G view swizzles — `rgb2yuv*.comp`, picked by
 //! chroma (4:2:0 / 4:4:4), depth (R8/RG8 or R16/RG16 `code << 6`), and colour (BT.709
-//! or BT.2020/PQ, full range). Ingest, CSC and encode record into one command buffer
+//! or BT.2020/PQ, full range). The host's crop and scale (`vk_reframe`) runs ahead of the CSC
+//! on either input. Ingest, CSC and encode record into one command buffer
 //! (`pyrowave_device_set_command_buffer`).
 //!
 //! The AU is one pyrowave packet (boundary = buffer size), `keyframe = true`, through
@@ -20,6 +21,7 @@
 // Every unsafe block in this module carries a `// SAFETY:` proof (parent module enforces it).
 
 use super::vk_csc::{bind_rgb, csc_layout, csc_push, CursorPlane, WordsCache};
+use super::vk_reframe::Reframe;
 use super::vk_util::{
     color_range, import_failure_feeds_latch, import_rgb_dmabuf, imported_acquire_barrier,
     imported_release_barrier, make_host_buffer, make_plain_image, pixel_to_vk, reject_dmabuf,
@@ -478,8 +480,8 @@ struct Slot {
     y: VkImageAlloc,
     uv: VkImageAlloc,
     cursor: CursorPlane,
-    /// CPU-input staging, lazily (re)created on format change.
-    cpu_img: Option<(VkImageAlloc, vk::Format)>,
+    /// CPU-input staging at the capture's size, lazily (re)created on a format or size change.
+    cpu_img: Option<(VkImageAlloc, vk::Format, (u32, u32))>,
     cpu_stage: Option<(VkBufferAlloc, u64)>,
 }
 
@@ -557,6 +559,8 @@ pub struct PyroWaveEncoder {
     csc_dsl: vk::DescriptorSetLayout,
     csc_pool: vk::DescriptorPool,
     sampler: vk::Sampler,
+    /// The host's crop and scale ahead of the CSC ([`Encoder::set_input_crop`]).
+    reframe: Option<Reframe>,
 
     // Per-buffer, not per-slot: it retains the VkImage/VkDeviceMemory per inode, which is
     // what makes two slots sampling the same imported buffer safe.
@@ -1005,6 +1009,7 @@ impl PyroWaveEncoder {
             csc_dsl: vk::DescriptorSetLayout::null(),
             csc_pool: vk::DescriptorPool::null(),
             sampler: vk::Sampler::null(),
+            reframe: None,
             import_cache: ImportCache::default(),
             words: WordsCache::default(),
             cpu_ingest: CpuIngest::default(),
@@ -1366,9 +1371,9 @@ impl PyroWaveEncoder {
         )
     }
 
-    /// Stage a CPU frame as 4-byte pixels ([`CpuIngest`]) in the slot's upload buffer.
-    /// Per-slot: a host write while the previous frame's copy is still pending would race
-    /// that copy.
+    /// Stage a CPU frame as 4-byte pixels ([`CpuIngest`]) in the slot's upload buffer, sized
+    /// to the capture (a reframed session's is larger than the session). Per-slot: a host
+    /// write while the previous frame's copy is still pending would race that copy.
     unsafe fn ensure_cpu_rgb(
         &mut self,
         slot: usize,
@@ -1378,11 +1383,11 @@ impl PyroWaveEncoder {
         let fmt = pixel_to_vk(staged.fmt).context("unsupported CPU pixel format")?;
         let bytes = staged.bytes;
         let dev = self.device.clone();
-        let (w, h) = (self.width, self.height);
+        let (w, h) = (frame.width, frame.height);
         // Widen before the multiply: `w * h * 4` wraps in u32 once `w * h > 2^30`.
         let need = w as u64 * h as u64 * 4;
-        if self.slots[slot].cpu_img.map(|(_, f)| f) != Some(fmt) {
-            if let Some((old, _)) = self.slots[slot].cpu_img.take() {
+        if self.slots[slot].cpu_img.map(|(_, f, size)| (f, size)) != Some((fmt, (w, h))) {
+            if let Some((old, ..)) = self.slots[slot].cpu_img.take() {
                 old.destroy(&dev);
             }
             let img = make_plain_image(
@@ -1393,7 +1398,7 @@ impl PyroWaveEncoder {
                 h,
                 vk::ImageUsageFlags::SAMPLED | vk::ImageUsageFlags::TRANSFER_DST,
             )?;
-            self.slots[slot].cpu_img = Some((img, fmt));
+            self.slots[slot].cpu_img = Some((img, fmt, (w, h)));
         }
         if self.slots[slot]
             .cpu_stage
@@ -1418,8 +1423,8 @@ impl PyroWaveEncoder {
         Ok(self.slots[slot].cpu_img.unwrap().0.view)
     }
 
-    /// Record and submit ingest, CSC and encode. The in-flight entry owns any raw
-    /// source hold until [`wait_and_packetize`] retires its fence.
+    /// Record and submit ingest, the reframe when set, CSC and encode. The in-flight entry
+    /// owns any raw source hold until [`wait_and_packetize`] retires its fence.
     unsafe fn submit_frame(&mut self, frame: &CapturedFrame, t0: std::time::Instant) -> Result<()> {
         // A failed `reset()` leaves the encoder destroyed and null. A null here is a
         // use-after-free inside pyrowave, so fail loudly.
@@ -1429,10 +1434,14 @@ impl PyroWaveEncoder {
         );
         let dev = self.device.clone();
         let (w, h) = (self.width, self.height);
-        // No alignment: a mismatch smears (`rgb2yuv.comp` clamps; CPU uploads min(len,need)).
-        // A PipeWire size change is not always transient (`reset()` reopens at the same
-        // dimensions).
-        if frame.width != w || frame.height != h {
+        // No alignment: a mismatch smears (`rgb2yuv.comp` clamps). A PipeWire size change is
+        // not always transient (`reset()` reopens at the same dimensions). A reframed session
+        // needs only a capture that holds its crop.
+        let fits = match &self.reframe {
+            Some(r) => r.covers(frame.width, frame.height),
+            None => frame.width == w && frame.height == h,
+        };
+        if !fits {
             bail!(
                 "pyrowave: frame {}x{} != session mode {w}x{h} — refusing a mismatched encode \
                  source",
@@ -1525,8 +1534,8 @@ impl PyroWaveEncoder {
                                     .layer_count(1),
                             )
                             .image_extent(vk::Extent3D {
-                                width: w,
-                                height: h,
+                                width: frame.width,
+                                height: frame.height,
                                 depth: 1,
                             })],
                     );
@@ -1546,6 +1555,27 @@ impl PyroWaveEncoder {
                     (view, None, None)
                 }
                 _ => bail!("pyrowave: unsupported FramePayload (need Dmabuf or Cpu RGB)"),
+            };
+            // A reframed session converts the scaled crop; the cursor went in at source size, and
+            // the reframe is what read a LINEAR source's words.
+            let idle = self.words.idle();
+            let (cursor_pc, rgb_view, lin) = match &self.reframe {
+                Some(r) => (
+                    [0; 4],
+                    r.record(
+                        &dev,
+                        cmd,
+                        slot,
+                        self.sampler,
+                        rgb_view,
+                        self.slots[slot].cursor.img.view,
+                        cursor_pc,
+                        lin,
+                        idle,
+                    ),
+                    None,
+                ),
+                None => (cursor_pc, rgb_view, lin),
             };
             // This slot's previous frame was retired before `submit` chose it.
             bind_rgb(
@@ -1597,7 +1627,8 @@ impl PyroWaveEncoder {
             } else {
                 dev.cmd_dispatch(cmd, (w / 2).div_ceil(8), (h / 2).div_ceil(8), 1);
             }
-            // The CSC was the source's last read: hand it back to the producer's family.
+            // The CSC, or the reframe ahead of it, was the source's last read: hand it back to
+            // the producer's family.
             if let Some(img) = imported {
                 let rel = imported_release_barrier(
                     img,
@@ -1905,8 +1936,43 @@ impl Encoder for PyroWaveEncoder {
         EncoderCaps {
             blends_cursor: true,
             chroma_444: self.chroma444,
+            // Both inputs, dmabuf and CPU upload, reach the CSC as RGB the reframe reads.
+            downscales_input: true,
+            crops_input: true,
             ..EncoderCaps::default()
         }
+    }
+
+    fn set_input_crop(&mut self, rect: [u32; 4]) -> Result<()> {
+        let [_, _, w, h] = rect;
+        anyhow::ensure!(
+            w >= self.width && h >= self.height,
+            "pyrowave: a {w}x{h} crop would upscale into the {}x{} session",
+            self.width,
+            self.height
+        );
+        // SAFETY: waiting out every submission first means no queued command reads the old
+        // stage; the new one is fresh handles on this encoder's live device, released here or
+        // in `Drop`.
+        unsafe {
+            if let Some(mut old) = self.reframe.take() {
+                self.device.device_wait_idle()?;
+                old.destroy(&self.device);
+            }
+            self.reframe = Some(Reframe::new(
+                &self.device,
+                &self.mem_props,
+                rect,
+                (self.width, self.height),
+                self.slots.len(),
+            )?);
+        }
+        tracing::info!(
+            crop = ?rect,
+            out = ?(self.width, self.height),
+            "pyrowave: cropping and scaling ahead of the CSC"
+        );
+        Ok(())
     }
 
     fn poll(&mut self) -> Result<Option<EncodedFrame>> {
@@ -2042,11 +2108,14 @@ impl Drop for PyroWaveEncoder {
                 }
             }
             pw::pyrowave_device_destroy(self.pw_dev);
+            if let Some(mut r) = self.reframe.take() {
+                r.destroy(&self.device);
+            }
             self.import_cache.clear(&self.device);
             self.words.destroy(&self.device);
             // Failed open leaves a partial prefix; `vkDestroy*(VK_NULL_HANDLE)` is a no-op.
             for sl in std::mem::take(&mut self.slots) {
-                if let Some((img, _)) = sl.cpu_img {
+                if let Some((img, ..)) = sl.cpu_img {
                     img.destroy(&self.device);
                 }
                 if let Some((stage, _)) = sl.cpu_stage {

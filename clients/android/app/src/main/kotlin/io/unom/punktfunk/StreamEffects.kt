@@ -307,13 +307,15 @@ internal fun rememberStreamedGame(handle: Long, host: KnownHost?, ringOpen: Bool
 /**
  * The background keep-alive (Settings › General): its ongoing notification, the leave-the-app
  * watch, and the away countdown. A null [keepAliveSpan] means leaving the app ends the session.
- * [endAway] ends it from a path that fires while the app is already away.
+ * [decoded] is [rememberDecodedSize]'s. [endAway] ends it from a path that fires while the app
+ * is already away.
  */
 @Composable
 internal fun KeepAliveEffects(
     session: ActiveSession,
     host: KnownHost?,
     keepAliveSpan: Long?,
+    decoded: IntArray?,
     endAway: (deliberate: Boolean) -> Unit,
     onSessionEnded: (SessionEndReason) -> Unit,
 ) {
@@ -322,14 +324,16 @@ internal fun KeepAliveEffects(
     val keepAlive = keepAliveSpan != null
     var away by remember(handle) { mutableStateOf(false) }
     val startedAt = remember(handle) { System.currentTimeMillis() }
-    // What the notification says. All of it is fixed at the handshake, so it is read once.
+    // What the notification says. Its size is the decoded picture's once one arrives: a host that
+    // scales sends less than its mode.
     val noteHost = host?.name?.takeIf { it.isNotEmpty() }
         ?: context.getString(AppR.string.app_name)
     val noteTitle = session.launchHold?.game?.title
-    val modeLine = remember(handle) {
+    val modeLine = remember(handle, decoded) {
         val mode = NativeBridge.nativeVideoSize(handle)
-        val w = mode?.getOrNull(0) ?: 0
-        val h = mode?.getOrNull(1) ?: 0
+        val size = decoded ?: mode
+        val w = size?.getOrNull(0) ?: 0
+        val h = size?.getOrNull(1) ?: 0
         val hz = mode?.getOrNull(2) ?: 0
         listOfNotNull(
             if (w > 0 && h > 0) "$w×$h" else null,
@@ -338,6 +342,10 @@ internal fun KeepAliveEffects(
         ).joinToString(" · ")
     }
     fun note(deadline: Long?) = StreamNote(noteHost, noteTitle, modeLine, startedAt, deadline)
+    // A size that lands after the post. Away, the notification counts down and names none.
+    LaunchedEffect(modeLine) {
+        if (!away) StreamKeepAliveService.update(context, note(null))
+    }
 
     // The notification goes up when the session starts: an app already in the background may
     // not start a foreground service, and without it the OS freezes the process, audio and QUIC

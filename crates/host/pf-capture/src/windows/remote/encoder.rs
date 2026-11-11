@@ -75,7 +75,9 @@ fn hdr_meta_bytes(meta: Option<pf_frame::HdrMeta>) -> [u8; 28] {
     meta.map_or([0; 28], bytemuck::cast)
 }
 
-fn caps_from_wire(w: &encode::EncoderCapsWire) -> EncoderCaps {
+/// `frames` is the header's `frames_input`: only a driver that stamps it scaled what it was
+/// asked to. A v9 driver and a capture worker encode the surface at its own size.
+fn caps_from_wire(w: &encode::EncoderCapsWire, frames: bool) -> EncoderCaps {
     EncoderCaps {
         supports_rfi: w.supports_rfi != 0,
         chroma_444: w.chroma_444 != 0,
@@ -83,9 +85,8 @@ fn caps_from_wire(w: &encode::EncoderCapsWire) -> EncoderCaps {
         intra_refresh_recovery: w.intra_refresh_recovery != 0,
         intra_refresh_period: w.intra_refresh_period,
         blends_cursor: w.blends_cursor != 0,
-        // The driver encodes what DWM composes at the monitor's own size.
-        downscales_input: false,
-        crops_input: false,
+        downscales_input: frames,
+        crops_input: frames,
     }
 }
 
@@ -140,6 +141,9 @@ fn clock_hold(backend_opened: u32) -> Option<super::clock_boost::ClockBoost> {
 /// a section in its process, stamp the header, send `SET_ENCODE`. Structured failure:
 /// [`DriverEncodeOpenError`] when the far side walked the list and none opened, else the
 /// delivery error. There is no fallback.
+///
+/// The framing rides the request's v10 tail, after the surface size a far side that reads no
+/// framing opens at; caps say whether it framed ([`caps_from_wire`]).
 pub(crate) fn open(
     t: &dyn Transport,
     params: &DriverEncodeParams,
@@ -188,6 +192,9 @@ pub(crate) fn open(
         // The host process carries `host.env`, so its environment is the knob source; the
         // driver reads these instead of WUDFHost's own (machine) environment.
         knobs: pf_encode_core::knobs::dev_override::from_env(),
+        encode_width: params.encode_width,
+        encode_height: params.encode_height,
+        src_rect: params.src_rect,
     };
     let reply = match t.set_encode(&req) {
         Ok(r) => r,
@@ -225,10 +232,17 @@ pub(crate) fn open(
         });
         bail!("AU section header failed its layout gate after SET_ENCODE: {header:?}");
     }
-    let caps = caps_from_wire(&reply.caps);
+    let caps = caps_from_wire(&reply.caps, header.frames_input != 0);
+    let crop = match params.src_rect {
+        [0, 0, 0, 0] => [0, 0, params.width, params.height],
+        rect => rect,
+    };
     tracing::info!(
         target_id = target_id,
         backend = backend_name(reply.backend_opened),
+        size = ?(params.width, params.height),
+        ?crop,
+        encode = ?(params.encode_width, params.encode_height),
         ?caps,
         applied_kbps = reply.applied_bitrate_kbps,
         sdr_fp16 = params.sdr_fp16,
@@ -248,6 +262,7 @@ pub(crate) fn open(
         target_id,
         ctl,
         caps,
+        crop,
         applied_bps: u64::from(reply.applied_bitrate_kbps) * 1000,
         retarget_after: 0,
         hdr_meta: params.hdr_meta,
@@ -278,6 +293,8 @@ pub struct EncoderProxy {
     target_id: u32,
     ctl: EncodeCtlSender,
     caps: EncoderCaps,
+    /// The rectangle of each surface `SET_ENCODE` asked for.
+    crop: [u32; 4],
     /// The rate this side last asked for. It stands until the driver has published past
     /// [`Self::retarget_after`], because its stamp until then describes the rate before the ask.
     applied_bps: u64,
@@ -573,8 +590,15 @@ impl Encoder for EncoderProxy {
         // The driver owns its input ring.
     }
 
-    fn set_input_crop(&mut self, _rect: [u32; 4]) -> Result<()> {
-        // `crops_input` is false: the host never asks the driver to crop.
+    /// The far side framed at `SET_ENCODE`, so this only checks that `rect` is what the open
+    /// sent. Any other, or a far side that frames nothing, is refused.
+    fn set_input_crop(&mut self, rect: [u32; 4]) -> Result<()> {
+        if !self.caps.crops_input || rect != self.crop {
+            bail!(
+                "driver encode: frame {rect:?}: the encoder frames only {:?}, fixed at open",
+                self.crop
+            );
+        }
         Ok(())
     }
 
@@ -619,6 +643,43 @@ mod tests {
                 assert!(e.is_no_swap_chain(), "{e}");
             }
         }
+    }
+
+    /// A framed open keeps the surface's size where a v9 driver reads it and sends the framing
+    /// in the v10 tail. Only a far side that stamps `frames_input` reports that it frames, and
+    /// it takes no crop but the one the open sent.
+    #[test]
+    fn only_a_framing_driver_reports_that_it_frames() {
+        let crop = [0, 120, 3840, 1920];
+        for frames in [false, true] {
+            let (t, far) = fake::transport(EncoderSite::Driver);
+            far.lock().unwrap().frames_input = frames;
+            let params = DriverEncodeParams {
+                encode_width: 1920,
+                encode_height: 960,
+                src_rect: crop,
+                ..fake::params(3840, 2160, false, 0)
+            };
+            let mut enc = open(&t, &params, fake::clock::CLOCKS).expect("an encoder");
+            let req = far.lock().unwrap().set_encodes[0];
+            assert_eq!((req.width, req.height), (3840, 2160));
+            assert_eq!((req.encode_width, req.encode_height), (1920, 960));
+            assert_eq!(req.src_rect, crop);
+            let caps = enc.caps();
+            assert_eq!((caps.downscales_input, caps.crops_input), (frames, frames));
+            assert_eq!(enc.set_input_crop(crop).is_ok(), frames);
+            assert!(enc.set_input_crop([0, 0, 3840, 2160]).is_err());
+        }
+        // Unframed, the tail is zero: the request a v9 host sent.
+        let (t, far) = fake::transport(EncoderSite::Driver);
+        let params = fake::params(1920, 1080, false, 0);
+        let _enc = open(&t, &params, fake::clock::CLOCKS).expect("an encoder");
+        let req = far.lock().unwrap().set_encodes[0];
+        assert_eq!((req.width, req.height), (1920, 1080));
+        assert_eq!(
+            (req.encode_width, req.encode_height, req.src_rect),
+            (0, 0, [0; 4])
+        );
     }
 
     /// Every `Encoder` method is written here: this is a proxy, so an inherited default

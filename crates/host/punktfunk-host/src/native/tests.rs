@@ -1578,6 +1578,7 @@ fn plain_hello(
         profile: profile.map(Into::into),
         access_only: false,
         screens: Vec::new(),
+        view: None,
     }
 }
 

@@ -493,6 +493,17 @@ struct ConnectRequest {
     /// `FEATURE_STUDIO_RANGE` ask.
     #[serde(default)]
     studio_range: bool,
+    /// The size the picture is shown at when the mode is larger ([`ConnectParams::view`]);
+    /// `0`×`0` names none.
+    #[serde(default)]
+    view_width: u32,
+    #[serde(default)]
+    view_height: u32,
+}
+
+/// A `w`×`h` view, or `None` when either side is not positive.
+fn view_of(w: i64, h: i64) -> Option<(u32, u32)> {
+    Some((u32::try_from(w).ok()?, u32::try_from(h).ok()?)).filter(|&(w, h)| w > 0 && h > 0)
 }
 
 /// The request Kotlin's JSON names; `None` (logged) when it doesn't parse.
@@ -661,6 +672,8 @@ fn connect(req: ConnectRequest, prompts_unlock: bool, unlock: Option<ProfileUnlo
         preset_name,
         profile,
         studio_range,
+        view_width,
+        view_height,
     } = req;
     // Which shell asked, for the host's `handshake complete` line. Set before the dial: core reads
     // it once the host says it parses the block.
@@ -763,6 +776,7 @@ fn connect(req: ConnectRequest, prompts_unlock: bool, unlock: Option<ProfileUnlo
         // An older Qualcomm display shows full-range BT.709 as studio, so ask for studio SDR. The
         // decode path takes the range from the Welcome either way.
         studio_range,
+        view: view_of(view_width.into(), view_height.into()),
         // Handshake budget from Kotlin: ~10 s for a normal connect, ~185 s for "request access"
         // (the host parks the connection until the operator approves the device — see ConnectScreen).
         // No `cancel`: Kotlin drops the result (`Dial.cancelled`) rather than abort the dial — its
@@ -854,11 +868,14 @@ pub extern "system" fn Java_io_unom_punktfunk_kit_NativeBridge_nativeDisconnectQ
     })
 }
 
-/// Request an in-stream resolution switch without reconnecting.
+/// Request an in-stream resolution switch without reconnecting, shown at the `view_width` ×
+/// `view_height` view (`request_mode_view`); a side of `0` names none, which
+/// clears an earlier one at a new size and keeps it at the same size.
 ///
 /// Returns `false` for a missing session, nonpositive geometry, or a closed request channel.
 /// A concurrent close cannot invalidate the table-retained session during this enqueue.
 #[unsafe(no_mangle)]
+#[allow(clippy::too_many_arguments)]
 pub extern "system" fn Java_io_unom_punktfunk_kit_NativeBridge_nativeRequestMode(
     _env: EnvUnowned,
     _this: JObject,
@@ -866,6 +883,8 @@ pub extern "system" fn Java_io_unom_punktfunk_kit_NativeBridge_nativeRequestMode
     width: jint,
     height: jint,
     refresh_hz: jint,
+    view_width: jint,
+    view_height: jint,
 ) -> jboolean {
     jni_guard(false, || {
         if width <= 0 || height <= 0 || refresh_hz <= 0 {
@@ -874,14 +893,13 @@ pub extern "system" fn Java_io_unom_punktfunk_kit_NativeBridge_nativeRequestMode
         let Some(session) = SESSIONS.get(handle) else {
             return false;
         };
-        session
-            .client
-            .request_mode(Mode {
-                width: width as u32,
-                height: height as u32,
-                refresh_hz: refresh_hz as u32,
-            })
-            .is_ok()
+        let mode = Mode {
+            width: width as u32,
+            height: height as u32,
+            refresh_hz: refresh_hz as u32,
+        };
+        let view = view_of(view_width.into(), view_height.into());
+        session.client.request_mode_view(mode, view).is_ok()
     })
 }
 

@@ -1054,6 +1054,7 @@ pub(super) fn close_window(
         0,
     );
     let mut snap = c.hud_snapshot();
+    snap.picture = st.last_video;
     snap.decoder = st.facts.decoder.to_string();
     snap.hdr = hdr_shown(st.hdr, presenter.hdr_active(), st.hdr_untonemapped);
     snap.preset = st.preset.clone();

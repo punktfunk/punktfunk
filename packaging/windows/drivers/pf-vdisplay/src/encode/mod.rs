@@ -81,6 +81,7 @@ pub fn set_encode(owner: u32, req: &SetEncodeRequest) -> Result<SetEncodeReply, 
         && wire::codec::valid(req.codec)
         && req.width != 0
         && req.height != 0
+        && req.framing().is_some()
         && listed;
     if !valid {
         return Err(STATUS_INVALID_PARAMETER);

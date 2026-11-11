@@ -20,7 +20,8 @@ pub(super) struct SessionFacts {
     /// Session totals; this loop notes every encoder rate it adopts.
     pub(super) counters: Arc<crate::session_status::SessionCounters>,
     pub(super) conn: super::super::link::SessionLink,
-    /// The client's ask. Encoders fit to it; the display may deliver another size.
+    /// The client's ask at bring-up. A mirror's encoder fits to it; the display may deliver
+    /// another size.
     pub(super) negotiated: punktfunk_core::Mode,
     pub(super) bitrate_auto: bool,
     pub(super) audio_reserved_kbps: u32,
@@ -83,7 +84,7 @@ pub(super) struct LoopEnds {
     pub(super) inj_shared_tx: std::sync::mpsc::Sender<punktfunk_core::input::InputEvent>,
     #[cfg(target_os = "linux")]
     pub(super) inj_session_tx: Option<std::sync::mpsc::Sender<punktfunk_core::input::InputEvent>>,
-    pub(super) reconfig: std::sync::mpsc::Receiver<punktfunk_core::Mode>,
+    pub(super) reconfig: std::sync::mpsc::Receiver<crate::native::wiring::ModeAsk>,
     pub(super) keyframe: std::sync::mpsc::Receiver<()>,
     pub(super) rfi: std::sync::mpsc::Receiver<(u32, u32)>,
     pub(super) bitrate_rx: std::sync::mpsc::Receiver<u32>,

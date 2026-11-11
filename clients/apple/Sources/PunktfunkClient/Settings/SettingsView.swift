@@ -34,9 +34,9 @@ struct SettingsView: View {
     // windowed session instead streams at the window's native pixels (1:1, no scaling) so it stays
     // pixel-exact rather than the presenter resampling a fixed-mode frame into the window.
     @AppStorage(DefaultsKey.matchWindow) var matchWindow = SettingDefault.matchWindow
-    // Render-resolution multiplier: the host renders/encodes at chosen-resolution × this, and the
-    // presenter downscales (> 1 = supersampling for sharpness) or upscales (< 1 = a lighter host /
-    // link). 1.0 = Native (the prior behaviour).
+    // Render-resolution multiplier: the host renders at chosen-resolution × this. Above 1x the host
+    // or the presenter scales the picture down (supersampling for sharpness); below 1x the
+    // presenter upscales (a lighter host / link). 1.0 = Native.
     @AppStorage(DefaultsKey.renderScale) var renderScale = SettingDefault.renderScale
     @AppStorage(DefaultsKey.videoFit) var videoFit = SettingDefault.videoFit
     @AppStorage(DefaultsKey.screens) var screens = SettingDefault.screens

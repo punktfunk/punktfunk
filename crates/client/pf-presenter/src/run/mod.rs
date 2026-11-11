@@ -455,6 +455,8 @@ struct StreamState {
     resize_requested: Option<(u32, u32)>,
     /// Connector mode last shown in the HUD/title — a change refreshes both.
     shown_mode: Option<Mode>,
+    /// The picture size and refresh the window title names.
+    titled: Option<((u32, u32), u32)>,
     /// Scrim + spinner. Armed by [`resize_tick`](stream::resize_tick) when it requests a
     /// switch; cleared when a decoded frame reaches the target (or on timeout).
     resize_overlay: ResizeIndicator,
@@ -487,7 +489,8 @@ struct StreamState {
     /// The further screens' windows, empty unless the stream asked for screens.
     screens: screens::ScreenWindows,
     /// Launch params, kept for codec-fallback re-dial. Clone is at start, so a mid-session
-    /// accepted mode switch is not in here — the retry re-reads it from the connector.
+    /// accepted mode switch is not in here — the retry re-reads it from the connector. The
+    /// view of the last mode request is written back here.
     /// The latch grid rides by `Arc` (it is the presenter's). `force_software` does not:
     /// it is a per-session demote latch, and the retry replaces it.
     params: SessionParams,
@@ -526,7 +529,11 @@ fn run_inner(opts: SessionOpts, mut mode: ModeCtl) -> Result<Outcome> {
                 force_software.clone(),
                 sh.presenter.vulkan_decode(),
             );
-            sh.size_to_stream(params.mode);
+            sh.size_to_stream(
+                params
+                    .view
+                    .unwrap_or((params.mode.width, params.mode.height)),
+            );
             Some(sh.start_stream(params, force_software))
         }
         ModeCtl::Browse(_) => None,

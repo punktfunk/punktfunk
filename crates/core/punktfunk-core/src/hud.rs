@@ -411,6 +411,9 @@ pub struct StatsSnapshot {
     pub width: u32,
     pub height: u32,
     pub refresh_hz: u32,
+    /// The decoded picture's size, set by an embedder that knows it. A host that scales sends
+    /// less than `width`×`height`, and the mode line then leads with this.
+    pub picture: Option<(u32, u32)>,
     /// `H.264`, `HEVC`, `AV1` or `PyroWave`; empty when unknown.
     pub codec: String,
     pub bit_depth: u8,
@@ -1214,8 +1217,15 @@ fn text(role: Role, text: String) -> HudLine {
 }
 
 #[cfg(any(test, feature = "l10n"))]
-fn mode(s: &StatsSnapshot) -> String {
-    format!("{}×{}@{}", s.width, s.height, s.refresh_hz)
+fn mode(s: &StatsSnapshot) -> Vec<String> {
+    let host = (s.width, s.height);
+    match s.picture.filter(|&p| p != host) {
+        Some((w, h)) => vec![
+            format!("{w}×{h}@{}", s.refresh_hz),
+            m::overlay_host_renders(s.width, s.height),
+        ],
+        None => vec![format!("{}×{}@{}", s.width, s.height, s.refresh_hz)],
+    }
 }
 
 /// Why Automatic is running below where it was, while that still holds, and how often
@@ -1397,7 +1407,8 @@ fn advanced_lines(s: &StatsSnapshot, tier: StatsVerbosity) -> Vec<HudLine> {
         return out;
     }
     let detailed = tier == StatsVerbosity::Detailed;
-    let mut l1 = vec![mode(s), fps(s.received_fps()), mbps(s.mbps())];
+    let mut l1 = mode(s);
+    l1.extend([fps(s.received_fps()), mbps(s.mbps())]);
     if detailed {
         l1.extend(target(s));
         media_fields(s, &mut l1);
@@ -1506,7 +1517,7 @@ fn standard_lines(s: &StatsSnapshot, tier: StatsVerbosity) -> Vec<HudLine> {
         out.push(line(Role::Primary, f));
         return out;
     }
-    let mut l1 = vec![mode(s)];
+    let mut l1 = mode(s);
     media_fields(s, &mut l1);
     l1.extend(s.preset.clone());
     l1.extend(screen_field(s));
@@ -2361,6 +2372,34 @@ mod tests {
             ..Counters::default()
         });
         assert_eq!((s.lost, s.skipped, s.skipped_overflow), (2, Some(4), 1));
+    }
+
+    /// A picture at the host's mode reads as the mode alone; one the host scaled down leads
+    /// with its own size and names the mode after it. Compact names no size.
+    #[test]
+    fn the_mode_line_names_the_host_size_beside_a_smaller_picture() {
+        let mut s = StatsSnapshot {
+            width: 3840,
+            height: 2160,
+            refresh_hz: 60,
+            ..Default::default()
+        };
+        let first = |s: &StatsSnapshot, tier, advanced| format(s, tier, advanced)[0].text.clone();
+        let plain = first(&s, StatsVerbosity::Normal, false);
+        assert!(plain.starts_with("3840×2160@60"), "{plain}");
+        let compact = first(&s, StatsVerbosity::Compact, false);
+        s.picture = Some((3840, 2160));
+        assert_eq!(first(&s, StatsVerbosity::Normal, false), plain);
+        s.picture = Some((1920, 1080));
+        for advanced in [false, true] {
+            let scaled = format(&s, StatsVerbosity::Detailed, advanced);
+            assert_eq!(
+                scaled[0].fields[..2],
+                ["1920×1080@60", "host renders 3840×2160"],
+                "advanced={advanced}"
+            );
+        }
+        assert_eq!(first(&s, StatsVerbosity::Compact, false), compact);
     }
 
     #[cfg(feature = "serde")]

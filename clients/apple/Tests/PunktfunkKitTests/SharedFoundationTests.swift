@@ -783,6 +783,29 @@ final class SharedFoundationTests: XCTestCase {
         XCTAssertEqual([set.width, set.height, set.hz], [1_920, 1_080, 120])
     }
 
+    /// Above 1x the connect names the chosen size as its view beside the scaled mode; 1x and
+    /// below name none. An override that brings the mode down to the view drops it. The desktop
+    /// twin is `the_connect_names_the_view_above_1x`.
+    func testStreamViewRidesAScaledMode() {
+        var s = EffectiveSettings()
+        (s.width, s.height, s.codec) = (1_366, 768, "hevc")
+        let native = (width: 1_920, height: 1_080, hz: 60)
+        func ask(_ scale: Double, lines: UInt32? = nil) -> [UInt32] {
+            s.renderScale = scale
+            let own = s.streamMode(native: native)
+            let mode = GameOverrides(lines: lines).fit(own, native: native, codecMax: 8_192)
+            let view = s.streamView(native: native, mode: mode)
+            return [mode.width, mode.height] + (view.map { [$0.width, $0.height] } ?? [])
+        }
+        XCTAssertEqual(ask(1.5), [2_048, 1_152, 1_366, 768])
+        XCTAssertEqual(ask(2.0), [2_732, 1_536, 1_366, 768])
+        XCTAssertEqual(ask(1.0), [1_366, 768])
+        XCTAssertEqual(ask(0.5), [682, 384])
+        XCTAssertEqual(ask(2.0, lines: 1_080), [1_920, 1_080, 1_366, 768])
+        XCTAssertEqual(ask(2.0, lines: 768), [1_366, 768])
+        XCTAssertEqual(ask(2.0, lines: 720), [1_280, 720])
+    }
+
     // MARK: - The audio format a preset carries
 
     /// `AudioFormatChoice`'s raw values are a CROSS-CLIENT contract, not an implementation detail:

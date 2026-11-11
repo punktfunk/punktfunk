@@ -18,8 +18,8 @@ use punktfunk_core::Mode;
 pub(super) enum RebuildAsk {
     /// Gaming↔Desktop.
     SessionSwitch(SessionSwitch),
-    /// The client's accepted mode.
-    Mode(Mode),
+    /// The client's accepted mode, and the view it is encoded at (`None` = the mode).
+    Mode(Mode, Option<(u32, u32)>),
     /// The client's codec ask, vetted by the control task.
     Format(Codec),
     /// The Windows topology watchdog's generation now.
@@ -179,19 +179,21 @@ pub(super) struct RebuildPlan {
     pub(super) rollback: Rollback,
 }
 
-/// The rate `mode` runs at: PyroWave pins it per mode at the session's bits per pixel, and an
-/// Automatic session keeps its rate inside the new bounds.
-fn rate_at(mode: &Mode, f: &RebuildFacts) -> u32 {
+/// The rate `mode` encoded at `view` runs at: PyroWave pins it per picture at the session's bits
+/// per pixel, and an Automatic session keeps its rate inside the new bounds.
+fn rate_at(mode: Mode, view: Option<(u32, u32)>, f: &RebuildFacts) -> u32 {
     if f.plan.codec != Codec::PyroWave {
         return f.rate_kbps;
     }
     let running = f.bitrate_auto.then_some(f.rate_kbps);
-    pyrowave_mode_kbps(running, mode, &f.plan, f.pyrowave_max_kbps)
+    let picture = crate::session_plan::picture(mode, view);
+    pyrowave_mode_kbps(running, &picture, &f.plan, f.pyrowave_max_kbps)
 }
 
-/// The rebuild `ask` needs, or `None`: a switch to the compositor that runs, the live mode
-/// asked again (S5-6), a topology generation already followed or no IDD-push to follow.
+/// The rebuild `ask` needs, or `None`: a switch to the compositor that runs, the live mode and
+/// view asked again (S5-6), a topology generation already followed or no IDD-push to follow.
 pub(super) fn plan(ask: &RebuildAsk, f: &RebuildFacts) -> Option<RebuildPlan> {
+    let view = f.plan.reframe_to.map(|(_, v)| v);
     let idd_push = f.plan.capture == CaptureBackend::IddPush;
     let rebuilt = Epilogue {
         reassert_sync: idd_push,
@@ -222,11 +224,26 @@ pub(super) fn plan(ask: &RebuildAsk, f: &RebuildFacts) -> Option<RebuildPlan> {
             },
             ..at_live
         },
-        RebuildAsk::Mode(mode) if mode == f.mode => return None,
-        RebuildAsk::Mode(mode) => RebuildPlan {
+        RebuildAsk::Mode(mode, asked) if (mode, asked) == (f.mode, view) => return None,
+        // The display stays: the encoder alone reopens on the live capture, framed anew.
+        RebuildAsk::Mode(mode, asked) if mode == f.mode => RebuildPlan {
+            build: Build::Encoder,
+            rate_kbps: rate_at(mode, asked, f),
+            trace: Some("resize"),
+            epilogue: Epilogue {
+                tell: Some(Tell::Mode),
+                ..PIPELINE
+            },
+            rollback: Rollback {
+                tell: Some(Tell::Mode),
+                ..KEPT
+            },
+            ..at_live
+        },
+        RebuildAsk::Mode(mode, asked) => RebuildPlan {
             in_place: f.windows && idd_push,
             mode,
-            rate_kbps: rate_at(&mode, f),
+            rate_kbps: rate_at(mode, asked, f),
             trace: Some("resize"),
             epilogue: Epilogue {
                 tell: Some(Tell::Mode),
@@ -286,7 +303,7 @@ pub(super) fn plan(ask: &RebuildAsk, f: &RebuildFacts) -> Option<RebuildPlan> {
             reason: SwapReason::SourceMode,
             build: Build::Encoder,
             mode,
-            rate_kbps: rate_at(&mode, f),
+            rate_kbps: rate_at(mode, view, f),
             epilogue: Epilogue {
                 tell: Some(Tell::Correction),
                 ..PIPELINE
@@ -457,6 +474,30 @@ mod tests {
         pyrowave_mode_kbps(None, &BIG, &f.plan, None)
     }
 
+    /// The view a client shows [`BIG`] at.
+    const VIEW: (u32, u32) = (1920, 1080);
+
+    fn viewed(f: &mut RebuildFacts) {
+        f.plan.reframe_to = Some((punktfunk_core::video_fit::VideoFit::Fit, VIEW));
+    }
+
+    /// The encoder alone reopened on the live display for a new view, at `rate_kbps`.
+    fn new_view(rate_kbps: u32) -> Option<RebuildPlan> {
+        Some(RebuildPlan {
+            rate_kbps,
+            trace: Some("resize"),
+            epilogue: Epilogue {
+                tell: Some(Tell::Mode),
+                ..REBUILT
+            },
+            rollback: Rollback {
+                tell: Some(Tell::Mode),
+                ..SURVIVES
+            },
+            ..at_live(SwapReason::ModeSwitch, Build::Encoder)?
+        })
+    }
+
     struct Row {
         name: &'static str,
         ask: fn() -> RebuildAsk,
@@ -492,27 +533,63 @@ mod tests {
         Row {
             name: "mode switch: one build at the new mode, the client hears it; a failed one \
                    tells the mode kept (44692a0dc)",
-            ask: || RebuildAsk::Mode(BIG),
+            ask: || RebuildAsk::Mode(BIG, None),
             facts: |_| {},
             want: || to_big(20_000, false),
         },
         Row {
             name: "mode switch to the live mode: nothing (S5-6)",
-            ask: || RebuildAsk::Mode(LIVE),
+            ask: || RebuildAsk::Mode(LIVE, None),
             facts: |_| {},
             want: || None,
         },
         Row {
+            name: "the live mode and view asked again: nothing",
+            ask: || RebuildAsk::Mode(LIVE, Some(VIEW)),
+            facts: viewed,
+            want: || None,
+        },
+        Row {
+            name: "a view at the live mode: the encoder alone, framed for it; the client hears \
+                   the mode",
+            ask: || RebuildAsk::Mode(LIVE, Some(VIEW)),
+            facts: |_| {},
+            want: || new_view(20_000),
+        },
+        Row {
+            name: "a view cleared at the live mode: the encoder alone, at the mode",
+            ask: || RebuildAsk::Mode(LIVE, None),
+            facts: viewed,
+            want: || new_view(20_000),
+        },
+        Row {
             name: "mode switch on Windows IDD-push: in place first, the generation read again",
-            ask: || RebuildAsk::Mode(BIG),
+            ask: || RebuildAsk::Mode(BIG, None),
             facts: idd_push,
             want: || to_big(20_000, true),
         },
         Row {
             name: "PyroWave mode switch: the pin re-resolved at the mode built (S5-8)",
-            ask: || RebuildAsk::Mode(BIG),
+            ask: || RebuildAsk::Mode(BIG, None),
             facts: pyrowave,
             want: || to_big(pyrowave_pin(), false),
+        },
+        Row {
+            name: "PyroWave mode switch with a view: the pin priced at the view",
+            ask: || RebuildAsk::Mode(BIG, Some(VIEW)),
+            facts: pyrowave,
+            want: || {
+                let mut f = facts();
+                pyrowave(&mut f);
+                let at_view = Mode {
+                    width: VIEW.0,
+                    height: VIEW.1,
+                    ..BIG
+                };
+                let pin = pyrowave_mode_kbps(None, &at_view, &f.plan, None);
+                assert!(pin < pyrowave_pin(), "a view prices fewer pixels");
+                to_big(pin, false)
+            },
         },
         Row {
             name: "codec change: re-resolved at the live mode (S2-5), the display request \
