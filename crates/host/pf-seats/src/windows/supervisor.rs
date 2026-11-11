@@ -369,7 +369,11 @@ fn logoff_owned(accounts: &AccountManager, seat: &Seat, cycle: bool) -> WinResul
 }
 
 /// One seat's loop: probe what the state names, step, perform what it answers.
-fn run_worker(runtime: &Runtime, mut rig: Rig) {
+fn run_worker(runtime: &Runtime, rig: Rig) {
+    let _finished = MarkFinished(runtime);
+    // Declared after the guard, so a panic drops the rig's children before the runtime reads
+    // finished.
+    let mut rig = rig;
     loop {
         let look = runtime.lock().look();
         let observation = match rig.probe(look) {
@@ -386,6 +390,17 @@ fn run_worker(runtime: &Runtime, mut rig: Rig) {
                 actions = runtime.step(Observation::Failed(error.into())).into();
             }
         }
+    }
+}
+
+/// Marks its runtime finished when the worker leaves, by a panic too, and wakes the waiters:
+/// `start` and `stop` wait on a phase only the worker moves.
+struct MarkFinished<'a>(&'a Runtime);
+
+impl Drop for MarkFinished<'_> {
+    fn drop(&mut self) {
+        self.0.lock().abandon();
+        self.0.changed.notify_all();
     }
 }
 
@@ -850,6 +865,19 @@ mod tests {
             ..seat(&name)
         };
         assert!(supervisor.stop(&adopted).is_ok());
+    }
+
+    /// A worker that panics leaves its runtime finished, so a stop doesn't wait out its limit.
+    #[test]
+    fn a_worker_that_panics_leaves_its_runtime_finished() {
+        let runtime = Arc::new(Runtime::new(&seat("pfs-panic")));
+        let worker = runtime.clone();
+        let died = std::thread::spawn(move || {
+            let _finished = MarkFinished(&worker);
+            panic!("the worker panics");
+        });
+        assert!(died.join().is_err());
+        assert!(runtime.lock().finished());
     }
 
     /// The sweep looks at a seat once, and not while a runtime of ours holds it.

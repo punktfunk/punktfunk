@@ -802,6 +802,20 @@ impl State {
         self.phase = Phase::Finished;
         vec![Action::Finish]
     }
+
+    /// The worker left without [`Action::Finish`]: it panicked, and its children went with it.
+    /// A seat nobody stopped reads failed, and a start still waiting is answered.
+    pub(crate) fn abandon(&mut self) {
+        if self.finished() {
+            return;
+        }
+        if self.stop.is_none() {
+            let error = BackendError::new("seat_worker", "seat supervisor ended unexpectedly");
+            self.status = RuntimeStatus::failed(error.message.clone());
+            self.answer = Some(Err(error));
+        }
+        self.finish();
+    }
 }
 
 fn starting(detail: String) -> RuntimeStatus {
@@ -1608,6 +1622,37 @@ mod tests {
         assert_eq!(bench.ending(), Some(STOPPED_READYING));
         assert_eq!(bench.run_out(), [Action::Finish]);
         assert_eq!(bench.answer(), Some(Err(STOPPED_READYING)));
+    }
+
+    /// A worker that dies mid-phase leaves the seat finished, so no caller waits on it: failed
+    /// and answered, or stopped when a stop was asked. One that finished stays as it was.
+    #[test]
+    fn a_worker_that_dies_leaves_the_seat_finished() {
+        const DIED: (&str, &str) = ("seat_worker", "seat supervisor ended unexpectedly");
+        let phases = [
+            At::Fresh,
+            At::Gating,
+            At::Readying,
+            At::HostDown,
+            At::Resting,
+        ];
+        for at in phases {
+            let mut bench = bench(at);
+            bench.state.abandon();
+            assert!(bench.state.finished(), "{at:?}");
+            let failed = shows(RuntimeState::Failed, DIED.1);
+            assert_eq!(bare(bench.state.status()), failed, "{at:?}");
+            assert_eq!(bench.answer(), Some(Err(DIED)), "{at:?}");
+            assert_eq!(bench.state.session(), None, "{at:?}");
+        }
+        let mut bench = bench(At::Running);
+        bench.asks(Observation::Stop);
+        bench.state.abandon();
+        assert!(bench.state.finished());
+        assert_eq!(bare(bench.state.status()), RuntimeStatus::stopped());
+        let before = bench.state.clone();
+        bench.state.abandon();
+        assert_eq!(bench.state, before);
     }
 
     #[test]
