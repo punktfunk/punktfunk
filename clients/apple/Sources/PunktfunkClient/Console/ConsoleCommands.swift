@@ -293,7 +293,7 @@ extension ConsoleModel {
         // A running-titles refresh must not cut a list fetch short; only a new fetch does.
         if refreshOnly {
             Task { [weak self] in
-                let status = await LibraryClient.status(target)
+                let status = await LibraryClient.statusIfAnswered(target)
                 self?.pushStatus(status, serial: serial, fp: fp)
             }
             return
@@ -341,12 +341,13 @@ extension ConsoleModel {
     /// The shelf the console has open: the last `FetchLibrary`'s host and its list fetch.
     private var openShelf: FetchGuard { FetchGuard(fp: fetchReq.fp, serial: fetchSerial) }
 
-    /// What the host runs and downloads, while the shelf it was read for is open.
+    /// What the host runs and downloads, while the shelf it was read for is open. A read the
+    /// host didn't answer (nil) changes nothing, so a live download keeps its badge and its poll.
     private func pushStatus(
-        _ status: (games: [RunningGame], downloads: [HostDownload], grants: UInt32?),
+        _ status: (games: [RunningGame], downloads: [HostDownload], grants: UInt32?)?,
         serial: Int, fp: String
     ) {
-        guard openShelf.accepts(.answer(serial: serial), fp: fp) else { return }
+        guard let status, openShelf.accepts(.answer(serial: serial), fp: fp) else { return }
         bridge.push(.libraryDownloads, ConsoleJSON.downloads(status.downloads, grants: status.grants))
         bridge.push(.libraryRunning, ConsoleJSON.runningGames(status.games))
     }
