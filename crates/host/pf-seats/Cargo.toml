@@ -27,7 +27,8 @@ zeroize = "1"
 # `net` reads a socket peer's credentials (SO_PEERCRED), `fs` opens a file without following a
 # link, `process` names the uid the state directory must belong to and `thread` drops the login
 # helper's child to its person, all through safe wrappers, so this half denies unsafe code except
-# in `linux::pam`, `linux::login` and one call of `linux::handover`. `pam` loads libpam at run time,
+# in `linux::pam`, `linux::login`, one call of `linux::handover` and `linux::loopback`'s `bpf(2)`.
+# `pam` loads libpam at run time,
 # since this crate is linked into `punktfunk-host` too and only the seat daemon may need the
 # library. PAM frees the answers its conversation returns with `free()`, so they come from
 # libc's own allocator.

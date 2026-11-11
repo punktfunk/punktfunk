@@ -20,6 +20,9 @@ EnvironmentFile=/run/punktfunk/seats/%i.env
 # Holds the session id for seat-reap.
 RuntimeDirectory=punktfunk-seat-%i
 ExecStart=/usr/libexec/punktfunk/seat-session
+# A made seat's own loopback address for Steam's UI link, attached to its user's slice as root.
+# `-`: a kernel that refuses the hook leaves a seat that starts all the same.
+ExecStartPost=-+/usr/libexec/punktfunk/punktfunk-seats loopback %i
 # pam_systemd moves the session's processes out of this unit, so stopping it reaches only the
 # runner. The runner kills its children on SIGTERM; this kills the session for anything it missed.
 # `-`: a failed reap must not skip the drop-in's later ExecStopPost= unmounts.

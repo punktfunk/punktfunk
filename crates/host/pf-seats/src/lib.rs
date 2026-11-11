@@ -8,7 +8,7 @@
 //! Unix socket the `punktfunk-seats` daemon serves.
 
 // Allowed in `linux::pam` (libpam), `linux::login` (the login helper's signals and privilege
-// drop) and `linux::handover`'s `SO_PEERPIDFD` read.
+// drop), `linux::handover`'s `SO_PEERPIDFD` read and `linux::loopback`'s `bpf(2)` call.
 #![cfg_attr(not(windows), deny(unsafe_code))]
 
 mod attempts;

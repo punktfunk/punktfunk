@@ -59,15 +59,19 @@ mod linux {
         \x20 drain                       answer the seats' waiting uinput reads (ExecStop)\n\
         \x20 serve-usb                   a seat's USB pad server, which the supervisor starts\n\
         \x20 pam-check <account>         the supervisor's password check: password on stdin, a code out\n\
-        \x20 login <account>             a seat unit's login helper, which the supervisor starts\n";
+        \x20 login <account>             a seat unit's login helper, which the supervisor starts\n\
+        \x20 loopback <account>          a made seat's own address for Steam's UI link (ExecStartPost)\n";
 
     pub fn main() -> ExitCode {
         let args: Vec<String> = std::env::args().skip(1).collect();
         // No flags here: the account is data from a unit's instance name.
-        if let [verb, account] = args.as_slice()
-            && verb == pf_seats::linux::login::VERB
-        {
-            return ExitCode::from(pf_seats::linux::login::run(account));
+        if let [verb, account] = args.as_slice() {
+            if verb == pf_seats::linux::login::VERB {
+                return ExitCode::from(pf_seats::linux::login::run(account));
+            }
+            if verb == pf_seats::linux::loopback::VERB {
+                return ExitCode::from(pf_seats::linux::loopback::run(account));
+            }
         }
         match run(args) {
             Ok(()) => ExitCode::SUCCESS,
