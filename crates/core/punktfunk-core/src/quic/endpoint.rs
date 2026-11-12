@@ -20,13 +20,17 @@ use std::sync::{Arc, Mutex};
 pub const DEFAULT_IDLE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(8);
 
 fn stream_transport() -> Arc<quinn::TransportConfig> {
-    stream_transport_idle(DEFAULT_IDLE_TIMEOUT)
+    stream_transport_idle(DEFAULT_IDLE_TIMEOUT, None)
 }
 
 /// Idle clamped to 1 s..1 h so the QUIC VarInt millisecond conversion cannot
 /// fail. Keep-alive is `min(idle/2, 4s)`: two PINGs per window, one lost PING
-/// does not false-close.
-fn stream_transport_idle(idle: std::time::Duration) -> Arc<quinn::TransportConfig> {
+/// does not false-close. `initial_rtt` is the RTT a path starts at before its first sample;
+/// `None` keeps quinn's own.
+fn stream_transport_idle(
+    idle: std::time::Duration,
+    initial_rtt: Option<std::time::Duration>,
+) -> Arc<quinn::TransportConfig> {
     use std::time::Duration;
     let idle = idle.clamp(Duration::from_secs(1), Duration::from_secs(3600));
     let keep_alive = (idle / 2).min(Duration::from_secs(4));
@@ -35,6 +39,9 @@ fn stream_transport_idle(idle: std::time::Duration) -> Arc<quinn::TransportConfi
         quinn::IdleTimeout::try_from(idle).expect("clamped idle timeout is a valid QUIC value"),
     ));
     t.keep_alive_interval(Some(keep_alive));
+    if let Some(rtt) = initial_rtt {
+        t.initial_rtt(rtt);
+    }
     // 4 KiB ≈ 200 ms of stereo Opus, ~14 ms of 48 kHz/24-bit PCM. Latest-wins
     // under congestion; do not raise for PCM — TransportConfig is built before
     // the plane is known, so a PCM-sized buffer would give Opus ~800 ms of lag.
@@ -165,7 +172,10 @@ fn server_config(
     let quic_cfg = quinn::crypto::rustls::QuicServerConfig::try_from(rustls_cfg)
         .map_err(|e| anyhow_result::Error::msg(format!("quic server config: {e}")))?;
     let mut server_config = quinn::ServerConfig::with_crypto(Arc::new(quic_cfg));
-    server_config.transport_config(stream_transport_idle(idle));
+    // The host's media waits out quinn's path validation after a client changes IP, and that
+    // timer starts from this RTT.
+    let initial_rtt = crate::transport::shared::HOST_INITIAL_RTT;
+    server_config.transport_config(stream_transport_idle(idle, Some(initial_rtt)));
     Ok(server_config)
 }
 
@@ -444,8 +454,8 @@ mod tests {
 
     #[test]
     fn absurd_idle_timeout_is_clamped_not_a_panic() {
-        let _ = super::stream_transport_idle(std::time::Duration::MAX);
-        let _ = super::stream_transport_idle(std::time::Duration::ZERO);
+        let _ = super::stream_transport_idle(std::time::Duration::MAX, None);
+        let _ = super::stream_transport_idle(std::time::Duration::ZERO, None);
     }
 
     /// Loopback MTU is 64 KiB, so only endpoint config can cap the search.
