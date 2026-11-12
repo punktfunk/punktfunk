@@ -76,17 +76,17 @@ impl FormatGap {
         match self {
             FormatGap::Depth => (
                 "close_join_needs_10bit",
-                "Couldn't join the shared screen — it streams in 10-bit colour, and this \
+                "Couldn't join the shared screen — it streams in 10-bit color, and this \
                  device can't. Connect this device first and let the other one join it.",
             ),
             FormatGap::Chroma => (
                 "close_join_needs_444",
-                "Couldn't join the shared screen — it streams in full colour detail (4:4:4), \
+                "Couldn't join the shared screen — it streams in full color detail (4:4:4), \
                  and this device can't. Connect this device first and let the other one join it.",
             ),
             FormatGap::Range => (
                 "close_join_range",
-                "Couldn't join the shared screen — its colour range is one this device can't \
+                "Couldn't join the shared screen — its color range is one this device can't \
                  show. Connect this device first and let the other one join it.",
             ),
         }
