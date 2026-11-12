@@ -10,6 +10,28 @@ pub fn hex(fp: &[u8; 32]) -> String {
     })
 }
 
+/// A device's code: the first 16 hex digits of its fingerprint, upper case, in fours. A device
+/// waiting for approval and the host's console both show it, for a person to compare.
+pub fn device_code(fp: &[u8; 32]) -> String {
+    let hex = hex(fp).to_uppercase();
+    [&hex[0..4], &hex[4..8], &hex[8..12], &hex[12..16]].join(" ")
+}
+
+/// A hex fingerprint in fours, eight groups to a line: two lines for 64 digits, to compare
+/// against a host's log.
+pub fn grouped(fp_hex: &str) -> String {
+    let groups: Vec<&str> = fp_hex
+        .as_bytes()
+        .chunks(4)
+        .map(|c| std::str::from_utf8(c).unwrap_or(""))
+        .collect();
+    groups
+        .chunks(8)
+        .map(|line| line.join(" "))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 /// 64 hex digits, either case, into the 32-byte SHA-256 fingerprint. `None` on any
 /// other length or a non-hex byte, multibyte UTF-8 included: an mDNS `fp` is peer text.
 pub fn parse_hex32(s: &str) -> Option<[u8; 32]> {
@@ -27,7 +49,15 @@ pub fn parse_hex32(s: &str) -> Option<[u8; 32]> {
 
 #[cfg(test)]
 mod tests {
-    use super::{hex, parse_hex32};
+    use super::{device_code, hex, parse_hex32};
+
+    /// The vector every client's own spelling of the code is tested against.
+    #[test]
+    fn the_device_code_is_sixteen_digits_in_fours() {
+        let mut fp = [0u8; 32];
+        fp[..8].copy_from_slice(&[0x4f, 0x2a, 0x91, 0xc3, 0x07, 0xbe, 0xd5, 0x12]);
+        assert_eq!(device_code(&fp), "4F2A 91C3 07BE D512");
+    }
 
     #[test]
     fn parses_either_case_and_refuses_everything_else() {

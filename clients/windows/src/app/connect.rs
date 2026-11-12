@@ -661,11 +661,19 @@ pub(crate) fn request_access_page(
             })
             .horizontal_alignment(HorizontalAlignment::Center)
     };
+    // The host's console shows the same code beside this request.
+    let code = trust::device_code(&ctx.identity).map(|code| {
+        text(client::pair_device_code(&code))
+            .font_size(16.0)
+            .font_weight(FontWeight::SEMI_BOLD)
+            .horizontal_alignment(HorizontalAlignment::Center)
+            .into()
+    });
     busy_page(
         pal,
         &headline,
         &client::dial_approve_no_pin(&target_name),
-        vec![cancel_btn.into()],
+        code.into_iter().chain([cancel_btn.into()]).collect(),
     )
 }
 

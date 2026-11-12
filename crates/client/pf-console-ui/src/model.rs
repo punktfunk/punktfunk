@@ -298,6 +298,8 @@ struct ConsoleState {
     /// One-shot toast. The shell `take`s it on the next sync — unlike [`PairPhase`]
     /// there is no modal state, so a take-once string is the whole protocol.
     notice: Option<String>,
+    /// This device's code, from a host whose identity loads after the console is built.
+    device_code: Option<String>,
     /// What the host bundles, for the Licences screen. Kept once sent.
     licenses: Option<Arc<Vec<LicenseSection>>>,
     /// The latest controller reading while the input test is on.
@@ -501,6 +503,16 @@ impl ConsoleShared {
 
     pub(crate) fn take_notice(&self) -> Option<String> {
         self.0.lock().unwrap().notice.take()
+    }
+
+    /// This device's code ([`crate::shell::ConsoleOptions::device_code`]), for a host that
+    /// learns it after the console is built.
+    pub fn set_device_code(&self, code: String) {
+        self.0.lock().unwrap().device_code = Some(code);
+    }
+
+    pub(crate) fn take_device_code(&self) -> Option<String> {
+        self.0.lock().unwrap().device_code.take()
     }
 
     /// The unlock the `Launch` just taken carries, for its dial. Only an embedder whose console
