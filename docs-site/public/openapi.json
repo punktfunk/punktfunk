@@ -8573,7 +8573,7 @@
           "profiles"
         ],
         "summary": "Ask for a key unlock's challenge",
-        "description": "For a profile on a person's own Linux account and a device that enrolled an unlock key: 32\nrandom bytes for the key to sign, and the seat id the signed message names. It is good for\none proof within two minutes, and a new one replaces it. A device without a key is refused;\nit unlocks with the account's password. Paired devices only.",
+        "description": "For a device that enrolled an unlock key: 32 random bytes for the key to sign, and what the\nsigned message names, the seat id for a profile on a person's own Linux account or the\nprofile id for a locked profile. It is good for one proof within two minutes, and a new one\nreplaces it. A device without a key is refused; it unlocks with the account's password or the\nprofile's PIN. Paired devices only.",
         "operationId": "unlockChallenge",
         "parameters": [
           {
@@ -8638,7 +8638,7 @@
             }
           },
           "409": {
-            "description": "The profile doesn't open with an account password, or this device has no unlock key",
+            "description": "This device has no unlock key for the profile",
             "content": {
               "application/json": {
                 "schema": {
@@ -19787,16 +19787,20 @@
       },
       "UnlockChallenge": {
         "type": "object",
-        "description": "`POST /profiles/{id}/unlock-challenge`.",
+        "description": "`POST /profiles/{id}/unlock-challenge`: `seat` for a profile on a person's own Linux account,\n`profile` for a locked one, never both.",
         "required": [
-          "challenge",
-          "seat"
+          "challenge"
         ],
         "properties": {
           "challenge": {
             "type": "string",
             "description": "32 random bytes, lowercase hex: good for one proof within two minutes.",
             "example": "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08"
+          },
+          "profile": {
+            "type": "string",
+            "description": "The locked profile's id, as its signed message names it.",
+            "example": "9a3f1c2b7e40"
           },
           "seat": {
             "type": "string",
@@ -19812,7 +19816,8 @@
           "none",
           "password",
           "key",
-          "pin"
+          "pin",
+          "pin_key"
         ]
       },
       "UnpairAllResult": {

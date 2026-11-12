@@ -68,6 +68,9 @@ pub(crate) enum UnlockNeed {
     Key,
     /// A locked profile's PIN, 4 to 8 digits, sent as the unlock's secret.
     Pin,
+    /// A signature from this device's unlock key over a fresh `unlock-challenge`, or the locked
+    /// profile's PIN.
+    PinKey,
 }
 
 impl From<Needs> for UnlockNeed {
@@ -80,15 +83,21 @@ impl From<Needs> for UnlockNeed {
     }
 }
 
-/// `POST /profiles/{id}/unlock-challenge`.
+/// `POST /profiles/{id}/unlock-challenge`: `seat` for a profile on a person's own Linux account,
+/// `profile` for a locked one, never both.
 #[derive(Serialize, ToSchema)]
 pub(crate) struct UnlockChallenge {
     /// 32 random bytes, lowercase hex: good for one proof within two minutes.
     #[schema(example = "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08")]
-    challenge: String,
+    pub(super) challenge: String,
     /// The seat's id, 32 lowercase hex characters, as the signed message names it.
-    #[schema(example = "0123456789abcdef0123456789abcdef")]
-    seat: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(value_type = String, required = false, example = "0123456789abcdef0123456789abcdef")]
+    pub(super) seat: Option<String>,
+    /// The locked profile's id, as its signed message names it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(value_type = String, required = false, example = "9a3f1c2b7e40")]
+    pub(super) profile: Option<String>,
 }
 
 /// A device signed in to a profile on a person's own Linux account, or on a locked profile's
@@ -505,13 +514,8 @@ fn not_a_person() -> Response {
     )
 }
 
-/// The person's own Linux account `id` plays on, from the door's ledger, or the answer for a
-/// profile with none.
-async fn person_of(st: &MgmtState, id: &str) -> Result<pf_seats::SeatId, Response> {
-    person_seat(st, id).await?.ok_or_else(not_a_person)
-}
-
-/// [`person_of`], `None` for a profile that is not on a person's own account.
+/// The person's own Linux account `id` plays on, from the door's ledger; `None` for a profile
+/// that is not on a person's own account.
 pub(super) async fn person_seat(
     st: &MgmtState,
     id: &str,
@@ -1009,6 +1013,7 @@ pub(crate) async fn enumerate_profiles(
                 _ if operator => need,
                 Opens::Yes => need,
                 Opens::Pin => UnlockNeed::Pin,
+                Opens::Key => UnlockNeed::PinKey,
                 Opens::No => return None,
             };
             let row = public(
@@ -1854,10 +1859,11 @@ pub(crate) async fn end_profile_session(
 
 /// Ask for a key unlock's challenge
 ///
-/// For a profile on a person's own Linux account and a device that enrolled an unlock key: 32
-/// random bytes for the key to sign, and the seat id the signed message names. It is good for
-/// one proof within two minutes, and a new one replaces it. A device without a key is refused;
-/// it unlocks with the account's password. Paired devices only.
+/// For a device that enrolled an unlock key: 32 random bytes for the key to sign, and what the
+/// signed message names, the seat id for a profile on a person's own Linux account or the
+/// profile id for a locked profile. It is good for one proof within two minutes, and a new one
+/// replaces it. A device without a key is refused; it unlocks with the account's password or the
+/// profile's PIN. Paired devices only.
 #[utoipa::path(
     post,
     path = "/profiles/{id}/unlock-challenge",
@@ -1870,7 +1876,7 @@ pub(crate) async fn end_profile_session(
         (status = UNAUTHORIZED, description = "Missing or invalid credentials", body = ApiError),
         (status = FORBIDDEN, description = "Not a paired device", body = ApiError),
         (status = NOT_FOUND, description = "No profile with that id", body = ApiError),
-        (status = CONFLICT, description = "The profile doesn't open with an account password, or this device has no unlock key", body = ApiError),
+        (status = CONFLICT, description = "This device has no unlock key for the profile", body = ApiError),
         (status = SERVICE_UNAVAILABLE, description = "The seat supervisor didn't answer", body = ApiError),
     )
 )]
@@ -1885,8 +1891,9 @@ pub(crate) async fn unlock_challenge(
             "Only a paired device asks for its own unlock challenge.",
         );
     };
-    let seat = match person_of(&st, &id).await {
-        Ok(seat) => seat,
+    let seat = match person_seat(&st, &id).await {
+        Ok(Some(seat)) => seat,
+        Ok(None) => return super::locks::challenge(&st, &id, &fp.to_ascii_lowercase()),
         Err(resp) => return resp,
     };
     let command = Command::Challenge {
@@ -1896,7 +1903,8 @@ pub(crate) async fn unlock_challenge(
     match ask_door(&st, command).await {
         Ok(CommandResult::Challenge { challenge, seat }) => Json(UnlockChallenge {
             challenge,
-            seat: seat.as_str().to_string(),
+            seat: Some(seat.as_str().to_string()),
+            profile: None,
         })
         .into_response(),
         Ok(_) => unexpected(),

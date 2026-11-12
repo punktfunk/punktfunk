@@ -209,8 +209,9 @@ password.
   host's owner to add it.`
 - A **PIN** of 4 to 8 digits lets a device off the list in. A locked profile with a PIN shows in
   every device's picker, and the right PIN puts that device on its list for the visit, or until
-  you sign it out when the device stays signed in. An app that can't ask for a PIN yet says
-  `This profile needs its PIN. Update Punktfunk on this device.`
+  you sign it out when the device stays signed in. A device with a fingerprint reader or face
+  unlock can keep that instead, and opens the profile with it from then on. An app that can't
+  ask for a PIN yet says `This profile needs its PIN. Update Punktfunk on this device.`
 - Wrong PINs make a device wait, as a wrong account password does. Ten wrong PINs for one profile
   within 15 minutes, from any devices, stop PIN entry for it for a while; the devices on its list
   still open it.
