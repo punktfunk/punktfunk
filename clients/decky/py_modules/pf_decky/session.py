@@ -4,7 +4,8 @@ force-stop a wedged client.
 The session binary serves a control socket, one text verb per connection with ``ok``/``err``
 back (``clients/session/src/main.rs``, ``ctl_socket``). A flatpak client puts it in its app
 runtime dir, the one runtime path the sandbox and this backend see identically; a native client
-in the plain runtime dir. No socket means no running client.
+in the plain runtime dir. A client is up only while its socket accepts a connection: the file
+outlives the process.
 """
 
 import asyncio
@@ -54,11 +55,28 @@ async def kill_stream() -> dict:
     return {"ok": True}
 
 
+async def _accepts(sock: Path) -> bool:
+    """Does a client hold this socket? A client that exited leaves the file behind, so the file
+    alone proves nothing: only a live one accepts a connection."""
+    if not sock.is_socket():
+        return False
+    try:
+        _reader, writer = await asyncio.wait_for(
+            asyncio.open_unix_connection(str(sock)), timeout=2.0
+        )
+    except Exception:  # noqa: BLE001 — refused or timed out: nobody is listening
+        return False
+    writer.close()
+    return True
+
+
 async def stream_running() -> dict:
-    """Whether the client's control socket exists. It lives as long as the client process, so
-    between console-mode streams it lingers, which only leaves the panel's host buttons
-    harmlessly visible."""
-    return {"running": any(p.is_socket() for p in _ctl_sockets())}
+    """Whether a client is up: one of its control sockets accepts. The socket lives as long as
+    the client process, so it stays up between console-mode streams."""
+    for sock in _ctl_sockets():
+        if await _accepts(sock):
+            return {"running": True}
+    return {"running": False}
 
 
 async def end_game(ref: str, game_id: str) -> dict:

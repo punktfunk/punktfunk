@@ -34,7 +34,7 @@ _PLUGIN = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_PLUGIN / "py_modules"))
 sys.path.insert(0, str(_PLUGIN))
 import main  # noqa: E402  (the plugin backend)
-from pf_decky import art, client, steam_input, update  # noqa: E402
+from pf_decky import art, client, session, steam_input, update  # noqa: E402
 
 # The argv fixtures below monkey-patch `_client_argv` to pin one install shape; the
 # _flatpak_ref block wants the REAL resolver back, so keep a handle on it.
@@ -506,6 +506,27 @@ _importers = [p.name for p in sorted((_PLUGIN / "py_modules" / "pf_decky").glob(
               if _imports_main(p)]
 check("loader: no pf_decky module imports main" + (f" ({_importers})" if _importers else ""),
       not _importers)
+
+# ---- stream_running: the socket file outlives its client --------------------------------
+import socket as _socket  # noqa: E402
+import tempfile  # noqa: E402
+
+with tempfile.TemporaryDirectory(dir="/tmp") as _run:
+    _sock = Path(_run) / "ctl.sock"
+    _real_ctl_sockets = session._ctl_sockets
+    session._ctl_sockets = lambda: [Path(_run) / "absent.sock", _sock]
+    check("running: no socket file is no stream",
+          asyncio.run(main.Plugin().stream_running()) == {"running": False})
+    _listener = _socket.socket(_socket.AF_UNIX)
+    _listener.bind(str(_sock))
+    _listener.listen(1)
+    check("running: a socket that accepts is a stream",
+          asyncio.run(main.Plugin().stream_running()) == {"running": True})
+    _listener.close()  # the client exits; its socket file stays
+    check("running: the stale file is left behind", _sock.is_socket())
+    check("running: a socket nobody holds is no stream",
+          asyncio.run(main.Plugin().stream_running()) == {"running": False})
+    session._ctl_sockets = _real_ctl_sockets
 
 print()
 if failures:
