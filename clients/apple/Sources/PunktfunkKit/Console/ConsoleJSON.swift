@@ -81,7 +81,8 @@ public enum ConsoleJSON {
         }
     }
 
-    /// `HostRow.screens`: the host's own `GET /display/targets` body, or null before it answers.
+    /// `HostRow.screens`: the host's `GET /display/targets` body in its own keys, `may_choose`
+    /// and `role` included, or null before it answers.
     private static func screensJSON(
         _ screens: [String: DisplayTargets], _ host: StoredHost
     ) -> Any {
@@ -89,6 +90,12 @@ public enum ConsoleJSON {
               let json = try? JSONSerialization.jsonObject(with: data)
         else { return NSNull() }
         return json
+    }
+
+    /// A `SetScreen` command's write: its `screen`, and `topology` when the row is a role.
+    public static func screenPick(_ command: [String: Any]) -> ScreenPick? {
+        guard let data = try? JSONSerialization.data(withJSONObject: command) else { return nil }
+        return try? JSONDecoder().decode(ScreenPick.self, from: data)
     }
 
     /// The home carousel: saved hosts in store order, which is the order they were added, each
