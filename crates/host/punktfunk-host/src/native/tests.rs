@@ -2957,6 +2957,67 @@ fn a_seat_host_checks_the_box_s_lock_file() {
     assert_eq!(heard, [kid_seat(19806)]);
 }
 
+/// A locked profile's PIN, sent as the hello's `ProfileUnlock`, opens it for a device off its
+/// list. With none the client is sent to its prompt, or told to update when it has none; a key
+/// proof is turned back to the prompt; a wrong PIN is refused and the device waits before the
+/// next. A right one puts the device on the list, so its next connect needs nothing.
+#[test]
+fn a_locked_profile_opens_with_its_pin() {
+    use punktfunk_core::reject::RejectReason::{ProfileLocked, SeatUnavailable};
+    let _registry = crate::session_status::tests::registry_lock();
+    let _serial = SESSION_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    let pin = serde_json::to_value(pf_seats::locks::PinHash::new("2468").unwrap()).unwrap();
+    let locked = |_: &str| {
+        let lock = serde_json::json!({"locked": true, "pin": pin});
+        serde_json::json!({"version": 1, "profiles": {KID_PROFILE: lock}})
+    };
+    let key = {
+        let secret = v2msg::Zeroizing::new(vec![0x30, 0x45, 0x01]);
+        v2msg::ProfileUnlock::new(v2msg::UNLOCK_KEY_PROOF, secret, false, 0, Vec::new()).unwrap()
+    };
+    let pw = |pin: &str, stay| Sends::Unlock(password(pin, stay, None));
+    let dials = vec![
+        (KID_PROFILE, offers(true), Sends::Nothing),
+        (KID_PROFILE, offers(false), Sends::Nothing),
+        (KID_PROFILE, offers(true), Sends::Unlock(key)),
+        (KID_PROFILE, offers(true), pw("1357", false)),
+        (KID_PROFILE, offers(true), pw("2468", false)),
+    ];
+    let (heard, _) = dial_host(19807, false, locked, dials);
+    let closed = |reason, sentence: &str| Heard::Closed(reason, sentence.to_string());
+    assert_eq!(
+        heard[..4],
+        [
+            closed(ProfileLocked, ""),
+            closed(
+                SeatUnavailable,
+                "This profile needs its PIN. Update Punktfunk on this device."
+            ),
+            closed(ProfileLocked, ""),
+            closed(ProfileLocked, "That isn't this profile's PIN."),
+        ]
+    );
+    let Heard::Closed(ProfileLocked, wait) = &heard[4] else {
+        panic!("the device waits: {:?}", heard[4]);
+    };
+    assert!(
+        wait.starts_with("Too many wrong PINs. Try again in "),
+        "{wait}"
+    );
+
+    let dials = vec![
+        (KID_PROFILE, offers(true), pw("2468", true)),
+        (KID_PROFILE, offers(true), Sends::Nothing),
+    ];
+    let (heard, lock_file) = dial_host(19808, false, locked, dials);
+    assert_eq!(heard, [kid_seat(19808), kid_seat(19808)]);
+    let file = pf_seats::locks::Locks::parse(&std::fs::read(lock_file).unwrap()).unwrap();
+    let entries = file.profiles[KID_PROFILE].list.entries();
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].kind, pf_seats::ipc::DeviceKind::Stay);
+    assert_eq!(entries[0].name, "Kid's tablet", "its pairing name");
+}
+
 /// A session on a locked profile ends once its device is signed out, with the sentence that says
 /// so.
 #[test]

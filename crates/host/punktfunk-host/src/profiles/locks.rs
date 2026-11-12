@@ -455,6 +455,104 @@ mod tests {
         assert_eq!(tried, PinAnswer::NoPin);
     }
 
+    /// Wrong PINs count per device as a password's do, and ten across devices lock PIN entry for
+    /// the profile, the right PIN included; a device on its list keeps opening it. A right PIN
+    /// puts the device on the list, for now or until signed out.
+    #[test]
+    fn ten_wrong_pins_close_the_pin_to_every_device() {
+        let (locks, _) = store();
+        let listed = device(99);
+        locks
+            .edit(KID, |lock, now| {
+                lock.locked = true;
+                lock.pin = PinHash::new("2468");
+                lock.admit(&listed, now, true)
+            })
+            .unwrap();
+        assert_eq!(
+            locks.try_pin(KID, &device(1), "1357", false),
+            PinAnswer::Wrong
+        );
+        let waits = locks.try_pin(KID, &device(1), "2468", false);
+        assert!(
+            matches!(waits, PinAnswer::Wait(_)),
+            "the device waits: {waits:?}"
+        );
+        for n in 2..=10 {
+            assert_eq!(
+                locks.try_pin(KID, &device(n), "0000", false),
+                PinAnswer::Wrong
+            );
+        }
+        assert_eq!(locks.failures(KID), 10);
+        let closed = locks.try_pin(KID, &device(11), "2468", false);
+        let fourteen = Duration::from_secs(14 * 60);
+        assert!(
+            matches!(closed, PinAnswer::Wait(w) if w > fourteen),
+            "{closed:?}"
+        );
+        assert_eq!(locks.opens(KID, Some(&listed.fingerprint)), Opens::Yes);
+        assert_eq!(locks.opens(KID, Some(&device(11).fingerprint)), Opens::Pin);
+
+        let (fresh, _) = store();
+        fresh
+            .edit(KID, |lock, _| {
+                lock.locked = true;
+                lock.pin = PinHash::new("2468");
+            })
+            .unwrap();
+        let (tv, phone) = (device(1), device(2));
+        assert_eq!(fresh.try_pin(KID, &tv, "2468", true), PinAnswer::Opened);
+        assert_eq!(fresh.try_pin(KID, &phone, "2468", false), PinAnswer::Opened);
+        let kinds: Vec<_> = fresh
+            .get(KID)
+            .list
+            .entries()
+            .into_iter()
+            .map(|e| e.kind)
+            .collect();
+        use pf_seats::ipc::DeviceKind;
+        assert_eq!(kinds, [DeviceKind::Stay, DeviceKind::ForNow]);
+        assert_eq!(fresh.opens(KID, Some(&phone.fingerprint)), Opens::Yes);
+    }
+
+    /// A device signed in for now stays while any of its sessions plays, and leaves ten minutes
+    /// after the last ends.
+    #[test]
+    fn a_device_for_now_leaves_after_its_last_session() {
+        let dir = crate::test_support::scratch();
+        let file = serde_json::json!({"version": 1, "profiles": [
+            {"id": KID, "display_name": "Kid", "os_account": {"kind": "operator"}},
+        ]});
+        std::fs::write(dir.join("profiles.json"), file.to_string()).unwrap();
+        let profiles = Arc::new(Profiles::load_with(Some(dir.join("profiles.json")), None));
+        let tv = device(1);
+        profiles
+            .locks()
+            .edit(KID, |lock, now| {
+                lock.locked = true;
+                lock.admit(&tv, now, false)
+            })
+            .unwrap();
+        let ends = || {
+            profiles.locks().get(KID).list.devices[0]
+                .present
+                .unwrap()
+                .expires_unix
+        };
+        let first = Presence::join(&profiles, KID, &tv.fingerprint).unwrap();
+        let second = Presence::join(&profiles, KID, &tv.fingerprint).unwrap();
+        drop(first);
+        assert_eq!(ends(), None, "a session still plays");
+        drop(second);
+        let left = ends().expect("its grace runs");
+        assert!(left > crate::clock::unix_secs());
+        assert!(Presence::join(&profiles, KID, &device(2).fingerprint).is_none());
+        let back = Presence::join(&profiles, KID, &tv.fingerprint).unwrap();
+        assert_eq!(ends(), None, "back within its grace");
+        drop(back);
+    }
+
     /// A removed profile's lock goes with it, a seat's once its seat is gone; and while
     /// `profiles.json` doesn't read, the owner's stand-in opens nothing once a profile is locked.
     #[test]

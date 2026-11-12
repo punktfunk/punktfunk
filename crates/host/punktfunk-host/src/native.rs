@@ -1370,7 +1370,9 @@ async fn admit_here(
     };
     tracing::info!(profile = %resolved.id, name = %resolved.display_name, via = ?resolved.via, "profile");
     // Before placement, so a profile that plays here and one sent to its seat pass one check.
-    let presence = lock::admit(&host.profiles, conn, first, &resolved, fp_hex.as_deref()).await?;
+    let fp = fp_hex.as_deref();
+    let wire = (&mut *send, &mut *recv);
+    let presence = lock::admit(host, conn, wire, first, &resolved, fp).await?;
     // A refusal ends the connect here and leaves the profile's last-used time alone.
     let placed = place_profile(
         conn,

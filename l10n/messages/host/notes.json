@@ -76,6 +76,8 @@
 	"apierr_worker_seats_stopped": "500 when a request about all seats never finished.",
 	"apierr_worker_switch_stopped": "500 when turning Reachable without logging in on or off never finished starting.",
 	"apierr_worker_windows_accounts_stopped": "500 when the host never finished reading this PC's Windows accounts.",
+	"close_lock_pin_wait_minutes": "A locked profile's PIN lockout. {count} is minutes left, rounded up.",
+	"close_lock_pin_wait_seconds": "A locked profile's PIN lockout. {count} is seconds left, rounded up.",
 	"close_monitor_missing": "Why a session couldn't start. {monitor} is the connector name of the monitor the host is set to stream.",
 	"close_monitor_none": "{monitor} is a connector name such as HDMI-A-1.",
 	"diag_door_no_device_summary": "Why a device check does not apply on the door (the account-free login host).",
