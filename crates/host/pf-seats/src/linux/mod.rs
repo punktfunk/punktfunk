@@ -667,16 +667,21 @@ impl LinuxBackend {
         passwd: &accounts::Passwd,
         token: &str,
     ) -> Result<(), BackendError> {
-        let state = &self.inner.state;
+        self.write_token(seat, token)?;
+        let (state, browser) = (&self.inner.state, session::browser(&self.inner.box_dir));
+        session::write_unit_files(seat, Own::Owner, passwd, state, token, None, &browser)
+    }
+
+    /// Writes `token` as the seat's token file, for the box's client to present: the `punktfunk`
+    /// user's when there is one.
+    fn write_token(&self, seat: &Seat, token: &str) -> Result<(), BackendError> {
         let door = accounts::lookup("punktfunk")?;
         shared::write_host_token(
-            state,
+            &self.inner.state,
             &seat.id,
             &session::token_line(token),
             shared::token_owner(door.as_ref()),
-        )?;
-        let browser = session::browser(&self.inner.box_dir);
-        session::write_unit_files(seat, Own::Owner, passwd, state, token, None, &browser)
+        )
     }
 
     /// Writes the owner's files again at supervisor start: `/run` is empty after a boot, and the
@@ -990,6 +995,8 @@ impl PlatformBackend for LinuxBackend {
         devices::box_fingerprint(&self.inner.box_dir, &self.inner.state)
     }
 
+    /// A made seat's row up: its user's group, home, groups, folders, Steam links and copies put
+    /// right, then [`LinuxBackend::bring_up`]. The owner's and a person's rows start their own way.
     fn start(&self, seat: &Seat) -> Result<RuntimeStatus, BackendError> {
         let asked = self.inner.stops.load(Ordering::SeqCst);
         match Own::of(seat) {
@@ -1024,56 +1031,8 @@ impl PlatformBackend for LinuxBackend {
         let reader = shared::Reader::group(passwd.gid);
         shared::refresh_trust(box_dir, state, &seat.id, reader)?;
         shared::refresh_seat_library(state, &seat.id, reader)?;
-        let unit = session::unit(&seat.account);
         unit_hook(&self.inner, &seat.account, Some(passwd.uid));
-        // A unit already up keeps its token: the host read it when it started.
-        if !session::state(&seat.account)?.live() {
-            if session::port_taken(seat.mgmt_port) {
-                return Err(err(
-                    "port_in_use",
-                    format!("management port {} is already in use", seat.mgmt_port),
-                ));
-            }
-            let token = session::mint_token();
-            let door = accounts::lookup("punktfunk")?;
-            shared::write_host_token(
-                state,
-                &seat.id,
-                &session::token_line(&token),
-                shared::token_owner(door.as_ref()),
-            )?;
-            let source = self.steam_source();
-            let root = source.as_ref().map(|s| s.root.as_path());
-            let owner = self.owner();
-            let shares = libraries::share(box_dir, state, &seat.id, &passwd, root, owner.as_ref());
-            let shown = shares.as_ref().map_or(&[][..], |s| s.libraries.as_slice());
-            libraries::register(state, &seat.id, &passwd, shown);
-            let browser = session::browser(box_dir);
-            session::write_unit_files(
-                seat,
-                Own::Seat,
-                &passwd,
-                state,
-                &token,
-                shares.as_ref(),
-                &browser,
-            )?;
-            self.stopped_since(asked)?;
-            // A manager already up (the last run's, or a linger's from boot) lacks this start's
-            // groups and drop-in; the new session would join it and hand its apps neither.
-            let manager = format!("user@{}.service", passwd.uid);
-            let _ = run("systemctl_failed", "systemctl", &["stop", &manager]);
-            let _ = run("systemctl_failed", "systemctl", &["reset-failed", &unit]);
-            run("systemctl_failed", "systemctl", &["start", &unit])?;
-            // The mount's own error is in the unit's journal.
-            for stage in shares
-                .iter()
-                .flat_map(|s| libraries::unmounted(&seat.id, s))
-            {
-                let stage = stage.display();
-                tracing::warn!(seat = %seat.id, %stage, %unit, "seat library stage not mounted");
-            }
-        }
+        self.bring_up(seat, Own::Seat, &passwd, None, asked)?;
         self.track(&seat.id, Tracked::of(seat, &passwd));
         self.wait_ready(seat, asked, false)?;
         Ok(RuntimeStatus::running())
@@ -1361,14 +1320,7 @@ impl LinuxBackend {
             self.wait_port(seat, asked)?;
             return Ok(RuntimeStatus::running());
         }
-        let unit = session::unit(&seat.account);
-        // A unit already up keeps its token: the host read it when it started.
-        if !session::state(&seat.account)?.live() {
-            self.write_owner_files(seat, &passwd, &session::mint_token())?;
-            self.stopped_since(asked)?;
-            let _ = run("systemctl_failed", "systemctl", &["reset-failed", &unit]);
-            run("systemctl_failed", "systemctl", &["start", &unit])?;
-        }
+        self.bring_up(seat, Own::Owner, &passwd, None, asked)?;
         self.wait_ready(seat, asked, false)?;
         Ok(RuntimeStatus::running())
     }
@@ -1377,9 +1329,8 @@ impl LinuxBackend {
     /// login is theirs, and the headless session would sit beside it uninvited. Otherwise the
     /// unit brings up the headless session and a contract seat's host in it, which admits only
     /// the devices the row's list does. The account is checked first, and what is made is the
-    /// row's own, never in the account. A cold start with `password` runs the login helper when
-    /// [`login_with`] says so, and hands it the password through [`handover`] while this waits;
-    /// a helper that ended before a session falls back to the plain start.
+    /// row's own, never in the account. The login drop-in [`Self::bring_up`] wrote stays while
+    /// the start waits; a helper that ended before a session falls back to the plain start.
     fn start_person(
         &self,
         seat: &Seat,
@@ -1398,61 +1349,12 @@ impl LinuxBackend {
             .said("account_at_desk")
             .param("account", &seat.account));
         }
-        let (box_dir, state) = (&self.inner.box_dir, &self.inner.state);
+        let state = &self.inner.state;
         shared::ensure_person_dirs(state, &seat.id, &passwd)?;
         let reader = shared::Reader::person(passwd.uid, passwd.gid);
         person_trust(&self.inner, &seat.id, reader)?;
         shared::refresh_seat_library(state, &seat.id, reader)?;
-        let mut written = None;
-        // A unit already up keeps its token: the host read it when it started.
-        if !session::state(&seat.account)?.live() {
-            if session::port_taken(seat.mgmt_port) {
-                return Err(err(
-                    "port_in_use",
-                    format!("management port {} is already in use", seat.mgmt_port),
-                ));
-            }
-            let token = session::mint_token();
-            let door = accounts::lookup("punktfunk")?;
-            shared::write_host_token(
-                state,
-                &seat.id,
-                &session::token_line(&token),
-                shared::token_owner(door.as_ref()),
-            )?;
-            let browser = session::browser(box_dir);
-            session::write_unit_files(seat, Own::Person, &passwd, state, &token, None, &browser)?;
-            let label =
-                (self.inner.login_label.get().cloned()).unwrap_or_else(handover::Label::unbound);
-            if label == handover::Label::Missing && password.is_some() {
-                tracing::warn!(account = %seat.account,
-                    cause = "the login socket doesn't carry PID 1's SELinux context",
-                    "seat started without the wallet login");
-            }
-            let off = self.inner.helper_off.load(Ordering::SeqCst);
-            let login = login_with(password, &label, off);
-            let dropin = login
-                .as_ref()
-                .and_then(|(_, context)| login_dropin(context.as_deref()));
-            let password = login.map(|(password, _)| password);
-            if password.is_some() && dropin.is_none() {
-                tracing::warn!(account = %seat.account, cause = "this binary's path can't go in a unit file",
-                    "seat started without the wallet login");
-            }
-            written = dropin.is_some().then(|| LoginDropin(&seat.account));
-            session::set_login(&seat.account, dropin.as_deref())?;
-            self.stopped_since(asked)?;
-            let unit = session::unit(&seat.account);
-            let _ = run("systemctl_failed", "systemctl", &["reset-failed", &unit]);
-            let handover = &self.inner.handover;
-            let offer = password
-                .filter(|_| written.is_some())
-                .map(|password| handover.offer(&seat.account, password, Instant::now()));
-            run("systemctl_failed", "systemctl", &["start", &unit])?;
-            if let Some(offer) = offer {
-                offer.wait(|| session::state(&seat.account).is_ok_and(|s| s.live()));
-            }
-        }
+        let written = self.bring_up(seat, Own::Person, &passwd, password, asked)?;
         self.track(&seat.id, Tracked::of(seat, &passwd));
         let ready = self.wait_ready(seat, asked, written.is_some());
         drop(written);
@@ -1468,6 +1370,112 @@ impl LinuxBackend {
             }
             ready => ready.map(|()| RuntimeStatus::running()),
         }
+    }
+
+    /// `seat`'s unit up from cold, a row of `kind` on `passwd`'s account: a fresh token, the
+    /// unit's files, then the unit. A unit already up keeps its token, which its host read when it
+    /// started, and nothing here runs. `password` is a person's, for [`Self::person_login`];
+    /// the login drop-in's guard comes back for the caller to hold while it waits.
+    fn bring_up<'s>(
+        &self,
+        seat: &'s Seat,
+        kind: Own,
+        passwd: &accounts::Passwd,
+        password: Option<&Secret>,
+        asked: u64,
+    ) -> Result<Option<LoginDropin<'s>>, BackendError> {
+        if session::state(&seat.account)?.live() {
+            return Ok(None);
+        }
+        // The owner's own host may hold the row's port until the unit's runner stands it down.
+        if kind != Own::Owner && session::port_taken(seat.mgmt_port) {
+            return Err(err(
+                "port_in_use",
+                format!("management port {} is already in use", seat.mgmt_port),
+            ));
+        }
+        let token = session::mint_token();
+        self.write_token(seat, &token)?;
+        let shares = if kind.ours() {
+            self.share_libraries(seat, passwd)
+        } else {
+            None
+        };
+        let (state, browser) = (&self.inner.state, session::browser(&self.inner.box_dir));
+        let shown = shares.as_ref();
+        session::write_unit_files(seat, kind, passwd, state, &token, shown, &browser)?;
+        let (written, password) = match kind {
+            Own::Person => self.person_login(seat, password)?,
+            Own::Owner | Own::Seat => (None, None),
+        };
+        self.stopped_since(asked)?;
+        let unit = session::unit(&seat.account);
+        if kind.ours() {
+            // A manager already up (the last run's, or a linger's from boot) lacks this start's
+            // groups and drop-in; the new session would join it and hand its apps neither.
+            let manager = format!("user@{}.service", passwd.uid);
+            let _ = run("systemctl_failed", "systemctl", &["stop", &manager]);
+        }
+        let _ = run("systemctl_failed", "systemctl", &["reset-failed", &unit]);
+        let handover = &self.inner.handover;
+        let offer =
+            password.map(|password| handover.offer(&seat.account, password, Instant::now()));
+        run("systemctl_failed", "systemctl", &["start", &unit])?;
+        if let Some(offer) = offer {
+            offer.wait(|| session::state(&seat.account).is_ok_and(|s| s.live()));
+        }
+        // The mount's own error is in the unit's journal.
+        for stage in shares
+            .iter()
+            .flat_map(|s| libraries::unmounted(&seat.id, s))
+        {
+            let stage = stage.display();
+            tracing::warn!(seat = %seat.id, %stage, %unit, "seat library stage not mounted");
+        }
+        Ok(written)
+    }
+
+    /// The owner's libraries a made seat is shown, listed in its Steam's library list.
+    fn share_libraries(&self, seat: &Seat, passwd: &accounts::Passwd) -> Option<libraries::Shares> {
+        let (box_dir, state) = (&self.inner.box_dir, &self.inner.state);
+        let source = self.steam_source();
+        let root = source.as_ref().map(|s| s.root.as_path());
+        let owner = self.owner();
+        let shares = libraries::share(box_dir, state, &seat.id, passwd, root, owner.as_ref());
+        let shown = shares.as_ref().map_or(&[][..], |s| s.libraries.as_slice());
+        libraries::register(state, &seat.id, passwd, shown);
+        shares
+    }
+
+    /// How a person's cold start opens their session ([`login_with`]): the login drop-in written,
+    /// or removed, and its guard, made first so a failed write still removes it. The password
+    /// comes back only when the drop-in is written, for the helper to take through [`handover`].
+    fn person_login<'s, 'p>(
+        &self,
+        seat: &'s Seat,
+        password: Option<&'p Secret>,
+    ) -> Result<(Option<LoginDropin<'s>>, Option<&'p Secret>), BackendError> {
+        let label =
+            (self.inner.login_label.get().cloned()).unwrap_or_else(handover::Label::unbound);
+        if label == handover::Label::Missing && password.is_some() {
+            tracing::warn!(account = %seat.account,
+                cause = "the login socket doesn't carry PID 1's SELinux context",
+                "seat started without the wallet login");
+        }
+        let off = self.inner.helper_off.load(Ordering::SeqCst);
+        let login = login_with(password, &label, off);
+        let dropin = login
+            .as_ref()
+            .and_then(|(_, context)| login_dropin(context.as_deref()));
+        let password = login.map(|(password, _)| password);
+        if password.is_some() && dropin.is_none() {
+            tracing::warn!(account = %seat.account, cause = "this binary's path can't go in a unit file",
+                "seat started without the wallet login");
+        }
+        let written = dropin.is_some().then(|| LoginDropin(&seat.account));
+        session::set_login(&seat.account, dropin.as_deref())?;
+        let password = password.filter(|_| written.is_some());
+        Ok((written, password))
     }
 
     /// `seat`'s unit started again as systemd's own login opens it, after the login helper ended
