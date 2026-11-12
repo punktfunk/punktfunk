@@ -362,7 +362,7 @@ fn valid_integrity(s: &str) -> bool {
     let Some((alg, b64)) = s.split_once('-') else {
         return false;
     };
-    matches!(alg, "sha512" | "sha384" | "sha256" | "sha1")
+    matches!(alg, "sha512" | "sha384" | "sha256")
         && !b64.is_empty()
         && b64
             .bytes()
@@ -647,6 +647,7 @@ mod tests {
     fn integrity_shape() {
         assert!(valid_integrity("sha512-abcABC123+/="));
         assert!(!valid_integrity("md5-abc"));
+        assert!(!valid_integrity("sha1-abcABC123+/="));
         assert!(!valid_integrity("sha512-"));
         assert!(!valid_integrity("sha512"));
     }
