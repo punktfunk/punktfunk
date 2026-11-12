@@ -83,6 +83,7 @@
 	"link_unknown_host": "Aucun hôte enregistré ne correspond à « {name} ».",
 	"link_unknown_preset": "Ce lien demande un préréglage nommé « {preset} », absent de cet appareil.",
 	"pair_action": "Associer",
+	"pair_device_code": "Code de l’appareil : {code}",
 	"pair_device_name": "Nom de l’appareil",
 	"pair_device_name_placeholder": "Nom affiché sur l’hôte",
 	"pair_failed": "L’association n’a pas abouti — réessayez depuis la page Appareils de la console web de l’hôte.",

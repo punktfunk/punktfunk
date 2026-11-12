@@ -155,6 +155,13 @@ pub fn pair_and_save(
 /// the host's own timeout.
 pub const REQUEST_ACCESS_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(185);
 
+/// The code this device shows while it waits for approval, or `None` for a certificate that
+/// does not parse.
+pub fn device_code(identity: &(String, String)) -> Option<String> {
+    let fp = endpoint::fingerprint_of_pem(&identity.0).ok()?;
+    Some(punktfunk_core::fp::device_code(&fp))
+}
+
 /// Request access without a PIN: blocks until the host's operator approves this device or
 /// refuses it. `pin` is the advertised fingerprint (`None` trusts on first use); setting
 /// `cancel` withdraws the request. Returns the host certificate fingerprint. Never streams.

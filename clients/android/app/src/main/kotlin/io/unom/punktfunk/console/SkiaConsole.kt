@@ -64,6 +64,7 @@ import io.unom.punktfunk.kit.security.ClientIdentity
 import io.unom.punktfunk.kit.security.IdentityHolder
 import io.unom.punktfunk.kit.security.KnownHost
 import io.unom.punktfunk.kit.security.KnownHostStore
+import io.unom.punktfunk.kit.security.deviceCode
 import io.unom.punktfunk.kit.security.nowSecs
 import io.unom.punktfunk.models.ActiveSession
 import java.util.concurrent.Executors
@@ -367,8 +368,15 @@ object SkiaConsole {
         // a start entry queues its shelf fetch or desktop dial before that, and a cold-start
         // link waits in `parkedLink`.
         main.post(object : Runnable {
+            var codeSent = false
+
             override fun run() {
                 if (handle == 0L) return
+                // Once, when the identity is there: the console shows it while a request waits.
+                if (!codeSent) identity?.let { id ->
+                    codeSent = true
+                    id.deviceCode()?.let { NativeBridge.nativeConsoleSetDeviceCode(handle, it) }
+                }
                 if (identities.settled) {
                     state.now { parkedLink.also { parkedLink = null } }?.let(::handleDeepLink)
                     drainCommands()

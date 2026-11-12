@@ -20,6 +20,19 @@ public struct ClientIdentity: Sendable {
     public var fingerprint: Data? {
         ClientTLS.derFromPEM(certPEM, type: "CERTIFICATE").map { Data(SHA256.hash(data: $0)) }
     }
+
+    /// The code this device shows while it waits for approval, and the host's web console
+    /// shows beside the request: the fingerprint's first 16 hex digits, upper case, in fours.
+    public var deviceCode: String? {
+        fingerprint.map { Self.deviceCode(of: $0) }
+    }
+
+    static func deviceCode(of fingerprint: Data) -> String {
+        let hex = fingerprint.prefix(8).map { String(format: "%02X", $0) }
+        return stride(from: 0, to: hex.count, by: 2)
+            .map { hex[$0...].prefix(2).joined() }
+            .joined(separator: " ")
+    }
 }
 
 /// Generate a fresh client identity (self-signed cert + key, PEM).

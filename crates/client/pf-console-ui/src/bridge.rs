@@ -19,6 +19,9 @@ use std::sync::Arc;
 #[derive(serde::Deserialize)]
 pub struct CreateOptions {
     pub device_name: String,
+    /// This device's code ([`ConsoleOptions::device_code`]). Absent shows none.
+    #[serde(default)]
+    pub device_code: Option<String>,
     /// Skia's resource budget, bytes (the host sizes it from the device's memory class).
     pub gpu_cache_bytes: usize,
     /// Whether the touch shell exists as a fallback (phones/tablets; false on a TV) —
@@ -98,6 +101,7 @@ impl CreateOptions {
         store.set_known_hosts(self.known_hosts);
         let opts = ConsoleOptions {
             device_name: self.device_name,
+            device_code: self.device_code,
             version: None,
             system_keyboard: self.system_keyboard,
             tv: self.tv,

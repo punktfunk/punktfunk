@@ -78,6 +78,9 @@ pub struct Device {
     pub av1_ok: bool,
     /// Name the host stores this client under when pairing.
     pub name: String,
+    /// This device's code ([`crate::shell::ConsoleOptions::device_code`]), shown while a
+    /// request waits for approval.
+    pub code: Option<String>,
     /// The About row's version ([`crate::shell::ConsoleOptions::version`]).
     pub version: String,
 }
@@ -132,6 +135,7 @@ impl Device {
             pyrowave_ok: true,
             av1_ok: true,
             name: "test".into(),
+            code: None,
             version: crate::VERSION.into(),
         }
     }

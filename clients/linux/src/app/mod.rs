@@ -655,7 +655,13 @@ impl SimpleComponent for AppModel {
                                 );
                             }
                             Pending::Approval => {
-                                gate::present_waiting(&self.window, &flight.waiting, name, cancel);
+                                gate::present_waiting(
+                                    &self.window,
+                                    &flight.waiting,
+                                    name,
+                                    &self.identity,
+                                    cancel,
+                                );
                             }
                         }
                     }

@@ -55,6 +55,7 @@
 	"link_unknown_host": "A link named a host this device doesn't know. name: the name or address from the link.",
 	"link_unknown_preset": "preset: the preset name from the link.",
 	"pair_action": "Button that pairs with the typed PIN.",
+	"pair_device_code": "Under 'Approve this device…' while a device waits. code: sixteen hex digits in four groups, the code the host's web console shows for this request.",
 	"pair_device_name": "Label of the field naming this device for the host.",
 	"pair_device_name_placeholder": "Placeholder in the empty device-name field.",
 	"pair_no_pin_hint": "Beside the request-access button on the pairing screen.",

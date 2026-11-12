@@ -309,6 +309,7 @@ mod scene {
         };
         let create = CreateOptions {
             device_name: "Mac".into(),
+            device_code: None,
             gpu_cache_bytes: 64 << 20,
             fallback_ui: false,
             tv: !matches!(platform, Platform::Desktop),

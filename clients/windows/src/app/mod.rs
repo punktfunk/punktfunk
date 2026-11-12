@@ -79,6 +79,8 @@ pub(crate) enum Screen {
     /// Shortcuts button).
     Help,
     Pair,
+    /// First connect to a host that takes new devices: its fingerprint, to trust or decline.
+    Trust,
     /// Per-host network speed test (probe burst + recommended bitrate).
     SpeedTest,
     /// The target host's game library (poster grid; tap-to-launch) — paired hosts only,
@@ -633,6 +635,7 @@ impl Component for Shell {
                 help::help_page(pal, &self.ctx, &svc.set_screen, &self.set(Msg::SettingsNav))
             }
             Screen::Pair => component::<pair::PairPage>("pair", svc.clone()).into(),
+            Screen::Trust => connect::trust_page(pal, &self.ctx, &svc.set_screen, &svc.set_status),
             Screen::SpeedTest => component::<speed::SpeedPage>(
                 "speed",
                 SpeedProps {
