@@ -20,6 +20,27 @@ pub(crate) struct ProfileLock {
     pin: bool,
     /// Wrong PINs in the last 15 minutes over all devices. At 10, PIN entry waits.
     failed_pins: u32,
+    /// The paired devices playing as it now, on its desktop's other profiles too: the ones a
+    /// lock would cut off unless they are kept.
+    playing: Vec<PlayingDevice>,
+}
+
+/// A paired device playing as a profile now.
+#[derive(Serialize, ToSchema, Debug, PartialEq, Eq)]
+pub(crate) struct PlayingDevice {
+    /// SHA-256 of the device's certificate, lowercase hex.
+    fingerprint: String,
+    /// The name it paired with.
+    name: String,
+}
+
+/// `POST /profiles/{id}/lock`, optional.
+#[derive(Deserialize, ToSchema, Default)]
+pub(crate) struct LockProfile {
+    /// Paired devices, by certificate SHA-256 hex, that keep opening it: they join its list,
+    /// until signed out, as it locks. A profile already locked takes only devices it lets in.
+    #[serde(default)]
+    devices: Vec<String>,
 }
 
 /// `PUT /profiles/{id}/lock/pin`.
@@ -88,13 +109,16 @@ async fn readable(st: &MgmtState, id: &str) -> Result<Arc<Profiles>, Response> {
     Ok(profiles)
 }
 
-fn state(profiles: &Profiles, id: &str) -> ProfileLock {
+/// Profile `id`'s lock as it is now.
+async fn state(st: &MgmtState, profiles: &Profiles, id: &str) -> Response {
     let lock = profiles.locks().get(id);
-    ProfileLock {
+    Json(ProfileLock {
         locked: lock.locked,
         pin: lock.pin.is_some(),
         failed_pins: u32::try_from(profiles.locks().failures(id)).unwrap_or(u32::MAX),
-    }
+        playing: playing(st, profiles, id).await,
+    })
+    .into_response()
 }
 
 /// Applies `change` to profile `id`'s lock and answers its state.
@@ -104,9 +128,71 @@ async fn change(st: &MgmtState, id: &str, change: impl FnOnce(&mut Lock)) -> Res
         Err(resp) => return resp,
     };
     match profiles.locks().edit(id, |lock, _| change(lock)) {
-        Ok(()) => Json(state(&profiles, id)).into_response(),
+        Ok(()) => state(st, &profiles, id).await,
         Err(e) => edit_error(e),
     }
+}
+
+/// The paired devices whose live sessions play as a profile under `id`'s lock: this host's
+/// sessions and, on a door, every seat's. A session's client is a fingerprint prefix, so a
+/// device is named only when exactly one paired device carries it.
+async fn playing(st: &MgmtState, profiles: &Profiles, id: &str) -> Vec<PlayingDevice> {
+    let owner = profiles.owner_id();
+    // A GameStream session plays as the owner.
+    let profile_of = |profile: Option<String>, gamestream: bool| {
+        profile.or_else(|| gamestream.then(|| owner.clone()).flatten())
+    };
+    let mut live: Vec<(String, Option<String>, Option<String>)> = crate::session_status::snapshot()
+        .into_iter()
+        .map(|s| {
+            let gamestream = s.plane == crate::events::Plane::Gamestream;
+            let profile = profile_of(s.profile.map(|p| p.id), gamestream);
+            (s.client, s.client_name, profile)
+        })
+        .collect();
+    if st.door.is_some() {
+        let snapshot = st.seats_snapshot().await;
+        let rows = snapshot.statuses.values();
+        for row in rows.flat_map(|s| s["sessions"].as_array().cloned().unwrap_or_default()) {
+            let text = |v: &serde_json::Value| v.as_str().map(str::to_owned);
+            let profile = profile_of(text(&row["profile"]["id"]), row["plane"] == "gamestream");
+            let client = text(&row["client"]).unwrap_or_default();
+            live.push((client, text(&row["client_name"]), profile));
+        }
+    }
+    let holder = |p: &Option<String>| p.as_deref().is_some_and(|p| profiles.lock_holder(p) == id);
+    live.retain(|(_, _, profile)| holder(profile));
+    let mut paired = local_paired(st);
+    let unknown = |paired: &[(String, Option<String>)]| {
+        let named = |c: &String| {
+            paired
+                .iter()
+                .any(|(fp, _)| crate::session_status::is_client(c, fp))
+        };
+        live.iter().any(|(client, ..)| !named(client))
+    };
+    if st.door.is_some() && unknown(&paired) {
+        paired.extend(owner_moonlight(st).await.unwrap_or_default());
+    }
+    let mut out: Vec<PlayingDevice> = Vec::new();
+    for (client, session_name, _) in &live {
+        let mut carrying = paired
+            .iter()
+            .filter(|(fp, _)| crate::session_status::is_client(client, fp));
+        let (Some((fp, label)), None) = (carrying.next(), carrying.next()) else {
+            continue;
+        };
+        if out.iter().any(|d| &d.fingerprint == fp) {
+            continue;
+        }
+        let name = label.as_deref().or(session_name.as_deref());
+        let device = crate::native::unlock::device(fp, name);
+        out.push(PlayingDevice {
+            fingerprint: device.fingerprint,
+            name: device.name,
+        });
+    }
+    out
 }
 
 /// Read a profile's lock
@@ -131,7 +217,7 @@ pub(crate) async fn get_profile_lock(
     Path(id): Path<String>,
 ) -> Response {
     match lockable(&st, &id).await {
-        Ok(profiles) => Json(state(&profiles, &id)).into_response(),
+        Ok(profiles) => state(&st, &profiles, &id).await,
         Err(resp) => resp,
     }
 }
@@ -139,25 +225,76 @@ pub(crate) async fn get_profile_lock(
 /// Lock a profile
 ///
 /// From now only the devices on its list open it, and a device that brings its PIN when it has
-/// one. A session from any other device ends. Admin lane only.
+/// one. `devices`, paired devices, join the list in the same step, so a lock keeps the ones
+/// someone plays on; a session from any other device ends. On a profile already locked it
+/// takes only devices the profile lets in, so it never widens who opens it. Admin lane only.
 #[utoipa::path(
     post,
     path = "/profiles/{id}/lock",
     tag = "profiles",
     operation_id = "lockProfile",
     params(("id" = String, Path, description = "The profile id")),
+    request_body(content = Option<LockProfile>, description = "The devices that keep opening it; none when absent"),
     responses(
         (status = OK, description = "Locked", body = ProfileLock),
+        (status = BAD_REQUEST, description = "Not a device fingerprint", body = ApiError),
         (status = UNAUTHORIZED, description = "Missing or invalid bearer token", body = ApiError),
-        (status = NOT_FOUND, description = "No profile with that id", body = ApiError),
-        (status = CONFLICT, description = "A person's own account, a profile on the owner's lock, or a lock file that doesn't read", body = ApiError),
+        (status = NOT_FOUND, description = "No such profile, or no paired device with a fingerprint", body = ApiError),
+        (status = CONFLICT, description = "A person's own account, a profile on the owner's lock, a lock file that doesn't read, or a locked profile asked to let in another device", body = ApiError),
+        (status = UNPROCESSABLE_ENTITY, description = "The list is full", body = ApiError),
     )
 )]
 pub(crate) async fn lock_profile(
     State(st): State<Arc<MgmtState>>,
     Path(id): Path<String>,
+    body: Option<Json<LockProfile>>,
 ) -> Response {
-    change(&st, &id, |lock| lock.locked = true).await
+    let asked = body.map(|Json(b)| b.devices).unwrap_or_default();
+    let fps: Vec<String> = asked.iter().map(|f| f.to_ascii_lowercase()).collect();
+    let too_many = fps.len() > pf_seats::unlock::MAX_DEVICES;
+    if too_many || !fps.iter().all(|f| pf_seats::unlock::valid_fingerprint(f)) {
+        return api_error(StatusCode::BAD_REQUEST, "That isn't a device fingerprint.");
+    }
+    let profiles = match lockable(&st, &id).await {
+        Ok(profiles) => profiles,
+        Err(resp) => return resp,
+    };
+    let devices = match paired_devices(&st, &fps).await {
+        Ok(devices) => devices,
+        Err(resp) => return resp,
+    };
+    let locked = profiles.locks().edit(&id, |lock, now| {
+        if lock.locked {
+            let admitted = lock.admitted(now);
+            let kept = devices.iter().all(|d| admitted.contains(&d.fingerprint));
+            return kept.then_some(()).ok_or(StatusCode::CONFLICT);
+        }
+        let before = lock.clone();
+        lock.locked = true;
+        if devices.iter().all(|d| lock.admit(d, now, true)) {
+            return Ok(());
+        }
+        *lock = before;
+        Err(StatusCode::UNPROCESSABLE_ENTITY)
+    });
+    match locked {
+        Ok(Ok(())) => state(&st, &profiles, &id).await,
+        Ok(Err(StatusCode::CONFLICT)) => api_error_coded(
+            StatusCode::CONFLICT,
+            "profile_locked_already",
+            "This profile is already locked. Add a device to let another one in.",
+        ),
+        Ok(Err(_)) => full(),
+        Err(e) => edit_error(e),
+    }
+}
+
+fn full() -> Response {
+    api_error_coded(
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "profile_devices_full",
+        "This profile has all the devices it can take. Sign one out first.",
+    )
 }
 
 /// Unlock a profile
@@ -288,11 +425,7 @@ pub(crate) async fn add_profile_device(
         .edit(&id, |lock, now| lock.admit(&device, now, true))
     {
         Ok(true) => devices(&st, &id).await,
-        Ok(false) => api_error_coded(
-            StatusCode::UNPROCESSABLE_ENTITY,
-            "profile_devices_full",
-            "This profile has all the devices it can take. Sign one out first.",
-        ),
+        Ok(false) => full(),
         Err(e) => edit_error(e),
     }
 }
@@ -349,21 +482,34 @@ async fn owner_moonlight(
 
 /// The name device `fp` paired with here, when it is paired: natively, else with Moonlight.
 fn paired_label(st: &MgmtState, fp: &str) -> Option<Option<String>> {
-    let native = st.native.as_ref().and_then(|np| {
-        let paired = np.list().into_iter();
-        paired
-            .filter(|c| c.fingerprint.eq_ignore_ascii_case(fp))
-            .map(|c| c.name)
-            .next()
-    });
-    if native.is_some() {
-        return Some(native);
+    let paired = local_paired(st).into_iter();
+    paired.filter(|(f, _)| f == fp).map(|(_, l)| l).next()
+}
+
+/// The devices paired with this host, lowercase, under the names they paired with: native ones
+/// first, then Moonlight ones and their labels.
+fn local_paired(st: &MgmtState) -> Vec<(String, Option<String>)> {
+    let native = st.native.as_ref().map(|np| np.list()).unwrap_or_default();
+    let mut paired: Vec<_> = native
+        .into_iter()
+        .map(|c| (c.fingerprint.to_ascii_lowercase(), Some(c.name)))
+        .collect();
+    let ders = st
+        .app
+        .paired
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .clone();
+    if !ders.is_empty() {
+        let mut labels = crate::gamestream::load_client_labels();
+        let moonlight = ders.iter().map(|der| {
+            let fp = hex::encode(crate::https::sha256(der));
+            let label = labels.remove(&fp);
+            (fp, label)
+        });
+        paired.extend(moonlight);
     }
-    let ders = st.app.paired.lock().unwrap_or_else(|e| e.into_inner());
-    let moonlight = ders
-        .iter()
-        .any(|der| hex::encode(crate::https::sha256(der)) == fp);
-    moonlight.then(|| crate::gamestream::load_client_labels().remove(fp))
+    paired
 }
 
 /// `GET /profiles/{id}/devices` for a profile that takes a lock: its list.

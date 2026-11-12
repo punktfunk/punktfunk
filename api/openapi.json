@@ -8126,7 +8126,7 @@
           "profiles"
         ],
         "summary": "Lock a profile",
-        "description": "From now only the devices on its list open it, and a device that brings its PIN when it has\none. A session from any other device ends. Admin lane only.",
+        "description": "From now only the devices on its list open it, and a device that brings its PIN when it has\none. `devices`, paired devices, join the list in the same step, so a lock keeps the ones\nsomeone plays on; a session from any other device ends. On a profile already locked it\ntakes only devices the profile lets in, so it never widens who opens it. Admin lane only.",
         "operationId": "lockProfile",
         "parameters": [
           {
@@ -8139,6 +8139,23 @@
             }
           }
         ],
+        "requestBody": {
+          "description": "The devices that keep opening it; none when absent",
+          "content": {
+            "application/json": {
+              "schema": {
+                "oneOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "$ref": "#/components/schemas/LockProfile"
+                  }
+                ]
+              }
+            }
+          }
+        },
         "responses": {
           "200": {
             "description": "Locked",
@@ -8146,6 +8163,16 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ProfileLock"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Not a device fingerprint",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
                 }
               }
             }
@@ -8161,7 +8188,7 @@
             }
           },
           "404": {
-            "description": "No profile with that id",
+            "description": "No such profile, or no paired device with a fingerprint",
             "content": {
               "application/json": {
                 "schema": {
@@ -8171,7 +8198,17 @@
             }
           },
           "409": {
-            "description": "A person's own account, a profile on the owner's lock, or a lock file that doesn't read",
+            "description": "A person's own account, a profile on the owner's lock, a lock file that doesn't read, or a locked profile asked to let in another device",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "The list is full",
             "content": {
               "application/json": {
                 "schema": {
@@ -15832,6 +15869,19 @@
           }
         }
       },
+      "LockProfile": {
+        "type": "object",
+        "description": "`POST /profiles/{id}/lock`, optional.",
+        "properties": {
+          "devices": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Paired devices, by certificate SHA-256 hex, that keep opening it: they join its list,\nuntil signed out, as it locks. A profile already locked takes only devices it lets in."
+          }
+        }
+      },
       "LogEntry": {
         "type": "object",
         "required": [
@@ -16808,6 +16858,24 @@
           }
         }
       },
+      "PlayingDevice": {
+        "type": "object",
+        "description": "A paired device playing as a profile now.",
+        "required": [
+          "fingerprint",
+          "name"
+        ],
+        "properties": {
+          "fingerprint": {
+            "type": "string",
+            "description": "SHA-256 of the device's certificate, lowercase hex."
+          },
+          "name": {
+            "type": "string",
+            "description": "The name it paired with."
+          }
+        }
+      },
       "PluginAccessSnapshot": {
         "type": "object",
         "description": "What an API read returns for one plugin: its entry plus its pending rows.",
@@ -17389,7 +17457,8 @@
         "required": [
           "locked",
           "pin",
-          "failed_pins"
+          "failed_pins",
+          "playing"
         ],
         "properties": {
           "failed_pins": {
@@ -17405,6 +17474,13 @@
           "pin": {
             "type": "boolean",
             "description": "It has a PIN."
+          },
+          "playing": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PlayingDevice"
+            },
+            "description": "The paired devices playing as it now, on its desktop's other profiles too: the ones a\nlock would cut off unless they are kept."
           }
         }
       },

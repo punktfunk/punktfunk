@@ -279,8 +279,10 @@ export type SignedInKind = "for_now" | "stay" | "key"
 export const SignedInKind = Schema.Literals(["for_now", "stay", "key"]).annotate({ "description": "How a signed-in device gets back on.", "identifier": "SignedInKind" })
 export type ProfileDeviceAdd = { readonly "fingerprint": string } & { readonly [x: string]: Schema.Json }
 export const ProfileDeviceAdd = Schema.StructWithRest(Schema.Struct({ "fingerprint": Schema.String.annotate({ "description": "SHA-256 of a paired device's certificate, hex: a Punktfunk device or a Moonlight one." }) }), [Schema.Record(Schema.String, Schema.Json.annotate({ "expected": "JSON value" }))]).annotate({ "description": "`POST /profiles/{id}/devices`.", "identifier": "ProfileDeviceAdd" })
-export type ProfileLock = { readonly "failed_pins": number, readonly "locked": boolean, readonly "pin": boolean } & { readonly [x: string]: Schema.Json }
-export const ProfileLock = Schema.StructWithRest(Schema.Struct({ "failed_pins": Schema.Number.annotate({ "description": "Wrong PINs in the last 15 minutes over all devices. At 10, PIN entry waits.", "format": "int32" }).check(Schema.isInt().annotate({ "expected": "an integer" })).check(Schema.isGreaterThanOrEqualTo(0).annotate({ "expected": "a value greater than or equal to 0" })), "locked": Schema.Boolean.annotate({ "description": "Only the devices on its list, and a device that brings its PIN, open it." }), "pin": Schema.Boolean.annotate({ "description": "It has a PIN." }) }), [Schema.Record(Schema.String, Schema.Json.annotate({ "expected": "JSON value" }))]).annotate({ "description": "A profile's lock, as the console shows it.", "identifier": "ProfileLock" })
+export type PlayingDevice = { readonly "fingerprint": string, readonly "name": string } & { readonly [x: string]: Schema.Json }
+export const PlayingDevice = Schema.StructWithRest(Schema.Struct({ "fingerprint": Schema.String.annotate({ "description": "SHA-256 of the device's certificate, lowercase hex." }), "name": Schema.String.annotate({ "description": "The name it paired with." }) }), [Schema.Record(Schema.String, Schema.Json.annotate({ "expected": "JSON value" }))]).annotate({ "description": "A paired device playing as a profile now.", "identifier": "PlayingDevice" })
+export type LockProfile = { readonly "devices"?: ReadonlyArray<string> } & { readonly [x: string]: Schema.Json }
+export const LockProfile = Schema.StructWithRest(Schema.Struct({ "devices": Schema.optionalKey(Schema.Array(Schema.String).annotate({ "description": "Paired devices, by certificate SHA-256 hex, that keep opening it: they join its list,\nuntil signed out, as it locks. A profile already locked takes only devices it lets in." })) }), [Schema.Record(Schema.String, Schema.Json.annotate({ "expected": "JSON value" }))]).annotate({ "description": "`POST /profiles/{id}/lock`, optional.", "identifier": "LockProfile" })
 export type ProfilePin = { readonly "pin": string } & { readonly [x: string]: Schema.Json }
 export const ProfilePin = Schema.StructWithRest(Schema.Struct({ "pin": Schema.String.annotate({ "description": "4 to 8 digits.", "examples": ["2468"] }) }), [Schema.Record(Schema.String, Schema.Json.annotate({ "expected": "JSON value" }))]).annotate({ "description": "`PUT /profiles/{id}/lock/pin`.", "identifier": "ProfilePin" })
 export type UnlockChallenge = { readonly "challenge": string, readonly "seat": string } & { readonly [x: string]: Schema.Json }
@@ -453,6 +455,8 @@ export type SeatCheck = { readonly "code": string, readonly "id"?: string | null
 export const SeatCheck = Schema.StructWithRest(Schema.Struct({ "code": Schema.String.annotate({ "description": "A stable id such as `rds_role`.", "examples": ["rds_role"] }), "id": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null]).annotate({ "description": "The host message `message` is the English of, worded with `params`." })), "level": CheckLevel, "message": Schema.String.annotate({ "description": "One plain sentence for the operator." }), "params": Schema.optionalKey(Schema.Record(Schema.String, Schema.String).annotate({ "description": "The values of that message's placeholders, by name." }).check(Schema.isPropertyNames(Schema.String).annotate({ "expected": "an object with property names matching the schema" }))), "seat_id": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null]).annotate({ "description": "The seat it is about; absent when it is about the box." })), "seat_name": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null]).annotate({ "description": "The name of the profile that plays on that seat, when one does." })) }), [Schema.Record(Schema.String, Schema.Json.annotate({ "expected": "JSON value" }))]).annotate({ "description": "One thing the seat checks found.", "identifier": "SeatCheck" })
 export type SignedInDevice = { readonly "added_unix": number, readonly "fingerprint": string, readonly "kind": SignedInKind, readonly "last_unix": number, readonly "name": string } & { readonly [x: string]: Schema.Json }
 export const SignedInDevice = Schema.StructWithRest(Schema.Struct({ "added_unix": Schema.Number.annotate({ "description": "When it first signed in, unix seconds.", "format": "int64" }).check(Schema.isInt().annotate({ "expected": "an integer" })), "fingerprint": Schema.String.annotate({ "description": "SHA-256 of the device's certificate, lowercase hex." }), "kind": SignedInKind, "last_unix": Schema.Number.annotate({ "description": "When it last unlocked or rejoined, unix seconds.", "format": "int64" }).check(Schema.isInt().annotate({ "expected": "an integer" })), "name": Schema.String.annotate({ "description": "The name it paired with." }) }), [Schema.Record(Schema.String, Schema.Json.annotate({ "expected": "JSON value" }))]).annotate({ "description": "A device signed in to a profile on a person's own Linux account, or on a locked profile's\nlist.", "identifier": "SignedInDevice" })
+export type ProfileLock = { readonly "failed_pins": number, readonly "locked": boolean, readonly "pin": boolean, readonly "playing": ReadonlyArray<PlayingDevice> } & { readonly [x: string]: Schema.Json }
+export const ProfileLock = Schema.StructWithRest(Schema.Struct({ "failed_pins": Schema.Number.annotate({ "description": "Wrong PINs in the last 15 minutes over all devices. At 10, PIN entry waits.", "format": "int32" }).check(Schema.isInt().annotate({ "expected": "an integer" })).check(Schema.isGreaterThanOrEqualTo(0).annotate({ "expected": "a value greater than or equal to 0" })), "locked": Schema.Boolean.annotate({ "description": "Only the devices on its list, and a device that brings its PIN, open it." }), "pin": Schema.Boolean.annotate({ "description": "It has a PIN." }), "playing": Schema.Array(PlayingDevice).annotate({ "description": "The paired devices playing as it now, on its desktop's other profiles too: the ones a\nlock would cut off unless they are kept." }) }), [Schema.Record(Schema.String, Schema.Json.annotate({ "expected": "JSON value" }))]).annotate({ "description": "A profile's lock, as the console shows it.", "identifier": "ProfileLock" })
 export type SessionSettings = { readonly "disconnect_grace_seconds"?: number, readonly "game_on_new_launch"?: GameOnNewLaunch, readonly "game_on_session_end"?: GameOnSessionEnd, readonly "session_on_game_exit"?: boolean, readonly "version"?: number } & { readonly [x: string]: Schema.Json }
 export const SessionSettings = Schema.StructWithRest(Schema.Struct({ "disconnect_grace_seconds": Schema.optionalKey(Schema.Number.annotate({ "description": "Ignored unless `game_on_session_end` is `Always`.", "format": "int32" }).check(Schema.isInt().annotate({ "expected": "an integer" })).check(Schema.isGreaterThanOrEqualTo(0).annotate({ "expected": "a value greater than or equal to 0" }))), "game_on_new_launch": Schema.optionalKey(GameOnNewLaunch), "game_on_session_end": Schema.optionalKey(GameOnSessionEnd), "session_on_game_exit": Schema.optionalKey(Schema.Boolean), "version": Schema.optionalKey(Schema.Number.annotate({ "format": "int32" }).check(Schema.isInt().annotate({ "expected": "an integer" })).check(Schema.isGreaterThanOrEqualTo(0).annotate({ "expected": "a value greater than or equal to 0" }))) }), [Schema.Record(Schema.String, Schema.Json.annotate({ "expected": "JSON value" }))]).annotate({ "identifier": "SessionSettings" })
 export type LinkMinute = { readonly "abr_backoffs": number, readonly "abr_max_kbps": number, readonly "abr_min_kbps": number, readonly "acked_p": number, readonly "anchor_p": number, readonly "egress_kbps": number, readonly "fec_max_pct": number, readonly "fec_min_pct": number, readonly "gaps": number, readonly "idr": number, readonly "intra_refresh": number, readonly "keyframe_req": number, readonly "link_kbps": number, readonly "loss_head": number, readonly "loss_max_ppm": number, readonly "loss_mean_ppm": number, readonly "loss_mid": number, readonly "loss_tail": number, readonly "loss_windows": number, readonly "resend_pkts": number, readonly "retargets": number, readonly "rfi": number, readonly "rfi_declined": number, readonly "secs": number, readonly "session_id": number, readonly "shape": LinkShape, readonly "sock_drops": number, readonly "unrecovered": number, readonly "windows": number } & { readonly [x: string]: Schema.Json }
@@ -1606,14 +1610,20 @@ export type GetProfileLock404 = ApiError
 export const GetProfileLock404 = ApiError
 export type GetProfileLock409 = ApiError
 export const GetProfileLock409 = ApiError
+export type LockProfileRequestJson = null | LockProfile
+export const LockProfileRequestJson = Schema.Union([Schema.Null, LockProfile], { mode: "oneOf" })
 export type LockProfile200 = ProfileLock
 export const LockProfile200 = ProfileLock
+export type LockProfile400 = ApiError
+export const LockProfile400 = ApiError
 export type LockProfile401 = ApiError
 export const LockProfile401 = ApiError
 export type LockProfile404 = ApiError
 export const LockProfile404 = ApiError
 export type LockProfile409 = ApiError
 export const LockProfile409 = ApiError
+export type LockProfile422 = ApiError
+export const LockProfile422 = ApiError
 export type UnlockProfile200 = ProfileLock
 export const UnlockProfile200 = ProfileLock
 export type UnlockProfile401 = ApiError
@@ -3434,11 +3444,14 @@ export const make = (
   ),
     "lockProfile": (id, options: Parameters<Punktfunk["lockProfile"]>[1]) => __makePathRequest(HttpClientRequest.post, [id], () => "/api/v1/profiles/" + __encodePathParam(id) + "/lock").pipe(
     Effect.flatMap((request) => request.pipe(
-      withResponse(options?.config)(HttpClientResponse.matchStatus({
+      HttpClientRequest.bodyJsonUnsafe(options.payload),
+      withResponse(options.config)(HttpClientResponse.matchStatus({
       "2xx": decodeSuccess(LockProfile200),
+      "400": decodeError("LockProfile400", LockProfile400),
       "401": decodeError("LockProfile401", LockProfile401),
       "404": decodeError("LockProfile404", LockProfile404),
       "409": decodeError("LockProfile409", LockProfile409),
+      "422": decodeError("LockProfile422", LockProfile422),
       orElse: unexpectedStatus
     }))
     ))
@@ -5014,11 +5027,13 @@ readonly "getProfileLock": {
   }
   /**
 * From now only the devices on its list open it, and a device that brings its PIN when it has
-* one. A session from any other device ends. Admin lane only.
+* one. `devices`, paired devices, join the list in the same step, so a lock keeps the ones
+* someone plays on; a session from any other device ends. On a profile already locked it
+* takes only devices the profile lets in, so it never widens who opens it. Admin lane only.
 */
 readonly "lockProfile": {
-    <Config extends OperationConfig | undefined = undefined>(id: string, options: { readonly config: Config }): Effect.Effect<WithOptionalResponse<typeof LockProfile200.Type, Config>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"LockProfile401", typeof LockProfile401.Type> | PunktfunkError<"LockProfile404", typeof LockProfile404.Type> | PunktfunkError<"LockProfile409", typeof LockProfile409.Type>>;
-    <Config extends OperationConfig | undefined = undefined>(id: string, options: { readonly config?: Config | undefined } | undefined): Effect.Effect<WithOptionalResponse<typeof LockProfile200.Type, Config | undefined>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"LockProfile401", typeof LockProfile401.Type> | PunktfunkError<"LockProfile404", typeof LockProfile404.Type> | PunktfunkError<"LockProfile409", typeof LockProfile409.Type>>;
+    <Config extends OperationConfig | undefined = undefined>(id: string, options: { readonly payload: typeof LockProfileRequestJson.Encoded; readonly config: Config }): Effect.Effect<WithOptionalResponse<typeof LockProfile200.Type, Config>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"LockProfile400", typeof LockProfile400.Type> | PunktfunkError<"LockProfile401", typeof LockProfile401.Type> | PunktfunkError<"LockProfile404", typeof LockProfile404.Type> | PunktfunkError<"LockProfile409", typeof LockProfile409.Type> | PunktfunkError<"LockProfile422", typeof LockProfile422.Type>>;
+    <Config extends OperationConfig | undefined = undefined>(id: string, options: { readonly payload: typeof LockProfileRequestJson.Encoded; readonly config?: Config | undefined }): Effect.Effect<WithOptionalResponse<typeof LockProfile200.Type, Config | undefined>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"LockProfile400", typeof LockProfile400.Type> | PunktfunkError<"LockProfile401", typeof LockProfile401.Type> | PunktfunkError<"LockProfile404", typeof LockProfile404.Type> | PunktfunkError<"LockProfile409", typeof LockProfile409.Type> | PunktfunkError<"LockProfile422", typeof LockProfile422.Type>>;
   }
   /**
 * Every paired device opens it again. Its list and its PIN stay for the next lock. Admin lane
