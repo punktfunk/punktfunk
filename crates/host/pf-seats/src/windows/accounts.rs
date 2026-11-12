@@ -28,9 +28,10 @@ use std::time::{Duration, Instant};
 use windows::core::{PCWSTR, PWSTR};
 use windows::Win32::Foundation::{
     CloseHandle, LocalFree, ERROR_ACCOUNT_LOCKED_OUT, ERROR_ALIAS_EXISTS, ERROR_FILE_NOT_FOUND,
-    ERROR_LOGON_FAILURE, ERROR_MEMBER_IN_ALIAS, ERROR_MEMBER_NOT_IN_ALIAS, ERROR_NO_SUCH_ALIAS,
-    ERROR_NO_SUCH_MEMBER, ERROR_PASSWORD_EXPIRED, ERROR_PASSWORD_MUST_CHANGE, HANDLE, HLOCAL,
-    NTSTATUS, STATUS_OBJECT_NAME_NOT_FOUND, WIN32_ERROR,
+    ERROR_LOGON_FAILURE, ERROR_LOGON_TYPE_NOT_GRANTED, ERROR_MEMBER_IN_ALIAS,
+    ERROR_MEMBER_NOT_IN_ALIAS, ERROR_NO_SUCH_ALIAS, ERROR_NO_SUCH_MEMBER, ERROR_PASSWORD_EXPIRED,
+    ERROR_PASSWORD_MUST_CHANGE, HANDLE, HLOCAL, NTSTATUS, STATUS_OBJECT_NAME_NOT_FOUND,
+    WIN32_ERROR,
 };
 use windows::Win32::NetworkManagement::NetManagement::{
     NERR_GroupExists, NERR_GroupNotFound, NERR_Success, NERR_UserExists, NERR_UserInGroup,
@@ -618,6 +619,8 @@ fn typed_credential(password: &Secret) -> WinResult<Credential> {
 
 /// Signs `account` in over the network with `credential` and closes the token: proof the
 /// password is the account's. Each refusal counts toward the account's lockout; `fault` words it.
+/// A policy that denies the account network sign-ins is [`network_logon_denied`] instead, which
+/// neither counts as a wrong password nor retries.
 fn verify_password(
     account: &str,
     credential: &Credential,
@@ -638,12 +641,28 @@ fn verify_password(
             &mut token,
         )
     }
-    .map_err(fault)?;
+    .map_err(|error| match WIN32_ERROR::from_error(&error) {
+        Some(ERROR_LOGON_TYPE_NOT_GRANTED) => network_logon_denied(account),
+        _ => fault(error),
+    })?;
     // SAFETY: LogonUserW returned this owned token and no later operation uses it.
     unsafe {
         let _ = CloseHandle(token);
     }
     Ok(())
+}
+
+/// The sentence for an account local policy keeps from network sign-ins, which the password
+/// check needs and Remote Desktop doesn't.
+fn network_logon_denied(account: &str) -> BackendError {
+    backend_error(
+        "account_policy",
+        format!(
+            "Couldn't check {account}'s password — this PC's security policy denies it sign-in \
+             from the network. In Local Security Policy, remove the entry that covers it from \
+             Deny access to this computer from the network, then try again."
+        ),
+    )
 }
 
 /// Puts `account` in Remote Desktop Users. `true`: this call added it.
@@ -1208,5 +1227,20 @@ mod tests {
                 fault.message
             );
         }
+    }
+
+    /// A policy refusal is no wrong password: the attempt limits and the seat's retry rule read
+    /// `account_policy` as neither.
+    #[test]
+    fn a_denied_network_sign_in_is_a_policy_refusal() {
+        let refused = network_logon_denied("Bärbel");
+        assert_eq!(refused.code, "account_policy");
+        assert!(
+            refused
+                .message
+                .starts_with("Couldn't check Bärbel's password"),
+            "{}",
+            refused.message
+        );
     }
 }
