@@ -2331,10 +2331,12 @@ enum Sends {
     Nothing,
 }
 
-/// What it hears back: a redirect, or the host's typed close and its sentence.
+/// What it hears back: a redirect, the session starting here, or the host's typed close and its
+/// sentence.
 #[derive(Debug, PartialEq)]
 enum Heard {
     Redirect { port: u16, pin: String },
+    Played,
     Closed(punktfunk_core::reject::RejectReason, String),
 }
 
@@ -2380,10 +2382,14 @@ async fn dial_person(
             pendings += 1;
             continue;
         }
+        if ty == registry::MSG_SERVER_HELLO {
+            conn.close(0u32.into(), b"");
+            return (pendings, Heard::Played);
+        }
         assert_eq!(
             ty,
             msg::Redirect::TYPE,
-            "a person's account answers no other frame"
+            "an admission answers no other frame"
         );
         let to = msg::decode::<msg::Redirect>(ty, &body).unwrap();
         conn.close(0u32.into(), b"");
@@ -2774,4 +2780,95 @@ fn a_wrong_password_never_reaches_a_log_or_an_error() {
             "That isn't jdoe's password.".into()
         )
     );
+}
+
+const OWNER_PROFILE: &str = "4f1c3a9b0e27";
+const KID_PROFILE: &str = "c1d000000001";
+
+/// A device's dial: the profile it names, the features it offers, what it sends after its hello.
+type Dial<'a> = (
+    &'a str,
+    punktfunk_core::quic::v2::features::FeatureSet,
+    Sends,
+);
+
+/// The features of a client that follows redirects, and with `prompts` also asks for an unlock.
+fn offers(prompts: bool) -> punktfunk_core::quic::v2::features::FeatureSet {
+    use punktfunk_core::quic::v2::registry::{FEATURE_PROFILES, FEATURE_PROFILE_UNLOCK};
+    let features = punktfunk_core::quic::v2::features::FeatureSet::default().with(FEATURE_PROFILES);
+    match prompts {
+        true => features.with(FEATURE_PROFILE_UNLOCK),
+        false => features,
+    }
+}
+
+/// A box of its own on `port`: the owner on the box's own session, and [`KID_PROFILE`] on a made
+/// seat on `port + 1000` that no other test's redirect holds. `locks`, given the device's
+/// fingerprint, is the profile lock file, `null` for none. One paired device makes `dials` in
+/// turn; what it hears each time, and where the lock file is.
+fn dial_box(
+    port: u16,
+    locks: impl FnOnce(&str) -> serde_json::Value,
+    dials: Vec<Dial<'_>>,
+) -> (Vec<Heard>, std::path::PathBuf) {
+    use crate::native::unlock::fake::{self, Fake};
+    let dir = crate::test_support::scratch();
+    let seat_id = format!("{port:032x}");
+    let mut seat = fake::person(&seat_id, port + 1000);
+    seat.adopted_uid = None;
+    let file = serde_json::json!({"version": 1, "profiles": [
+        {"id": OWNER_PROFILE, "display_name": "Enrico", "os_account": {"kind": "operator"}},
+        {"id": KID_PROFILE, "display_name": "Kid", "os_account": {"kind": "seat", "seat": seat_id}},
+    ]});
+    std::fs::write(dir.join("profiles.json"), file.to_string()).unwrap();
+    let np = NativePairing::load_with(Some(dir.join("punktfunk1-paired.json")), None, false);
+    let np = Arc::new(np.unwrap());
+    let (cert, key) = endpoint::generate_identity().unwrap();
+    let fp = hex::encode(endpoint::fingerprint_of_pem(&cert).unwrap());
+    np.add_with_access("Kid's tablet", &fp, None).unwrap();
+    let lock_file = dir.join(pf_seats::locks::FILE);
+    let locks = locks(&fp);
+    if !locks.is_null() {
+        std::fs::write(&lock_file, locks.to_string()).unwrap();
+    }
+    let profiles = crate::profiles::Profiles::load_with(Some(dir.join("profiles.json")), None);
+    let sup = Fake::new(vec![seat], |_| Ok(pf_seats::ipc::CommandResult::Left));
+    let _armed = fake::arm(&fp, Arc::new(sup));
+    let host = spawn_profile_host(port, dials.len() as u32, np, Arc::new(profiles));
+    std::thread::sleep(std::time::Duration::from_millis(500));
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let heard = dials
+        .into_iter()
+        .map(|(profile, features, sends)| {
+            let dialled = dial_person(port, (&cert, &key), profile, features, sends);
+            rt.block_on(dialled).1
+        })
+        .collect();
+    host.join().unwrap().unwrap();
+    (heard, lock_file)
+}
+
+/// The kid's seat as a redirect from `port` names it.
+fn kid_seat(port: u16) -> Heard {
+    Heard::Redirect {
+        port: port + 1000,
+        pin: "5eed".repeat(16),
+    }
+}
+
+/// An open profile opens as it always has: the box's own session plays here and a seat's profile
+/// goes to its seat, with nothing asked of the device.
+#[test]
+fn an_open_profile_opens_on_every_session_path() {
+    let _registry = crate::session_status::tests::registry_lock();
+    let _serial = SESSION_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    let dials = vec![
+        (OWNER_PROFILE, offers(true), Sends::Nothing),
+        (KID_PROFILE, offers(false), Sends::Nothing),
+    ];
+    let (heard, _) = dial_box(19801, |_| serde_json::Value::Null, dials);
+    assert_eq!(heard, [Heard::Played, kid_seat(19801)]);
 }
