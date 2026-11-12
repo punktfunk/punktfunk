@@ -149,19 +149,27 @@ impl Overrides {
         }
     }
 
-    /// The profile's entry for `id` when it has one, a shared override it names looked up in its
-    /// own file and then the box's; else the box's.
+    /// [`Self::own_entry`] when there is one, else the box's.
     pub(crate) fn resolve(&self, id: &str) -> Option<GameOverrides> {
-        match self
-            .own
-            .as_ref()
-            .and_then(|own| Some((own, own.entry(id)?)))
-        {
-            Some((own, entry)) => resolve_entry(entry, |set| {
-                own.sets.get(set).or_else(|| self.base.sets.get(set))
-            }),
+        match self.own_entry(id) {
+            Some(entry) => resolve_entry(entry, |set| self.set(set)),
             None => self.base.resolve(id),
         }
+    }
+
+    /// The profile's entry for `id`, its game's then its source's. One naming a shared override
+    /// that is gone sets nothing, so the box's applies; a `none` is an entry.
+    pub(crate) fn own_entry(&self, id: &str) -> Option<&OverrideEntry> {
+        let own = self.own.as_ref()?;
+        let live = |e: &&OverrideEntry| e.set.as_deref().is_none_or(|s| self.set(s).is_some());
+        let game = own.games.get(id).filter(live);
+        game.or_else(|| own.sources.get(store_of(id)).filter(live))
+    }
+
+    /// Shared override `id`: the profile's, then the box's.
+    fn set(&self, id: &str) -> Option<&GameOverrides> {
+        let own = self.own.as_ref().and_then(|own| own.sets.get(id));
+        own.or_else(|| self.base.sets.get(id))
     }
 }
 
@@ -541,6 +549,32 @@ mod tests {
             checked_entry(&own, &BTreeSet::new(), entry),
             Err(OverrideError::NoSuchSet)
         ));
+    }
+
+    /// A profile's entry, for a game or its source, naming a shared override that is gone sets
+    /// nothing: the box's applies. Its `none` still wins.
+    #[test]
+    fn a_profile_s_entry_on_a_gone_set_leaves_the_box_s() {
+        let own: OverridesDoc = serde_json::from_str(
+            r#"{"games":{"steam:413150":{"set":"fedcba987654"},"steam:1091500":{"none":true}},
+                "sources":{"heroic":{"set":"fedcba987654"}}}"#,
+        )
+        .unwrap();
+        let o = Overrides {
+            base: doc(),
+            own: Some(own),
+        };
+        for id in ["steam:413150", "heroic:other"] {
+            assert!(o.own_entry(id).is_none(), "{id}");
+            assert_eq!(o.resolve(id), doc().resolve(id), "{id}");
+            assert!(o.resolve(id).is_some(), "{id}");
+        }
+        assert!(o.own_entry("steam:1091500").is_some());
+        assert_eq!(
+            o.resolve("steam:1091500"),
+            None,
+            "its none beats the box's set"
+        );
     }
 
     #[test]

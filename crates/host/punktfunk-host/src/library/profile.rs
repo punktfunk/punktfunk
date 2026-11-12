@@ -160,7 +160,7 @@ pub struct ProfileValues {
 /// The profile's own overrides and picks, read once per list.
 #[derive(Default)]
 pub(crate) struct OwnValues {
-    overrides: Option<OverridesDoc>,
+    overrides: Option<Overrides>,
     picks: BTreeMap<String, Artwork>,
 }
 
@@ -171,7 +171,7 @@ impl OwnValues {
             return Self::default();
         }
         Self {
-            overrides: Some(load_overrides(view)),
+            overrides: Some(Overrides::load(view)),
             picks: own_picks(view),
         }
     }
@@ -181,7 +181,7 @@ impl OwnValues {
         let overrides = self
             .overrides
             .as_ref()
-            .is_some_and(|o| o.entry(id).is_some());
+            .is_some_and(|o| o.own_entry(id).is_some());
         let picks: Vec<String> = self.picks.get(id).map_or_else(Vec::new, |art| {
             ArtKind::ALL
                 .iter()
