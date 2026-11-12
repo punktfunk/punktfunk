@@ -32,7 +32,7 @@ The last line, `punktfunk-omarchy setup`, does the rest. Each step is safe to re
 | --- | --- |
 | **Groups** | Adds you to `input` (virtual gamepads) and `punktfunk` (the virtual Steam Deck pad). Log out and back in before streaming. |
 | **Autostart** | Enables `punktfunk-host` and `punktfunk-web` as user services that start at login. |
-| **Firewall** | Opens the host's ufw profiles to your local networks, `tailscale0` and `wt0` (see [Firewall](#firewall)). |
+| **Firewall** | Opens the host's ufw profiles to your local networks (`192.168.0.0/16`, `10.0.0.0/8`, `172.16.0.0/12`), Tailscale's `tailscale0` and NetBird's `wt0`, plus a management port moved off 47990. |
 | **Browser trust** | Trusts the console's certificate in Chromium, so it opens without a warning. |
 | **App menu** | Adds **Punktfunk Web Console** to Apps (`Super`+`Space`), already signed in, plus a **Punktfunk Host** submenu. |
 | **Bar widget** | A Punktfunk widget in the bar. It replaces the tray icon. |
@@ -78,20 +78,10 @@ session, or to open the web console when nothing is streaming.
 
 Keys: `1`–`5` or `h` / `l` switch tabs, `j` / `k` move, Enter activates, Esc closes.
 
-## Firewall
-
-`setup` opens `punktfunk-native` and `punktfunk-web` to `192.168.0.0/16`, `10.0.0.0/8`,
-`172.16.0.0/12`, `tailscale0` and NetBird's `wt0`. The two interface rules wait dormant until the
-interface exists.
-`punktfunk-gamestream` opens only while GameStream is on, which
-[**GameStream** in the menu](#moonlight-gamestream) sets. A management port moved off 47990 opens
-too. Video needs no rule; see [Ports](/docs/ports).
-
 ## Updating
 
-`omarchy update` updates Punktfunk with the rest of the system, after its snapper snapshot. The
-console's Updates card shows that command instead of an **Update now** button. A rollback reverts
-the binaries only; your pairings and `~/.config/punktfunk` stay.
+`omarchy update` updates Punktfunk with the rest of the system, after its snapper snapshot. A
+rollback reverts the binaries only; your pairings and `~/.config/punktfunk` stay.
 
 ## Next to Sunshine
 
@@ -117,22 +107,13 @@ setting, restarts the host and opens the ufw profile. Enter the PIN a Moonlight 
 ## This box as a client
 
 The install line includes `punktfunk-client`. It follows the Omarchy theme live; turn that off with
-**Follow the Omarchy theme** in its preferences, or **Follow system theme** in the game console's
-settings. **Hosts in the Omarchy menu** in preferences (or `punktfunk-client --omarchy-menu on`)
-adds a **Punktfunk** submenu with a connect row per saved host, a wake row where the MAC is known,
-and the game console. `setup` turns it on for you.
+**Follow system theme** in its preferences or in the game console's settings. **Hosts in the
+Omarchy menu** in preferences (or `punktfunk-client --omarchy-menu on`) adds a **Punktfunk**
+submenu with a connect row per saved host, a wake row where the MAC is known, and the game
+console. `setup` turns it on for you.
 
 ## Good to know
 
-- **Sessions.** The host starts at login on both Hyprland login sessions. Only
-  **Hyprland (uwsm-managed)** also restarts it with the session; `punktfunk-omarchy status` says
-  which one you run. It rarely matters: the host finds the live compositor on every connect.
-- **Keep-alive.** A disconnect keeps the virtual display for the
-  [keep-alive](/docs/virtual-displays#keep-alive) window, then moves its workspace to a physical
-  monitor. Release it early in the console (**Displays** → **Release**) or with
-  `punktfunk-host ctl display release`.
-- **Screen sharing.** During a stream the host borrows Omarchy's screen-share picker setting and
-  hands it back when the last stream ends. Browser shares keep working.
 - **Your own hooks.** If `~/.config/punktfunk/hooks.json` already exists, `setup` prints the toast
   and idle entries for you to add instead of editing it.
 - **Snapshot mirror.** Omarchy pins Arch packages to a snapshot. If pacman reports an unsatisfiable
@@ -165,8 +146,9 @@ Autostart is off. Re-run `punktfunk-omarchy setup`.
 
 ### Physical monitors stay dark after a disconnect
 
-The virtual display is still in its keep-alive window. Release it as above; see
-[Virtual displays](/docs/virtual-displays#troubleshooting).
+The virtual display is still in its [keep-alive](/docs/virtual-displays#keep-alive) window, after
+which its workspace moves to a physical monitor. Release it early in the console (**Displays** →
+**Release**) or with `punktfunk-host ctl display release`.
 
 More in [Troubleshooting](/docs/troubleshooting) and on the [Hyprland page](/docs/hyprland).
 

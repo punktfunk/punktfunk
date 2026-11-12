@@ -18,8 +18,8 @@ PUNKTFUNK_MGMT_BIND=0.0.0.0:47991
 ```
 
 Then restart the host: `systemctl --user restart punktfunk-host`, or on Windows
-`punktfunk-host service restart`. The guided installer does this for you when it finds Sunshine
-running.
+`punktfunk-host service restart`. The guided installer and the Windows installer do this for you
+when they find another host running or set to start on its own.
 
 - Clients and the console find the new port on their own. A host you added to a client **by IP
   address** assumes the default port: add it again from the host list.
@@ -54,7 +54,7 @@ Running both is fine for a trial. If something acts up, stop the other host firs
 | `apps.json` | The [game library](/docs/game-library), filled by launcher [plugins](/docs/plugins) and custom titles from the console |
 | Per-app prep/undo commands | [Per-app prep/undo](/docs/automation#per-app-prepundo), plus events and hooks |
 | `sunshine.conf` | `host.env` ([Configuration](/docs/configuration)) and the console |
-| HDR through the virtual display | [HDR](/docs/hdr): Windows, and Linux on gamescope or GNOME 50 |
+| HDR through the virtual display | [HDR](/docs/hdr): Windows, and Linux on gamescope or Hyprland |
 | Clipboard, Wake-on-LAN | [Shared clipboard](/docs/clipboard), [Wake-on-LAN](/docs/wake-on-lan) |
 
 ## Migrating for good
