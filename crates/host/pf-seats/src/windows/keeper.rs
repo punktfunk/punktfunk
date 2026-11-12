@@ -19,6 +19,19 @@ pub const KEEPER_EXE: &str = "punktfunk-seat-keeper.exe";
 
 /// The seat listener's loopback port, where a session also gets its pads' audio endpoints.
 pub const SEAT_LISTENER_PORT: u16 = pf_driver_proto::seat_audio::LISTENER_PORT;
+/// Remote Desktop's own port.
+pub const RDP_PORT: u16 = 3389;
+
+/// The port `keep`, `trust` and `observe` dial: the seat listener's while the supervisor has it
+/// in place, else Remote Desktop's own. A listener that isn't the supervisor's is never dialled:
+/// whatever answers on its port is not Remote Desktop.
+pub fn rdp_port() -> u16 {
+    if super::seat_listener::configured() {
+        SEAT_LISTENER_PORT
+    } else {
+        RDP_PORT
+    }
+}
 
 /// The keeper's own handshake gives up after 15 s.
 pub(super) const OBSERVE_LIMIT: Duration = Duration::from_secs(20);

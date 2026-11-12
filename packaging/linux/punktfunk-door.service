@@ -35,6 +35,9 @@ RestartSec=2
 NoNewPrivileges=yes
 PrivateTmp=yes
 ProtectSystem=full
+# It opens no device and reads no home: door-helper copies the owner's files, from a `+` line.
+ProtectHome=yes
+PrivateDevices=yes
 ProtectKernelTunables=yes
 ProtectKernelModules=yes
 ProtectControlGroups=yes

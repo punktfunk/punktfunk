@@ -370,15 +370,35 @@ fn signal_set(signals: &[libc::c_int]) -> libc::sigset_t {
 }
 
 /// The signals the parent takes from here on, blocked so they wait for [`wait_forwarding`].
-/// A child inherits the mask: [`Person::spawn`] clears it.
+/// A process forked after it starts with the mask from before ([`unblock_in_child`]), so a wallet
+/// daemon `pam_open_session` starts still stops on SIGTERM.
 #[cfg(target_os = "linux")]
 fn block_signals() -> libc::sigset_t {
     use libc::{SIGALRM, SIGCHLD, SIGHUP, SIGINT, SIGQUIT, SIGTERM};
     let set = signal_set(&[SIGTERM, SIGINT, SIGHUP, SIGQUIT, SIGALRM, SIGCHLD]);
-    // SAFETY: pthread_sigmask reads an initialized set and changes this thread's mask alone; the
-    // helper has no other thread.
-    unsafe { libc::pthread_sigmask(libc::SIG_BLOCK, &set, std::ptr::null_mut()) };
+    let mut before = std::mem::MaybeUninit::<libc::sigset_t>::uninit();
+    // SAFETY: pthread_sigmask reads an initialized set, writes the old mask into `before` and
+    // changes this thread's mask alone; the helper has no other thread.
+    let blocked = unsafe { libc::pthread_sigmask(libc::SIG_BLOCK, &set, before.as_mut_ptr()) };
+    // SAFETY: a call that answered 0 filled `before`.
+    if blocked == 0 && UNBLOCKED.set(unsafe { before.assume_init() }).is_ok() {
+        // SAFETY: registers a child handler that makes async-signal-safe calls only.
+        unsafe { libc::pthread_atfork(None, None, Some(unblock_in_child)) };
+    }
     set
+}
+
+/// The helper's mask from before [`block_signals`].
+#[cfg(target_os = "linux")]
+static UNBLOCKED: std::sync::OnceLock<libc::sigset_t> = std::sync::OnceLock::new();
+
+/// In each child this process forks, before the child runs anything: [`UNBLOCKED`] as its mask.
+#[cfg(target_os = "linux")]
+extern "C" fn unblock_in_child() {
+    if let Some(mask) = UNBLOCKED.get() {
+        // SAFETY: pthread_sigmask reads an initialized set and changes the child's only thread.
+        unsafe { libc::pthread_sigmask(libc::SIG_SETMASK, mask, std::ptr::null_mut()) };
+    }
 }
 
 /// Waits for `child` to end, forwarding each stop signal in `signals` to it.
@@ -459,6 +479,39 @@ mod tests {
                 "{signal}"
             );
         }
+    }
+
+    /// A process forked once the helper blocks its stop signals, as a PAM session module forks a
+    /// wallet daemon, starts with them unblocked; the helper keeps them blocked.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn what_pam_forks_takes_stop_signals() {
+        let mut before = std::mem::MaybeUninit::<libc::sigset_t>::uninit();
+        // SAFETY: a null set only reads this thread's mask into `before`.
+        unsafe { libc::pthread_sigmask(libc::SIG_BLOCK, std::ptr::null(), before.as_mut_ptr()) };
+        block_signals();
+        // SAFETY: the child makes async-signal-safe calls only, then `_exit`s.
+        let pid = unsafe { libc::fork() };
+        if pid == 0 {
+            let mut mask = std::mem::MaybeUninit::<libc::sigset_t>::uninit();
+            // SAFETY: as above, in the child's only thread; `_exit` runs no destructor.
+            unsafe {
+                libc::pthread_sigmask(libc::SIG_BLOCK, std::ptr::null(), mask.as_mut_ptr());
+                libc::_exit(libc::sigismember(mask.as_ptr(), libc::SIGTERM));
+            }
+        }
+        let (mut status, mut helper) = (0, std::mem::MaybeUninit::<libc::sigset_t>::uninit());
+        // SAFETY: `pid` is this process's child and `status` an int; then the test thread gets
+        // its own mask back, and `helper` the one it replaced.
+        unsafe {
+            libc::waitpid(pid, &mut status, 0);
+            libc::pthread_sigmask(libc::SIG_SETMASK, before.as_ptr(), helper.as_mut_ptr());
+        }
+        // SAFETY: the call above filled `helper`.
+        let held = unsafe { libc::sigismember(helper.as_ptr(), libc::SIGTERM) };
+        assert_eq!(held, 1, "the helper keeps SIGTERM blocked");
+        assert!(libc::WIFEXITED(status), "{status}");
+        assert_eq!(libc::WEXITSTATUS(status), 0, "SIGTERM blocked in the child");
     }
 
     /// The built helper as `punktfunk-seat@.service` runs it, as root, through this package's PAM

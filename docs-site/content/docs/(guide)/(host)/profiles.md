@@ -73,7 +73,8 @@ yours included.
 
    On SteamOS, run `bash ~/punktfunk/scripts/steamdeck/update.sh` in Konsole instead and enter
    your password: it sets the switch up and joins the group. Restart once after. On NixOS, set
-   `services.punktfunk.seats.enable = true` and rebuild.
+   `services.punktfunk.seats.enable = true`, rebuild and restart: the users in
+   `services.punktfunk.host.users` join the group.
 
 2. Open **Profiles** and tick **Reachable without logging in**. Confirm with the console
    password. The page reloads while the host restarts, and the console asks you to sign in again.

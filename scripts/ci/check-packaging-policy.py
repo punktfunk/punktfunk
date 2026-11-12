@@ -19,11 +19,16 @@ A SteamOS update rebuilds /etc and keeps only what its keep lists name, so every
 Steam Deck scripts install must be on scripts/punktfunk-atomic-keep.conf or under a tree SteamOS
 keeps itself.
 
+packaging/linux's units are system units. PID 1 reads each EnvironmentFile= as root and follows a
+link, whatever User= says, and a `+` or `!` line hands what it read to root. So each such file sits
+directly in a directory only root writes.
+
 Usage: python3 scripts/ci/check-packaging-policy.py [--self-test]
 """
 import glob
 import itertools
 import os
+import posixpath
 import re
 import subprocess
 import sys
@@ -55,6 +60,10 @@ SEATS_REMOVAL = [
     ("packaging/arch/punktfunk-seats.install", "pre_remove()"),
     ("packaging/bazzite/punktfunk-sysext.sh", "cmd_remove()"),
 ]
+UNITS = "packaging/linux/*.service"
+# Directories only root writes (punktfunk-seats.tmpfiles; pf-seats' env files are root's with a
+# read ACL). Their subdirectories hold seat accounts' files, so a unit's file sits directly in one.
+ROOT_DIRS = ("/var/lib/punktfunk-seats", "/run/punktfunk/seats")
 KEEP_LIST = "scripts/punktfunk-atomic-keep.conf"
 DECK_SCRIPTS = "scripts/steamdeck/*.sh"
 # The /etc trees SteamOS's own keep list holds, as KEEP_LIST's comments say.
@@ -265,6 +274,20 @@ def removal_errors(texts):
     return errors
 
 
+def env_file_errors(units):
+    """[(path, error)] for each EnvironmentFile= in `units` ({path: unit text}) that is not directly
+    in one of ROOT_DIRS: an account that owns its directory could swap it for a link to any file
+    root reads, or for settings a root line then runs with."""
+    errors = []
+    for path, text in units.items():
+        for m in re.finditer(r"^[ \t]*EnvironmentFile[ \t]*=[ \t]*-?(.*?)[ \t]*$", text, re.M):
+            name = m.group(1)
+            if name and posixpath.dirname(name) not in ROOT_DIRS:
+                errors.append((path, f"EnvironmentFile={name}: PID 1 reads it as root, from a "
+                                     f"directory root doesn't own alone ({', '.join(ROOT_DIRS)})"))
+    return errors
+
+
 # A file path under /etc, not a tail of another path such as /usr/share/punktfunk/etc.
 ETC_PATH = re.compile(r"(?<![\w.-])/etc/[^\s\"'$)]+")
 
@@ -314,9 +337,13 @@ def tree_errors():
     seats = {path: read(path) for path in SEATS_RECIPES}
     deck = {os.path.relpath(f, ROOT): read(os.path.relpath(f, ROOT))
             for f in sorted(glob.glob(os.path.join(ROOT, DECK_SCRIPTS)))}
+    units = {os.path.relpath(f, ROOT): read(os.path.relpath(f, ROOT))
+             for f in sorted(glob.glob(os.path.join(ROOT, UNITS)))}
+    if not units:
+        errors.append((UNITS, "no unit to check"))
     return (errors + tree_group_errors() + seats_errors(read(PAYLOAD), seats)
             + removal_errors({path: read(path) for path, _ in SEATS_REMOVAL})
-            + keep_errors(read(KEEP_LIST), deck))
+            + keep_errors(read(KEEP_LIST), deck) + env_file_errors(units))
 
 
 def check():
@@ -454,6 +481,20 @@ sudo setcap cap_sys_nice=ep ${WORKER}
                        ("* stays in a segment", "sudo tee /etc/pam.d/punktfunk-x/y\n"),
                        ("continued line", "sudo install x \\\n  /etc/b.conf\n")):
         expect(f"deck install: {name}", len(keep_errors(keep, {"d.sh": text})), 1)
+
+    door = ("[Service]\nUser=punktfunk\nExecStartPre=+-/usr/libexec/punktfunk/door-helper ports\n"
+            "EnvironmentFile=-/var/lib/punktfunk-seats/host.env\n"
+            "# EnvironmentFile=-/var/lib/punktfunk/host.env\nEnvironmentFile=\n")
+    seat = "[Service]\nUser=%i\nEnvironmentFile=/run/punktfunk/seats/%i.env\nExecStopPost=-+/x %i\n"
+    expect("env files root's", env_file_errors({"door": door, "seat": seat}), [])
+    for name, text in (
+            ("the door's own host.env", door + "EnvironmentFile=-/var/lib/punktfunk/host.env\n"),
+            ("the owner's host.env", seat + "EnvironmentFile=-%h/.config/punktfunk/host.env\n"),
+            ("a console without + lines", "User=punktfunk\nEnvironmentFile=/var/lib/punktfunk/web-password\n"),
+            ("a seat's folder in root's", "EnvironmentFile=/var/lib/punktfunk-seats/hosts/%i/mgmt-token\n"),
+            ("a way out of root's", "EnvironmentFile=/var/lib/punktfunk-seats/../punktfunk/host.env\n"),
+            ("spaced", "  EnvironmentFile = /var/lib/punktfunk/host.env \n")):
+        expect(f"env file: {name}", len(env_file_errors({"u": text})), 1)
     if fails:
         return 1
     print("check-packaging-policy self-test ok")

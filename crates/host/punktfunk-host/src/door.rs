@@ -60,8 +60,8 @@ pub(crate) fn unavailable() -> Option<ApiError> {
 }
 
 /// Whether the switch this host last started ran and failed: `door-helper` refused, or stopped
-/// halfway and put the box back. The helper's reason is in the host's log. Blocking: it runs
-/// `systemctl`.
+/// halfway and put the box back. A door the failed off restarted reads that off from systemd.
+/// The helper's reason is in the host's log. Blocking: it runs `systemctl`.
 pub(crate) fn switch_failed() -> bool {
     #[cfg(target_os = "linux")]
     {
@@ -125,6 +125,27 @@ fn copy_is_stale(recorded: Option<&str>, running: &str) -> bool {
         .is_some_and(|v| !v.is_empty() && v != running)
 }
 
+/// `systemctl show -p Result -p InactiveExitTimestampMonotonic` of the off unit, then the on unit:
+/// the off ran after the last on and didn't succeed. A unit's stamp is 0 before its first run.
+/// The unprivileged door keeps no record of its own: systemd holds one until the next run.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code, reason = "Linux only"))]
+fn off_failed_last(shown: &str) -> bool {
+    let mut units = shown.split("\n\n").map(|block| {
+        let field = |key: &str| {
+            block
+                .lines()
+                .find_map(|l| l.strip_prefix(key)?.strip_prefix('='))
+                .unwrap_or_default()
+        };
+        let began: u64 = field("InactiveExitTimestampMonotonic").parse().unwrap_or(0);
+        (field("Result").to_string(), began)
+    });
+    let (Some((result, off)), Some((_, on))) = (units.next(), units.next()) else {
+        return false;
+    };
+    off > on && !result.is_empty() && result != "success"
+}
+
 /// The unit that switches the door for `user`.
 #[cfg_attr(not(target_os = "linux"), allow(dead_code, reason = "Linux only"))]
 fn unit(on: bool, user: &str) -> String {
@@ -163,12 +184,13 @@ mod linux {
     }
 
     /// The switch unit this host last started, and its invocation before then: a newer one is
-    /// that start's run.
+    /// that start's run. An off stops the door that holds this, so a restarted door has none.
     static STARTED: std::sync::Mutex<Option<(String, String)>> = std::sync::Mutex::new(None);
 
     pub(super) fn switch_failed() -> bool {
-        let Some((unit, before)) = STARTED.lock().unwrap_or_else(|e| e.into_inner()).clone() else {
-            return false;
+        let started = STARTED.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        let Some((unit, before)) = started else {
+            return pf_paths::seat::role().is_door() && restarted_by_failed_off();
         };
         let Some(shown) = capture(Command::new("systemctl").args([
             "show",
@@ -181,6 +203,25 @@ mod linux {
             return false;
         };
         ran_and_failed(&shown, &before)
+    }
+
+    /// The owner's off unit ran after their last on and failed: `door-helper` stopped the door,
+    /// couldn't hand the files home, and started this door again.
+    fn restarted_by_failed_off() -> bool {
+        let Ok(owner) = owner_account() else {
+            return false;
+        };
+        let (off, on) = (unit(false, &owner), unit(true, &owner));
+        capture(Command::new("systemctl").args([
+            "show",
+            "-p",
+            "Result",
+            "-p",
+            "InactiveExitTimestampMonotonic",
+            &off,
+            &on,
+        ]))
+        .is_some_and(|shown| off_failed_last(&shown))
     }
 
     /// `systemctl show -p InvocationID -p Result`'s `before`'s successor, ended without success.
@@ -471,6 +512,33 @@ mod tests {
         assert!(!ran_and_failed(&shown("b2", "success"), "a1"));
         assert!(!ran_and_failed(&shown("", "success"), ""), "not run yet");
         assert!(ran_and_failed(&shown("b2", "exit-code"), ""), "a first run");
+    }
+
+    /// A door the off restarted reads that off's run: failed after the owner's last on is a
+    /// failed switch; one before that on, a success, or no run at all is not.
+    #[test]
+    fn an_off_that_failed_after_the_last_on_is_a_failed_switch() {
+        let shown = |off: (&str, u64), on: (&str, u64)| {
+            format!(
+                "Result={}\nInactiveExitTimestampMonotonic={}\n\nResult={}\nInactiveExitTimestampMonotonic={}\n",
+                off.0, off.1, on.0, on.1
+            )
+        };
+        assert!(off_failed_last(&shown(
+            ("exit-code", 900),
+            ("success", 500)
+        )));
+        assert!(off_failed_last(&shown(("timeout", 900), ("success", 0))));
+        assert!(
+            !off_failed_last(&shown(("exit-code", 500), ("success", 900))),
+            "an on since"
+        );
+        assert!(!off_failed_last(&shown(("success", 900), ("success", 500))));
+        assert!(
+            !off_failed_last(&shown(("success", 0), ("success", 0))),
+            "never ran"
+        );
+        assert!(!off_failed_last("Result=exit-code\n"), "one unit only");
     }
 
     #[cfg(not(target_os = "linux"))]

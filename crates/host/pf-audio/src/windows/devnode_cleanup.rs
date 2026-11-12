@@ -176,7 +176,7 @@ mod abandoned_tests {
 /// ROOT-enumerated (software-created) only.
 ///
 /// A marker name colliding under a real sound card's `Device Parameters` must not take hardware.
-fn is_removable_instance(instance_id: &str) -> bool {
+pub(super) fn is_removable_instance(instance_id: &str) -> bool {
     instance_id.to_ascii_uppercase().starts_with("ROOT\\")
 }
 

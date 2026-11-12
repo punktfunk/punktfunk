@@ -57,7 +57,8 @@ The container finds hosts that announce themselves on your network. Settings, un
 2. Pick your host. For one the page did not find, click **Add a host** and type its address.
 3. Choose **Request access**, then approve the browser in the console under **Devices → Waiting
    for approval** ([Pairing](/docs/pairing#approve-it-from-the-console-no-pin)). Or click **Pair a
-   device** in the console and type its PIN into the page.
+   device** in the console and type its PIN into the page. A host you added by its address is
+   offered the PIN only.
 
 Two kinds of request have no **Approve** in the console. Click **Arm PIN** on the row instead, and
 type that PIN into the page:

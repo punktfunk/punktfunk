@@ -6,7 +6,7 @@
 // is built from ONLY plain DOM elements + inline styles, so it cannot itself depend on a
 // (possibly broken) Steam-internal component — it is guaranteed to render.
 import { Component, ErrorInfo, ReactNode } from "react";
-import { t } from "./i18n";
+import { t } from "../i18n";
 
 export class PluginErrorBoundary extends Component<
   { children: ReactNode },

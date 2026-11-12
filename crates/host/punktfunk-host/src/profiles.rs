@@ -1,6 +1,7 @@
 //! Profiles: the people on this box, in `profiles.json` beside the pairing store.
 //!
-//! The schema is `multi-user-profiles.md` §4 with one more account kind, [`OsAccount::Seat`].
+//! The schema is the part of `multi-user-profiles.md` §4 the host reads, with one more account
+//! kind, [`OsAccount::Seat`]. A key it doesn't know is dropped on load and gone at the next save.
 //! The owner profile is the box's own session; [`Profiles::ensure_owner`] creates it at start.
 //! A profile is not a trust boundary: the device stays the principal, and any paired device may
 //! name any profile.
@@ -9,7 +10,6 @@
 //! a save never overwrites what could not be read. A save that fails is a mutation that failed:
 //! memory keeps the old file.
 
-use crate::library::CustomEntry;
 use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -69,22 +69,6 @@ pub struct Profile {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub legacy_device: Option<String>,
     #[serde(default)]
-    pub assigned_fingerprints: Vec<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub passcode: Option<PasscodeHash>,
-    #[serde(default)]
-    pub require_passcode_even_when_assigned: bool,
-    #[serde(default)]
-    pub allow_shared_view: bool,
-    #[serde(default)]
-    pub tvos_user_ids: Vec<String>,
-    #[serde(default)]
-    pub library_scope: LibraryScope,
-    #[serde(default)]
-    pub custom_entries: Vec<CustomEntry>,
-    #[serde(default)]
-    pub session_defaults: SessionDefaults,
-    #[serde(default)]
     pub created_unix: u64,
     #[serde(default)]
     pub updated_unix: u64,
@@ -105,13 +89,8 @@ pub enum OsAccount {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         seat: Option<String>,
     },
-    /// Reserved for the OS-user increment: resolves to [`ProfileError::SessionUnavailable`].
-    Linux {
-        username: String,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        uid: Option<u32>,
-    },
-    /// Reserved for the OS-user increment: resolves to [`ProfileError::SessionUnavailable`].
+    /// A take-turns profile: a local Windows account that takes the console in turn. It plays
+    /// on that account's SID when one is stored, else on the name alone.
     Windows {
         account_name: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -130,49 +109,12 @@ pub enum Home {
     Bigpicture,
 }
 
-/// Names a secret in an OS vault; never the secret.
+/// Where a take-turns account's secret would live. Only `none` exists: the console switches
+/// accounts without a password. Still written, because an older host requires the key.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "source", rename_all = "snake_case")]
 pub enum CredentialRef {
     None,
-    CredentialManager { target: String },
-    LsaSecret { key: String },
-    DpapiBlob { path: String },
-}
-
-/// Argon2id PHC string. Unused in this increment.
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
-pub struct PasscodeHash {
-    pub phc: String,
-}
-
-#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
-#[serde(tag = "mode", rename_all = "snake_case")]
-pub enum LibraryScope {
-    #[default]
-    All,
-    Allow {
-        ids: Vec<String>,
-    },
-    Deny {
-        ids: Vec<String>,
-    },
-}
-
-#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
-pub struct SessionDefaults {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub max_width: Option<u32>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub max_height: Option<u32>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub max_refresh_hz: Option<u32>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub max_bitrate_kbps: Option<u32>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub compositor: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub gamepad: Option<String>,
 }
 
 /// The profile a connect lands in.
@@ -430,14 +372,6 @@ impl Profiles {
                 os_account,
                 home: input.home.unwrap_or_default(),
                 legacy_device: None,
-                assigned_fingerprints: Vec::new(),
-                passcode: None,
-                require_passcode_even_when_assigned: false,
-                allow_shared_view: false,
-                tvos_user_ids: Vec::new(),
-                library_scope: LibraryScope::All,
-                custom_entries: Vec::new(),
-                session_defaults: SessionDefaults::default(),
                 created_unix: now,
                 updated_unix: now,
                 last_used_unix: 0,
@@ -647,14 +581,6 @@ impl Profiles {
                     os_account: OsAccount::Operator,
                     home: Home::Desktop,
                     legacy_device: None,
-                    assigned_fingerprints: Vec::new(),
-                    passcode: None,
-                    require_passcode_even_when_assigned: false,
-                    allow_shared_view: false,
-                    tvos_user_ids: Vec::new(),
-                    library_scope: LibraryScope::All,
-                    custom_entries: Vec::new(),
-                    session_defaults: SessionDefaults::default(),
                     created_unix: now,
                     updated_unix: now,
                     last_used_unix: 0,
@@ -723,14 +649,6 @@ impl Profiles {
                 os_account: OsAccount::Operator,
                 home: Home::Desktop,
                 legacy_device: legacy,
-                assigned_fingerprints: Vec::new(),
-                passcode: None,
-                require_passcode_even_when_assigned: false,
-                allow_shared_view: false,
-                tvos_user_ids: Vec::new(),
-                library_scope: LibraryScope::All,
-                custom_entries: Vec::new(),
-                session_defaults: SessionDefaults::default(),
                 created_unix: now,
                 updated_unix: now,
                 last_used_unix: 0,
@@ -788,9 +706,37 @@ impl Profiles {
         }
     }
 
-    /// The profile a connect from `fp` asking for `asked` lands in (`profiles-and-seats.md`
-    /// §6.2). `asked` is read before trust: it is only ever compared against stored ids.
+    /// The profile a connect from `fp` asking for `asked` lands in and plays now
+    /// (`profiles-and-seats.md` §6.2): [`Self::pick`], refused while its account can't play.
     pub fn resolve(&self, fp: Option<&str>, asked: Option<&str>) -> Result<Resolved, ProfileError> {
+        let resolved = self.pick(fp, asked)?;
+        // A take-turns profile plays here only once its account is the console. The client waits
+        // on the seat state (`mgmt`) until it is, so a dial that lands early is refused, not
+        // played under the wrong account.
+        match &resolved.os_account {
+            OsAccount::Windows {
+                account_name, sid, ..
+            } => {
+                let on_console = take_turns::holds_console(
+                    account_name,
+                    sid.as_deref(),
+                    take_turns::console_account().as_deref(),
+                    sid.as_ref()
+                        .and_then(|_| take_turns::session_sid())
+                        .as_deref(),
+                );
+                if !on_console {
+                    return Err(ProfileError::SessionUnavailable);
+                }
+            }
+            OsAccount::Operator | OsAccount::Seat { .. } => {}
+        }
+        Ok(resolved)
+    }
+
+    /// The profile a connect from `fp` asking for `asked` lands in, whether or not its account
+    /// can play now. `asked` is read before trust: it is only ever compared against stored ids.
+    pub fn pick(&self, fp: Option<&str>, asked: Option<&str>) -> Result<Resolved, ProfileError> {
         let state = self.lock();
         let file = &state.file;
         let (profile, via) = match asked {
@@ -838,20 +784,6 @@ impl Profiles {
                 via,
             });
         };
-        // A take-turns profile plays here only once its account is the console. The client waits
-        // on the seat state (`mgmt`) until it is, so a dial that lands early is refused, not
-        // played under the wrong account. Linux's own-user kind is still unbuilt.
-        match &profile.os_account {
-            OsAccount::Linux { .. } => return Err(ProfileError::SessionUnavailable),
-            OsAccount::Windows { account_name, .. } => {
-                let on_console = take_turns::console_account()
-                    .is_some_and(|user| user.eq_ignore_ascii_case(account_name));
-                if !on_console {
-                    return Err(ProfileError::SessionUnavailable);
-                }
-            }
-            OsAccount::Operator | OsAccount::Seat { .. } => {}
-        }
         Ok(Resolved {
             id: profile.id.clone(),
             display_name: profile.display_name.clone(),

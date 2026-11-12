@@ -27,6 +27,7 @@
     {"id": "apierr_account_missing", "params": {"account": "jdoe"}, "english": "The host's own English.", "sentence": "There is no account called jdoe on this host."},
     {"id": "apierr_account_missing_windows", "params": {"account": "jdoe"}, "english": "The host's own English.", "sentence": "No Windows account jdoe on this host."},
     {"id": "apierr_account_name_lowercase", "params": {}, "english": "The host's own English.", "sentence": "Enter the account's Linux user name, in lowercase."},
+    {"id": "apierr_account_network_denied", "params": {"account": "jdoe"}, "english": "The host's own English.", "sentence": "Couldn't check jdoe's password — this host's policy denies it sign-in from the network. In Local Security Policy, remove it from Deny access to this computer from the network, then try again."},
     {"id": "apierr_account_not_ordinary", "params": {"account": "jdoe"}, "english": "The host's own English.", "sentence": "jdoe is a system account, not a person's."},
     {"id": "apierr_account_policy", "params": {"account": "jdoe"}, "english": "The host's own English.", "sentence": "jdoe isn't allowed to sign in over Remote Desktop on this host."},
     {"id": "apierr_account_signed_in", "params": {"account": "jdoe"}, "english": "The host's own English.", "sentence": "jdoe is signed in on this host. Sign jdoe out first."},

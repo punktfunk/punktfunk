@@ -12,12 +12,12 @@
 // told why, rather than being shown a button that could only fail. Under no circumstances does
 // this sheet trust-on-first-use its way past a missing fingerprint.
 import { DialogButton, Focusable, ModalRoot, Spinner, showModal } from "@decky/ui";
-import { toaster } from "@decky/api";
 import { FC, useRef, useState } from "react";
-import { type PairResult, requestAccess, trustHost } from "./backend";
-import { diag } from "./diag";
-import type { HostView } from "./hosts";
-import { rejectText, t } from "./i18n";
+import { type PairResult, requestAccess, trustHost } from "../backend";
+import { diag } from "../lib/diag";
+import { toast } from "../lib/toast";
+import type { HostView } from "../hosts/model";
+import { rejectText, t } from "../i18n";
 import { PairModal } from "./pair";
 
 /** User-facing copy for a `trustHost` failure code. */
@@ -54,7 +54,7 @@ export const TrustSheet: FC<{
   host: HostView;
   closeModal?: () => void;
   /** Stream this host, having just been let in. */
-  onStream: (opts: { requestAccess?: boolean }) => void;
+  onStream: () => void;
   /** Re-read the host list — the record changed underneath the panel. */
   onChanged: () => void;
 }> = ({ host, closeModal, onStream, onChanged }) => {
@@ -100,16 +100,12 @@ export const TrustSheet: FC<{
       }
       changed();
       if (!approval) {
-        stream({});
+        stream();
         closeModal?.();
         return;
       }
       // Step 2: the request, pinned to that fingerprint. It parks until somebody answers.
-      toaster.toast({
-        title: "Punktfunk",
-        body: t("decky_trust_approve_toast", { host: h.name }),
-        duration: 10_000,
-      });
+      toast(t("decky_trust_approve_toast", { host: h.name }), { duration: 10_000 });
       const res = await requestAccess(h.addr, h.port, "Steam Deck", h.advertisedFp);
       if (!res.ok) {
         diag(`request access: ${res.error} ${res.reject ?? ""} ${res.detail ?? ""}`);
@@ -117,7 +113,7 @@ export const TrustSheet: FC<{
         setBusy(false);
         return;
       }
-      toaster.toast({ title: "Punktfunk", body: t("pair_paired", { host: h.name }) });
+      toast(t("pair_paired", { host: h.name }));
       changed();
       closeModal?.();
     } catch (e) {

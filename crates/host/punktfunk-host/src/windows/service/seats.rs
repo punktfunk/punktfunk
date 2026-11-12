@@ -2,17 +2,20 @@
 //! `\\.\pipe\punktfunk-seats` pipe the console host reaches it through.
 //!
 //! Seat hosts run in the supervisor's own jobs, never the console host's, so a console relaunch
-//! leaves them running; the service stopping logs their accounts off. The pipe opens first;
-//! autostart seats then come up one at a time beside it, once TermService runs. Without
-//! `HKLM\SOFTWARE\Punktfunk\Seats` the ledger is still served and every start answers
-//! `seats_off`. A slot that cannot open logs the reason and stays inert: seats never stop the
-//! service.
+//! leaves them running; the service stopping logs their accounts off. Autostart seats come up
+//! one at a time once TermService runs, beside the pipe, which waits out a name another process
+//! holds. Without `HKLM\SOFTWARE\Punktfunk\Seats` the ledger is still served and every start
+//! answers `seats_off`. A slot that cannot open logs the reason and stays inert: seats never stop
+//! the service.
 
 use super::*;
 use pf_seats::windows::pipe::{wake, PipeServer};
 use pf_seats::{SeatService, WindowsBackend};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+
+/// How often the service narrows Remote Desktop to this PC again, as the idle check runs.
+const RDP_LOCAL_TICK_SECS: u64 = 300;
 
 pub(super) struct SeatsSlot {
     stop: Arc<AtomicBool>,
@@ -50,14 +53,25 @@ impl SeatsSlot {
             tracing::error!("seat supervisor thread did not start: {error}");
         }
         // Windows takes about a minute to answer the first role query after a restart. Asked
-        // here, the Seats dialog an operator opens after signing in is answered at once. First
-        // the firewall: a rule Windows added since must not open Remote Desktop to the network.
-        let warm = backend.clone();
+        // here, the Seats dialog an operator opens after signing in is answered at once. The
+        // firewall goes first and again on every tick: a rule added or reset since, or a
+        // firewall not up yet at boot, must not leave Remote Desktop open to the network.
+        let (warm, checks_stop) = (backend.clone(), Arc::clone(&stop));
         let _ = std::thread::Builder::new()
             .name("seats-checks".into())
             .spawn(move || {
                 warm.keep_rdp_local();
                 drop(pf_seats::backend::PlatformBackend::seating(&warm));
+                warm.delete_owed_profiles();
+                for second in 1_u64.. {
+                    std::thread::sleep(std::time::Duration::from_secs(1));
+                    if checks_stop.load(Ordering::SeqCst) {
+                        break;
+                    }
+                    if second % RDP_LOCAL_TICK_SECS == 0 {
+                        warm.keep_rdp_local();
+                    }
+                }
             });
         SeatsSlot {
             stop,
@@ -67,20 +81,14 @@ impl SeatsSlot {
 }
 
 /// The pipe until the slot stops, with autostart seats, then the seats of recent players, coming
-/// up beside it: a start takes minutes, and the console reads the seats meanwhile. A start's
-/// first failure is logged here; the supervisor logs every failure after that.
+/// up beside it: a start takes minutes, and the console reads the seats meanwhile. They come up
+/// while the pipe waits for its name too. A start's first failure is logged here; the supervisor
+/// logs every failure after that.
 fn serve(
     service: Arc<SeatService<WindowsBackend>>,
     backend: &WindowsBackend,
     stop: &Arc<AtomicBool>,
 ) {
-    let server = match PipeServer::bind(pf_seats::ipc::PIPE_NAME, Arc::clone(&service)) {
-        Ok(server) => server,
-        Err(error) => {
-            tracing::error!("seats pipe did not open: {error}");
-            return;
-        }
-    };
     {
         let (service, backend, stop) = (Arc::clone(&service), backend.clone(), Arc::clone(stop));
         let spawned = std::thread::Builder::new()
@@ -90,6 +98,9 @@ fn serve(
             tracing::warn!("seat warm-up did not start: {error}");
         }
     }
+    let Some(server) = PipeServer::bind_until(pf_seats::ipc::PIPE_NAME, service, stop) else {
+        return;
+    };
     tracing::info!(pipe = pf_seats::ipc::PIPE_NAME, "seat supervisor serving");
     server.serve_until(stop);
 }

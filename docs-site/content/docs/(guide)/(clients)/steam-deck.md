@@ -36,18 +36,20 @@ paste `https://unom.io/pf-decky-canary` instead. To pin a version, see
 
 ## Use it
 
-Open the **Punktfunk** panel from the Quick Access Menu.
+Open the **Punktfunk** panel from the Quick Access Menu. From the top, it shows a waiting update,
+the running stream, your hosts, then **Punktfunk**, **Troubleshooting** and **About**.
 
-- **Hosts** lists the hosts on your network and the ones you saved. **Refresh** rescans. A lock
-  means the host hasn't let this Deck in yet.
-- **Tap a locked host** and choose **Request access** or **Use a PIN instead…**. See
-  [Request access](#request-access), or [pair with a PIN](/docs/pairing#pair-with-a-pin). After
-  that, the host connects silently.
-- **Tap a host** to stream fullscreen. A sleeping host is [woken](/docs/wake-on-lan) first once the
-  client knows its MAC address.
-- **▸ Preset name** under a host streams it with that [preset](/docs/presets-and-links). Pin
-  presets in the Punktfunk app; the panel only shows them.
-- **● Name** under a host with more than one profile streams as that profile, this time only.
+- **Hosts** lists the hosts this Deck can stream, one row each. Tap a host to stream it
+  fullscreen. A sleeping host is [woken](/docs/wake-on-lan) first once the client knows its MAC
+  address; its row then reads **Offline · wakes on connect**.
+- **▾** beside a host opens its options. The **☰** button does the same while the host is
+  selected. Pick a profile to stream as it this time only; the check marks the profile this Deck
+  plays as. Pick a [preset](/docs/presets-and-links) to stream with it. A host with one profile and
+  no pinned presets has no ▾. Pin presets in the Punktfunk app; the panel only shows them.
+- **Needs access** lists hosts that haven't let this Deck in yet. Tap one and choose **Request
+  access** or **Use a PIN instead…**. See [Request access](#request-access), or
+  [pair with a PIN](/docs/pairing#pair-with-a-pin). After that, the host moves to **Hosts**.
+- **Refresh**, the last row under the hosts, rescans.
 - **Open Punktfunk** opens the app's console: add a host by address, pair, browse a host's
   [library](/docs/game-library), and change [settings](/docs/client-settings).
 
@@ -55,9 +57,10 @@ The plugin also puts a **Punktfunk** entry in your Steam library. It opens the s
 
 ### Request access
 
-Tap the host → **Request access**, then approve the Deck in the host's
-[web console](/docs/web-console). Once someone does, the panel says the Deck is paired: tap the
-host to stream. With no approval in about three minutes it gives up.
+Tap the host under **Needs access** → **Request access**. The sheet waits until someone approves
+the Deck in the host's [web console](/docs/web-console), then the host moves to **Hosts**. With no
+approval in about three minutes it gives up. A host that takes new devices without approval offers
+**Connect** instead, which streams right away.
 
 The host must be advertising on your network. A host you added by address offers the PIN only.
 
@@ -70,15 +73,17 @@ installed on the Deck. Pick **This device** to hand the button back to Steam. Th
 
 ### Controls while streaming
 
+While a stream runs, the panel opens with a **Streaming** section.
+
 - **Leave:** hold [L1 + R1 + Start + Select](/docs/shortcuts#leaving-with-a-controller) for a
-  second, or quit the game from the Steam overlay. Change it under **Open Punktfunk → Settings →
-  Input → Shortcuts**.
+  second, quit the game from the Steam overlay, or tap **Stop** under **Streaming**. Change the
+  button combination under **Open Punktfunk → Settings → Input → Shortcuts**.
 - **The Steam and `…` buttons open the Deck's own menus.** To press them on the host,
-  [hold **Select**](/docs/shortcuts#the-guide-button-xbox--ps--steam-and-quick-access), or use
-  **Host menus** in the panel while a stream runs. To send them raw instead, set
-  **Open Punktfunk → Settings → Controllers → Guide button** to **Send to host** (turn on
+  [hold **Select**](/docs/shortcuts#the-guide-button-xbox--ps--steam-and-quick-access), or tap
+  **Steam menu on host** or **Quick access on host** under **Streaming**. To send them raw instead,
+  set **Open Punktfunk → Settings → Controllers → Guide button** to **Send to host** (turn on
   **Show advanced** first).
-- **End game:** a stream started from a game's page adds **End game** to **Host menus**. It closes
+- **End game:** a stream started from a game's page adds **End game** to **Streaming**. It closes
   the game on the host, then the stream.
 - **Steam Input.** The host always gets the full Steam Deck controller: paddles, both trackpads
   and gyro. Set a game's controls in Steam on the host, during a stream so Steam there sees the
@@ -92,7 +97,7 @@ installed on the Deck. Pick **This device** to hand the button back to Steam. Th
 
 When the plugin or the client has an update, the panel shows **Update Punktfunk** at the top. Tap
 it; nothing leaves Gaming Mode. A client the plugin can't update (a sysext, a nix profile, a source
-build) shows the update command instead.
+build) shows the update command instead. To check right away, tap **About → Check for updates**.
 
 The plugin follows the [channel](/docs/channels) you installed it from. If the button never
 appears, install the plugin from the same URL again; Decky replaces it in place.
@@ -147,19 +152,20 @@ Reopen the game page.
 
 ### Hidden entries named after games pile up
 
-Each game streamed from its page has one. Panel → **About** → **Remove game shortcuts**.
+Each game streamed from its page has one. Panel → **Troubleshooting** → **Remove game shortcuts**.
 
 ### The stream is stuck, black or won't close
 
-Panel → **About** → **Force-stop**, then start it again.
+Panel → **Troubleshooting** → **Force-stop**, then start it again. While the panel shows
+**Streaming**, its **Stop** does the same.
 
 ### The Punktfunk library entry is gone
 
-Panel → **About** → **Recreate library shortcut**.
+Panel → **Troubleshooting** → **Recreate library shortcut**.
 
 ## Uninstalling
 
-1. In the panel, tap **About → Remove game shortcuts**.
+1. In the panel, tap **Troubleshooting → Remove game shortcuts**.
 2. Remove the plugin: Quick Access Menu → **plug** icon → **gear** → **Plugins** →
    **Punktfunk** → **Uninstall**.
 3. Remove the two non-Steam entries named **Punktfunk** (one is hidden): in your library, **Manage

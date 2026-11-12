@@ -1,8 +1,14 @@
 // What may ride Steam's launch options: every id shape the clients really use passes, and every
-// shell metacharacter, space, flag lead and over-long value is refused. Run by `pnpm test`.
+// shell metacharacter, space, flag lead and over-long value is refused. Then the options string
+// itself: the token order the wrapper reads. Run by `pnpm test`.
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { isSafeClientBin, isSafeLaunchId } from "../src/launch-id.ts";
+import {
+  isSafeClientBin,
+  isSafeLaunchId,
+  launchOptions,
+  validateLaunch,
+} from "../src/steam/launch-options.ts";
 
 const shared = (name: string) =>
   JSON.parse(readFileSync(new URL(`../../shared/${name}`, import.meta.url), "utf8"));
@@ -100,3 +106,47 @@ for (const bin of [
   assert.equal(isSafeClientBin(bin), false, `unsafe path passed: ${JSON.stringify(bin)}`);
 }
 console.log("launch id tests passed");
+
+// The options string: PF_REF first, the client path only when given, each extra in a fixed
+// order, and the wrapper behind %command% as a quoted argument.
+const runner = "/home/deck/homebrew/plugins/punktfunk/bin/punktfunkrun.sh";
+const tail = `%command% "${runner}"`;
+const host = "11111111-2222-4333-8444-555555555555";
+assert.equal(launchOptions(host, runner, "", {}), `PF_REF=${host} ${tail}`, "plain stream");
+assert.equal(
+  launchOptions(host, runner, "/usr/bin/punktfunk-client", {}),
+  `PF_REF=${host} PF_CLIENT_BIN=/usr/bin/punktfunk-client ${tail}`,
+  "native client",
+);
+assert.equal(
+  launchOptions(host, runner, "/usr/bin/punktfunk-client", {
+    profileId: "0a1b2c3d4e5f",
+    gameId: "steam:570",
+    presetId: "f5e4d3c2b1a0",
+  }),
+  `PF_REF=${host} PF_CLIENT_BIN=/usr/bin/punktfunk-client PF_PRESET=f5e4d3c2b1a0 ` +
+    `PF_GAME=steam:570 PF_AS=0a1b2c3d4e5f ${tail}`,
+  "every extra, in the wrapper's order",
+);
+assert.equal(
+  launchOptions("192.168.1.50:9777", runner, "", {}),
+  `PF_REF=192.168.1.50:9777 ${tail}`,
+  "an unsaved host by address",
+);
+for (const bin of ["/home/deck/my apps/client", "/a;id", "relative/client"]) {
+  assert.throws(() => launchOptions(host, runner, bin, {}), /client path/, `unsafe path ${bin}`);
+}
+
+// validateLaunch refuses an unsafe host ref or id before anything reaches Steam.
+validateLaunch(host, { presetId: "f5e4d3c2b1a0", gameId: "steam:570", profileId: "0a1b2c3d4e5f" });
+validateLaunch("[fe80::1]:9777", {});
+for (const [ref, opts, what] of [
+  ["--browse", {}, /host reference/],
+  ["host;id", {}, /host reference/],
+  [host, { presetId: "a b" }, /preset id/],
+  [host, { gameId: "steam:570$(id)" }, /game id/],
+  [host, { profileId: "-x" }, /profile id/],
+] as const) {
+  assert.throws(() => validateLaunch(ref, opts), what, `${ref} ${JSON.stringify(opts)}`);
+}
+console.log("launch options tests passed");

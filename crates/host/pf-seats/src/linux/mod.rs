@@ -41,6 +41,9 @@ mod safe_open;
 mod session;
 mod shared;
 pub mod socket;
+pub mod stage;
+#[cfg(test)]
+mod start_tests;
 #[cfg(test)]
 mod unlock_tests;
 
@@ -48,7 +51,7 @@ pub use pam::{run_check as pam_check, CHECK_VERB as PAM_CHECK_VERB};
 pub use shared::ledger_root;
 pub use socket::SOCKET_PATH;
 
-use crate::backend::{BackendError, PlatformBackend};
+use crate::backend::{Adopted, BackendError, PlatformBackend};
 use crate::ipc::{Diagnostic, DiagnosticLevel, SeatingStatus};
 use crate::model::{Ledger, RuntimeState, RuntimeStatus, Seat, SeatId};
 use crate::persistence::{LedgerStore, StoreError};
@@ -160,7 +163,7 @@ struct Inner {
     hook: OnceLock<UnitHook>,
     /// The prerequisite checks `Seating` last answered with, and when they ran.
     checks: Mutex<Option<(Instant, Vec<Diagnostic>)>>,
-    /// Held by a removal throughout and by [`keep_level`] for each seat it refreshes, so a
+    /// Held by a removal throughout and by [`level_seat`] for each seat it refreshes, so a
     /// refresh never writes a removed seat's trust copy or environment file back.
     level: Mutex<()>,
     /// Each person's row's device list, loaded on first use. Held across each change, its save
@@ -239,6 +242,7 @@ impl Own {
 /// What the keep-level thread and the pad broker need of a running seat.
 #[derive(Clone, Debug)]
 struct Tracked {
+    kind: Own,
     /// Who reads its trust copy.
     reader: shared::Reader,
     /// The row and account, for a row on a person's own account: its physical login ends the
@@ -251,7 +255,8 @@ struct Tracked {
 
 impl Tracked {
     fn of(seat: &Seat, passwd: &accounts::Passwd) -> Self {
-        let (reader, guest) = if Own::of(seat).ours() {
+        let kind = Own::of(seat);
+        let (reader, guest) = if kind.ours() {
             (shared::Reader::group(passwd.gid), None)
         } else {
             (
@@ -260,6 +265,7 @@ impl Tracked {
             )
         };
         Self {
+            kind,
             reader,
             guest,
             uid: passwd.uid,
@@ -579,12 +585,6 @@ impl LinuxBackend {
         }
     }
 
-    /// The box owner's uid once their row is prepared, for the account `door-helper` recorded:
-    /// the one peer besides root and the door the socket serves, for Flatpak changes only.
-    pub fn owner_uid(&self) -> Option<u32> {
-        self.owner().map(|owner| owner.uid)
-    }
-
     fn owner(&self) -> Option<accounts::Passwd> {
         self.inner
             .owner
@@ -649,7 +649,7 @@ impl LinuxBackend {
         if let Err(error) = refresh_box_library(&self.inner) {
             tracing::warn!(account = %seat.account, %error, "box library not copied");
         }
-        if let Some(changed) = rewrite_env(&self.inner, seat, passwd)? {
+        if let Some(changed) = rewrite_env(&self.inner, seat, Own::Owner, passwd)? {
             return Ok(changed);
         }
         self.write_owner_files(seat, passwd, &session::mint_token())?;
@@ -662,17 +662,21 @@ impl LinuxBackend {
         passwd: &accounts::Passwd,
         token: &str,
     ) -> Result<(), BackendError> {
-        let state = &self.inner.state;
+        self.write_token(seat, token)?;
+        let (state, browser) = (&self.inner.state, session::browser(&self.inner.box_dir));
+        session::write_unit_files(seat, Own::Owner, passwd, state, token, None, &browser)
+    }
+
+    /// Writes `token` as the seat's token file, for the box's client to present: the `punktfunk`
+    /// user's when there is one.
+    fn write_token(&self, seat: &Seat, token: &str) -> Result<(), BackendError> {
         let door = accounts::lookup("punktfunk")?;
         shared::write_host_token(
-            state,
+            &self.inner.state,
             &seat.id,
             &session::token_line(token),
             shared::token_owner(door.as_ref()),
-        )?;
-        let owner = Some((passwd.uid, passwd.gid));
-        let browser = session::browser(&self.inner.box_dir);
-        session::write_unit_files(seat, &passwd.home, state, token, owner, None, &browser)
+        )
     }
 
     /// Writes the owner's files again at supervisor start: `/run` is empty after a boot, and the
@@ -944,6 +948,13 @@ impl PlatformBackend for LinuxBackend {
         Ok(())
     }
 
+    /// The box owner's uid once their row is prepared, for the account `door-helper` recorded:
+    /// the one peer besides root and the door the socket serves, for Flatpak changes only, and
+    /// the uid the ledger keeps on the owner's row.
+    fn owner_uid(&self) -> Option<u32> {
+        self.owner().map(|owner| owner.uid)
+    }
+
     fn account_uid(&self, account: &str, ledger: &Ledger) -> Result<u32, BackendError> {
         accounts::adoptable(account, ledger, &self.inner.state).map(|found| found.uid)
     }
@@ -956,15 +967,15 @@ impl PlatformBackend for LinuxBackend {
     }
 
     /// A person's row, whose password [`Self::check_password`] passed: the account still resolves
-    /// to the recorded uid, then the row's directory is made. Nothing is made in the account, and
-    /// a refusal leaves nothing behind.
-    fn adopt_account(&self, seat: &Seat, _password: &Secret) -> Result<bool, BackendError> {
+    /// to the recorded uid, then the row's directory is made. Nothing is made in the account, so
+    /// release has nothing of it to take back, and a refusal leaves nothing behind.
+    fn adopt_account(&self, seat: &Seat, _password: &Secret) -> Result<Adopted, BackendError> {
         let passwd = accounts::require_person(seat)?;
         let made = shared::ensure_person_dirs(&self.inner.state, &seat.id, &passwd);
         if made.is_err() {
             let _ = shared::remove_seat_dirs(&self.inner.state, &seat.id);
         }
-        made.map(|()| false)
+        made.map(|()| Adopted::default())
     }
 
     fn account_owned(&self, seat: &Seat) -> Result<(), BackendError> {
@@ -986,6 +997,8 @@ impl PlatformBackend for LinuxBackend {
         devices::box_fingerprint(&self.inner.box_dir, &self.inner.state)
     }
 
+    /// A made seat's row up: its user's group, home, groups, folders, Steam links and copies put
+    /// right, then [`LinuxBackend::bring_up`]. The owner's and a person's rows start their own way.
     fn start(&self, seat: &Seat) -> Result<RuntimeStatus, BackendError> {
         let asked = self.inner.stops.load(Ordering::SeqCst);
         match Own::of(seat) {
@@ -1020,56 +1033,8 @@ impl PlatformBackend for LinuxBackend {
         let reader = shared::Reader::group(passwd.gid);
         shared::refresh_trust(box_dir, state, &seat.id, reader)?;
         shared::refresh_seat_library(state, &seat.id, reader)?;
-        let unit = session::unit(&seat.account);
         unit_hook(&self.inner, &seat.account, Some(passwd.uid));
-        // A unit already up keeps its token: the host read it when it started.
-        if !session::state(&seat.account)?.live() {
-            if session::port_taken(seat.mgmt_port) {
-                return Err(err(
-                    "port_in_use",
-                    format!("management port {} is already in use", seat.mgmt_port),
-                ));
-            }
-            let token = session::mint_token();
-            let door = accounts::lookup("punktfunk")?;
-            shared::write_host_token(
-                state,
-                &seat.id,
-                &session::token_line(&token),
-                shared::token_owner(door.as_ref()),
-            )?;
-            let source = self.steam_source();
-            let root = source.as_ref().map(|s| s.root.as_path());
-            let owner = self.owner();
-            let shares = libraries::share(box_dir, state, &seat.id, &passwd, root, owner.as_ref());
-            let shown = shares.as_ref().map_or(&[][..], |s| s.libraries.as_slice());
-            libraries::register(state, &seat.id, &passwd, shown);
-            let browser = session::browser(box_dir);
-            session::write_unit_files(
-                seat,
-                &passwd.home,
-                state,
-                &token,
-                Some((passwd.uid, passwd.gid)),
-                shares.as_ref(),
-                &browser,
-            )?;
-            self.stopped_since(asked)?;
-            // A manager already up (the last run's, or a linger's from boot) lacks this start's
-            // groups and drop-in; the new session would join it and hand its apps neither.
-            let manager = format!("user@{}.service", passwd.uid);
-            let _ = run("systemctl_failed", "systemctl", &["stop", &manager]);
-            let _ = run("systemctl_failed", "systemctl", &["reset-failed", &unit]);
-            run("systemctl_failed", "systemctl", &["start", &unit])?;
-            // The mount's own error is in the unit's journal.
-            for stage in shares
-                .iter()
-                .flat_map(|s| libraries::unmounted(&seat.id, s))
-            {
-                let stage = stage.display();
-                tracing::warn!(seat = %seat.id, %stage, %unit, "seat library stage not mounted");
-            }
-        }
+        self.bring_up(seat, Own::Seat, &passwd, None, asked)?;
         self.track(&seat.id, Tracked::of(seat, &passwd));
         self.wait_ready(seat, asked, false)?;
         Ok(RuntimeStatus::running())
@@ -1357,14 +1322,7 @@ impl LinuxBackend {
             self.wait_port(seat, asked)?;
             return Ok(RuntimeStatus::running());
         }
-        let unit = session::unit(&seat.account);
-        // A unit already up keeps its token: the host read it when it started.
-        if !session::state(&seat.account)?.live() {
-            self.write_owner_files(seat, &passwd, &session::mint_token())?;
-            self.stopped_since(asked)?;
-            let _ = run("systemctl_failed", "systemctl", &["reset-failed", &unit]);
-            run("systemctl_failed", "systemctl", &["start", &unit])?;
-        }
+        self.bring_up(seat, Own::Owner, &passwd, None, asked)?;
         self.wait_ready(seat, asked, false)?;
         Ok(RuntimeStatus::running())
     }
@@ -1373,9 +1331,8 @@ impl LinuxBackend {
     /// login is theirs, and the headless session would sit beside it uninvited. Otherwise the
     /// unit brings up the headless session and a contract seat's host in it, which admits only
     /// the devices the row's list does. The account is checked first, and what is made is the
-    /// row's own, never in the account. A cold start with `password` runs the login helper when
-    /// [`login_with`] says so, and hands it the password through [`handover`] while this waits;
-    /// a helper that ended before a session falls back to the plain start.
+    /// row's own, never in the account. The login drop-in [`Self::bring_up`] wrote stays while
+    /// the start waits; a helper that ended before a session falls back to the plain start.
     fn start_person(
         &self,
         seat: &Seat,
@@ -1394,61 +1351,12 @@ impl LinuxBackend {
             .said("account_at_desk")
             .param("account", &seat.account));
         }
-        let (box_dir, state) = (&self.inner.box_dir, &self.inner.state);
+        let state = &self.inner.state;
         shared::ensure_person_dirs(state, &seat.id, &passwd)?;
         let reader = shared::Reader::person(passwd.uid, passwd.gid);
         person_trust(&self.inner, &seat.id, reader)?;
         shared::refresh_seat_library(state, &seat.id, reader)?;
-        let mut written = None;
-        // A unit already up keeps its token: the host read it when it started.
-        if !session::state(&seat.account)?.live() {
-            if session::port_taken(seat.mgmt_port) {
-                return Err(err(
-                    "port_in_use",
-                    format!("management port {} is already in use", seat.mgmt_port),
-                ));
-            }
-            let token = session::mint_token();
-            let door = accounts::lookup("punktfunk")?;
-            shared::write_host_token(
-                state,
-                &seat.id,
-                &session::token_line(&token),
-                shared::token_owner(door.as_ref()),
-            )?;
-            let browser = session::browser(box_dir);
-            session::write_unit_files(seat, &passwd.home, state, &token, None, None, &browser)?;
-            let label =
-                (self.inner.login_label.get().cloned()).unwrap_or_else(handover::Label::unbound);
-            if label == handover::Label::Missing && password.is_some() {
-                tracing::warn!(account = %seat.account,
-                    cause = "the login socket doesn't carry PID 1's SELinux context",
-                    "seat started without the wallet login");
-            }
-            let off = self.inner.helper_off.load(Ordering::SeqCst);
-            let login = login_with(password, &label, off);
-            let dropin = login
-                .as_ref()
-                .and_then(|(_, context)| login_dropin(context.as_deref()));
-            let password = login.map(|(password, _)| password);
-            if password.is_some() && dropin.is_none() {
-                tracing::warn!(account = %seat.account, cause = "this binary's path can't go in a unit file",
-                    "seat started without the wallet login");
-            }
-            written = dropin.is_some().then(|| LoginDropin(&seat.account));
-            session::set_login(&seat.account, dropin.as_deref())?;
-            self.stopped_since(asked)?;
-            let unit = session::unit(&seat.account);
-            let _ = run("systemctl_failed", "systemctl", &["reset-failed", &unit]);
-            let handover = &self.inner.handover;
-            let offer = password
-                .filter(|_| written.is_some())
-                .map(|password| handover.offer(&seat.account, password, Instant::now()));
-            run("systemctl_failed", "systemctl", &["start", &unit])?;
-            if let Some(offer) = offer {
-                offer.wait(|| session::state(&seat.account).is_ok_and(|s| s.live()));
-            }
-        }
+        let written = self.bring_up(seat, Own::Person, &passwd, password, asked)?;
         self.track(&seat.id, Tracked::of(seat, &passwd));
         let ready = self.wait_ready(seat, asked, written.is_some());
         drop(written);
@@ -1464,6 +1372,112 @@ impl LinuxBackend {
             }
             ready => ready.map(|()| RuntimeStatus::running()),
         }
+    }
+
+    /// `seat`'s unit up from cold, a row of `kind` on `passwd`'s account: a fresh token, the
+    /// unit's files, then the unit. A unit already up keeps its token, which its host read when it
+    /// started, and nothing here runs. `password` is a person's, for [`Self::person_login`];
+    /// the login drop-in's guard comes back for the caller to hold while it waits.
+    fn bring_up<'s>(
+        &self,
+        seat: &'s Seat,
+        kind: Own,
+        passwd: &accounts::Passwd,
+        password: Option<&Secret>,
+        asked: u64,
+    ) -> Result<Option<LoginDropin<'s>>, BackendError> {
+        if session::state(&seat.account)?.live() {
+            return Ok(None);
+        }
+        // The owner's own host may hold the row's port until the unit's runner stands it down.
+        if kind != Own::Owner && session::port_taken(seat.mgmt_port) {
+            return Err(err(
+                "port_in_use",
+                format!("management port {} is already in use", seat.mgmt_port),
+            ));
+        }
+        let token = session::mint_token();
+        self.write_token(seat, &token)?;
+        let shares = if kind.ours() {
+            self.share_libraries(seat, passwd)
+        } else {
+            None
+        };
+        let (state, browser) = (&self.inner.state, session::browser(&self.inner.box_dir));
+        let shown = shares.as_ref();
+        session::write_unit_files(seat, kind, passwd, state, &token, shown, &browser)?;
+        let (written, password) = match kind {
+            Own::Person => self.person_login(seat, password)?,
+            Own::Owner | Own::Seat => (None, None),
+        };
+        self.stopped_since(asked)?;
+        let unit = session::unit(&seat.account);
+        if kind.ours() {
+            // A manager already up (the last run's, or a linger's from boot) lacks this start's
+            // groups and drop-in; the new session would join it and hand its apps neither.
+            let manager = format!("user@{}.service", passwd.uid);
+            let _ = run("systemctl_failed", "systemctl", &["stop", &manager]);
+        }
+        let _ = run("systemctl_failed", "systemctl", &["reset-failed", &unit]);
+        let handover = &self.inner.handover;
+        let offer =
+            password.map(|password| handover.offer(&seat.account, password, Instant::now()));
+        run("systemctl_failed", "systemctl", &["start", &unit])?;
+        if let Some(offer) = offer {
+            offer.wait(|| session::state(&seat.account).is_ok_and(|s| s.live()));
+        }
+        // The mount's own error is in the unit's journal.
+        for stage in shares
+            .iter()
+            .flat_map(|s| libraries::unmounted(&seat.id, s))
+        {
+            let stage = stage.display();
+            tracing::warn!(seat = %seat.id, %stage, %unit, "seat library stage not mounted");
+        }
+        Ok(written)
+    }
+
+    /// The owner's libraries a made seat is shown, listed in its Steam's library list.
+    fn share_libraries(&self, seat: &Seat, passwd: &accounts::Passwd) -> Option<libraries::Shares> {
+        let (box_dir, state) = (&self.inner.box_dir, &self.inner.state);
+        let source = self.steam_source();
+        let root = source.as_ref().map(|s| s.root.as_path());
+        let owner = self.owner();
+        let shares = libraries::share(box_dir, state, &seat.id, passwd, root, owner.as_ref());
+        let shown = shares.as_ref().map_or(&[][..], |s| s.libraries.as_slice());
+        libraries::register(state, &seat.id, passwd, shown);
+        shares
+    }
+
+    /// How a person's cold start opens their session ([`login_with`]): the login drop-in written,
+    /// or removed, and its guard, made first so a failed write still removes it. The password
+    /// comes back only when the drop-in is written, for the helper to take through [`handover`].
+    fn person_login<'s, 'p>(
+        &self,
+        seat: &'s Seat,
+        password: Option<&'p Secret>,
+    ) -> Result<(Option<LoginDropin<'s>>, Option<&'p Secret>), BackendError> {
+        let label =
+            (self.inner.login_label.get().cloned()).unwrap_or_else(handover::Label::unbound);
+        if label == handover::Label::Missing && password.is_some() {
+            tracing::warn!(account = %seat.account,
+                cause = "the login socket doesn't carry PID 1's SELinux context",
+                "seat started without the wallet login");
+        }
+        let off = self.inner.helper_off.load(Ordering::SeqCst);
+        let login = login_with(password, &label, off);
+        let dropin = login
+            .as_ref()
+            .and_then(|(_, context)| login_dropin(context.as_deref()));
+        let password = login.map(|(password, _)| password);
+        if password.is_some() && dropin.is_none() {
+            tracing::warn!(account = %seat.account, cause = "this binary's path can't go in a unit file",
+                "seat started without the wallet login");
+        }
+        let written = dropin.is_some().then(|| LoginDropin(&seat.account));
+        session::set_login(&seat.account, dropin.as_deref())?;
+        let password = password.filter(|_| written.is_some());
+        Ok((written, password))
     }
 
     /// `seat`'s unit started again as systemd's own login opens it, after the login helper ended
@@ -1519,15 +1533,11 @@ impl LinuxBackend {
     }
 }
 
-/// While a seat runs: refreshes its trust copy when the box's files change, the environment file
-/// of a row on a person's own account, and, for a seat other than the owner's, the box's library,
-/// which follows the owner's own first. A person's pairing list follows who its row admits, as
-/// presence runs out. Ends a person's headless session when they sit down at the machine, and
-/// repairs the games folder's ACL mask after a made seat stops and every [`ACL_EVERY`]. Logs,
-/// once per library load of the unit's run, why a made seat's Steam couldn't open a library
-/// folder; a load the log keeps from the last run is passed over. The owner's
-/// row stays listed while its host is the owner's own, which reads the same copy. Ends when the
-/// backend is dropped.
+/// Keeps every running seat level with the box, every [`TRUST_TICK`], one job after another: the
+/// box's library, each seat's copies and the desk yield of a row on a person's own account, a made
+/// seat's missed libraries every [`REACH_EVERY`], the games folder's ACL mask. Each job's memory
+/// is a local here, handed to it. The owner's row stays listed while its host is the owner's own,
+/// which reads the same copy. Ends when the backend is dropped.
 fn keep_level(inner: Weak<Inner>) {
     let mut acl_at = Instant::now();
     let mut reach_at = Instant::now();
@@ -1537,15 +1547,7 @@ fn keep_level(inner: Weak<Inner>) {
     loop {
         std::thread::sleep(TRUST_TICK);
         let Some(inner) = inner.upgrade() else { return };
-        // Logged once per outage, like a trust copy below.
-        match refresh_box_library(&inner) {
-            Ok(_) => library_failing = false,
-            Err(error) if !library_failing => {
-                library_failing = true;
-                tracing::warn!(%error, "box library not copied");
-            }
-            Err(_) => {}
-        }
+        level_box_library(&inner, &mut library_failing);
         let seats: Vec<(SeatId, Tracked)> = inner
             .running
             .lock()
@@ -1554,36 +1556,8 @@ fn keep_level(inner: Weak<Inner>) {
             .map(|(id, tracked)| (id.clone(), tracked.clone()))
             .collect();
         for (id, tracked) in &seats {
-            let level = inner.level.lock().unwrap_or_else(|e| e.into_inner());
-            // Removed since the list was taken: its files are gone and stay gone.
-            let tracked_now = inner.running.lock().unwrap_or_else(|e| e.into_inner());
-            if !tracked_now.contains_key(id) {
+            if !level_seat(&inner, id, tracked, &mut failing) {
                 continue;
-            }
-            drop(tracked_now);
-            let trust = match &tracked.guest {
-                Some((seat, _)) if !seat.owner => person_trust(&inner, id, tracked.reader),
-                _ => shared::refresh_trust(&inner.box_dir, &inner.state, id, tracked.reader),
-            };
-            let refreshed = trust
-                .and_then(|_| match &tracked.guest {
-                    Some((seat, passwd)) => rewrite_env(&inner, seat, passwd).map(|_| ()),
-                    None => Ok(()),
-                })
-                .and_then(|()| match &tracked.guest {
-                    Some((seat, _)) if seat.owner => Ok(false),
-                    _ => shared::refresh_seat_library(&inner.state, id, tracked.reader),
-                });
-            drop(level);
-            match refreshed {
-                Ok(_) => {
-                    failing.remove(id);
-                }
-                // Logged once per outage, not every tick.
-                Err(error) if failing.insert(id.clone()) => {
-                    tracing::warn!(seat = %id, %error, "trust copy not refreshed");
-                }
-                Err(_) => {}
             }
             if let Some((seat, _)) = &tracked.guest {
                 yield_to_the_desk(&inner, seat);
@@ -1591,31 +1565,110 @@ fn keep_level(inner: Weak<Inner>) {
         }
         if reach_at.elapsed() >= REACH_EVERY {
             reach_at = Instant::now();
-            for (id, tracked) in seats.iter().filter(|(_, tracked)| tracked.guest.is_none()) {
-                let Ok(Some(passwd)) = accounts::lookup(&tracked.account) else {
-                    continue;
-                };
-                let Some(missed) = reach::missed(&passwd.home) else {
-                    continue;
-                };
-                if explained.get(id) == Some(&missed.stamp) {
-                    continue;
-                }
-                if reach::this_run(&missed, &session::unit(&tracked.account)) {
-                    reach::explain(id, &passwd, &missed);
-                }
-                explained.insert(id.clone(), missed.stamp);
-            }
+            explain_reach(&seats, &mut explained);
         }
-        let seat_up = seats.iter().any(|(_, tracked)| tracked.guest.is_none());
-        let due = seat_up && acl_at.elapsed() >= ACL_EVERY;
-        if inner.acl_dirty.swap(false, Ordering::SeqCst) || due {
-            acl_at = Instant::now();
-            if let Err(error) = shared::fix_acl(&inner.state) {
-                tracing::warn!(%error, "games ACL mask not repaired");
-            }
+        repair_acl(&inner, &seats, &mut acl_at);
+    }
+}
+
+/// Brings the box's library level with the owner's own. A failure is logged once per outage:
+/// `failing` says whether the last one failed.
+fn level_box_library(inner: &Inner, failing: &mut bool) {
+    match refresh_box_library(inner) {
+        Ok(_) => *failing = false,
+        Err(error) if !*failing => {
+            *failing = true;
+            tracing::warn!(%error, "box library not copied");
+        }
+        Err(_) => {}
+    }
+}
+
+/// Refreshes `id`'s copies ([`refresh_copies`]) under the level lock, so a removal never sees
+/// them written back. A seat removed since `tracked` was read is left alone, and this returns
+/// `false`: its files are gone and stay gone. A failure is logged once per outage: `failing` holds
+/// the seats whose last refresh failed.
+fn level_seat(
+    inner: &Inner,
+    id: &SeatId,
+    tracked: &Tracked,
+    failing: &mut HashSet<SeatId>,
+) -> bool {
+    let level = inner.level.lock().unwrap_or_else(|e| e.into_inner());
+    let tracked_now = inner.running.lock().unwrap_or_else(|e| e.into_inner());
+    if !tracked_now.contains_key(id) {
+        return false;
+    }
+    drop(tracked_now);
+    let refreshed = refresh_copies(inner, id, tracked);
+    drop(level);
+    match refreshed {
+        Ok(()) => {
+            failing.remove(id);
+        }
+        Err(error) if failing.insert(id.clone()) => {
+            tracing::warn!(seat = %id, %error, "trust copy not refreshed");
+        }
+        Err(_) => {}
+    }
+    true
+}
+
+/// A running seat's trust copy, whose pairing list follows who a person's row admits as presence
+/// runs out; then the environment file of a row on a person's own account; then, for a seat other
+/// than the owner's, the box's library in its trust copy. The first failure ends it.
+fn refresh_copies(inner: &Inner, id: &SeatId, tracked: &Tracked) -> Result<(), BackendError> {
+    let (box_dir, state, reader) = (&inner.box_dir, &inner.state, tracked.reader);
+    match tracked.kind {
+        Own::Person => person_trust(inner, id, reader)?,
+        Own::Owner | Own::Seat => shared::refresh_trust(box_dir, state, id, reader)?,
+    };
+    if let Some((seat, passwd)) = &tracked.guest {
+        rewrite_env(inner, seat, tracked.kind, passwd)?;
+    }
+    if tracked.kind != Own::Owner {
+        shared::refresh_seat_library(state, id, reader)?;
+    }
+    Ok(())
+}
+
+/// Logs, once per library load of the unit's run, why a made seat's Steam couldn't open a library
+/// folder; a load the log keeps from the last run is passed over. `explained` holds the load each
+/// seat was last read at.
+fn explain_reach(seats: &[(SeatId, Tracked)], explained: &mut HashMap<SeatId, String>) {
+    for (id, tracked) in seats.iter().filter(|(_, tracked)| tracked.kind.ours()) {
+        let Ok(Some(passwd)) = accounts::lookup(&tracked.account) else {
+            continue;
+        };
+        let Some(missed) = reach::missed(&passwd.home) else {
+            continue;
+        };
+        if explained.get(id) == Some(&missed.stamp) {
+            continue;
+        }
+        if reach::this_run(&missed, &session::unit(&tracked.account)) {
+            reach::explain(id, &passwd, &missed);
+        }
+        explained.insert(id.clone(), missed.stamp);
+    }
+}
+
+/// Repairs the games folder's ACL mask when [`acl_due`]; `acl_at` is when it last did.
+fn repair_acl(inner: &Inner, seats: &[(SeatId, Tracked)], acl_at: &mut Instant) {
+    let seat_up = seats.iter().any(|(_, tracked)| tracked.kind.ours());
+    let dirty = inner.acl_dirty.swap(false, Ordering::SeqCst);
+    if acl_due(dirty, seat_up, acl_at.elapsed()) {
+        *acl_at = Instant::now();
+        if let Err(error) = shared::fix_acl(&inner.state) {
+            tracing::warn!(%error, "games ACL mask not repaired");
         }
     }
+}
+
+/// The ACL repair is due once a unit stopped since the last (`dirty`), and while a made seat is
+/// up once [`ACL_EVERY`] has passed `since` the last.
+fn acl_due(dirty: bool, seat_up: bool, since: Duration) -> bool {
+    dirty || (seat_up && since >= ACL_EVERY)
 }
 
 /// The one choice of how a person's cold start opens their session: through the login helper,
@@ -1688,21 +1741,21 @@ fn unit_ended(seat: &Seat, state: &session::UnitState, login: bool) -> BackendEr
     }
 }
 
-/// Writes the environment file of a row on a person's own account again with the token it holds,
-/// as the box's Seat defaults stand now: Browser streaming reaches its host at the next start.
-/// Every row's stays root's; the owner may read theirs, which their own host reads too.
+/// Writes the environment file of a row of `kind` on a person's own account again with the token
+/// it holds, as the box's Seat defaults stand now: Browser streaming reaches its host at the next
+/// start. Every row's stays root's; the owner may read theirs, which their own host reads too.
 /// `None` when the file holds no token, `Some(true)` when it changed.
 fn rewrite_env(
     inner: &Inner,
     seat: &Seat,
+    kind: Own,
     passwd: &accounts::Passwd,
 ) -> Result<Option<bool>, BackendError> {
     let Some(token) = session::env_token(&seat.account) else {
         return Ok(None);
     };
     let browser = session::browser(&inner.box_dir);
-    let reader = seat.owner.then_some((passwd.uid, passwd.gid));
-    let changed = session::write_env(seat, &passwd.home, &inner.state, &token, reader, &browser)?;
+    let changed = session::write_env(seat, kind, passwd, &inner.state, &token, &browser)?;
     if changed {
         tracing::info!(account = %seat.account, browser = browser.on,
             "environment file rewritten for its host's next start");
@@ -1825,10 +1878,12 @@ mod tests {
             autostart: false,
             runtime: crate::model::RuntimeStatus::stopped(),
             owner: true,
+            owner_uid: None,
             fingerprint: None,
             adopted_sid: None,
             adopted_uid: None,
             rdp_granted: false,
+            console_deny_kept: false,
         };
         let passwd = accounts::Passwd {
             name: "bob".into(),
@@ -1846,6 +1901,116 @@ mod tests {
             1,
             "only the record"
         );
+    }
+
+    /// A made seat as the keep-level thread holds it, its copies for this process's group.
+    fn made_tracked() -> (SeatId, Tracked) {
+        let seat = Seat {
+            id: SeatId::parse("0123456789abcdef0123456789abcd0a").unwrap(),
+            name: "Desk".into(),
+            account: "pf-seat-9".into(),
+            display_slot: 12,
+            native_port: 9779,
+            mgmt_port: 48_124,
+            autostart: false,
+            runtime: RuntimeStatus::stopped(),
+            owner: false,
+            owner_uid: None,
+            fingerprint: None,
+            adopted_sid: None,
+            adopted_uid: None,
+            rdp_granted: false,
+            console_deny_kept: false,
+        };
+        let passwd = accounts::Passwd {
+            name: "pf-seat-9".into(),
+            uid: 3_999_999_990,
+            gid: rustix::process::getegid().as_raw(),
+            gecos: String::new(),
+            home: "/nonexistent".into(),
+        };
+        (seat.id.clone(), Tracked::of(&seat, &passwd))
+    }
+
+    /// What `f` logs on this thread.
+    fn logged(f: impl FnOnce()) -> String {
+        struct Sink(Arc<Mutex<Vec<u8>>>);
+        impl std::io::Write for Sink {
+            fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+                self.0.lock().unwrap().extend_from_slice(bytes);
+                Ok(bytes.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        let lines = Arc::new(Mutex::new(Vec::new()));
+        let sink = Arc::clone(&lines);
+        let subscriber = tracing_subscriber::fmt()
+            .with_writer(move || Sink(Arc::clone(&sink)))
+            .finish();
+        tracing::subscriber::with_default(subscriber, f);
+        String::from_utf8_lossy(&lines.lock().unwrap()).into_owned()
+    }
+
+    /// A seat removed since the keep-level thread listed the running ones gets none of its copies
+    /// written back; one still running gets them.
+    #[test]
+    fn a_removed_seat_s_copies_are_not_written_back() {
+        let (box_dir, state) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        let backend = backend(box_dir.path(), state.path());
+        let (id, tracked) = made_tracked();
+        let trust = shared::trust_dir(state.path(), &id);
+        let mut failing = HashSet::new();
+        assert!(!level_seat(&backend.inner, &id, &tracked, &mut failing));
+        assert!(!trust.exists(), "a removed seat's copy stays gone");
+        backend.track(&id, tracked.clone());
+        assert!(level_seat(&backend.inner, &id, &tracked, &mut failing));
+        assert!(trust.is_dir());
+        assert!(failing.is_empty());
+    }
+
+    /// A trust copy that keeps failing is logged when it starts to, not at every tick, and again
+    /// when it fails after a refresh that worked.
+    #[test]
+    fn a_failing_trust_copy_is_logged_once_per_outage() {
+        let (box_dir, state) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        let backend = backend(box_dir.path(), state.path());
+        let (id, tracked) = made_tracked();
+        backend.track(&id, tracked.clone());
+        let trust = shared::trust_dir(state.path(), &id);
+        std::fs::create_dir_all(trust.parent().unwrap()).unwrap();
+        let mut failing = HashSet::new();
+        let mut tick = |broken: bool| {
+            let _ = std::fs::remove_dir_all(&trust);
+            let _ = std::fs::remove_file(&trust);
+            if broken {
+                std::fs::write(&trust, "").unwrap();
+            }
+            let kept = || assert!(level_seat(&backend.inner, &id, &tracked, &mut failing));
+            let lines = logged(kept);
+            (
+                lines.matches("trust copy not refreshed").count(),
+                failing.contains(&id),
+            )
+        };
+        let ticks = [tick(true), tick(true), tick(true), tick(false), tick(true)];
+        assert_eq!(
+            ticks,
+            [(1, true), (0, true), (0, true), (0, false), (1, true)]
+        );
+    }
+
+    /// The games folder's ACL mask is repaired once a unit stopped, and while a made seat runs
+    /// once `ACL_EVERY` has passed; with no stop and no made seat up, never.
+    #[test]
+    fn the_acl_repair_is_due_after_a_stop_or_every_acl_every() {
+        let (soon, late) = (ACL_EVERY - Duration::from_secs(1), ACL_EVERY);
+        assert!(acl_due(true, false, Duration::ZERO));
+        assert!(acl_due(true, true, soon));
+        assert!(!acl_due(false, true, soon));
+        assert!(acl_due(false, true, late));
+        assert!(!acl_due(false, false, late * 10));
     }
 
     #[test]

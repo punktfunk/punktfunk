@@ -54,6 +54,7 @@ const PAM_CONV_ERR: c_int = 19;
 const PAM_PROMPT_ECHO_OFF: c_int = 1;
 const PAM_ERROR_MSG: c_int = 3;
 const PAM_TEXT_INFO: c_int = 4;
+const PAM_RHOST: c_int = 4;
 #[cfg(target_os = "linux")]
 const PAM_CONV: c_int = 5;
 #[cfg(target_os = "linux")]
@@ -62,6 +63,11 @@ const PAM_ESTABLISH_CRED: c_int = 0x2;
 const PAM_DELETE_CRED: c_int = 0x4;
 /// Keeps the modules from printing to the daemon's journal.
 const PAM_SILENT: c_int = 0x8000;
+
+/// `PAM_RHOST` while the password is checked: the typist is on a device, not at the machine, so
+/// a module that waits for a finger or a face there (`pam_fprintd`) steps aside. Not `localhost`,
+/// which such a module reads as local; `.invalid` never resolves to an address.
+const REMOTE_HOST: &CStr = c"punktfunk.invalid";
 
 #[repr(C)]
 struct Message {
@@ -350,6 +356,48 @@ fn takes(password: &[u8]) -> bool {
     !password.is_empty() && password.len() <= MAX_PASSWORD && !password.contains(&0)
 }
 
+/// `pam_start` on `service` for `user`, then what both transactions set before
+/// `pam_authenticate`: `env` in PAM's environment and [`REMOTE_HOST`] as `PAM_RHOST`. A step
+/// that fails ends the transaction; the cause is for the journal.
+///
+/// # Safety
+/// `conversation.data` stays valid until the returned handle's `pam_end`.
+unsafe fn begin(
+    pam: &Pam,
+    service: &CStr,
+    user: &CStr,
+    conversation: &Conversation,
+    env: &[CString],
+) -> Result<*mut c_void, String> {
+    let mut handle = std::ptr::null_mut();
+    // SAFETY: `service` and `user` are NUL-ended and outlive the call; PAM copies `conversation`,
+    // whose `data` the caller keeps until `pam_end`; `handle` is the slot for the new handle.
+    let started =
+        unsafe { (pam.start)(service.as_ptr(), user.as_ptr(), conversation, &mut handle) };
+    if started != PAM_SUCCESS || handle.is_null() {
+        return Err(format!("pam_start answered {started}"));
+    }
+    // SAFETY: a live handle, and NUL-ended strings PAM copies.
+    let put = |pair: &CString| ("pam_putenv", unsafe { (pam.putenv)(handle, pair.as_ptr()) });
+    let remote = || {
+        let host = REMOTE_HOST.as_ptr().cast();
+        // SAFETY: as above.
+        let set = unsafe { (pam.set_item)(handle, PAM_RHOST, host) };
+        ("pam_set_item", set)
+    };
+    let failed = env
+        .iter()
+        .map(put)
+        .chain(std::iter::once_with(remote))
+        .find(|&(_, status)| status != PAM_SUCCESS);
+    if let Some((step, status)) = failed {
+        // SAFETY: the live handle, not used again.
+        unsafe { (pam.end)(handle, status) };
+        return Err(format!("{step} answered {status}"));
+    }
+    Ok(handle)
+}
+
 /// Runs the `login` stack for `account` with `password` in this process and answers the code.
 fn judge(account: &str, password: &[u8]) -> &'static str {
     if !takes(password) {
@@ -370,15 +418,12 @@ fn judge(account: &str, password: &[u8]) -> &'static str {
         converse,
         data: secret.as_mut_ptr().cast(),
     };
-    let mut handle = std::ptr::null_mut();
-    // SAFETY: `SERVICE` and `user` are NUL-ended and outlive the call; `conversation` and the
-    // buffer `data` points at outlive `pam_end` below; `handle` is the slot for the new handle.
-    let started =
-        unsafe { (pam.start)(SERVICE.as_ptr(), user.as_ptr(), &conversation, &mut handle) };
-    if started != PAM_SUCCESS {
-        return unavailable(&format!("pam_start answered {started}"));
-    }
-    // SAFETY: `handle` is the live handle `pam_start` returned, ended exactly once below.
+    // SAFETY: the buffer `data` points at outlives `pam_end` below.
+    let handle = match unsafe { begin(pam, SERVICE, &user, &conversation, &[]) } {
+        Ok(handle) => handle,
+        Err(cause) => return unavailable(&cause),
+    };
+    // SAFETY: `handle` is the live handle `begin` returned, ended exactly once below.
     let mut status = unsafe { (pam.authenticate)(handle, PAM_SILENT) };
     let checking_account = status == PAM_SUCCESS;
     if checking_account {
@@ -431,9 +476,9 @@ pub(super) enum Refusal {
 
 #[cfg(target_os = "linux")]
 impl Login {
-    /// `pam_start` on `service` for `account`, `env` in PAM's environment, then
-    /// `pam_authenticate` with `password` and `pam_acct_mgmt`. Any prompt for something other
-    /// than the password fails the conversation.
+    /// [`begin`] on `service` for `account` with `env`, then `pam_authenticate` with `password`
+    /// and `pam_acct_mgmt`. Any prompt for something other than the password fails the
+    /// conversation.
     pub(super) fn authenticate(
         service: &CStr,
         account: &str,
@@ -453,17 +498,9 @@ impl Login {
             converse,
             data: secret.as_mut_ptr().cast(),
         };
-        let mut handle = std::ptr::null_mut();
-        // SAFETY: `service` and `user` are NUL-ended and outlive the call; PAM copies
-        // `conversation`, whose `data` is the heap buffer `secret` owns, which `Login` keeps until
-        // `pam_end`; `handle` is the slot for the new handle.
-        let started =
-            unsafe { (pam.start)(service.as_ptr(), user.as_ptr(), &conversation, &mut handle) };
-        if started != PAM_SUCCESS || handle.is_null() {
-            return Err(Refusal::Unavailable(format!(
-                "pam_start answered {started}"
-            )));
-        }
+        // SAFETY: `data` is the heap buffer `secret` owns, which `Login` keeps until `pam_end`.
+        let handle = unsafe { begin(pam, service, &user, &conversation, env) }
+            .map_err(Refusal::Unavailable)?;
         let mut login = Self {
             pam,
             handle,
@@ -472,15 +509,7 @@ impl Login {
             open: false,
             secret,
         };
-        for pair in env {
-            // SAFETY: a live handle and a NUL-ended `NAME=value`, which PAM copies.
-            let put = unsafe { (pam.putenv)(login.handle, pair.as_ptr()) };
-            if put != PAM_SUCCESS {
-                login.status = put;
-                return Err(Refusal::Unavailable(format!("pam_putenv answered {put}")));
-            }
-        }
-        // SAFETY: the live handle `pam_start` returned.
+        // SAFETY: the live handle `begin` returned.
         let mut status = unsafe { (pam.authenticate)(login.handle, PAM_SILENT) };
         let checking_account = status == PAM_SUCCESS;
         if checking_account {
@@ -496,10 +525,17 @@ impl Login {
     }
 
     /// `pam_setcred` and `pam_open_session`, as systemd's `PAMName=` runs them: a failed
-    /// `setcred` is only logged. The password is wiped here, and a later prompt gets no answer.
+    /// `setcred` is only logged. `PAM_RHOST` is unset first, so `pam_systemd` registers a local
+    /// session. The password is wiped here, and a later prompt gets no answer.
     pub(super) fn open(&mut self) -> Result<(), String> {
         let (pam, handle) = (self.pam, self.handle);
-        // SAFETY: the live handle of an authenticated transaction.
+        // SAFETY: the live handle of an authenticated transaction; a null item unsets it.
+        let unset = unsafe { (pam.set_item)(handle, PAM_RHOST, std::ptr::null()) };
+        if unset != PAM_SUCCESS {
+            self.status = unset;
+            return Err(format!("pam_set_item answered {unset}"));
+        }
+        // SAFETY: as above.
         let established = unsafe { (pam.setcred)(handle, PAM_ESTABLISH_CRED | PAM_SILENT) };
         self.established = established == PAM_SUCCESS;
         if !self.established {
@@ -680,6 +716,134 @@ pub(super) mod tests {
             assert_eq!(check(bad), "credential_wrong");
         }
         assert_eq!(check("pw"), "pam_unavailable", "a check that can't start");
+    }
+
+    thread_local! {
+        /// What the fake libpam of [`fake`] was asked on this thread, in order.
+        static CALLS: std::cell::RefCell<Vec<String>> = const { std::cell::RefCell::new(Vec::new()) };
+    }
+
+    fn record(call: String) {
+        CALLS.with(|calls| calls.borrow_mut().push(call));
+    }
+
+    fn calls() -> Vec<String> {
+        CALLS.with(|calls| std::mem::take(&mut *calls.borrow_mut()))
+    }
+
+    unsafe extern "C" fn fake_start(
+        _: *const c_char,
+        _: *const c_char,
+        _: *const Conversation,
+        handle: *mut *mut c_void,
+    ) -> c_int {
+        record("start".into());
+        // SAFETY: `begin` passes its slot; the fakes never read through the handle.
+        unsafe { *handle = std::ptr::NonNull::<c_void>::dangling().as_ptr() };
+        PAM_SUCCESS
+    }
+
+    unsafe extern "C" fn fake_set_item(_: *mut c_void, item: c_int, value: *const c_void) -> c_int {
+        let value = match (item, value.is_null()) {
+            (_, true) => "null".into(),
+            // SAFETY: a `PAM_RHOST` value is a NUL-ended string.
+            (PAM_RHOST, false) => unsafe { CStr::from_ptr(value.cast()) }
+                .to_string_lossy()
+                .into_owned(),
+            _ => "set".into(),
+        };
+        record(format!("set_item {item} {value}"));
+        PAM_SUCCESS
+    }
+
+    unsafe extern "C" fn fake_putenv(_: *mut c_void, pair: *const c_char) -> c_int {
+        // SAFETY: `begin` passes a NUL-ended `NAME=value`.
+        let pair = unsafe { CStr::from_ptr(pair) }.to_string_lossy();
+        record(format!("putenv {pair}"));
+        PAM_SUCCESS
+    }
+
+    unsafe extern "C" fn fake_envlist(_: *mut c_void) -> *mut *mut c_char {
+        std::ptr::null_mut()
+    }
+
+    macro_rules! fake_step {
+        ($($name:ident),*) => {$(
+            unsafe extern "C" fn $name(_: *mut c_void, _: c_int) -> c_int {
+                record(stringify!($name).into());
+                PAM_SUCCESS
+            }
+        )*};
+    }
+    fake_step!(
+        authenticate,
+        account,
+        setcred,
+        open_session,
+        close_session,
+        end
+    );
+
+    /// A libpam that records each call and answers success, on this test process's own symbols.
+    fn fake() -> &'static Pam {
+        Box::leak(Box::new(Pam {
+            _library: libloading::os::unix::Library::this().into(),
+            start: fake_start,
+            authenticate,
+            account,
+            setcred,
+            open_session,
+            close_session,
+            end,
+            set_item: fake_set_item,
+            putenv: fake_putenv,
+            envlist: fake_envlist,
+        }))
+    }
+
+    /// Both transactions tell the stack the password comes from elsewhere before any module
+    /// judges it, so a fingerprint or face module at the machine steps aside.
+    #[test]
+    fn the_stack_hears_a_remote_typist() {
+        let conversation = Conversation {
+            converse,
+            data: std::ptr::null_mut(),
+        };
+        let env = [CString::new("XDG_SESSION_TYPE=wayland").unwrap()];
+        // SAFETY: the fake keeps no pointer.
+        let begun = unsafe { begin(fake(), c"login", c"alice", &conversation, &env) };
+        assert!(begun.is_ok());
+        assert_eq!(
+            calls(),
+            [
+                "start",
+                "putenv XDG_SESSION_TYPE=wayland",
+                "set_item 4 punktfunk.invalid"
+            ]
+        );
+    }
+
+    /// The login helper's session opens with no remote host, so `pam_systemd` registers a local
+    /// one, as a display manager's.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn the_helper_s_session_opens_local() {
+        let mut login = Login {
+            pam: fake(),
+            handle: std::ptr::NonNull::<c_void>::dangling().as_ptr(),
+            status: PAM_SUCCESS,
+            established: false,
+            open: false,
+            secret: Zeroizing::new(vec![0]),
+        };
+        assert_eq!(login.open(), Ok(()));
+        drop(login);
+        let calls = calls();
+        assert_eq!(
+            calls[..3],
+            ["set_item 4 null", "setcred", "open_session"],
+            "{calls:?}"
+        );
     }
 
     /// `script` as an executable file in a fresh directory, which the caller keeps.
