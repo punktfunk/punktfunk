@@ -378,7 +378,11 @@ async fn a_vouched_install_is_the_device_s_never_the_operator_s() {
 async fn the_door_answers_a_profile_s_library_itself() {
     let fp = "aa11bb22cc33dd44ee55ff6600112233445566778899aabbccddeeff00112233";
     let seats = FakeSeats::new(box_snapshot(None));
-    let app = test_app_door(test_state(), Some(paired(&[fp])), seats.clone());
+    let tmp = tempfile::tempdir().unwrap();
+    let row = |id: &str| serde_json::json!({"id": id, "display_name": id, "os_account": {"kind": "operator"}});
+    let profiles = serde_json::json!({"profiles": [row("000000000001"), row("a1a1a1a1a1a1")]});
+    let state = super::profile_view::profiles_state(tmp.path(), profiles);
+    let app = test_app_door(state, Some(paired(&[fp])), seats.clone());
     for path in [
         "/api/v1/library?as=a1a1a1a1a1a1",
         "/api/v1/library/page?as=a1a1a1a1a1a1",
