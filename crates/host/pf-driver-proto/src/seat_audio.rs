@@ -12,6 +12,7 @@
 
 use bytemuck::{Pod, Zeroable};
 use core::mem::{offset_of, size_of};
+use core::sync::atomic::{AtomicU64, Ordering};
 
 /// `"PFSA"` little-endian. The seat host writes it last, after the other header fields.
 pub const RING_MAGIC: u32 = 0x4153_4650;
@@ -69,8 +70,8 @@ pub struct RingHeader {
     /// [`RING_FRAMES`].
     pub ring_frames: u32,
     pub reserved: [u32; 11],
-    /// Frames written since the section was created. Only the endpoint writes it, with
-    /// Release ordering after the frames; readers load it with Acquire.
+    /// Frames written since the section was created. Endpoints move it with [`publish`] after
+    /// the frames; readers load it with Acquire.
     pub write_pos: u64,
     pub tail: [u64; 7],
 }
@@ -138,6 +139,15 @@ pub fn slot_of(id: &str) -> Option<u8> {
 #[must_use]
 pub fn ring_index(pos: u64) -> usize {
     (pos % RING_FRAMES) as usize
+}
+
+/// Moves the ring's cursor past `frames` frames an endpoint wrote at `from`, unless another
+/// endpoint on the slot moved it since `from` was read: that endpoint's frames stand and these
+/// are dropped. The cursor never moves back, so the reader repeats and skips nothing.
+pub fn publish(cursor: &AtomicU64, from: u64, frames: u64) -> bool {
+    cursor
+        .compare_exchange(from, from + frames, Ordering::Release, Ordering::Relaxed)
+        .is_ok()
 }
 
 /// The frames a reader at `read` takes when the writer is at `write`: `(from, count)`.
@@ -227,6 +237,19 @@ mod tests {
             (write - RING_FRAMES / 2, RING_FRAMES / 2)
         );
         assert_eq!(readable(RING_FRAMES, 0), (0, RING_FRAMES));
+    }
+
+    /// Two endpoints on one slot: the one that read the cursor first and published last moves it
+    /// nowhere, least of all back.
+    #[test]
+    fn a_writer_that_lost_the_cursor_never_moves_it_back() {
+        let cursor = AtomicU64::new(0);
+        let late = cursor.load(Ordering::Relaxed);
+        for _ in 0..2 {
+            assert!(publish(&cursor, cursor.load(Ordering::Relaxed), 480));
+        }
+        assert!(!publish(&cursor, late, 480));
+        assert_eq!(cursor.load(Ordering::Relaxed), 960);
     }
 
     #[test]
