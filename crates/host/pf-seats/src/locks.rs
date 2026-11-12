@@ -6,6 +6,10 @@
 //! its list admits, by [`DeviceList::admitted`]'s rules; any other device needs its PIN, and with
 //! no PIN never opens it. A file that can't be read locks every profile. A seat's copy carries no
 //! PIN: a seat host never takes one.
+//!
+//! A profile takes [`PIN_FAILURES`] wrong PINs in any [`PIN_WINDOW`], over all devices, counted
+//! in the file so a restart forgets none. A try counts before its hash runs and is taken back
+//! when right, so neither a crash nor tries at once get past the cap.
 
 use crate::ipc::Device;
 use crate::unlock::{lower_hex, DeviceList};
@@ -18,6 +22,10 @@ use std::num::NonZeroU32;
 pub const FILE: &str = "profile-locks.json";
 /// A PIN is 4 to 8 ASCII digits: a gamepad and a TV remote type it.
 pub const PIN_LEN: std::ops::RangeInclusive<usize> = 4..=8;
+/// Wrong PINs a profile takes in any [`PIN_WINDOW`]: about 960 tries a day.
+pub const PIN_FAILURES: usize = 10;
+/// Seconds.
+pub const PIN_WINDOW: i64 = 15 * 60;
 /// OWASP's PBKDF2-HMAC-SHA256 floor in 2023. The lockout, not this, guards a short PIN.
 const ITERATIONS: u32 = 600_000;
 /// Rounds a stored hash may name: under this is no slow hash, over it a check that never ends.
@@ -44,6 +52,9 @@ pub struct Lock {
     pub locked: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pin: Option<PinHash>,
+    /// When each wrong PIN, or try in flight, of the last [`PIN_WINDOW`] came, unix seconds.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub wrong_pins: Vec<i64>,
     #[serde(flatten)]
     pub list: DeviceList,
 }
@@ -67,9 +78,11 @@ impl Locks {
     }
 
     fn valid(&self) -> bool {
-        self.profiles
-            .values()
-            .all(|l| l.list.valid() && l.pin.as_ref().is_none_or(PinHash::valid))
+        self.profiles.values().all(|l| {
+            l.list.valid()
+                && l.pin.as_ref().is_none_or(PinHash::valid)
+                && l.wrong_pins.len() <= PIN_FAILURES
+        })
     }
 
     /// What device `fp`, lowercase hex or none, needs to open `profile` at `now`.
@@ -112,6 +125,7 @@ impl Locks {
             let lock = self.profiles.get(id)?;
             let bare = Lock {
                 pin: None,
+                wrong_pins: Vec::new(),
                 ..lock.clone()
             };
             Some((id.clone(), bare))
@@ -137,6 +151,33 @@ impl Lock {
     pub fn admit(&mut self, device: &Device, now: i64, stay: bool) -> bool {
         self.list.expire(now);
         self.list.grant(device, now, stay, None)
+    }
+
+    /// Wrong PINs, and tries in flight, counted at `now`.
+    pub fn wrong_pins(&mut self, now: i64) -> usize {
+        self.wrong_pins
+            .retain(|at| now.saturating_sub(*at) < PIN_WINDOW);
+        self.wrong_pins.len()
+    }
+
+    /// Counts a PIN try at `now` before its hash runs, or answers the seconds until one would
+    /// count. [`Self::refund_pin`] takes a right one back.
+    pub fn charge_pin(&mut self, now: i64) -> Result<(), i64> {
+        if self.wrong_pins(now) < PIN_FAILURES {
+            self.wrong_pins.push(now);
+            return Ok(());
+        }
+        let mut counted = self.wrong_pins.clone();
+        counted.sort_unstable();
+        let frees = counted[counted.len() - PIN_FAILURES] + PIN_WINDOW;
+        Err(frees.saturating_sub(now).max(1))
+    }
+
+    /// Takes back the try [`Self::charge_pin`] counted at `at`: its PIN was right.
+    pub fn refund_pin(&mut self, at: i64) {
+        if let Some(i) = self.wrong_pins.iter().position(|t| *t == at) {
+            self.wrong_pins.swap_remove(i);
+        }
     }
 }
 
@@ -330,6 +371,25 @@ mod tests {
             ..one
         };
         assert!(!short.verify("2468"));
+    }
+
+    /// Ten tries count in any window, a right one is taken back, and the eleventh waits until
+    /// the oldest counted is a window old.
+    #[test]
+    fn a_profile_takes_ten_wrong_pins_a_window() {
+        let mut lock = Lock::default();
+        for n in 0..10 {
+            assert_eq!(lock.charge_pin(NOW + n), Ok(()));
+        }
+        assert_eq!(lock.charge_pin(NOW + 10), Err(PIN_WINDOW - 10));
+        lock.refund_pin(NOW + 3);
+        assert_eq!(
+            lock.charge_pin(NOW + 10),
+            Ok(()),
+            "a right one is taken back"
+        );
+        assert_eq!(lock.charge_pin(NOW + PIN_WINDOW), Ok(()), "the oldest left");
+        assert_eq!(lock.wrong_pins(NOW + 2 * PIN_WINDOW), 0);
     }
 
     /// A file is read only as one this crate wrote: a bad entry or PIN spoils all of it.

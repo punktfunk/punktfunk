@@ -3,8 +3,9 @@
 //! the box's file read only, a Linux one through the supervisor's copy that holds no PIN.
 //!
 //! A file that is there and can't be read locks every profile, refuses every edit, and is logged.
-//! A file that isn't there locks nothing. Wrong PINs count per device as an account password's
-//! do, and [`PROFILE_FAILURES`] per profile over all devices.
+//! A file that isn't there locks nothing. Wrong PINs count per device in memory, as an account
+//! password's do, and per profile in the file ([`pf_seats::locks::PIN_FAILURES`]), so a restart
+//! clears no profile's count.
 
 use super::{EditError, Profiles};
 use pf_seats::attempts::{Attempts, Outcome, Target};
@@ -14,9 +15,6 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant, SystemTime};
-
-/// Wrong PINs one profile takes in 15 minutes, over all devices: about 960 tries a day.
-const PROFILE_FAILURES: usize = 10;
 
 pub(crate) struct LockStore {
     state: Mutex<State>,
@@ -59,7 +57,7 @@ impl LockStore {
                 locks,
                 read_only,
             }),
-            attempts: Mutex::new(Attempts::with_cap(PROFILE_FAILURES)),
+            attempts: Mutex::new(Attempts::default()),
         }
     }
 
@@ -115,11 +113,7 @@ impl LockStore {
 
     /// Wrong PINs for profile `id` in the last 15 minutes, over all devices.
     pub(crate) fn failures(&self, id: &str) -> usize {
-        let target = Target {
-            device: None,
-            account: Some(id),
-        };
-        self.attempts().failures(target, Instant::now()).1
+        self.get(id).wrong_pins(crate::clock::unix_secs())
     }
 
     /// Applies `change` to profile `id`'s lock, its expired presence dropped, and saves the file
@@ -186,19 +180,38 @@ impl LockStore {
         let fp = device.fingerprint.as_str();
         let target = Target {
             device: Some((id, fp)),
-            account: Some(id),
+            account: None,
+        };
+        let counts = |store: &Self| {
+            let device = store.attempts().failures(target, Instant::now()).0;
+            (device, store.failures(id))
         };
         let admitted = self.attempts().admit(target, Instant::now());
         let ticket = match admitted {
             Ok(ticket) => ticket,
             Err(wait) => {
-                audit(
-                    id,
-                    fp,
-                    "locked_out",
-                    self.attempts().failures(target, Instant::now()),
-                );
+                audit(id, fp, "locked_out", counts(self));
                 return PinAnswer::Wait(wait);
+            }
+        };
+        // Counted in the file before the hash runs: a restart or a crash forgets no try.
+        let charged = self.edit(id, |lock, now| lock.charge_pin(now).map(|()| now));
+        let unjudged = |ticket| {
+            let now = Instant::now();
+            self.attempts()
+                .settle(target, ticket, Outcome::Unjudged, now);
+        };
+        let at = match charged {
+            Ok(Ok(at)) => at,
+            Ok(Err(secs)) => {
+                unjudged(ticket);
+                audit(id, fp, "locked_out", counts(self));
+                return PinAnswer::Wait(Duration::from_secs(secs.unsigned_abs()));
+            }
+            Err(e) => {
+                unjudged(ticket);
+                tracing::warn!(profile = %id, error = %e, "PIN try not counted");
+                return PinAnswer::NotSaved;
             }
         };
         let right = hash.verify(pin);
@@ -207,16 +220,14 @@ impl LockStore {
         } else {
             Outcome::Failed
         };
-        let counts = {
-            let mut attempts = self.attempts();
-            attempts.settle(target, ticket, outcome, Instant::now());
-            attempts.failures(target, Instant::now())
-        };
+        self.attempts()
+            .settle(target, ticket, outcome, Instant::now());
         if !right {
-            audit(id, fp, "wrong_pin", counts);
+            audit(id, fp, "wrong_pin", counts(self));
             return PinAnswer::Wrong;
         }
         let granted = self.edit(id, |lock, now| {
+            lock.refund_pin(at);
             // The PIN changed while this one was checked: it opens nothing.
             if lock.pin.as_ref() != Some(&hash) || !lock.locked {
                 return PinAnswer::NoPin;
@@ -226,6 +237,7 @@ impl LockStore {
                 false => PinAnswer::Full,
             }
         });
+        let counts = counts(self);
         let answer = granted.unwrap_or_else(|e| {
             tracing::warn!(profile = %id, error = %e, "device a PIN let in not saved");
             PinAnswer::NotSaved
@@ -453,7 +465,7 @@ mod tests {
     /// puts the device on the list, for now or until signed out.
     #[test]
     fn ten_wrong_pins_close_the_pin_to_every_device() {
-        let (locks, _) = store();
+        let (locks, path) = store();
         let listed = device(99);
         locks
             .edit(KID, |lock, now| {
@@ -486,6 +498,14 @@ mod tests {
         );
         assert_eq!(locks.opens(KID, Some(&listed.fingerprint)), Opens::Yes);
         assert_eq!(locks.opens(KID, Some(&device(11).fingerprint)), Opens::Pin);
+        // A restart forgets no wrong PIN: the profile's count lives in its file.
+        let restarted = LockStore::open(path, false);
+        assert_eq!(restarted.failures(KID), 10);
+        let still = restarted.try_pin(KID, &device(12), "2468", false);
+        assert!(
+            matches!(still, PinAnswer::Wait(w) if w > fourteen),
+            "{still:?}"
+        );
 
         let (fresh, _) = store();
         fresh
