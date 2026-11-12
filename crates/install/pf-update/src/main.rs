@@ -9,9 +9,9 @@
 //! upgrade every installed `punktfunk*` package; the verb picks which marker to read and
 //! which binary the post-install gate (`--version` must exit 0) runs.
 //!
-//! Result JSON is root-written and world-readable: the host's in
-//! `/var/lib/punktfunk-update/`, the unit's `StateDirectory=`, the client's in
-//! `/var/lib/punktfunk/`. stdout/stderr go to the unit journal.
+//! Result JSON is root-written and world-readable, in `/var/lib/punktfunk-update/`, both
+//! units' `StateDirectory=`: a directory only root writes, never the door's
+//! `/var/lib/punktfunk`. stdout/stderr go to the unit journal.
 //!
 //! Design: `host-update-from-web-console.md`.
 
@@ -54,7 +54,7 @@ mod linux_main {
         fn result_path(self) -> &'static str {
             match self {
                 Mode::Host => "/var/lib/punktfunk-update/update-result.json",
-                Mode::Client => "/var/lib/punktfunk/client-update-result.json",
+                Mode::Client => "/var/lib/punktfunk-update/client-update-result.json",
             }
         }
 
@@ -279,16 +279,28 @@ mod linux_main {
     }
 
     fn write_result(mode: Mode, result: &HelperResult) {
-        let path = Path::new(mode.result_path());
+        if let Ok(bytes) = serde_json::to_vec_pretty(result) {
+            let _ = write_new(Path::new(mode.result_path()), &bytes);
+        }
+    }
+
+    /// `bytes` at `path`, world-readable, through a temp file this call creates and renames into
+    /// place: a link at either name is replaced, never followed.
+    fn write_new(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+        use std::io::Write as _;
+        use std::os::unix::fs::OpenOptionsExt as _;
         if let Some(dir) = path.parent() {
-            let _ = std::fs::create_dir_all(dir);
+            std::fs::create_dir_all(dir)?;
         }
         let tmp = path.with_extension("json.tmp");
-        if let Ok(bytes) = serde_json::to_vec_pretty(result) {
-            if std::fs::write(&tmp, &bytes).is_ok() {
-                let _ = std::fs::rename(&tmp, path);
-            }
-        }
+        let _ = std::fs::remove_file(&tmp);
+        std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o644)
+            .open(&tmp)?
+            .write_all(bytes)?;
+        std::fs::rename(&tmp, path)
     }
 
     pub fn main() {
@@ -397,6 +409,28 @@ mod linux_main {
     unsafe extern "C" {
         #[link_name = "geteuid"]
         safe fn effective_uid() -> u32;
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        /// A link planted at the temp name is replaced, and the file it names keeps its bytes.
+        #[test]
+        fn a_planted_link_is_never_written_through() {
+            let dir = std::env::temp_dir().join(format!("pf-update-{}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&dir);
+            std::fs::create_dir_all(&dir).unwrap();
+            let target = dir.join("target");
+            std::fs::write(&target, "keep").unwrap();
+            let path = dir.join("result.json");
+            std::os::unix::fs::symlink(&target, dir.join("result.json.tmp")).unwrap();
+            write_new(&path, b"{}").unwrap();
+            assert_eq!(std::fs::read_to_string(&target).unwrap(), "keep");
+            assert_eq!(std::fs::read_to_string(&path).unwrap(), "{}");
+            assert!(std::fs::symlink_metadata(&path).unwrap().is_file());
+            let _ = std::fs::remove_dir_all(&dir);
+        }
     }
 }
 

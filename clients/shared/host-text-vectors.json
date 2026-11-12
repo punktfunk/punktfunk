@@ -27,6 +27,7 @@
     {"id": "apierr_account_missing", "params": {"account": "jdoe"}, "english": "The host's own English.", "sentence": "There is no account called jdoe on this host."},
     {"id": "apierr_account_missing_windows", "params": {"account": "jdoe"}, "english": "The host's own English.", "sentence": "No Windows account jdoe on this host."},
     {"id": "apierr_account_name_lowercase", "params": {}, "english": "The host's own English.", "sentence": "Enter the account's Linux user name, in lowercase."},
+    {"id": "apierr_account_network_denied", "params": {"account": "jdoe"}, "english": "The host's own English.", "sentence": "Couldn't check jdoe's password — this host's policy denies it sign-in from the network. In Local Security Policy, remove it from Deny access to this computer from the network, then try again."},
     {"id": "apierr_account_not_ordinary", "params": {"account": "jdoe"}, "english": "The host's own English.", "sentence": "jdoe is a system account, not a person's."},
     {"id": "apierr_account_policy", "params": {"account": "jdoe"}, "english": "The host's own English.", "sentence": "jdoe isn't allowed to sign in over Remote Desktop on this host."},
     {"id": "apierr_account_signed_in", "params": {"account": "jdoe"}, "english": "The host's own English.", "sentence": "jdoe is signed in on this host. Sign jdoe out first."},
@@ -45,6 +46,7 @@
     {"id": "apierr_plugin_needs_platform", "params": {"platforms": "Linux"}, "english": "The host's own English.", "sentence": "This plugin can't run on this host — requires Linux"},
     {"id": "apierr_profile_limit", "params": {"count": "1"}, "english": "The host's own English.", "sentence": "A host holds at most 1 profile"},
     {"id": "apierr_profile_limit", "params": {"count": "2"}, "english": "The host's own English.", "sentence": "A host holds at most 2 profiles"},
+    {"id": "apierr_seat_runs_no_plugins", "params": {}, "english": "The host's own English.", "sentence": "This seat uses the host's plugins, so none can be installed here. Install them on the host."},
     {"id": "apierr_title_in_use", "params": {"title": "Quail"}, "english": "The host's own English.", "sentence": "Quit Quail first."},
     {"id": "apierr_unlock_locked_out_device_minutes", "params": {"count": "1"}, "english": "The host's own English.", "sentence": "Too many failed attempts on this device. Try again in 1 minute."},
     {"id": "apierr_unlock_locked_out_device_minutes", "params": {"count": "2"}, "english": "The host's own English.", "sentence": "Too many failed attempts on this device. Try again in 2 minutes."},
@@ -78,5 +80,17 @@
     {"id": "seatline_switching", "params": {"profile": "Kid"}, "english": "The host's own English.", "sentence": "Switching to Kid…"},
     {"id": "apierr_from_a_newer_host", "params": {"account": "jdoe"}, "english": "A newer host said this.", "sentence": "A newer host said this."},
     {"id": "player_stats_scale_pct", "params": {}, "english": "Not a host message.", "sentence": "Not a host message."}
+  ],
+  "$screen_wish": "The stream-start line for a screen the session did not get as asked: `wish` is the preset's host_screen as sent (null for none), `reason` the ServerHello echo's reason as serde spells it, `id` the client message it words with ({role} is the wished role's name or the monitor's connector), and `sentence` what the player reads, null for nothing. Pinned by pf-client-core host_text::screen_wish_line.",
+  "screen_wish": [
+    {"wish": "second", "reason": "not_allowed", "id": "screen_wish_not_allowed", "sentence": "Second screen wasn't applied: this host decides the screen for this device."},
+    {"wish": "monitor:HDMI-A-1", "reason": "not_allowed", "id": "screen_wish_not_allowed", "sentence": "HDMI-A-1 wasn't applied: this host decides the screen for this device."},
+    {"wish": "only", "reason": "monitors_held", "id": "screen_wish_monitors_held", "sentence": "The host's monitors stayed as they were: another device was streaming first."},
+    {"wish": null, "reason": "monitors_held", "id": "screen_wish_monitors_held", "sentence": "The host's monitors stayed as they were: another device was streaming first."},
+    {"wish": "monitor:HDMI-A-1", "reason": "unavailable", "id": "screen_wish_unavailable", "sentence": "HDMI-A-1 wasn't applied: that monitor can't be streamed now."},
+    {"wish": "main", "reason": "no_monitors", "id": "screen_wish_no_monitors", "sentence": "Main screen wasn't applied: this desktop has no monitors."},
+    {"wish": "second", "reason": "as_asked", "id": null, "sentence": null},
+    {"wish": null, "reason": "not_allowed", "id": null, "sentence": null},
+    {"wish": "tablet", "reason": "no_monitors", "id": null, "sentence": null}
   ]
 }

@@ -18,6 +18,7 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { deviceCode } from "@/lib/format";
 import { m } from "@/paraglide/messages";
 import {
 	type AccessDraft,
@@ -113,20 +114,25 @@ export const ApproveDialog: FC<{
 				<DialogContent className="max-w-md">
 					<DialogHeader>
 						<DialogTitle>{m.pairing_pending_name_title()}</DialogTitle>
-						{/* The name field below is editable text, not a statement of WHICH knock
-						    this is — with two devices waiting the operator would be approving
-						    whichever row they hope they clicked. The fingerprint is the only
-						    thing that stays unique when two devices share a name, so the
-						    description states it (security-review 2026-08-15, carried into the
-						    access dialog that replaced the plain name prompt). */}
 						<DialogDescription>
-							{m.pairing_pending_name_desc({
-								name: device.name,
-								fp: `${device.fingerprint.slice(0, 16)}…`,
-							})}{" "}
+							{m.pairing_pending_name_desc({ name: device.name })}{" "}
 							{m.pairing_approve_desc()}
 						</DialogDescription>
 					</DialogHeader>
+
+					{/* The name is editable text and two devices can share one. The code is what
+					    says WHICH request this is, and the waiting device shows the same one. */}
+					<div className="rounded-md bg-muted px-3 py-2">
+						<p className="text-xs text-muted-foreground">
+							{m.pairing_pending_code()}
+						</p>
+						<p className="font-mono text-lg">
+							{deviceCode(device.fingerprint)}
+						</p>
+						<p className="text-xs text-muted-foreground">
+							{m.pairing_pending_code_hint()}
+						</p>
+					</div>
 
 					{device.profile && (
 						<p className="flex items-center gap-2 text-sm">

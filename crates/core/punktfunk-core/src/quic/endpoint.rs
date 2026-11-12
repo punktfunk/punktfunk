@@ -19,14 +19,28 @@ use std::sync::{Arc, Mutex};
 /// a lingering session; long enough that a wifi roam does not false-close.
 pub const DEFAULT_IDLE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(8);
 
+/// Bidirectional streams a client may hold open on the host: the management lane's 16 requests
+/// in flight plus as many it answers 429, or a session's control stream and clipboard fetches.
+/// cbindgen:ignore
+pub const HOST_MAX_BIDI_STREAMS: u32 = 32;
+
+/// The most a client, admitted or not, can make the host hold unread on one connection. Above
+/// quinn's 1.25 MB stream window, so one upload keeps its full rate.
+/// cbindgen:ignore
+pub const HOST_RECEIVE_WINDOW: u32 = 4 << 20;
+
 fn stream_transport() -> Arc<quinn::TransportConfig> {
-    stream_transport_idle(DEFAULT_IDLE_TIMEOUT)
+    Arc::new(stream_transport_idle(DEFAULT_IDLE_TIMEOUT, None))
 }
 
 /// Idle clamped to 1 s..1 h so the QUIC VarInt millisecond conversion cannot
 /// fail. Keep-alive is `min(idle/2, 4s)`: two PINGs per window, one lost PING
-/// does not false-close.
-fn stream_transport_idle(idle: std::time::Duration) -> Arc<quinn::TransportConfig> {
+/// does not false-close. `initial_rtt` is the RTT a path starts at before its first sample;
+/// `None` keeps quinn's own.
+fn stream_transport_idle(
+    idle: std::time::Duration,
+    initial_rtt: Option<std::time::Duration>,
+) -> quinn::TransportConfig {
     use std::time::Duration;
     let idle = idle.clamp(Duration::from_secs(1), Duration::from_secs(3600));
     let keep_alive = (idle / 2).min(Duration::from_secs(4));
@@ -35,6 +49,9 @@ fn stream_transport_idle(idle: std::time::Duration) -> Arc<quinn::TransportConfi
         quinn::IdleTimeout::try_from(idle).expect("clamped idle timeout is a valid QUIC value"),
     ));
     t.keep_alive_interval(Some(keep_alive));
+    if let Some(rtt) = initial_rtt {
+        t.initial_rtt(rtt);
+    }
     // 4 KiB ≈ 200 ms of stereo Opus, ~14 ms of 48 kHz/24-bit PCM. Latest-wins
     // under congestion; do not raise for PCM — TransportConfig is built before
     // the plane is known, so a PCM-sized buffer would give Opus ~800 ms of lag.
@@ -60,7 +77,7 @@ fn stream_transport_idle(idle: std::time::Duration) -> Arc<quinn::TransportConfi
     };
     mtud.upper_bound(probe_ceiling);
     t.mtu_discovery_config(Some(mtud));
-    Arc::new(t)
+    t
 }
 
 /// Client `max_udp_payload_size` advertisement. A peer's MTU search is
@@ -165,7 +182,16 @@ fn server_config(
     let quic_cfg = quinn::crypto::rustls::QuicServerConfig::try_from(rustls_cfg)
         .map_err(|e| anyhow_result::Error::msg(format!("quic server config: {e}")))?;
     let mut server_config = quinn::ServerConfig::with_crypto(Arc::new(quic_cfg));
-    server_config.transport_config(stream_transport_idle(idle));
+    // The host's media waits out quinn's path validation after a client changes IP, and that
+    // timer starts from this RTT.
+    let initial_rtt = crate::transport::shared::HOST_INITIAL_RTT;
+    let mut transport = stream_transport_idle(idle, Some(initial_rtt));
+    // No client opens a unidirectional stream, and the host accepts none on this plane.
+    transport
+        .max_concurrent_uni_streams(0u32.into())
+        .max_concurrent_bidi_streams(HOST_MAX_BIDI_STREAMS.into())
+        .receive_window(HOST_RECEIVE_WINDOW.into());
+    server_config.transport_config(Arc::new(transport));
     Ok(server_config)
 }
 
@@ -444,8 +470,37 @@ mod tests {
 
     #[test]
     fn absurd_idle_timeout_is_clamped_not_a_panic() {
-        let _ = super::stream_transport_idle(std::time::Duration::MAX);
-        let _ = super::stream_transport_idle(std::time::Duration::ZERO);
+        let _ = super::stream_transport_idle(std::time::Duration::MAX, None);
+        let _ = super::stream_transport_idle(std::time::Duration::ZERO, None);
+    }
+
+    /// No unidirectional stream, no bidirectional one past the cap, no unread bytes past the
+    /// window. Credit past a limit comes only from the host reading, which it never does here,
+    /// so an open or write that does not resolve at once never will.
+    #[tokio::test]
+    async fn a_client_cannot_open_or_fill_past_the_host_limits() {
+        use tokio::time::timeout;
+        let (_server_ep, _client_ep, _host_conn, conn) =
+            crate::quic::test_util::connect_pair().await;
+        let stuck = std::time::Duration::from_millis(50);
+        assert!(timeout(stuck, conn.open_uni()).await.is_err());
+        let mut streams = Vec::new();
+        for _ in 0..super::HOST_MAX_BIDI_STREAMS {
+            streams.push(timeout(stuck, conn.open_bi()).await.unwrap().unwrap());
+        }
+        assert!(timeout(stuck, conn.open_bi()).await.is_err());
+        let chunk = vec![0u8; 64 * 1024];
+        let mut sent = 0;
+        for (send, _) in &mut streams {
+            let before = sent;
+            while let Ok(Ok(n)) = timeout(stuck, send.write(&chunk)).await {
+                sent += n;
+            }
+            if sent == before {
+                break;
+            }
+        }
+        assert_eq!(sent, super::HOST_RECEIVE_WINDOW as usize);
     }
 
     /// Loopback MTU is 64 KiB, so only endpoint config can cap the search.

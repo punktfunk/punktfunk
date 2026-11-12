@@ -3,6 +3,7 @@
 // it server-side.
 import { readFileSync } from "node:fs";
 import { createError, type H3Event, proxyRequest } from "h3";
+import { loadEnvFiles } from "../../nitro-entry/env-files.mjs";
 import { dirPrefix } from "../../nitro-entry/tls-paths.mjs";
 
 /** The management API the proxy forwards to (loopback by default — never LAN-exposed). It serves
@@ -15,9 +16,20 @@ export function mgmtUrl(): string {
 	// bound, so a host moved off 47990 to coexist with a Sunshine fork carries the console with it),
 	// sourced as a systemd EnvironmentFile. An empty or truncated file would otherwise set the
 	// variable to "" and send every proxy hop to a URL that cannot parse.
+	followEndpoint();
 	const url = process.env.PUNKTFUNK_MGMT_URL?.trim();
 	return url ? url : "https://127.0.0.1:47990";
 }
+
+/** Re-reads the endpoint from the console's own env files every few seconds. Nothing restarts
+ * the door's console when the door moves its port, and a refused hop never ends it. */
+function followEndpoint(): void {
+	const now = Date.now();
+	if (now - endpointAt < CERT_CACHE_MS) return;
+	endpointAt = now;
+	loadEnvFiles(process.env, ["PUNKTFUNK_MGMT_URL"]);
+}
+let endpointAt = 0;
 
 /** Bearer token for the management API, injected server-side. */
 export function mgmtToken(): string {

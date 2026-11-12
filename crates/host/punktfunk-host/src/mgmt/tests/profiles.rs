@@ -137,6 +137,54 @@ async fn waking_another_profiles_seat_needs_the_launch_grant() {
     assert_eq!(send(&app, wake(&kid)).await.0, StatusCode::OK);
 }
 
+/// A device's own take-turns profile is off the console exactly when it needs a wake: the device
+/// wakes it without the launch grant, and still not the owner's.
+#[tokio::test]
+async fn a_device_wakes_its_own_take_turns_profile_off_the_console() {
+    const OWNER: &str = "4f1c3a9b0e27";
+    const BEN: &str = "7a77e7a77e01";
+    let path = crate::test_support::scratch().join("pf-mgmt-wake-turns.json");
+    let file = serde_json::json!({"version": 1, "default_profile_id": BEN, "profiles": [
+        {"id": OWNER, "display_name": "Enrico", "os_account": {"kind": "operator"}},
+        {"id": BEN, "display_name": "Ben", "os_account": {"kind": "windows",
+            "account_name": "Ben", "credential": {"source": "none"}}},
+    ]});
+    std::fs::write(&path, file.to_string()).unwrap();
+    let state = test_state();
+    let _ = state
+        .profiles
+        .set(Arc::new(crate::profiles::Profiles::load_with(
+            Some(path),
+            None,
+        )));
+    let np = Arc::new(
+        crate::native_pairing::NativePairing::load_with(
+            Some(crate::test_support::scratch().join("pf-mgmt-wake-turns-np.json")),
+            None,
+            false,
+        )
+        .unwrap(),
+    );
+    let guest = "aaaa00000050";
+    let access = crate::native_pairing::Access {
+        grants: punktfunk_core::quic::GRANT_GAMEPAD,
+        expires_unix: None,
+        until_disconnect: false,
+    };
+    np.add_with_access("guest", guest, Some(access)).unwrap();
+    let app = test_app_native(state, np);
+    let wake = |id: &str| {
+        axum::http::Request::post(format!("/api/v1/profiles/{id}/wake"))
+            .body(Body::empty())
+            .unwrap()
+    };
+    assert_eq!(send_cert(&app, wake(BEN), guest).await, StatusCode::OK);
+    assert_eq!(
+        send_cert(&app, wake(OWNER), guest).await,
+        StatusCode::FORBIDDEN
+    );
+}
+
 /// Where there are no seats the read says so and a change is a plain 409. The lanes are
 /// pinned by `every_route_is_classified_for_the_plugin_and_cert_lanes`.
 #[cfg(not(windows))]
@@ -697,5 +745,177 @@ mod person {
         assert_eq!(status, StatusCode::OK, "{body}");
         assert!(sup.asked().is_empty(), "{:?}", sup.asked());
         assert!(sup.called().is_empty(), "{:?}", sup.called());
+    }
+}
+
+mod seat_profiles {
+    //! Making and removing a profile with a desktop of its own, on a door whose supervisor is a
+    //! fake.
+
+    use super::*;
+    use crate::native::unlock::fake::{refused, Fake};
+    use crate::profiles::{OsAccount, Profiles};
+    use pf_seats::ipc::{Command, CommandResult};
+
+    const MADE: &str = "c0ffee00c0ffee00c0ffee00c0ffee00";
+
+    /// The row the supervisor makes for a seat called `name`.
+    fn made(name: &str) -> pf_seats::Seat {
+        serde_json::from_value(serde_json::json!({
+            "id": MADE, "name": name, "account": "pf-seat-1", "display_slot": 12,
+            "native_port": 9778, "mgmt_port": 47991, "runtime": { "state": "stopped" },
+        }))
+        .unwrap()
+    }
+
+    /// A door over `store`, asking `sup`.
+    fn door(store: Arc<Profiles>, sup: Arc<Fake>) -> Router {
+        let state = test_state();
+        let _ = state.profiles.set(store);
+        test_app_door(state, None, sup)
+    }
+
+    fn create(name: &str) -> axum::http::Request<Body> {
+        let body = serde_json::json!({ "display_name": name });
+        with_bearer(
+            json_req(Method::POST, "/api/v1/profiles", body),
+            "test-secret",
+        )
+    }
+
+    /// A profile the store refuses after its seat was made takes the seat back. A seat that won't
+    /// go is logged, and the answer is still the store's.
+    #[tokio::test]
+    async fn a_profile_the_store_refuses_takes_its_seat_back() {
+        let dir = crate::test_support::scratch();
+        // The store's parent is a file: it reads as empty and every save fails.
+        std::fs::write(dir.join("blocker"), b"").unwrap();
+        let path = dir.join("blocker").join("profiles.json");
+        let store = Arc::new(Profiles::load_with(Some(path), None));
+        let sup = Arc::new(Fake::new(Vec::new(), |c| match c {
+            Command::Create(seat) => Ok(CommandResult::Created {
+                seat: made(&seat.name),
+            }),
+            _ => Err(refused("account_signed_in", "Someone is signed in there.")),
+        }));
+        let (status, body) = send(&door(store, sup.clone()), create("Kid")).await;
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{body}");
+        let id = pf_seats::SeatId::parse(MADE).unwrap();
+        let asked = sup.asked();
+        assert!(matches!(asked[0], Command::Create(_)), "{asked:?}");
+        assert_eq!(
+            asked[1..],
+            [Command::Stop { id: id.clone() }, Command::Delete { id }]
+        );
+    }
+
+    /// A console that stops waiting while the seat is made still gets the profile written beside
+    /// it.
+    #[tokio::test]
+    async fn a_create_the_caller_stopped_waiting_for_still_writes_the_profile() {
+        let path = crate::test_support::scratch().join("profiles.json");
+        let store = Arc::new(Profiles::load_with(Some(path), None));
+        let began = Arc::new(tokio::sync::Notify::new());
+        let ask = began.clone();
+        let sup = Arc::new(Fake::new(Vec::new(), move |c| match c {
+            Command::Create(seat) => {
+                ask.notify_one();
+                std::thread::sleep(std::time::Duration::from_millis(300));
+                Ok(CommandResult::Created {
+                    seat: made(&seat.name),
+                })
+            }
+            _ => Err(refused("x", "y")),
+        }));
+        let call = door(store.clone(), sup.clone()).oneshot(create("Kid"));
+        tokio::select! {
+            _ = call => panic!("answered before the seat was made"),
+            _ = began.notified() => {}
+        }
+        let mut kid = None;
+        for _ in 0..50 {
+            kid = store.list().into_iter().find(|p| p.display_name == "Kid");
+            if kid.is_some() {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        }
+        let kid = kid.expect("the profile is written");
+        assert_eq!(
+            kid.os_account,
+            OsAccount::Seat {
+                seat: Some(MADE.into())
+            }
+        );
+        assert_eq!(sup.asked().len(), 1, "{:?}", sup.asked());
+    }
+
+    /// A seat's row keeps its name through its profile's rename, and the ledger takes no second
+    /// row by it: the host refuses that name before the supervisor, in its own words. The
+    /// owner's row, named for their login, holds no name.
+    #[tokio::test]
+    async fn a_name_a_seat_row_still_holds_is_refused_before_the_supervisor() {
+        let path = crate::test_support::scratch().join("profiles.json");
+        let store = Arc::new(Profiles::load_with(Some(path), None));
+        let mut owner = made("jane");
+        owner.id = pf_seats::SeatId::parse("0e".repeat(16)).unwrap();
+        owner.owner = true;
+        let sup = Arc::new(Fake::new(vec![made("Kid"), owner], |c| match c {
+            Command::Create(seat) => Ok(CommandResult::Created {
+                seat: made(&seat.name),
+            }),
+            _ => Err(refused("x", "y")),
+        }));
+        let app = door(store, sup.clone());
+        let (status, body) = send(&app, create("kid")).await;
+        assert_eq!(status, StatusCode::CONFLICT, "{body}");
+        assert_eq!(body["code"], "profile_name_taken");
+        assert!(sup.asked().is_empty(), "{:?}", sup.asked());
+        let (status, body) = send(&app, create("Jane")).await;
+        assert_eq!(status, StatusCode::CREATED, "{body}");
+    }
+
+    /// A seat profile leaves the box's file before its seat stops: the seat's host reads that
+    /// file and closes each session as removed. A seat that won't go puts the profile back as
+    /// it was, and the next try removes both.
+    #[tokio::test]
+    async fn a_seat_profile_leaves_the_store_before_its_seat_stops() {
+        const KID: &str = "9a3f1c2b7e40";
+        let path = crate::test_support::scratch().join("profiles.json");
+        let file = serde_json::json!({"version": 1, "default_profile_id": KID, "profiles": [
+            {"id": "4f1c3a9b0e27", "display_name": "Enrico", "os_account": {"kind": "operator"}},
+            {"id": KID, "display_name": "Kid", "os_account": {"kind": "seat", "seat": MADE}},
+        ]});
+        std::fs::write(&path, file.to_string()).unwrap();
+        let store = Arc::new(Profiles::load_with(Some(path.clone()), None));
+        let listed_at_stop = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let seen = listed_at_stop.clone();
+        let deletes = std::sync::atomic::AtomicUsize::new(0);
+        let sup = Arc::new(Fake::new(vec![made("Kid")], move |c| match c {
+            Command::Stop { .. } => {
+                let on_disk = std::fs::read_to_string(&path).unwrap();
+                seen.lock().unwrap().push(on_disk.contains(KID));
+                Ok(CommandResult::Stopped { seat: made("Kid") })
+            }
+            Command::Delete { .. } if deletes.fetch_add(1, Ordering::SeqCst) == 0 => {
+                Err(refused("account_signed_in", "Someone is signed in there."))
+            }
+            Command::Delete { id } => Ok(CommandResult::Deleted { id: id.clone() }),
+            _ => Err(refused("x", "y")),
+        }));
+        let app = door(store.clone(), sup);
+        let remove = || {
+            axum::http::Request::delete(format!("/api/v1/profiles/{KID}?erase=true"))
+                .body(Body::empty())
+                .unwrap()
+        };
+        let (status, body) = send(&app, remove()).await;
+        assert_eq!(status, StatusCode::CONFLICT, "{body}");
+        assert!(store.get(KID).is_some(), "put back");
+        assert_eq!(store.default_profile_id().as_deref(), Some(KID));
+        let (status, body) = send(&app, remove()).await;
+        assert_eq!(status, StatusCode::NO_CONTENT, "{body}");
+        assert!(store.get(KID).is_none());
+        assert_eq!(*listed_at_stop.lock().unwrap(), [false, false]);
     }
 }

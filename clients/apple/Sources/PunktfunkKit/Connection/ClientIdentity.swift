@@ -20,6 +20,19 @@ public struct ClientIdentity: Sendable {
     public var fingerprint: Data? {
         ClientTLS.derFromPEM(certPEM, type: "CERTIFICATE").map { Data(SHA256.hash(data: $0)) }
     }
+
+    /// The code this device shows while it waits for approval, and the host's web console
+    /// shows beside the request: the fingerprint's first 16 hex digits, upper case, in fours.
+    public var deviceCode: String? {
+        fingerprint.map { Self.deviceCode(of: $0) }
+    }
+
+    static func deviceCode(of fingerprint: Data) -> String {
+        let hex = fingerprint.prefix(8).map { String(format: "%02X", $0) }
+        return stride(from: 0, to: hex.count, by: 2)
+            .map { hex[$0...].prefix(2).joined() }
+            .joined(separator: " ")
+    }
 }
 
 /// Generate a fresh client identity (self-signed cert + key, PEM).
@@ -78,26 +91,22 @@ public func pair(
 
 /// Request access without a PIN: blocks until the host's operator approves this device (or
 /// refuses it), then returns the host's fingerprint to persist as paired. Never streams.
-/// `pinSHA256` is the advertised fingerprint; nil trusts on first use. A refusal throws
-/// `.rejected`; an unreachable host or a mismatched fingerprint throws `.connectFailed`.
+/// `pinSHA256` is the fingerprint the host must show: its advert's, or a link's. A host with
+/// none pairs by PIN. A refusal throws `.rejected`; an unreachable host or a mismatched
+/// fingerprint throws `.connectFailed`.
 public func requestAccess(
     host: String, port: UInt16 = 9777,
-    identity: ClientIdentity, pinSHA256: Data?, name: String,
+    identity: ClientIdentity, pinSHA256: Data, name: String,
     timeoutMs: UInt32 = 185_000
 ) throws -> Data {
-    if let pin = pinSHA256, pin.count != 32 { throw PunktfunkClientError.invalidPin }
+    guard pinSHA256.count == 32 else { throw PunktfunkClientError.invalidPin }
     var observed = [UInt8](repeating: 0, count: 32)
-    let pin = pinSHA256.map { [UInt8]($0) }
+    let pin = [UInt8](pinSHA256)
     let rc = host.withCString { cs in
         identity.certPEM.withCString { cert in
             identity.keyPEM.withCString { key in
                 name.withCString { n in
-                    if let pin {
-                        return punktfunk_request_access(
-                            cs, port, cert, key, pin, n, &observed, timeoutMs)
-                    }
-                    return punktfunk_request_access(
-                        cs, port, cert, key, nil, n, &observed, timeoutMs)
+                    punktfunk_request_access(cs, port, cert, key, pin, n, &observed, timeoutMs)
                 }
             }
         }

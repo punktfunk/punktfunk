@@ -919,6 +919,14 @@ pub(crate) fn setup_failed_sentence(e: &anyhow::Error) -> Option<Said> {
             "This Umbriel session can't be captured directly; the stream needs a GPU encoder.",
         ));
     }
+    #[cfg(target_os = "linux")]
+    if e.downcast_ref::<pf_capture::SharedCaptureTaken>().is_some() {
+        return Some(Said::new(
+            "close_join_other_codec",
+            "Couldn't join the shared screen — this device streams with a video codec that \
+             can't share it. Set the same video codec on both devices, then join again.",
+        ));
+    }
     e.downcast_ref::<pf_vdisplay::DisplayAsleep>()
         .map(|d| Said::new("close_display_asleep", &d.user_message()))
 }
@@ -2034,17 +2042,25 @@ fn display_half(
         view,
         features,
         mirrored,
+        screen,
+        topology,
+        display_hdr,
         ..
     } = n;
     // Read back from what the ServerHello agreed, like `cursor_forward` below.
-    let format_facts = handshake::FormatFacts::of(
+    let mut format_facts = handshake::FormatFacts::of(
         &hello,
         crate::session_plan::StudioAsk::of(&features),
         compositor,
         gamescope_route.as_ref(),
         &knobs,
-        joined.as_ref().map(|(d, _)| d.hdr),
+        joined.as_ref().map(|(d, _)| d),
+        handshake::follows_source(&features, mirrored),
     );
+    // The content the Welcome was resolved for, not a second look at it.
+    format_facts.content_hdr = format_facts
+        .follows_content()
+        .then_some(welcome.color.is_hdr());
     let reframe_to = handshake::reframe_to(hello.video_fit, handshake::joined_view(&joined), view);
     // Read back from Welcome, not recomputed (would re-probe and could drift).
     let cursor_forward = welcome.host_caps & punktfunk_core::quic::HOST_CAP_CURSOR != 0;
@@ -2056,6 +2072,7 @@ fn display_half(
             .expect("the Virtual source resolves a compositor during the handshake"),
         gamescope_route,
         format_facts,
+        display_hdr,
         encoder,
         host_knobs,
         knobs,
@@ -2076,6 +2093,8 @@ fn display_half(
         client_hdr: hello.display_hdr.map(crate::encode::hdr_meta_from_wire),
         join_live: joined.is_some(),
         mirrored,
+        screen,
+        topology,
         reframe_to,
         frame_map: lanes.frame_map,
         #[cfg(target_os = "linux")]

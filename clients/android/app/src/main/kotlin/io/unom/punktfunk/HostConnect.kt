@@ -278,6 +278,7 @@ suspend fun connectToHost(context: Context, spec: DialSpec, unlock: Unlock? = nu
             presetName = spec.preset?.name,
             deliveryFlags = spec.deliveryFlags,
             profile = spec.profile,
+            hostScreen = settings.hostScreen,
         )
         if (!spec.promptsUnlock && unlock == null) return@withContext NativeBridge.nativeConnect(request.toJson())
         try {

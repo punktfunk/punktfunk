@@ -69,6 +69,8 @@ public enum ConsoleJSON {
             // Read by the speed test alone: a preset that PINS bitrate is the layer its host
             // streams at, so the console must not offer to write the global instead.
             "bitrate_kbps": preset.overrides.bitrateKbps ?? NSNull(),
+            // The card's Screen section and line under a preset that pins the host screen.
+            "host_screen": preset.overrides.hostScreen ?? NSNull(),
         ]
     }
 
@@ -81,7 +83,8 @@ public enum ConsoleJSON {
         }
     }
 
-    /// `HostRow.screens`: the host's own `GET /display/targets` body, or null before it answers.
+    /// `HostRow.screens`: the host's `GET /display/targets` body in its own keys, `may_choose`
+    /// and `role` included, or null before it answers.
     private static func screensJSON(
         _ screens: [String: DisplayTargets], _ host: StoredHost
     ) -> Any {
@@ -89,6 +92,12 @@ public enum ConsoleJSON {
               let json = try? JSONSerialization.jsonObject(with: data)
         else { return NSNull() }
         return json
+    }
+
+    /// A `SetScreen` command's write: its `screen`, and `topology` when the row is a role.
+    public static func screenPick(_ command: [String: Any]) -> ScreenPick? {
+        guard let data = try? JSONSerialization.data(withJSONObject: command) else { return nil }
+        return try? JSONDecoder().decode(ScreenPick.self, from: data)
     }
 
     /// The home carousel: saved hosts in store order, which is the order they were added, each
@@ -318,6 +327,7 @@ public enum ConsoleJSON {
         j["render_scale"] = o.renderScale
         j["video_fit"] = o.videoFit
         j["screens"] = o.screens
+        j["host_screen"] = o.hostScreen
         j["codec"] = o.codec
         j["hdr_enabled"] = o.hdrEnabled
         j["enable_444"] = o.enable444
@@ -348,8 +358,8 @@ public enum ConsoleJSON {
     /// The keys `overrides(_:)` sends: exactly the ones a console save sets or clears.
     private static let consoleKeys: Set<String> = [
         "width", "height", "match_window", "compositor", "gamepad", "refresh_hz", "bitrate_kbps",
-        "pyrowave_bpp", "render_scale", "video_fit", "screens", "codec", "hdr_enabled", "enable_444",
-        "ten_bit_sdr",
+        "pyrowave_bpp", "render_scale", "video_fit", "screens", "host_screen", "codec", "hdr_enabled",
+        "enable_444", "ten_bit_sdr",
         "audio_channels", "audio_format", "mic_enabled", "echo_cancel", "keep_host_audio",
         "touch_mode", "mouse_mode", "invert_scroll", "overlay_actions", "shortcuts",
         "inhibit_shortcuts", "gamepad_forwarding", "system_buttons", "guide_gesture", "stats_verbosity",

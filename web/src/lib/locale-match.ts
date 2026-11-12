@@ -27,13 +27,21 @@ export function matchLocale<L extends string>(
 ): L | undefined {
 	const find = (tag: string | undefined) =>
 		shipped.find((l) => l.toLowerCase() === tag?.toLowerCase());
+	const exact = (t: string) => {
+		const via = Object.entries(fallback).find(
+			([from]) => from.toLowerCase() === t.toLowerCase(),
+		);
+		return find(t) ?? find(via?.[1]);
+	};
 	for (const tag of tags) {
-		let t = withChineseScript(tag.trim().replace(/_/g, "-"));
+		// A POSIX locale's `.UTF-8` and `@euro` are not part of the tag.
+		const bare = (tag.split(/[.@]/)[0] ?? "").trim().replace(/_/g, "-");
+		// A shipped `zh-TW` wins as written, before the script is read into the tag.
+		const asWritten = exact(bare);
+		if (asWritten) return asWritten;
+		let t = withChineseScript(bare);
 		for (;;) {
-			const via = Object.entries(fallback).find(
-				([from]) => from.toLowerCase() === t.toLowerCase(),
-			);
-			const hit = find(t) ?? find(via?.[1]);
+			const hit = exact(t);
 			if (hit) return hit;
 			const cut = t.lastIndexOf("-");
 			if (cut < 0) break;

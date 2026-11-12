@@ -455,6 +455,11 @@ cmd_status() {
 
 cmd_remove() {
   need_root
+  # The door goes off for its owner while its helper is still in /usr, as every package's removal
+  # does.
+  if [ -x /usr/libexec/punktfunk/door-remove ]; then /usr/libexec/punktfunk/door-remove || :; fi
+  # The seats' pad fence copy names a program the unmerge deletes.
+  rm -f /etc/udev/rules.d/65-punktfunk-seats.rules
   # /etc cleanup needs the /usr payload for the unmodified-compare — do it BEFORE unmerging.
   if merged; then
     if cmp -s "$ETC_SRC/gamescope-session-plus/sessions.d/steam" \
@@ -469,6 +474,7 @@ cmd_remove() {
   rm -f "$REBASE_UNIT" "$KEEP"; rmdir /etc/punktfunk 2>/dev/null || :
   rm -f "$IMG" "$SIDECAR" "$CONF"
   systemd-sysext refresh 2>/dev/null || :
+  udevadm control --reload 2>/dev/null || :
   echo "punktfunk sysext removed (user config in ~/.config/punktfunk is untouched)."
 }
 

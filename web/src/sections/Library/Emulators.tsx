@@ -11,7 +11,6 @@ import {
 } from "@/api/gen/emulators/emulators";
 import type { AdoptRequest } from "@/api/gen/model/adoptRequest";
 import type { EmulatorStatus } from "@/api/gen/model/emulatorStatus";
-import { useOwnAccount } from "@/api/seat";
 import { PasswordConfirmDialog } from "@/components/password-confirm";
 import { ROW_GAP, Stagger } from "@/components/stagger";
 import { Button } from "@/components/ui/button";
@@ -92,12 +91,11 @@ const Adopt: FC<{ id: string; onDone: () => void }> = ({ id, onDone }) => {
 /**
  * Every emulator the host knows: installed by punktfunk or found on the box first, the rest one
  * tap away. Installing and pointing at the operator's own copy are the operator's acts here; a
- * plugin's own ask lands in its source's Access rows instead. A seat on a person's own account
- * takes no copy added by hand.
+ * plugin's own ask lands in its source's Access rows instead. They are the owner's library's, so
+ * only its view shows them.
  */
 export const EmulatorsCard: FC = () => {
 	const qc = useQueryClient();
-	const own = useOwnAccount();
 	const rows = useGetEmulators();
 	const refresh = () =>
 		qc.invalidateQueries({ queryKey: getGetEmulatorsQueryKey() });
@@ -158,15 +156,13 @@ export const EmulatorsCard: FC = () => {
 												: m.emulators_install()}
 										</MenuItem>
 									)}
-									{!own && (
-										<MenuItem
-											onSelect={() =>
-												setAdopting(adopting === e.id ? undefined : e.id)
-											}
-										>
-											{m.emulators_adopt()}
-										</MenuItem>
-									)}
+									<MenuItem
+										onSelect={() =>
+											setAdopting(adopting === e.id ? undefined : e.id)
+										}
+									>
+										{m.emulators_adopt()}
+									</MenuItem>
 									{e.managed && (
 										<>
 											<MenuSeparator />

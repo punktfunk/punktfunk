@@ -93,6 +93,25 @@ describe("describePolicy (en)", () => {
 			"Living-room TV gets",
 		);
 	});
+
+	// The device sheet's rows, by role and as a copy of a monitor.
+	test.each([
+		[
+			"exclusive",
+			null,
+			"Tablet gets the only screen — your monitors turn off.",
+		],
+		["primary", null, "Tablet gets the main screen."],
+		["extend", null, "Tablet gets its own screen next to your monitors."],
+		["extend", "DP-1", "Tablet sees DP-1."],
+	] as const)(
+		"a device with %s, mirroring %s",
+		(topology, mirror, expected) => {
+			expect(
+				describePolicy(policy({ topology }), { deviceName: "Tablet", mirror }),
+			).toStartWith(expected);
+		},
+	);
 });
 
 describe("describePolicy (de)", () => {

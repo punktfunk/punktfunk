@@ -176,10 +176,10 @@ impl<B: PlatformBackend> SeatService<B> {
         }
     }
 
-    /// Refresh every seat's state, then start the autostart seats one at a time. A start runs
-    /// outside the ledger lock, as a `start` command does, so `list` answers meanwhile; a failed
-    /// start is recorded on its row, and the first one is returned once all have run. A person's
-    /// Linux row never autostarts: only its person's proof starts it.
+    /// Refresh every seat's state and the owner's uid, then start the autostart seats one at a
+    /// time. A start runs outside the ledger lock, as a `start` command does, so `list` answers
+    /// meanwhile; a failed start is recorded on its row, and the first one is returned once all
+    /// have run. A person's Linux row never autostarts: only its person's proof starts it.
     pub fn reconcile_startup(&self) -> Result<(), ApiError> {
         let autostarts = |seat: &Seat| seat.autostart && seat.adopted_uid.is_none();
         let autostart: Vec<SeatId> = {
@@ -188,6 +188,17 @@ impl<B: PlatformBackend> SeatService<B> {
             for seat in next.seats.iter_mut().filter(|seat| !autostarts(seat)) {
                 seat.runtime = self.observe(seat);
                 self.learn_pin(seat);
+            }
+            // A uid a person's row already holds stays off: the save would refuse the whole ledger.
+            if let Some(uid) = self.backend.owner_uid() {
+                let mut noted = next.clone();
+                for owner in noted.seats.iter_mut().filter(|s| s.owner) {
+                    owner.owner_uid = Some(uid);
+                }
+                match noted.validate() {
+                    Ok(()) => next = noted,
+                    Err(error) => tracing::warn!(%error, "owner's uid not recorded"),
+                }
             }
             let ids = next
                 .seats
@@ -221,6 +232,8 @@ impl<B: PlatformBackend> SeatService<B> {
         }
     }
 
+    /// Every seat as its backend reads it now. A state dir that can't take the refreshed states
+    /// still answers them: they are kept in memory, logged once, and saved with the next write.
     fn list(&self) -> Result<CommandResult, ApiError> {
         let mut current = self.lock();
         // Read under the ledger lock: a change marks its seat under it, before its backend runs.
@@ -245,8 +258,11 @@ impl<B: PlatformBackend> SeatService<B> {
             seat.runtime = self.observe(seat);
             self.learn_pin(seat);
         }
-        if next != *current {
-            self.commit(&mut current, next)?;
+        if next != *current
+            && let Err(error) = self.commit(&mut current, next.clone())
+        {
+            tracing::warn!(error = %error.message, "seat states not saved");
+            *current = next;
         }
         Ok(CommandResult::List {
             seats: current.seats.clone(),
@@ -285,10 +301,11 @@ impl<B: PlatformBackend> SeatService<B> {
     /// The owner's row: the one that exists when it names `account`, else a new one the backend
     /// has checked. The box has one owner, whom the backend names: a row for another account is
     /// stale, from an owner since changed, and the new one replaces it. An account the backend
-    /// doesn't accept leaves that row and answers Conflict.
+    /// doesn't accept leaves that row and answers Conflict. The new row keeps the uid the backend
+    /// prepared it for, so a person's row on that uid under another name refuses it.
     fn adopt_owner(&self, account: &str) -> Result<CommandResult, ApiError> {
         let _op = self.op();
-        let (stale, seat) = {
+        let (stale, mut seat) = {
             let current = self.lock();
             let stale = current.owner().cloned();
             if let Some(owner) = stale.as_ref().filter(|owner| owner.account == account) {
@@ -312,6 +329,7 @@ impl<B: PlatformBackend> SeatService<B> {
                 None => ApiError::from(error),
             });
         }
+        seat.owner_uid = self.backend.owner_uid();
         // Released after the new row is adopted, so what they share stays with the new owner.
         if let Some(owner) = &stale
             && let Err(error) = self.backend.remove(owner)
@@ -335,7 +353,7 @@ impl<B: PlatformBackend> SeatService<B> {
 
     /// A seat on a person's own account, whose SID is `sid`. Allocated on a copy, as `create`
     /// is; a backend that refuses has undone its own steps. Its sign-in counts against the
-    /// account's attempt limit.
+    /// account's attempt limit. The row records what the backend changed, for release.
     fn adopt(
         &self,
         request: CreateSeat,
@@ -353,8 +371,9 @@ impl<B: PlatformBackend> SeatService<B> {
             device: None,
             account: Some(&account),
         };
-        let granted = self.limited(target, || self.backend.adopt_account(&seat, password))?;
-        seat.rdp_granted = granted;
+        let adopted = self.limited(target, || self.backend.adopt_account(&seat, password))?;
+        seat.rdp_granted = adopted.rdp_granted;
+        seat.console_deny_kept = adopted.console_deny_kept;
         self.land(seat)
     }
 
@@ -636,8 +655,9 @@ impl<B: PlatformBackend> SeatService<B> {
     }
 
     /// Stops every seat before the backend turns seats off, so none runs without its display
-    /// driver. Only Windows turns seats off; elsewhere the backend's refusal answers before any
-    /// seat stops.
+    /// driver. `ops` is held from the first stop to the end, so no start lands in between; a
+    /// start in flight is interrupted first. Only Windows turns seats off; elsewhere the
+    /// backend's refusal answers before any seat stops.
     fn disable(&self, keep_accounts: bool) -> Result<CommandResult, ApiError> {
         if !keep_accounts {
             return Err(ApiError::new(
@@ -648,11 +668,14 @@ impl<B: PlatformBackend> SeatService<B> {
         if !cfg!(windows) {
             return self.seating(|backend| backend.disable(keep_accounts));
         }
-        let ids: Vec<SeatId> = self.lock().seats.iter().map(|s| s.id.clone()).collect();
-        for id in &ids {
-            self.change_runtime(id, false)?;
+        let ids = || -> Vec<SeatId> { self.lock().seats.iter().map(|s| s.id.clone()).collect() };
+        for id in &ids() {
+            self.interrupt_start(id);
         }
         let _op = self.op();
+        for id in &ids() {
+            self.change_locked(id, false, None)?;
+        }
         self.seating(|backend| backend.disable(keep_accounts))
     }
 

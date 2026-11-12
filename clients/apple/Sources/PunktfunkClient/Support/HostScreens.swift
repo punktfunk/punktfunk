@@ -32,10 +32,10 @@ final class HostScreenStore: ObservableObject {
         }
     }
 
-    /// Write this device's pick on `host`, then ask for the rows again. nil when the host took
+    /// Write a Screen row's pick on `host`, then ask for the rows again. nil when the host took
     /// it, else the sentence to show; `label` is the row's word.
     func pick(
-        _ screen: DisplayTarget, label: String, on host: StoredHost, port: UInt16? = nil
+        _ pick: ScreenPick, label: String, on host: StoredHost, port: UInt16? = nil
     ) async -> String? {
         defer {
             cache.invalidate(host.id.uuidString, keepValue: true)
@@ -43,7 +43,7 @@ final class HostScreenStore: ObservableObject {
         }
         do {
             let target = try MgmtTarget.make(host: host, port: port).get()
-            try await LibraryClient.setScreen(screen, on: target)
+            try await LibraryClient.setScreen(pick, on: target)
             return nil
         } catch let missing as MgmtTargetMissing {
             return missing.sentence
@@ -53,4 +53,15 @@ final class HostScreenStore: ObservableObject {
             return L10n.hostcardActionFailed(action: label, reason: why)
         }
     }
+}
+
+extension DisplayTargets {
+    /// The Screen section has a row to draw, or the note on why there is none to pick.
+    var hasSection: Bool { !rows.isEmpty || note != nil }
+}
+
+extension ScreenRow {
+    /// The line under the label: why the row is greyed, else the role's hint, else the
+    /// monitor's connector and mode.
+    var line: String? { reason ?? hint ?? (detail.isEmpty ? nil : detail) }
 }

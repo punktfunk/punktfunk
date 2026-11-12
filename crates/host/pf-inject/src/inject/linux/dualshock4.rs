@@ -17,6 +17,7 @@ use super::dualshock4_proto::{
 use crate::uhid_abi::{UhidDevice, UhidEvent};
 use crate::uhid_manager::{PadFeedback, PadProto, UhidManager};
 use anyhow::Result;
+use pf_driver_proto::gamepad::mark_ps_seat;
 use punktfunk_core::quic::{HidOutput, RichInput};
 
 /// The `CREATE2` identity of pad `index`: what this host opens, and what the seat broker
@@ -68,7 +69,8 @@ impl DualShock4Pad {
         self.dev.poll(|dev, ev| match ev {
             UhidEvent::Output(data) => parse_ds4_output(data, &mut fb),
             UhidEvent::GetReport { id, rnum } => {
-                let pairing = ds4_pairing_reply(pad);
+                let mut pairing = ds4_pairing_reply(pad);
+                mark_ps_seat(&mut pairing, crate::pad_broker::own_ps_seat());
                 let data: Option<&[u8]> = match rnum {
                     0x12 => Some(&pairing),
                     0x02 => Some(DS4_FEATURE_CALIBRATION),

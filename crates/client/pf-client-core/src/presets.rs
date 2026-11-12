@@ -24,6 +24,9 @@ pub const PRESETS_VERSION: u32 = 1;
 /// live global. Host properties (tier H) and this device's hardware
 /// (tier G) are absent.
 ///
+/// `host_screen` is presetable with no global row: a host's default is the
+/// pick on that host's card, so the global stays empty.
+///
 /// `extra` is the don't-clobber bag: a load→save on an older client must
 /// not erase a newer client's unknown key.
 #[derive(Default, Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -47,6 +50,10 @@ pub struct SettingsOverlay {
     pub video_fit: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub screens: Option<String>,
+    /// The role or monitor a connect with this preset asks the host for: `only`, `main`,
+    /// `second` or `monitor:<connector>`. `None` is the pick on the host's card.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub host_screen: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub codec: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -138,6 +145,9 @@ impl SettingsOverlay {
         }
         if let Some(v) = &self.screens {
             s.screens = v.clone();
+        }
+        if let Some(v) = &self.host_screen {
+            s.host_screen = v.clone();
         }
         if let Some(v) = &self.codec {
             s.codec = v.clone();
@@ -239,6 +249,7 @@ impl SettingsOverlay {
             "render_scale" => self.render_scale = None,
             "video_fit" => self.video_fit = None,
             "screens" => self.screens = None,
+            "host_screen" => self.host_screen = None,
             "codec" => self.codec = None,
             "hdr_enabled" => self.hdr_enabled = None,
             "enable_444" => self.enable_444 = None,
@@ -271,7 +282,8 @@ impl SettingsOverlay {
     }
 
     /// Pin one field at `from`'s value, by the names [`Self::clear`] takes. `resolution` pins
-    /// its three fields together. False for a name the overlay does not carry.
+    /// its three fields together. An empty `host_screen` clears it: empty is the host card's
+    /// pick, which is what no pin means. False for a name the overlay does not carry.
     pub fn pin(&mut self, field: &str, from: &Settings) -> bool {
         let s = from;
         match field {
@@ -289,6 +301,9 @@ impl SettingsOverlay {
             "render_scale" => self.render_scale = Some(s.render_scale),
             "video_fit" => self.video_fit = Some(s.video_fit.clone()),
             "screens" => self.screens = Some(s.screens.clone()),
+            "host_screen" => {
+                self.host_screen = Some(s.host_screen.clone()).filter(|v| !v.is_empty());
+            }
             "codec" => self.codec = Some(s.codec.clone()),
             "hdr_enabled" => self.hdr_enabled = Some(s.hdr_enabled),
             "enable_444" => self.enable_444 = Some(s.enable_444),
@@ -335,6 +350,7 @@ impl SettingsOverlay {
             "render_scale" => self.render_scale.is_some(),
             "video_fit" => self.video_fit.is_some(),
             "screens" => self.screens.is_some(),
+            "host_screen" => self.host_screen.is_some(),
             "codec" => self.codec.is_some(),
             "hdr_enabled" => self.hdr_enabled.is_some(),
             "enable_444" => self.enable_444.is_some(),
@@ -401,6 +417,22 @@ impl StreamPreset {
             extra: BTreeMap::new(),
         }
     }
+
+    /// The Second screen starter: the role pinned and nothing else, named after the role, or
+    /// "Second screen 2" and on while `taken` says a name is in use. The caller adds and saves it.
+    pub fn second_screen(taken: impl Fn(&str) -> bool) -> StreamPreset {
+        let mut p = StreamPreset::new(free_name(pf_l10n::client::screen_role_second(), taken));
+        p.overrides.host_screen = Some("second".into());
+        p
+    }
+}
+
+/// `base` while `taken` lets it through, else the first free "base N" from 2.
+fn free_name(base: &str, taken: impl Fn(&str) -> bool) -> String {
+    std::iter::once(base.to_string())
+        .chain((2u32..).map(|n| format!("{base} {n}")))
+        .find(|n| !taken(n))
+        .unwrap_or_default()
 }
 
 /// Outcome of a `preset=` / `--preset` reference. Ambiguity refuses
@@ -527,11 +559,7 @@ impl PresetsFile {
     /// copy's id; `None` when `id` names no preset. The caller saves.
     pub fn duplicate(&mut self, id: &str) -> Option<String> {
         let source = self.find_by_id(id)?.clone();
-        let name = (2..)
-            .map(|n| format!("{} {n}", source.name))
-            .find(|n| !self.name_taken(n, None))
-            .unwrap_or_else(|| source.name.clone());
-        let mut copy = StreamPreset::new(name);
+        let mut copy = StreamPreset::new(free_name(&source.name, |n| self.name_taken(n, None)));
         copy.overrides = source.overrides;
         copy.accent = source.accent;
         let copy_id = copy.id.clone();
@@ -594,6 +622,7 @@ pub(crate) mod tests {
             "render_scale",
             "video_fit",
             "screens",
+            "host_screen",
             "codec",
             "hdr_enabled",
             "enable_444",
@@ -621,7 +650,11 @@ pub(crate) mod tests {
             "vsync",
             "allow_vrr",
         ];
-        let from = Settings::default();
+        // The global host screen is always empty; a preset editor steps its value in.
+        let from = Settings {
+            host_screen: "second".into(),
+            ..Settings::default()
+        };
         for name in names {
             let mut o = SettingsOverlay::default();
             assert!(!o.overrides(name), "{name}");
@@ -653,6 +686,66 @@ pub(crate) mod tests {
         assert_eq!(copy.overrides, work.overrides);
         assert_eq!(copy.accent, work.accent);
         assert_eq!(catalog.duplicate("gone"), None);
+    }
+
+    /// A preset's host screen applies over the always-empty global, and pinning it empty is
+    /// no pin: the host card's pick.
+    #[test]
+    fn host_screen_is_a_preset_field_with_no_global_value() {
+        let base = Settings::default();
+        assert_eq!(base.host_screen, "");
+        let json = serde_json::to_value(&base).unwrap();
+        assert!(
+            json.get("host_screen").is_none(),
+            "the global file never holds it"
+        );
+
+        let o: SettingsOverlay =
+            serde_json::from_str(r#"{"host_screen":"monitor:HDMI-A-1"}"#).unwrap();
+        assert!(o.extra.is_empty());
+        assert_eq!(o.apply(&base).host_screen, "monitor:HDMI-A-1");
+
+        let mut o = o;
+        assert!(o.pin("host_screen", &base));
+        assert_eq!(o.host_screen, None, "empty is the host card's pick");
+        assert!(o.is_empty());
+    }
+
+    /// The starter pins the second screen and nothing else, under the role's name or the first
+    /// free "Second screen N".
+    #[test]
+    fn the_second_screen_starter_takes_a_free_name() {
+        let p = StreamPreset::second_screen(|_| false);
+        assert_eq!(p.name, "Second screen");
+        let want = SettingsOverlay {
+            host_screen: Some("second".into()),
+            ..Default::default()
+        };
+        assert_eq!(p.overrides, want);
+        let catalog = PresetsFile {
+            version: 1,
+            presets: vec![
+                StreamPreset::new("second SCREEN"),
+                StreamPreset::new("Second screen 2"),
+            ],
+        };
+        let p = StreamPreset::second_screen(|n| catalog.name_taken(n, None));
+        assert_eq!(p.name, "Second screen 3");
+
+        let raw = include_str!("../../../../clients/shared/screen-rows-vectors.json");
+        let file: serde_json::Value = serde_json::from_str(raw).unwrap();
+        for case in file["starter_cases"].as_array().unwrap() {
+            let taken: Vec<&str> = (case["taken"].as_array().unwrap().iter())
+                .map(|n| n.as_str().unwrap())
+                .collect();
+            let p =
+                StreamPreset::second_screen(|n| taken.iter().any(|t| t.eq_ignore_ascii_case(n)));
+            assert_eq!(p.name, case["name"], "{case}");
+            assert_eq!(
+                serde_json::to_value(&p.overrides).unwrap(),
+                case["overrides"]
+            );
+        }
     }
 
     #[test]

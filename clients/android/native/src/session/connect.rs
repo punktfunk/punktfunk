@@ -7,6 +7,7 @@ use jni::sys::{jboolean, jint, jlong};
 use jni::EnvUnowned;
 use punktfunk_core::client::{ConnectParams, NativeClient};
 use punktfunk_core::config::{CompositorPref, GamepadPref, Mode};
+use punktfunk_core::quic::v2::hello::ScreenWish;
 use punktfunk_core::quic::v2::msg::{ProfileUnlock, Zeroizing};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -499,6 +500,10 @@ struct ConnectRequest {
     view_width: u32,
     #[serde(default)]
     view_height: u32,
+    /// A preset's screen wish ([`ScreenWish::parse`]'s spelling); empty or unreadable asks for
+    /// none.
+    #[serde(default)]
+    host_screen: String,
 }
 
 /// A `w`×`h` view, or `None` when either side is not positive.
@@ -674,6 +679,7 @@ fn connect(req: ConnectRequest, prompts_unlock: bool, unlock: Option<ProfileUnlo
         studio_range,
         view_width,
         view_height,
+        host_screen,
     } = req;
     // Which shell asked, for the host's `handshake complete` line. Set before the dial: core reads
     // it once the host says it parses the block.
@@ -777,6 +783,7 @@ fn connect(req: ConnectRequest, prompts_unlock: bool, unlock: Option<ProfileUnlo
         // decode path takes the range from the Welcome either way.
         studio_range,
         view: view_of(view_width.into(), view_height.into()),
+        screen_wish: ScreenWish::parse(&host_screen),
         // Handshake budget from Kotlin: ~10 s for a normal connect, ~185 s for "request access"
         // (the host parks the connection until the operator approves the device — see ConnectScreen).
         // No `cancel`: Kotlin drops the result (`Dial.cancelled`) rather than abort the dial — its
@@ -935,6 +942,21 @@ pub extern "system" fn Java_io_unom_punktfunk_kit_NativeBridge_nativeSharesScree
         SESSIONS
             .get(handle)
             .is_some_and(|session| session.client.screen() == Some(&ScreenEcho::Shared))
+    })
+}
+
+/// Return the reason byte of the host's role echo: `0` as asked, `1` not allowed, `2` monitors
+/// held, `3` unavailable, `4` no monitors. A missing key and a host that sends no echo read `0`.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_io_unom_punktfunk_kit_NativeBridge_nativeScreenRoleReason(
+    _env: EnvUnowned,
+    _this: JObject,
+    handle: jlong,
+) -> jint {
+    jni_guard(0, || {
+        (SESSIONS.get(handle))
+            .and_then(|session| session.client.role())
+            .map_or(0, |echo| echo.reason.to_u8().into())
     })
 }
 
@@ -1127,7 +1149,7 @@ pub extern "system" fn Java_io_unom_punktfunk_kit_NativeBridge_nativeRequestAcce
         let out = if host.is_empty() || cert.is_empty() || key.is_empty() {
             log::error!("nativeRequestAccess: missing host/identity");
             String::new()
-        } else {
+        } else if let Some(pin) = pin {
             match NativeClient::request_access(
                 &host,
                 port as u16,
@@ -1144,6 +1166,10 @@ pub extern "system" fn Java_io_unom_punktfunk_kit_NativeBridge_nativeRequestAcce
                     String::new()
                 }
             }
+        } else {
+            // A host that advertised no fingerprint pairs by PIN; the app routes it there.
+            log::error!("nativeRequestAccess: no fingerprint to hold {host}:{port} to");
+            String::new()
         };
         env.new_string(out)
     })

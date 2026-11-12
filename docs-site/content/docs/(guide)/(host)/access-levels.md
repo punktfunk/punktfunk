@@ -11,13 +11,13 @@ see [Friends over the internet](/docs/friends-over-the-internet).
 Pick the access when you
 [approve a device or arm a PIN](/docs/pairing#choosing-access-when-you-admit-a-device). Change it
 later in the console: **Devices** → the device's **Edit access**. Each row shows the
-device's level and time left.
+device's level and time left. Pairing a device again keeps its access.
 
 ## The three presets
 
 | Access level | The device can |
 |---|---|
-| **Full control** | Do everything: keyboard, mouse, controllers, clipboard, microphone, launching games, host power, managing games. A plain **Approve** gives this. |
+| **Full control** | Do everything: keyboard, mouse, controllers, clipboard, microphone, launching games, host power, managing games, choosing its screen. A plain **Approve** gives this. |
 | **Controller only** | Send controller input. Its pads appear as extra controllers, with rumble and pad audio. |
 | **View only** | Watch and listen, and send nothing. |
 
@@ -35,8 +35,9 @@ Under **Advanced** in the access dialog:
 | **Clipboard** | The [shared clipboard](/docs/clipboard), when the host's own clipboard setting allows it too. Without it the client's clipboard control is greyed out. |
 | **Microphone** | Sending the client's microphone to the host. |
 | **Launch games** | Starting a title from the [library](/docs/game-library) when connecting. Without it, such a connect is refused with a message; the library stays visible. |
-| **Host power** | Sleep, restart and shut down the host from the client ([Host power](/docs/host-power)). Full control includes it, since keyboard access reaches the desktop's power menu anyway. |
-| **Manage games** | Pausing a title's download and removing a downloaded title from the client's library. **Launch games** already starts a download. Full control includes it, since keyboard access reaches the store's own uninstall anyway. |
+| **Host power** | Sleep, restart and shut down the host from the client ([Host power](/docs/host-power)). |
+| **Manage games** | Pausing a title's download and removing a downloaded title from the client's library. **Launch games** already starts a download. |
+| **Choose its screen** | Picking the screen the device streams, in its own app ([Screen](/docs/client-settings#screen)). Without it the device gets what **Displays** or its **Display settings…** say. |
 
 **Controller only** leaves out **Launch games**, so you choose what runs. Tick it to let a guest
 pick games.
@@ -96,10 +97,3 @@ requests are never restricted; they shape only that device's own stream.
 
 Current clients stop capturing what can't land, hide ungranted controls, show the access and time
 left in the [stats overlay](/docs/stats), and show expiry warnings whatever the overlay is set to.
-
-## Where enforcement happens
-
-The host checks every input event against the session's grants before injecting it, and never
-sets up an ungranted plane: no controller grant, no virtual pads; no microphone grant, no mic.
-Pairing a device again keeps its access. Only the console, behind its login, can widen a grant.
-Refused input is logged once per session and kind. See [Security & Safe Use](/docs/security).

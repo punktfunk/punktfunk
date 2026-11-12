@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: =?UTF-8?q?Enrico=20B=C3=BChler?= <enrico.buehler@unom.io>
 Date: Fri, 25 Sep 2026 17:43:24 +0200
-Subject: [PATCH 29/33] steamcompmgr: take a game out of iconic when input
+Subject: [PATCH 29/38] steamcompmgr: take a game out of iconic when input
  returns to it
 
 A fullscreen game that loses input to the Steam overlay can minimize
@@ -19,10 +19,10 @@ Stamp pfhdr24.
  2 files changed, 7 insertions(+), 1 deletion(-)
 
 diff --git a/src/meson.build b/src/meson.build
-index f582609..3396a99 100644
+index 93951a23..f4e6ad5c 100644
 --- a/src/meson.build
 +++ b/src/meson.build
-@@ -206,7 +206,8 @@ vcs_tag = run_command(vcs_tag_cmd, check: false).stdout().strip()
+@@ -214,7 +214,8 @@ vcs_tag = run_command(vcs_tag_cmd, check: false).stdout().strip()
  #   +pfhdr21 — …and a packed RGB capture dmabuf takes a tiled modifier its consumer accepts
  #   +pfhdr22 — …and a planar capture dmabuf exports its chroma plane where the driver put it
  #   +pfhdr23 — …and the composited cursor follows a shape change or a hide, and the pointer bound forgets a closed window
@@ -33,10 +33,10 @@ index f582609..3396a99 100644
  gamescope_version_conf = configuration_data()
  gamescope_version_conf.set('VCS_TAG', version_tag)
 diff --git a/src/steamcompmgr.cpp b/src/steamcompmgr.cpp
-index 0a3948c..246f5e8 100644
+index 6255e30b..ccd4d3a0 100644
 --- a/src/steamcompmgr.cpp
 +++ b/src/steamcompmgr.cpp
-@@ -4979,6 +4979,11 @@ void xwayland_ctx_t::DetermineAndApplyFocus( const std::vector< steamcompmgr_win
+@@ -5173,6 +5173,11 @@ void xwayland_ctx_t::DetermineAndApplyFocus( const std::vector< steamcompmgr_win
  			// don't care if we change kb focus window due to that happening when
  			// going from override -> focus and we don't want to hide then as it's probably a dropdown.
  			ctx->cursor->hide();

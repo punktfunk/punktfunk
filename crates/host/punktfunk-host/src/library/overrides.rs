@@ -4,7 +4,8 @@
 //!
 //! An entry names a shared override (`set`), carries values of its own, or is a game's `none`:
 //! the device decides, whatever its source sets. A game's entry wins over its source's. A shared
-//! override that is gone, or values that fail validation, override nothing.
+//! override that is gone, or values that fail validation, override nothing. A profile's layer
+//! holds a file of the same shape; its entry for a game or its source wins over the box's.
 //! [`GameEntry::overrides`] carries what each title resolves to; the handshake holds a client to
 //! the downward half. Pin `library-overrides.json` in the tests below.
 
@@ -87,27 +88,16 @@ pub struct OverridesDoc {
 }
 
 impl OverridesDoc {
-    /// `games[id] ?? sources[store]`, then the shared override it names, in the stored shape.
-    /// A pad name the host does not know drops only the pad. Absent when nothing is set, the
-    /// entry is `none`, or another value fails validation.
-    pub(crate) fn resolve(&self, id: &str) -> Option<GameOverrides> {
-        let entry = self
-            .games
+    /// `games[id] ?? sources[store]`.
+    pub(crate) fn entry(&self, id: &str) -> Option<&OverrideEntry> {
+        self.games
             .get(id)
-            .or_else(|| self.sources.get(store_of(id)))?;
-        if entry.none {
-            return None;
-        }
-        let mut o = match &entry.set {
-            Some(set) => self.sets.get(set)?.clone(),
-            None => GameOverrides {
-                name: None,
-                ..entry.values.clone()
-            },
-        };
-        // Android knows a pad only by its own name, and a hand-edited one may be any alias.
-        o.gamepad = o.gamepad_pref().map(|p| p.as_str().to_string());
-        checked(o).ok().filter(|o| !o.is_empty())
+            .or_else(|| self.sources.get(store_of(id)))
+    }
+
+    /// [`Self::entry`], then the shared override it names, in the stored shape.
+    pub(crate) fn resolve(&self, id: &str) -> Option<GameOverrides> {
+        resolve_entry(self.entry(id)?, |set| self.sets.get(set))
     }
 
     /// The sources whose titles see shared override `set`: each user game's store, and each
@@ -120,6 +110,66 @@ impl OverridesDoc {
             .map(|(id, _)| store_of(id).to_string())
             .chain(sources.map(|(s, _)| s.clone()))
             .collect()
+    }
+}
+
+/// `entry` with the shared override it names found by `set`. A pad name the host does not know
+/// drops only the pad. Absent when nothing is set, the entry is `none`, or another value fails
+/// validation.
+fn resolve_entry<'a>(
+    entry: &OverrideEntry,
+    set: impl Fn(&str) -> Option<&'a GameOverrides>,
+) -> Option<GameOverrides> {
+    if entry.none {
+        return None;
+    }
+    let mut o = match &entry.set {
+        Some(id) => set(id)?.clone(),
+        None => GameOverrides {
+            name: None,
+            ..entry.values.clone()
+        },
+    };
+    // Android knows a pad only by its own name, and a hand-edited one may be any alias.
+    o.gamepad = o.gamepad_pref().map(|p| p.as_str().to_string());
+    checked(o).ok().filter(|o| !o.is_empty())
+}
+
+/// The box's overrides and the profile in view's own, read once per list.
+pub(crate) struct Overrides {
+    base: OverridesDoc,
+    own: Option<OverridesDoc>,
+}
+
+impl Overrides {
+    pub(crate) fn load(view: &View) -> Self {
+        Self {
+            base: load_overrides(&view.base()),
+            own: view.layer().map(|_| load_overrides(view)),
+        }
+    }
+
+    /// [`Self::own_entry`] when there is one, else the box's.
+    pub(crate) fn resolve(&self, id: &str) -> Option<GameOverrides> {
+        match self.own_entry(id) {
+            Some(entry) => resolve_entry(entry, |set| self.set(set)),
+            None => self.base.resolve(id),
+        }
+    }
+
+    /// The profile's entry for `id`, its game's then its source's. One naming a shared override
+    /// that is gone sets nothing, so the box's applies; a `none` is an entry.
+    pub(crate) fn own_entry(&self, id: &str) -> Option<&OverrideEntry> {
+        let own = self.own.as_ref()?;
+        let live = |e: &&OverrideEntry| e.set.as_deref().is_none_or(|s| self.set(s).is_some());
+        let game = own.games.get(id).filter(live);
+        game.or_else(|| own.sources.get(store_of(id)).filter(live))
+    }
+
+    /// Shared override `id`: the profile's, then the box's.
+    fn set(&self, id: &str) -> Option<&GameOverrides> {
+        let own = self.own.as_ref().and_then(|own| own.sets.get(id));
+        own.or_else(|| self.base.sets.get(id))
     }
 }
 
@@ -207,37 +257,45 @@ pub enum OverrideError {
     Save(anyhow::Error),
 }
 
-fn settings_path() -> PathBuf {
-    pf_paths::seat::library_dir().join("library-overrides.json")
-}
+const FILE: &str = "library-overrides.json";
 
-/// Malformed or absent file → no overrides. A bad parse must cost the overrides, not a stream.
-pub fn load_overrides() -> OverridesDoc {
-    let mut doc: OverridesDoc = read_json_or_default(&settings_path());
+/// The file in `view`'s own layer, or the box's. Malformed or absent file → no overrides. A
+/// bad parse must cost the overrides, not a stream.
+pub fn load_overrides(view: &View) -> OverridesDoc {
+    let mut doc: OverridesDoc = read_json_or_default(&view.path(FILE));
     doc.version = VERSION;
     doc
 }
 
-/// What the launch of library id `id` is held to.
-pub fn overrides_for(id: &str) -> Option<GameOverrides> {
-    load_overrides().resolve(id)
+/// What the launch of library id `id` in `view` is held to.
+pub fn overrides_for(view: &View, id: &str) -> Option<GameOverrides> {
+    Overrides::load(view).resolve(id)
 }
 
-/// Load, change and save under one lock, then one `library.changed` per source `f` names. A
-/// bulk assign is many writes at once and must not lose one. No change, no save.
+/// Load `view`'s layer, change and save it under one lock, then one `library.changed` per source
+/// `f` names. A bulk assign is many writes at once and must not lose one. No change, no save.
+/// `f` also gets the shared override ids a profile's entry may name in the box's file.
 fn mutate<T>(
-    f: impl FnOnce(&mut OverridesDoc) -> std::result::Result<(T, BTreeSet<String>), OverrideError>,
+    view: &View,
+    f: impl FnOnce(
+        &mut OverridesDoc,
+        &BTreeSet<String>,
+    ) -> std::result::Result<(T, BTreeSet<String>), OverrideError>,
 ) -> std::result::Result<T, OverrideError> {
     static LOCK: Mutex<()> = Mutex::new(());
     let _serial = LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    let mut doc = load_overrides();
+    let box_sets = match view.layer() {
+        Some(_) => load_overrides(&view.base()).sets.into_keys().collect(),
+        None => BTreeSet::new(),
+    };
+    let mut doc = load_overrides(view);
     let before = doc.clone();
-    let (out, sources) = f(&mut doc)?;
+    let (out, sources) = f(&mut doc, &box_sets)?;
     if doc == before {
         return Ok(out);
     }
     let json = serde_json::to_string_pretty(&doc).map_err(|e| OverrideError::Save(e.into()))?;
-    save_json(&settings_path(), &json).map_err(OverrideError::Save)?;
+    save_json(&view.path(FILE), &json).map_err(OverrideError::Save)?;
     for source in sources {
         crate::events::emit(crate::events::EventKind::LibraryChanged { source });
     }
@@ -277,8 +335,11 @@ fn is_set_id(s: &str) -> bool {
     s.len() == 12 && s.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
 }
 
+/// `e` as stored. Its `set` names a shared override in `doc` or in `box_sets`, the box's that a
+/// profile's entry may name.
 fn checked_entry(
     doc: &OverridesDoc,
+    box_sets: &BTreeSet<String>,
     mut e: OverrideEntry,
 ) -> std::result::Result<OverrideEntry, OverrideError> {
     e.values.name = None;
@@ -289,7 +350,7 @@ fn checked_entry(
         if !is_set_id(set) || !e.values.is_empty() {
             return Err(OverrideError::Invalid("set"));
         }
-        if !doc.sets.contains_key(set) {
+        if !doc.sets.contains_key(set) && !box_sets.contains(set) {
             return Err(OverrideError::NoSuchSet);
         }
     }
@@ -305,36 +366,43 @@ fn put(map: &mut BTreeMap<String, OverrideEntry>, key: &str, e: OverrideEntry) {
     }
 }
 
-/// One game's entry, as stored after the call. Not checked against the catalog, like a hide:
-/// an absent title keeps its entry for when it returns.
+/// One game's entry in `view`'s layer, as stored after the call. Not checked against the
+/// catalog, like a hide: an absent title keeps its entry for when it returns.
 pub fn set_game_overrides(
+    view: &View,
     id: &str,
     entry: OverrideEntry,
 ) -> std::result::Result<OverrideEntry, OverrideError> {
-    mutate(|doc| {
-        let entry = checked_entry(doc, entry)?;
+    mutate(view, |doc, box_sets| {
+        let entry = checked_entry(doc, box_sets, entry)?;
         put(&mut doc.games, id, entry.clone());
         Ok((entry, BTreeSet::from([store_of(id).to_string()])))
     })
 }
 
-/// One source's entry, which each of its titles without one of its own takes. Never `none`.
+/// One source's entry in `view`'s layer, which each of its titles without one of its own takes.
+/// Never `none`.
 pub fn set_source_overrides(
+    view: &View,
     source: &str,
     entry: OverrideEntry,
 ) -> std::result::Result<OverrideEntry, OverrideError> {
     if entry.none {
         return Err(OverrideError::Invalid("none"));
     }
-    mutate(|doc| {
-        let entry = checked_entry(doc, entry)?;
+    mutate(view, |doc, box_sets| {
+        let entry = checked_entry(doc, box_sets, entry)?;
         put(&mut doc.sources, source, entry.clone());
         Ok((entry, BTreeSet::from([source.to_string()])))
     })
 }
 
-pub fn create_override_set(o: GameOverrides) -> std::result::Result<OverrideSet, OverrideError> {
-    mutate(|doc| {
+/// A shared override in `view`'s layer.
+pub fn create_override_set(
+    view: &View,
+    o: GameOverrides,
+) -> std::result::Result<OverrideSet, OverrideError> {
+    mutate(view, |doc, _| {
         let values = checked_set(doc, None, o)?;
         let id = loop {
             let id = hex::encode(rand::random::<[u8; 6]>());
@@ -347,11 +415,13 @@ pub fn create_override_set(o: GameOverrides) -> std::result::Result<OverrideSet,
     })
 }
 
+/// A shared override of `view`'s layer; a profile's changes only its own.
 pub fn update_override_set(
+    view: &View,
     id: &str,
     patch: OverrideSetPatch,
 ) -> std::result::Result<OverrideSet, OverrideError> {
-    mutate(|doc| {
+    mutate(view, |doc, _| {
         let mut o = doc.sets.get(id).cloned().ok_or(OverrideError::NoSuchSet)?;
         patch.apply(&mut o);
         let values = checked_set(doc, Some(id), o)?;
@@ -367,9 +437,12 @@ pub fn update_override_set(
     })
 }
 
-/// Removes a shared override and every entry that names it.
-pub fn delete_override_set(id: &str) -> std::result::Result<OverrideUsers, OverrideError> {
-    mutate(|doc| {
+/// Removes a shared override of `view`'s layer and every entry of that layer that names it.
+pub fn delete_override_set(
+    view: &View,
+    id: &str,
+) -> std::result::Result<OverrideUsers, OverrideError> {
+    mutate(view, |doc, _| {
         doc.sets.remove(id).ok_or(OverrideError::NoSuchSet)?;
         let reach = doc.reach(id);
         let (games, sources) = (doc.games.len(), doc.sources.len());
@@ -441,6 +514,69 @@ mod tests {
         assert_eq!(d.resolve("lutris:7"), None);
     }
 
+    /// A profile's entry for a game, or for its source, beats the box's; its `set` may name the
+    /// box's shared override; where it set nothing, the box's applies.
+    #[test]
+    fn a_profile_s_own_entry_wins_and_the_box_s_fills_the_rest() {
+        let own: OverridesDoc = serde_json::from_str(
+            r#"{"sets":{"0123456789ab":{"name":"Mine","hz":30}},
+                "games":{"steam:413150":{"none":true},"steam:1":{"set":"a1b2c3d4e5f6"},
+                         "steam:2":{"set":"0123456789ab"}},
+                "sources":{"lutris":{"gamepad":"dualsense"}}}"#,
+        )
+        .unwrap();
+        let o = Overrides {
+            base: doc(),
+            own: Some(own.clone()),
+        };
+        assert_eq!(o.resolve("steam:413150"), None, "its none beats the box's");
+        let named = |id| o.resolve(id).and_then(|v| v.name);
+        assert_eq!(named("steam:1").as_deref(), Some("1080p60 DualSense"));
+        assert_eq!(o.resolve("steam:2").and_then(|v| v.hz), Some(30));
+        let pad = |id| o.resolve(id).and_then(|v| v.gamepad);
+        assert_eq!(pad("lutris:7").as_deref(), Some("dualsense"), "its source");
+        assert_eq!(named("steam:1091500").as_deref(), Some("1080p60 DualSense"));
+        let alone = Overrides {
+            base: doc(),
+            own: None,
+        };
+        assert_eq!(alone.resolve("steam:413150"), doc().resolve("steam:413150"));
+
+        let box_sets = BTreeSet::from(["a1b2c3d4e5f6".to_string()]);
+        let entry: OverrideEntry = serde_json::from_str(r#"{"set":"a1b2c3d4e5f6"}"#).unwrap();
+        assert!(checked_entry(&own, &box_sets, entry.clone()).is_ok());
+        assert!(matches!(
+            checked_entry(&own, &BTreeSet::new(), entry),
+            Err(OverrideError::NoSuchSet)
+        ));
+    }
+
+    /// A profile's entry, for a game or its source, naming a shared override that is gone sets
+    /// nothing: the box's applies. Its `none` still wins.
+    #[test]
+    fn a_profile_s_entry_on_a_gone_set_leaves_the_box_s() {
+        let own: OverridesDoc = serde_json::from_str(
+            r#"{"games":{"steam:413150":{"set":"fedcba987654"},"steam:1091500":{"none":true}},
+                "sources":{"heroic":{"set":"fedcba987654"}}}"#,
+        )
+        .unwrap();
+        let o = Overrides {
+            base: doc(),
+            own: Some(own),
+        };
+        for id in ["steam:413150", "heroic:other"] {
+            assert!(o.own_entry(id).is_none(), "{id}");
+            assert_eq!(o.resolve(id), doc().resolve(id), "{id}");
+            assert!(o.resolve(id).is_some(), "{id}");
+        }
+        assert!(o.own_entry("steam:1091500").is_some());
+        assert_eq!(
+            o.resolve("steam:1091500"),
+            None,
+            "its none beats the box's set"
+        );
+    }
+
     #[test]
     fn malformed_or_out_of_range_overrides_nothing() {
         let d: OverridesDoc = serde_json::from_str("{ not json").unwrap_or_default();
@@ -470,30 +606,43 @@ mod tests {
         ] {
             assert!(
                 matches!(
-                    checked_entry(&d, entry(both)),
+                    checked_entry(&d, &BTreeSet::new(), entry(both)),
                     Err(OverrideError::Invalid("none"))
                 ),
                 "{both}"
             );
         }
-        assert!(checked_entry(&d, entry(r#"{"none":true}"#)).unwrap().none);
+        assert!(
+            checked_entry(&d, &BTreeSet::new(), entry(r#"{"none":true}"#))
+                .unwrap()
+                .none
+        );
         assert!(matches!(
-            checked_entry(&d, entry(r#"{"set":"a1b2c3d4e5f6","hz":60}"#)),
+            checked_entry(
+                &d,
+                &BTreeSet::new(),
+                entry(r#"{"set":"a1b2c3d4e5f6","hz":60}"#)
+            ),
             Err(OverrideError::Invalid("set"))
         ));
         assert!(matches!(
-            checked_entry(&d, entry(r#"{"set":"A1B2C3D4E5F6"}"#)),
+            checked_entry(&d, &BTreeSet::new(), entry(r#"{"set":"A1B2C3D4E5F6"}"#)),
             Err(OverrideError::Invalid("set"))
         ));
         assert!(matches!(
-            checked_entry(&d, entry(r#"{"set":"0123456789ab"}"#)),
+            checked_entry(&d, &BTreeSet::new(), entry(r#"{"set":"0123456789ab"}"#)),
             Err(OverrideError::NoSuchSet)
         ));
         assert!(matches!(
-            checked_entry(&d, entry(r#"{"gamepad":"joycon"}"#)),
+            checked_entry(&d, &BTreeSet::new(), entry(r#"{"gamepad":"joycon"}"#)),
             Err(OverrideError::Invalid("gamepad"))
         ));
-        let stored = checked_entry(&d, entry(r#"{"name":"mine","gamepad":"DS4"}"#)).unwrap();
+        let stored = checked_entry(
+            &d,
+            &BTreeSet::new(),
+            entry(r#"{"name":"mine","gamepad":"DS4"}"#),
+        )
+        .unwrap();
         assert_eq!(
             stored.values.name, None,
             "only a shared override has a name"

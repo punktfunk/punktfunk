@@ -5,7 +5,8 @@
 //! re-reading when the file changes, so a default reaches a running seat's next session. The
 //! Linux supervisor reads `library_writable` from the box's copy at each seat start. The box's
 //! upkeep reads the other two (kept warm, idle stop) from its own config. `dualsense_usbip` is
-//! the box's own switch handed on, not a Seats row: a seat has no settings of its own.
+//! the box's own switch handed on, not a Seats row. A seat's profile may hold session settings of
+//! its own in the box's library, which come before `end_on_game_exit`.
 
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};

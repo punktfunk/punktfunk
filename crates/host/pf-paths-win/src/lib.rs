@@ -3,8 +3,9 @@
 //! `%ProgramData%` grants Users add-subdirectory + CREATOR OWNER, so anything created there
 //! before the first elevated run belongs to whoever created it. These readers answer who owns
 //! a path and whether anyone unprivileged can write to a directory; the callers decide what a
-//! plant means for them. Ask BEFORE `pf_paths::create_private_dir`: its first pass re-owns the
-//! contents and erases the evidence.
+//! plant means for them, or [`quarantine_planted_tree`] moves a whole tree's plants aside. Ask
+//! BEFORE `pf_paths::create_private_dir`: its first pass re-owns the contents and erases the
+//! evidence.
 
 #![cfg(windows)]
 
@@ -34,6 +35,43 @@ pub fn rename_aside(path: &Path) -> Result<PathBuf> {
     Ok(aside)
 }
 
+/// Rename `path` aside when it is a reparse point or its owner is not SYSTEM, Administrators
+/// or TrustedInstaller, an unreadable owner included. `true` when it went.
+pub fn set_aside_if_planted(path: &Path) -> Result<bool> {
+    use std::os::windows::fs::MetadataExt;
+    const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
+    let md = std::fs::symlink_metadata(path)
+        .map_err(|e| other(format!("read {}: {e}", path.display())))?;
+    if md.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT == 0
+        && is_admin_owned(path) == Some(true)
+    {
+        return Ok(false);
+    }
+    let aside =
+        rename_aside(path).map_err(|e| other(format!("rename {} aside: {e}", path.display())))?;
+    tracing::warn!(
+        path = %path.display(), aside = %aside.display(),
+        "entry owned by a non-admin account renamed aside"
+    );
+    Ok(true)
+}
+
+/// Every entry below `dir` through [`set_aside_if_planted`]: a plant goes aside whole and is
+/// never entered, an admin-owned directory is walked. Lock `dir` first, or what lands during
+/// the walk is missed. `Err` names the entry that stayed; harden nothing it could not move.
+pub fn quarantine_planted_tree(dir: &Path) -> Result<()> {
+    // Listed in full first: a listing still open could hand back the name just renamed.
+    let entries = std::fs::read_dir(dir)
+        .and_then(|it| it.map(|e| e.map(|e| e.path())).collect::<Result<Vec<_>>>())
+        .map_err(|e| other(format!("list {}: {e}", dir.display())))?;
+    for entry in entries {
+        if !set_aside_if_planted(&entry)? && entry.is_dir() {
+            quarantine_planted_tree(&entry)?;
+        }
+    }
+    Ok(())
+}
+
 /// Refuse a staging directory anyone but SYSTEM/Administrators/TrustedInstaller can write.
 ///
 /// Both: the owner is in that set (an owner always retains `WRITE_DAC` and can restore their
@@ -42,22 +80,6 @@ pub fn rename_aside(path: &Path) -> Result<PathBuf> {
 ///
 /// Reads the security descriptor; `icacls` output uses localized account names.
 pub fn ensure_admin_only_source(dir: &Path) -> Result<()> {
-    use windows::Win32::Security::{GetAce, ACCESS_ALLOWED_ACE, ACE_HEADER, PSID};
-
-    const ACCESS_ALLOWED_ACE_TYPE: u8 = 0;
-    /// Rights that replace what we are about to trust and execute. GENERIC_ALL/WRITE are checked
-    /// unmapped in case an ACE stores them without mapping.
-    const WRITE_MASK: u32 = 0x0000_0002 // FILE_WRITE_DATA / FILE_ADD_FILE
-        | 0x0000_0004 // FILE_APPEND_DATA / FILE_ADD_SUBDIRECTORY
-        | 0x0000_0010 // FILE_WRITE_EA
-        | 0x0000_0100 // FILE_WRITE_ATTRIBUTES
-        | 0x0000_0040 // FILE_DELETE_CHILD
-        | 0x0001_0000 // DELETE
-        | 0x0004_0000 // WRITE_DAC
-        | 0x0008_0000 // WRITE_OWNER
-        | 0x1000_0000 // GENERIC_ALL
-        | 0x4000_0000; // GENERIC_WRITE
-
     if !dir.is_dir() {
         return Err(other(format!("{} is not a directory", dir.display())));
     }
@@ -70,40 +92,97 @@ pub fn ensure_admin_only_source(dir: &Path) -> Result<()> {
                 .into(),
         ));
     }
-    let dacl = info.dacl;
-    // A NULL DACL grants everyone everything; an absent one is not "no access".
-    if dacl.is_null() {
-        return Err(other(
-            "the directory has a NULL DACL (everyone has full control)".into(),
-        ));
+    match info.foreign_writer(&privileged, false)? {
+        Some(why) => Err(other(why)),
+        None => Ok(()),
     }
-    // SAFETY: `dacl` is a valid ACL inside `info`'s descriptor; AceCount bounds the GetAce index.
-    let count = unsafe { (*dacl).AceCount };
-    for i in 0..count as u32 {
-        let mut ace: *mut core::ffi::c_void = std::ptr::null_mut();
-        // SAFETY: i < AceCount, and `ace` is a live out-param.
-        unsafe { GetAce(dacl, i, &mut ace) }.map_err(|e| other(format!("GetAce: {e}")))?;
-        // SAFETY: every ACE starts with an ACE_HEADER.
-        let header = unsafe { *(ace as *const ACE_HEADER) };
-        if header.AceType != ACCESS_ALLOWED_ACE_TYPE {
-            continue; // deny ACEs only ever subtract; audit ACEs grant nothing
-        }
-        // SAFETY: an allow ACE is an ACCESS_ALLOWED_ACE, whose SidStart begins the trustee SID.
-        let allowed = unsafe { &*(ace as *const ACCESS_ALLOWED_ACE) };
-        if allowed.Mask & WRITE_MASK == 0 {
-            continue; // no write-shaped right
-        }
-        let sid = PSID(std::ptr::addr_of!(allowed.SidStart) as *mut core::ffi::c_void);
-        // SAFETY: `sid` is the trustee inside this ACE, inside `info`'s live descriptor.
-        if unsafe { sid_in(sid, &privileged) } != Some(true) {
-            return Err(other(format!(
-                "a non-administrative trustee has write access (ACE {i}, mask {:#010x}) — \
-                 anything staged here can be replaced before it is trusted or executed",
-                allowed.Mask
-            )));
-        }
+}
+
+/// An ACE `dir` inherits from its parent lets an account outside SYSTEM, Administrators and
+/// TrustedInstaller write in it, so what it holds was open to that account. An explicit ACE is
+/// the choice of whoever held `WRITE_DAC`, such as a plugin runner grant, and does not count.
+/// Unreadable or missing counts as open.
+pub fn inherits_open_acl(dir: &Path) -> bool {
+    let read = || -> Result<bool> {
+        let info = SecurityInfo::read(dir, true)?;
+        Ok(info.foreign_writer(&privileged_sids()?, true)?.is_some())
+    };
+    read().unwrap_or(true)
+}
+
+/// Owner Administrators; SYSTEM and Administrators full control, inherited below; nothing else,
+/// and protected from the parent's ACL: what [`ensure_admin_only_source`] passes.
+pub const ADMIN_ONLY: &str = "O:BAG:BAD:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)";
+
+/// Create the directory `path` with `sddl` as its descriptor from its first instant, so nothing
+/// lands in it under the parent's ACL. Fails if `path` exists.
+pub fn create_dir_with(path: &Path, sddl: &str) -> Result<()> {
+    use windows::core::HSTRING;
+    use windows::Win32::Storage::FileSystem::CreateDirectoryW;
+    let attributes = SecurityAttributes::new(sddl).map_err(win32_io)?;
+    // SAFETY: the `HSTRING` is NUL-terminated and `attributes` owns its descriptor; both outlive
+    // the call, which only reads them.
+    unsafe { CreateDirectoryW(&HSTRING::from(path.as_os_str()), Some(attributes.as_ptr())) }
+        .map_err(win32_io)
+}
+
+/// Give `path` [`ADMIN_ONLY`]'s owner and protected DACL in one call: no moment between the old
+/// ACL and the new one is open. The DACL replaces the old one whole, explicit ACEs included, and
+/// what lies below re-inherits from it; a child's explicit ACE stays. An account that cannot
+/// make Administrators the owner changes nothing.
+pub fn lock_admin_only(path: &Path) -> Result<()> {
+    use windows::core::{BOOL, HSTRING};
+    use windows::Win32::Security::Authorization::{SetNamedSecurityInfoW, SE_FILE_OBJECT};
+    use windows::Win32::Security::{
+        GetSecurityDescriptorDacl, GetSecurityDescriptorOwner, ACL, DACL_SECURITY_INFORMATION,
+        OWNER_SECURITY_INFORMATION, PROTECTED_DACL_SECURITY_INFORMATION, PSID,
+    };
+
+    let parsed = SecurityAttributes::new(ADMIN_ONLY).map_err(win32_io)?;
+    let (mut owner, mut dacl) = (PSID::default(), std::ptr::null_mut::<ACL>());
+    let (mut present, mut defaulted) = (BOOL::default(), BOOL::default());
+    // SAFETY: `parsed` owns a valid descriptor for this whole frame; both calls only write
+    // pointers into it to live locals.
+    unsafe {
+        GetSecurityDescriptorOwner(parsed.descriptor(), &mut owner, &mut defaulted)
+            .and_then(|()| {
+                GetSecurityDescriptorDacl(
+                    parsed.descriptor(),
+                    &mut present,
+                    &mut dacl,
+                    &mut defaulted,
+                )
+            })
+            .map_err(win32_io)?;
+    }
+    // SAFETY: the `HSTRING` is NUL-terminated; `owner` and `dacl` point into `parsed`, which
+    // outlives the call. The group and SACL are not passed and stay as they are.
+    let status = unsafe {
+        SetNamedSecurityInfoW(
+            &HSTRING::from(path.as_os_str()),
+            SE_FILE_OBJECT,
+            OWNER_SECURITY_INFORMATION
+                | DACL_SECURITY_INFORMATION
+                | PROTECTED_DACL_SECURITY_INFORMATION,
+            Some(owner),
+            None,
+            Some(dacl.cast_const()),
+            None,
+        )
+    };
+    if status.is_err() {
+        return Err(std::io::Error::from_raw_os_error(status.0 as i32));
     }
     Ok(())
+}
+
+/// `e` as the `io::Error` std makes of the same Win32 code, so `kind()` reads true.
+fn win32_io(e: windows::core::Error) -> std::io::Error {
+    use windows::Win32::Foundation::WIN32_ERROR;
+    match WIN32_ERROR::from_error(&e) {
+        Some(code) => std::io::Error::from_raw_os_error(code.0 as i32),
+        None => std::io::Error::other(e),
+    }
 }
 
 /// A path's security descriptor. `owner` and `dacl` point into `sd`, the one block
@@ -163,6 +242,71 @@ impl SecurityInfo {
     fn owner_in(&self, sids: &[Vec<u8>]) -> Option<bool> {
         // SAFETY: `owner` is null or points into `self.sd`, which lives as long as `self`.
         unsafe { sid_in(self.owner, sids) }
+    }
+
+    /// Why someone outside `privileged` may write here: the first allow ACE with a write-shaped
+    /// right for another trustee, or a NULL DACL. `None` when nobody else can. `inherited_only`
+    /// looks only at ACEs that came from the parent. Read with the DACL.
+    fn foreign_writer(
+        &self,
+        privileged: &[Vec<u8>],
+        inherited_only: bool,
+    ) -> Result<Option<String>> {
+        use windows::Win32::Security::{
+            GetAce, ACCESS_ALLOWED_ACE, ACE_HEADER, INHERITED_ACE, PSID,
+        };
+
+        const ACCESS_ALLOWED_ACE_TYPE: u8 = 0;
+        /// Rights that replace what we are about to trust and execute. GENERIC_ALL/WRITE are
+        /// checked unmapped in case an ACE stores them without mapping.
+        const WRITE_MASK: u32 = 0x0000_0002 // FILE_WRITE_DATA / FILE_ADD_FILE
+            | 0x0000_0004 // FILE_APPEND_DATA / FILE_ADD_SUBDIRECTORY
+            | 0x0000_0010 // FILE_WRITE_EA
+            | 0x0000_0100 // FILE_WRITE_ATTRIBUTES
+            | 0x0000_0040 // FILE_DELETE_CHILD
+            | 0x0001_0000 // DELETE
+            | 0x0004_0000 // WRITE_DAC
+            | 0x0008_0000 // WRITE_OWNER
+            | 0x1000_0000 // GENERIC_ALL
+            | 0x4000_0000; // GENERIC_WRITE
+
+        let dacl = self.dacl;
+        // A NULL DACL grants everyone everything; an absent one is not "no access".
+        if dacl.is_null() {
+            return Ok(Some(
+                "the directory has a NULL DACL (everyone has full control)".into(),
+            ));
+        }
+        // SAFETY: `dacl` is a valid ACL inside `self`'s descriptor; AceCount bounds the GetAce index.
+        let count = unsafe { (*dacl).AceCount };
+        for i in 0..count as u32 {
+            let mut ace: *mut core::ffi::c_void = std::ptr::null_mut();
+            // SAFETY: i < AceCount, and `ace` is a live out-param.
+            unsafe { GetAce(dacl, i, &mut ace) }.map_err(|e| other(format!("GetAce: {e}")))?;
+            // SAFETY: every ACE starts with an ACE_HEADER.
+            let header = unsafe { *(ace as *const ACE_HEADER) };
+            if header.AceType != ACCESS_ALLOWED_ACE_TYPE {
+                continue; // deny ACEs only ever subtract; audit ACEs grant nothing
+            }
+            if inherited_only && u32::from(header.AceFlags) & INHERITED_ACE.0 == 0 {
+                continue;
+            }
+            // SAFETY: an allow ACE is an ACCESS_ALLOWED_ACE, whose SidStart begins the trustee SID.
+            let allowed = unsafe { &*(ace as *const ACCESS_ALLOWED_ACE) };
+            if allowed.Mask & WRITE_MASK == 0 {
+                continue; // no write-shaped right
+            }
+            let sid = PSID(std::ptr::addr_of!(allowed.SidStart) as *mut core::ffi::c_void);
+            // SAFETY: `sid` is the trustee inside this ACE, inside `self`'s live descriptor.
+            if unsafe { sid_in(sid, privileged) } != Some(true) {
+                return Ok(Some(format!(
+                    "a non-administrative trustee has write access (ACE {i}, mask {:#010x}) — \
+                     anything staged here can be replaced before it is trusted or executed",
+                    allowed.Mask
+                )));
+            }
+        }
+        Ok(None)
     }
 }
 
@@ -419,6 +563,55 @@ pub fn kill_on_close_job(
         )
     }?;
     Ok(job)
+}
+
+#[cfg(test)]
+mod planted_tree_tests {
+    /// A folder this process made moves aside whole when a non-admin owns it (an unelevated
+    /// run) and stays, walked, when an admin does (an elevated one).
+    #[test]
+    fn a_folder_moves_aside_exactly_when_a_non_admin_owns_it() {
+        let root = std::env::temp_dir().join(format!("pf-planted-tree-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("sub")).unwrap();
+        std::fs::write(root.join("sub").join("host.env"), "x").unwrap();
+        let planted = super::is_admin_owned(&root.join("sub")) != Some(true);
+        super::quarantine_planted_tree(&root).unwrap();
+        assert_eq!(root.join("sub").join("host.env").exists(), !planted);
+        assert_eq!(
+            root.join("sub.untrusted").join("host.env").exists(),
+            planted
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+}
+
+#[cfg(test)]
+mod open_acl_tests {
+    /// A write grant inherited from the parent reads as open; the same grant made explicit on
+    /// the folder does not, though a staging check still refuses it.
+    #[test]
+    fn only_an_inherited_grant_reads_as_open() {
+        let icacls = |path: &std::path::Path, args: &[&str]| {
+            std::process::Command::new("icacls")
+                .arg(path)
+                .args(args)
+                .stdout(std::process::Stdio::null())
+                .status()
+                .is_ok_and(|s| s.success())
+        };
+        let base = std::env::temp_dir().join(format!("pf-open-acl-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(base.join("child")).unwrap();
+        assert!(icacls(&base, &["/grant", "*S-1-5-32-545:(OI)(CI)(M)"]));
+        assert!(super::inherits_open_acl(&base.join("child")));
+        assert!(super::inherits_open_acl(&base.join("missing")));
+        // Copies every inherited ACE onto the folder as an explicit one.
+        assert!(icacls(&base.join("child"), &["/inheritance:d"]));
+        assert!(!super::inherits_open_acl(&base.join("child")));
+        assert!(super::ensure_admin_only_source(&base.join("child")).is_err());
+        let _ = std::fs::remove_dir_all(&base);
+    }
 }
 
 #[cfg(test)]

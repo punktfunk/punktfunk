@@ -24,9 +24,10 @@ use windows::Win32::System::Com::StructuredStorage::{
     InitPropVariantFromCLSID, PROPVARIANT, PROPVARIANT_0, PROPVARIANT_0_0, PROPVARIANT_0_0_0,
 };
 use windows::Win32::System::Com::{CoTaskMemAlloc, BLOB, CLSCTX, STGM, STGM_READ};
-use windows::Win32::System::Threading::{
-    CreateEventW, OpenEventW, SetEvent, WaitForSingleObject, SYNCHRONIZATION_SYNCHRONIZE,
+use windows::Win32::System::Memory::{
+    MapViewOfFile, OpenFileMappingW, UnmapViewOfFile, FILE_MAP_READ,
 };
+use windows::Win32::System::Threading::{CreateEventW, SetEvent, WaitForSingleObject};
 use windows::Win32::System::Variant::{VARENUM, VT_BLOB, VT_BOOL, VT_LPWSTR, VT_UI4};
 use windows::Win32::UI::Shell::PropertiesSystem::{IPropertyStore, IPropertyStore_Impl};
 
@@ -84,18 +85,27 @@ pub(crate) fn wrap(session: u32, base: IMMDeviceEnumerator) -> Result<IMMDeviceE
     .into())
 }
 
-/// Whether `session`'s host owns `slot` now: its ownership event exists.
+/// Whether `session`'s host serves `slot` now: its presence section holds the magic. Only a
+/// privileged process can make that section and only SYSTEM may write it, so a user of another
+/// session can neither fake a pad here nor keep one listed.
 fn present(session: u32, slot: u8) -> bool {
-    let name = HSTRING::from(proto::owner_name(session, slot));
-    // SAFETY: opens a named event for SYNCHRONIZE only and closes it at once.
-    match unsafe { OpenEventW(SYNCHRONIZATION_SYNCHRONIZE, false, &name) } {
-        Ok(event) => {
-            // SAFETY: the handle was just opened and is not used again.
-            let _ = unsafe { CloseHandle(event) };
-            true
-        }
-        Err(_) => false,
-    }
+    let name = HSTRING::from(proto::presence_name(session, slot));
+    // SAFETY: opens a named section for reading; the handle is closed below.
+    let Ok(mapping) = (unsafe { OpenFileMappingW(FILE_MAP_READ.0, false, &name) }) else {
+        return false;
+    };
+    // SAFETY: maps the section's first PRESENCE_BYTES read-only; unmapped below.
+    let view = unsafe { MapViewOfFile(mapping, FILE_MAP_READ, 0, 0, proto::PRESENCE_BYTES) };
+    let magic = (!view.Value.is_null()).then(|| {
+        // SAFETY: the view is page-aligned and mapped; the host stores the u32 atomically.
+        let magic = unsafe { AtomicU32::from_ptr(view.Value.cast()) }.load(Ordering::Acquire);
+        // SAFETY: the view was mapped above and is released once.
+        let _ = unsafe { UnmapViewOfFile(view) };
+        magic
+    });
+    // SAFETY: the handle was opened above and is not used again.
+    let _ = unsafe { CloseHandle(mapping) };
+    magic == Some(proto::PRESENT_MAGIC)
 }
 
 fn present_mask(session: u32) -> u32 {

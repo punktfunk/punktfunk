@@ -145,6 +145,16 @@ pub(crate) fn desktop_px_to_virtualdesk(px: (i32, i32)) -> (i32, i32) {
     px_to_abs(virtual_desktop_rect(), px)
 }
 
+/// Desktop pixel counted from the virtual screen's top-left, the space
+/// `InjectSyntheticPointerInput` reads `ptPixelLocation` in.
+pub(crate) fn desktop_px_to_virtual_screen(px: (i32, i32)) -> (i32, i32) {
+    from_origin(virtual_desktop_rect(), px)
+}
+
+fn from_origin((vx, vy, _, _): Rect, (px, py): (i32, i32)) -> (i32, i32) {
+    (px - vx, py - vy)
+}
+
 /// SendInput absolute coordinates span 0..65535 over the chosen surface, and win32k maps them
 /// back as `px = ax * vw / 65536` (floor). The ceiling of `px * 65536 / vw` is the smallest
 /// value that lands on `px`, for every column.
@@ -197,6 +207,16 @@ mod tests {
         let r = (-2560, -100, 2560, 1440);
         assert_eq!(map_into(r, 0.0, 0.0), (-2560, -100));
         assert_eq!(map_into(r, 2.0, -1.0), (-2560 + 2559, -100));
+    }
+
+    /// A monitor left of and above the primary moves the virtual screen's origin negative;
+    /// a touch on the primary's top-left pixel lands that far into the virtual screen.
+    #[test]
+    fn pointer_pixels_count_from_the_virtual_screen() {
+        let v = (-2560, -100, 4480, 1540);
+        assert_eq!(from_origin(v, (0, 0)), (2560, 100));
+        assert_eq!(from_origin(v, (-2560, -100)), (0, 0));
+        assert_eq!(from_origin((0, 0, 1920, 1080), (1919, 1079)), (1919, 1079));
     }
 
     #[test]

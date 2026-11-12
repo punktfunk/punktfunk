@@ -1,7 +1,7 @@
 // Drives compatToolOf against a fake SteamClient.Apps: the tool Steam reports, "" for none, null
 // when Steam does not answer, and exactly one unregister per registration. Run by `pnpm test`.
 import assert from "node:assert/strict";
-import { type CompatApps, compatToolOf } from "../src/compat.ts";
+import { type CompatApps, compatToolOf } from "../src/steam/compat.ts";
 
 type Details = { strCompatToolName?: string } | null;
 

@@ -249,6 +249,7 @@ impl Switch2Usbip {
             kind,
             index,
             slot: 0,
+            seat: 0,
             identity: Vec::new(),
         };
         let attach = attach_device(hello, None, &format!("virtual {} {index}", model.name()))?;

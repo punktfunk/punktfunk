@@ -9,7 +9,8 @@
 //! Presentation only. Tests in this module pin the labels, chip text, and notices.
 
 use punktfunk_core::quic::{
-    normalize_legacy_full, GRANT_ALL, GRANT_PRESET_CONTROLLER_ONLY, GRANT_PRESET_VIEW_ONLY,
+    normalize_legacy_full, GRANT_ALL, GRANT_DISPLAY, GRANT_PRESET_CONTROLLER_ONLY,
+    GRANT_PRESET_VIEW_ONLY,
 };
 use std::time::{Duration, Instant};
 
@@ -118,9 +119,12 @@ pub fn format_remaining(left: Duration) -> Option<String> {
 
 /// Toast for a mid-session access change. A grants edit names the new level;
 /// same grants with a deadline is the host's T−5 m / T−1 m warning.
-/// `None` if the mask was reaffirmed and is still permanent.
+/// `None` if the mask was reaffirmed and is still permanent. Compared through
+/// [`effective_mask`] without [`GRANT_DISPLAY`]: the screen choice applies at the
+/// next connect, so a change of it alone says nothing about this session.
 pub fn update_notice(prev_grants: u32, next: &SessionAccess, now: Instant) -> Option<String> {
-    if next.grants != prev_grants {
+    let session_part = |grants: u32| effective_mask(grants) & !GRANT_DISPLAY;
+    if session_part(next.grants) != session_part(prev_grants) {
         return Some(level(next.grants).1.into());
     }
     match next.remaining(now) {
@@ -224,5 +228,29 @@ mod tests {
             deadline: None,
         };
         assert_eq!(update_notice(GRANT_POINTER, &same, now), None);
+    }
+
+    /// The screen choice applies at the next connect: taking it away or handing it over
+    /// raises no notice, at Full or at any other level.
+    #[test]
+    fn the_screen_choice_alone_raises_no_notice() {
+        use punktfunk_core::quic::GRANT_DISPLAY;
+        let now = Instant::now();
+        let at = |grants| SessionAccess {
+            grants,
+            deadline: None,
+        };
+        assert_eq!(
+            update_notice(GRANT_ALL, &at(GRANT_ALL & !GRANT_DISPLAY), now),
+            None
+        );
+        assert_eq!(
+            update_notice(GRANT_GAMEPAD, &at(GRANT_GAMEPAD | GRANT_DISPLAY), now),
+            None
+        );
+        assert_eq!(
+            update_notice(GRANT_ALL, &at(GRANT_GAMEPAD), now).as_deref(),
+            Some("Access is now Controller only")
+        );
     }
 }

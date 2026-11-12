@@ -87,7 +87,8 @@ fn extract_and_run(exe: &Path, data: &[u8], payload: &[u8]) -> Result<ExitCode, 
 }
 
 /// Elevated: `%ProgramData%\punktfunk\setup\<pid>-<hex>`, protected before anything lands in
-/// it. Unelevated: the same layout under `%LOCALAPPDATA%` — the client has no driver staging
+/// it, after what another account put under `%ProgramData%\punktfunk` has gone aside.
+/// Unelevated: the same layout under `%LOCALAPPDATA%` — the client has no driver staging
 /// and nothing there needs the admin-only guarantee.
 fn fresh_root() -> Result<PathBuf, String> {
     let elevated = elevated();
@@ -100,22 +101,29 @@ fn fresh_root() -> Result<PathBuf, String> {
     .ok_or("neither ProgramData nor LOCALAPPDATA is set")?;
     let base = data.join("punktfunk").join("setup");
     if elevated {
-        // Re-own and lock both ancestors first. `%ProgramData%` lets any account create
-        // `punktfunk\setup` ahead of the first install and keep FILE_DELETE_CHILD over it,
-        // which renames a protected root away mid-extract. Junctions are refused.
-        for dir in [base.parent().unwrap_or(&base), base.as_path()] {
-            pf_paths::create_private_dir(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
-            // Hardening is not proof: the host's own check on what is actually there, so a
-            // grant the reset missed refuses the install instead of staging into it.
-            pf_paths_win::ensure_admin_only_source(dir)
-                .map_err(|e| format!("{} isn't admin-only after hardening: {e}", dir.display()))?;
+        // `%ProgramData%` lets any account create `punktfunk\setup` ahead of the first install,
+        // own what it puts there and keep FILE_DELETE_CHILD over the extract root. The host
+        // trusts a file Administrators own, so a folder another account owns goes aside whole,
+        // and one that was open is locked and cleared, never re-owned.
+        let parent = base.parent().unwrap_or(&base);
+        let refused = |e: std::io::Error| {
+            pf_l10n::tools::setup_win_data_dir_failed(parent.display(), e.to_string())
+        };
+        if parent.symlink_metadata().is_ok() {
+            pf_paths_win::set_aside_if_planted(parent).map_err(refused)?;
         }
+        pf_paths::create_private_dir(parent).map_err(refused)?;
+        pf_paths::create_private_dir(&base).map_err(|e| format!("{}: {e}", base.display()))?;
+        // Hardening is not proof: the host's own check on what is actually there, so a
+        // grant the lock missed refuses the install instead of staging into it.
+        pf_paths_win::ensure_admin_only_source(&base)
+            .map_err(|e| format!("{} isn't admin-only after hardening: {e}", base.display()))?;
     } else {
         std::fs::create_dir_all(&base).map_err(|e| format!("{}: {e}", base.display()))?;
     }
     let root = base.join(format!("{}-{}", std::process::id(), sys::random_hex(4)?));
     if elevated {
-        protected_dir(&root)?;
+        protected_dir(&root, pf_paths_win::ADMIN_ONLY)?;
     } else {
         std::fs::create_dir(&root).map_err(|e| format!("{}: {e}", root.display()))?;
     }
@@ -156,24 +164,58 @@ fn elevated() -> bool {
     }
 }
 
-/// Owner Administrators; SYSTEM and Administrators full control, inherited; nothing else,
-/// and protected from the parent's ACL. Every trustee with write access is privileged, which
-/// is exactly what `ensure_admin_only_source` checks.
-fn protected_dir(path: &Path) -> Result<(), String> {
-    use windows::core::HSTRING;
-    use windows::Win32::fileapi::CreateDirectoryW;
+/// Create `path` with `sddl` as its descriptor from the first instant, so nothing lands in it
+/// under the parent's ACL. Fails if `path` exists.
+fn protected_dir(path: &Path, sddl: &str) -> Result<(), String> {
+    pf_paths_win::create_dir_with(path, sddl).map_err(|e| format!("create {}: {e}", path.display()))
+}
 
-    const SDDL: &str = "O:BAG:BAD:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)";
-    let attributes = pf_paths_win::SecurityAttributes::new(SDDL)
-        .map_err(|e| format!("security descriptor: {e}"))?;
-    // SAFETY: `attributes` outlives the call, which only reads it. The cast is between two
-    // versions of the `windows` crate that declare the same C struct.
-    unsafe {
-        CreateDirectoryW(
-            &HSTRING::from(path.as_os_str()),
-            Some(attributes.as_ptr().cast_mut().cast()),
-        )
-    }
-    .ok()
-    .map_err(|e| format!("create {}: {e}", path.display()))
+/// Give `dir` the DACL `sddl` describes (`grants`: its ACEs as icacls spells them): a missing
+/// dir is born with it, one that exists takes it in place of what it inherited. A link, or a
+/// dir another account owns, is refused. `Ok(true)` when the dir existed and others could write
+/// in it until now: what it holds is not proven. Ends on `ensure_admin_only_source`.
+// A real-box step: demo and test runs neither extract nor deploy a payload.
+#[allow(clippy::disallowed_methods)]
+pub(crate) fn lock_dir(dir: &Path, sddl: &str, grants: &[&str]) -> Result<bool, String> {
+    use std::os::windows::fs::MetadataExt;
+    const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
+    let was_open = match std::fs::symlink_metadata(dir) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            if let Some(parent) = dir.parent() {
+                std::fs::create_dir_all(parent)
+                    .map_err(|e| format!("{}: {e}", parent.display()))?;
+            }
+            protected_dir(dir, sddl)?;
+            false
+        }
+        Err(e) => return Err(format!("read {}: {e}", dir.display())),
+        Ok(md) if md.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 => {
+            return Err(format!("a link is in place of {}", dir.display()));
+        }
+        Ok(_) if pf_paths_win::is_admin_owned(dir) != Some(true) => {
+            return Err(format!("another account owns {}", dir.display()));
+        }
+        Ok(_) => {
+            let was_open = pf_paths_win::ensure_admin_only_source(dir).is_err();
+            let mut icacls = std::process::Command::new(pf_paths::system32("icacls.exe"));
+            icacls.arg(dir).arg("/inheritance:r");
+            for grant in grants {
+                icacls.args(["/grant:r", grant]);
+            }
+            let status = icacls
+                .arg("/Q")
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status();
+            if !status.is_ok_and(|s| s.success()) {
+                return Err(format!(
+                    "the access list of {} didn't change",
+                    dir.display()
+                ));
+            }
+            was_open
+        }
+    };
+    pf_paths_win::ensure_admin_only_source(dir).map_err(|e| e.to_string())?;
+    Ok(was_open)
 }

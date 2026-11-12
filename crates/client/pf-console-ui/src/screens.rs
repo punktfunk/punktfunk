@@ -78,6 +78,9 @@ pub struct Device {
     pub av1_ok: bool,
     /// Name the host stores this client under when pairing.
     pub name: String,
+    /// This device's code ([`crate::shell::ConsoleOptions::device_code`]), shown while a
+    /// request waits for approval.
+    pub code: Option<String>,
     /// The About row's version ([`crate::shell::ConsoleOptions::version`]).
     pub version: String,
 }
@@ -132,6 +135,7 @@ impl Device {
             pyrowave_ok: true,
             av1_ok: true,
             name: "test".into(),
+            code: None,
             version: crate::VERSION.into(),
         }
     }
@@ -527,6 +531,8 @@ pub(crate) enum Screen {
     Search(search::SearchScreen),
     /// A preset's menu: edit, rename, pin, delete. Raised by its Presets row.
     PresetMenu(preset::PresetMenu),
+    /// Where a new preset starts: empty, or a starter. Raised by New preset.
+    PresetStarter(preset::PresetStarter),
     /// A preset's name, new or renamed.
     PresetName(preset::PresetName),
     /// A preset's settings over the global ones.
@@ -628,6 +634,7 @@ impl Screen {
             Screen::Licenses(s) => s,
             Screen::Search(s) => s,
             Screen::PresetMenu(s) => s,
+            Screen::PresetStarter(s) => s,
             Screen::PresetName(s) => s,
             Screen::PresetEdit(s) => s,
             Screen::InputTest(s) => s,
@@ -659,6 +666,7 @@ impl Screen {
             Screen::Licenses(s) => s,
             Screen::Search(s) => s,
             Screen::PresetMenu(s) => s,
+            Screen::PresetStarter(s) => s,
             Screen::PresetName(s) => s,
             Screen::PresetEdit(s) => s,
             Screen::InputTest(s) => s,

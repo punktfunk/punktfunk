@@ -348,9 +348,20 @@ impl ConnectPlan {
         plan
     }
 
-    /// The launched game's overrides from the pinned host's cached library.
+    /// The launched game's overrides from the pinned host's library as cached for the profile
+    /// this plan plays as.
     fn cached_overrides(&self) -> Option<GameOverrides> {
-        crate::library_cache::overrides(self.host.fp_hex.as_deref()?, self.launch.as_deref()?)
+        crate::library_cache::overrides(
+            self.host.fp_hex.as_deref()?,
+            self.profile.as_deref(),
+            self.launch.as_deref()?,
+        )
+    }
+
+    /// Play as `profile` instead of the saved pick, with the overrides cached for it.
+    pub fn play_as(&mut self, profile: Option<String>) {
+        self.profile = profile;
+        self.overrides = self.cached_overrides();
     }
 
     /// Plan for a host the front-end already holds as values, not a stored [`KnownHost`].
@@ -616,7 +627,7 @@ pub fn plan_from_link(
             }
             // As typed: an id or a name. The front-end resolves a name against the box's list.
             if let Some(profile) = &link.as_profile {
-                plan.profile = Some(profile.clone());
+                plan.play_as(Some(profile.clone()));
             }
             Ok(if confirm {
                 PlanOutcome::ConfirmConnect(Box::new(plan))

@@ -1043,6 +1043,8 @@ pub struct FrameHeaderObu {
     pub mi_cols: u32,
     pub mi_rows: u32,
     pub header_bytes: usize,
+    /// punktfunk: bit offset in the OBU payload of `ref_order_hint[0]`, when coded.
+    pub ref_order_hint_bit: Option<usize>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -3627,6 +3629,7 @@ impl Parser {
             && fh.error_resilient_mode
             && enable_order_hint
         {
+            fh.ref_order_hint_bit = Some(r.0.position() as usize);
             for i in 0..NUM_REF_FRAMES {
                 fh.ref_order_hint[i] = r.0.read_bits::<u32>(order_hint_bits.try_into().unwrap())?;
                 if fh.ref_order_hint[i] != self.ref_info[i].ref_order_hint {

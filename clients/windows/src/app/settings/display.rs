@@ -1,4 +1,5 @@
-//! Display: resolution, picture, decoding, presentation and host output.
+//! Display: resolution, picture, a preset's host screen, decoding, presentation and host
+//! output.
 
 use super::{
     advanced_group, commit, described_labeled, described_overridable, group, labeled, presets,
@@ -6,6 +7,7 @@ use super::{
 };
 use crate::app::style::*;
 use crate::trust::Settings;
+use pf_client_core::display_targets::{self, Targets};
 use pf_client_core::settings::Label;
 use pf_fluent::Token;
 use pf_l10n::{client, common, desktop};
@@ -95,7 +97,32 @@ const COMPOSITORS: &[(&str, Label)] = &[
     ("gamescope", || "gamescope"),
 ];
 
-/// Display: resolution, quality, decoding, presentation, host output.
+/// Host screen, a preset's alone: core's choices over each paired host's last Screen answer,
+/// and the picked role's hint as the caption.
+fn host_screen_combo(cx: &Cx) -> (ComboBox, &'static str) {
+    let known = crate::trust::KnownHosts::load();
+    let answers: Vec<(&str, Targets)> = (known.hosts.iter().filter(|k| k.paired))
+        .filter_map(|k| Some((k.name.as_str(), display_targets::cached(&k.fp_hex)?)))
+        .collect();
+    let hosts: Vec<(&str, &Targets)> = answers.iter().map(|(n, t)| (*n, t)).collect();
+    let choices = display_targets::host_screen_choices(&hosts, Some(&cx.s.host_screen));
+    let current = choices.iter().position(|c| c.checked).unwrap_or(0);
+    let caption = choices
+        .get(current)
+        .and_then(|c| c.hint)
+        .unwrap_or_default();
+    let names = choices.iter().map(|c| c.label.clone()).collect();
+    // Empty is the host card's pick, and pinning it is no pin.
+    let values: Vec<String> = (choices.into_iter())
+        .map(|c| c.value.unwrap_or_default())
+        .collect();
+    let combo = setting_combo(cx, cx.scope, "host_screen", names, current, move |s, i| {
+        s.host_screen = values[i].clone();
+    });
+    (combo, caption)
+}
+
+/// Display: resolution, quality, decoding, presentation, a preset's host screen, host output.
 pub(super) fn display_section(cx: &Cx) -> Vec<View> {
     let Cx {
         ctx,
@@ -509,6 +536,17 @@ pub(super) fn display_section(cx: &Cx) -> Vec<View> {
             screens_combo,
             client::player_screens_hint(),
         ),
+    ]);
+    if preset_mode {
+        let (combo, caption) = host_screen_combo(cx);
+        picture.push(described_overridable(
+            cx,
+            &rows::HOST_SCREEN,
+            combo,
+            caption,
+        ));
+    }
+    picture.extend([
         described_overridable(
             cx,
             &rows::HDR,

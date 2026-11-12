@@ -9,8 +9,10 @@
 
 use super::auth::PairedDevice;
 use super::shared::*;
-use crate::vdisplay::policy::{ClientOverlay, DisplayTarget, SetBy};
+use crate::vdisplay::policy::{ClientOverlay, DisplayTarget, SetBy, Topology};
+use crate::vdisplay::Compositor;
 use axum::Extension;
+use punktfunk_core::quic::GRANT_DISPLAY;
 
 /// Picker row. `fields` is the expansion so the console does not hardcode it.
 #[derive(Serialize, ToSchema)]
@@ -434,8 +436,12 @@ pub(crate) async fn get_display_client(
 ///
 /// The operator writes the WHOLE overlay: a field absent from the body stops being pinned and
 /// the device follows the host again. An overlay that pins nothing is dropped, which is the
-/// same as `DELETE`. A paired device writes only `screen`, and only on its own row; its other
-/// fields stay, and it is answered 204. `set_by` records which of the two wrote the screen.
+/// same as `DELETE`. A paired device writes its pick on its own row while its access holds
+/// `GRANT_DISPLAY` (`0x100`): `screen` alone, keeping the row's `topology`, or `screen` with
+/// `topology` (`extend`, `primary` or `exclusive`). A monitor drops the row's topology, and a
+/// null screen clears the device's pick. Its other fields stay, and it is answered 204.
+/// `set_by` records who last wrote the pick; the operator's write keeps it while the row's
+/// screen and topology are unchanged.
 #[utoipa::path(
     put,
     path = "/display/clients/{fingerprint}",
@@ -445,22 +451,23 @@ pub(crate) async fn get_display_client(
     request_body = crate::vdisplay::policy::ClientOverlay,
     responses(
         (status = OK, description = "Overlay stored; the new settings state", body = DisplaySettingsState),
-        (status = NO_CONTENT, description = "A device's screen stored"),
+        (status = NO_CONTENT, description = "A device's pick stored"),
         (status = BAD_REQUEST, description = "Empty fingerprint", body = ApiError),
-        (status = FORBIDDEN, description = "A device wrote another row, or more than its screen", body = ApiError),
-        (status = UNPROCESSABLE_ENTITY, description = "The body is not an overlay", body = ApiError),
+        (status = FORBIDDEN, description = "A device wrote another row or more than its screen and topology, or may not choose its screen (`screen_choice_not_granted`)", body = ApiError),
+        (status = UNPROCESSABLE_ENTITY, description = "The body is not an overlay, or a device's topology is not `extend`, `primary` or `exclusive`", body = ApiError),
         (status = INTERNAL_SERVER_ERROR, description = "Overlay could not be persisted", body = ApiError),
         (status = UNAUTHORIZED, description = "Missing or invalid bearer token", body = ApiError),
     )
 )]
 pub(crate) async fn set_display_client(
+    State(st): State<Arc<MgmtState>>,
     device: Option<Extension<PairedDevice>>,
     Path(fingerprint): Path<String>,
     ApiJson(body): ApiJson<serde_json::Value>,
 ) -> Response {
     let key = fingerprint.trim().to_ascii_lowercase();
     if let Some(Extension(PairedDevice(me))) = device {
-        return set_own_screen(&me, &key, body);
+        return set_own_pick(&st, &me, &key, body);
     }
     if let Some(refused) = refused_on_seat() {
         return refused;
@@ -486,13 +493,9 @@ pub(crate) async fn set_display_client(
         return Json(display_settings_state()).into_response();
     }
     // `sanitized` drops an overlay that pins nothing, so this covers the reset
-    // case too without a second path. A screen the body leaves as it was keeps who chose it.
+    // case too without a second path. A pick the body leaves as it was keeps who chose it.
     let saved = store.update(|p| {
-        let mut overlay = overlay;
-        overlay.set_by = match p.clients.get(&key) {
-            Some(stored) if stored.screen == overlay.screen => stored.set_by,
-            _ => Some(SetBy::Console),
-        };
+        let overlay = overlay.console_write(p.clients.get(&key));
         p.clients.insert(key.clone(), overlay);
         true
     });
@@ -508,13 +511,21 @@ pub(crate) async fn set_display_client(
     Json(display_settings_state()).into_response()
 }
 
-/// A paired device `me` sets the screen of its row `key`. The answer carries no settings: the
-/// state names every other device.
-fn set_own_screen(me: &str, key: &str, body: serde_json::Value) -> Response {
-    let screen = match device_screen(me, key, body) {
-        Ok(screen) => screen,
+/// A paired device `me` writes the pick of its row `key` ([`device_pick`]), while its live
+/// access holds `GRANT_DISPLAY`. The answer carries no settings: the state names every other
+/// device.
+fn set_own_pick(st: &MgmtState, me: &str, key: &str, body: serde_json::Value) -> Response {
+    let (screen, topology) = match device_pick(me, key, body) {
+        Ok(pick) => pick,
         Err((status, why)) => return api_error(status, &why),
     };
+    if !super::downloads::granted(st, Some(me), GRANT_DISPLAY) {
+        return api_error_coded(
+            StatusCode::FORBIDDEN,
+            "screen_choice_not_granted",
+            "This host decides the screen for this device.",
+        );
+    }
     if let Some(refused) = refused_on_seat() {
         return refused;
     }
@@ -525,7 +536,7 @@ fn set_own_screen(me: &str, key: &str, body: serde_json::Value) -> Response {
     }
     let saved = store.update(|p| {
         let row = p.clients.entry(key.to_string()).or_default();
-        row.set_screen(screen, SetBy::Device);
+        row.set_device_pick(screen, topology);
         true
     });
     if let Err(e) = saved {
@@ -540,32 +551,45 @@ fn set_own_screen(me: &str, key: &str, body: serde_json::Value) -> Response {
     StatusCode::NO_CONTENT.into_response()
 }
 
-/// The screen a paired device `me` may write to the row `key`: its own row, and a body that
-/// names nothing but `screen`. Anything else is 403; a `screen` that does not read is 422.
-pub(super) fn device_screen(
+/// The pick a paired device `me` may write to the row `key`: its own row, and a body of
+/// `screen` alone or `screen` with `topology`. Another row or any other key is 403. A `screen`
+/// that does not read, a `topology` without one, or a `topology` other than `extend`,
+/// `primary` or `exclusive` is 422.
+pub(super) fn device_pick(
     me: &str,
     key: &str,
     body: serde_json::Value,
-) -> Result<Option<DisplayTarget>, (StatusCode, String)> {
+) -> Result<(Option<DisplayTarget>, Option<Topology>), (StatusCode, String)> {
     let refused = || {
         (
             StatusCode::FORBIDDEN,
             "a device may set only its own screen".into(),
         )
     };
+    let unreadable = |why: String| (StatusCode::UNPROCESSABLE_ENTITY, why);
     let serde_json::Value::Object(mut body) = body else {
         return Err(refused());
     };
-    let screen = body.remove("screen").unwrap_or(serde_json::Value::Null);
+    let screen = body.remove("screen");
+    let topology = body.remove("topology");
     if !me.eq_ignore_ascii_case(key) || !body.is_empty() {
         return Err(refused());
     }
-    serde_json::from_value(screen).map_err(|e| {
-        (
-            StatusCode::UNPROCESSABLE_ENTITY,
-            format!("read the screen: {e}"),
-        )
-    })
+    let topology = match topology.map(serde_json::from_value) {
+        None => None,
+        Some(Ok(t @ (Topology::Extend | Topology::Primary | Topology::Exclusive))) => Some(t),
+        Some(_) => {
+            return Err(unreadable(
+                "a device's topology is extend, primary or exclusive".into(),
+            ))
+        }
+    };
+    if topology.is_some() && screen.is_none() {
+        return Err(unreadable("a topology needs a screen".into()));
+    }
+    let screen = serde_json::from_value(screen.unwrap_or(serde_json::Value::Null))
+        .map_err(|e| unreadable(format!("read the screen: {e}")))?;
+    Ok((screen, topology))
 }
 
 /// Make one device follow the host again
@@ -796,16 +820,98 @@ pub(crate) struct DisplayTargets {
     /// What a device with no screen of its own streams.
     host_default: DisplayTarget,
     /// What the calling device is set to, before a taken or missing monitor falls back to its
-    /// own screen. Null on the operator and plugin lanes.
+    /// own screen. A screen it set itself counts only while `may_choose`. Null on the operator
+    /// and plugin lanes.
     yours: Option<DisplayTarget>,
+    /// Whether the caller may choose the screen: a paired device's `GRANT_DISPLAY`, always on
+    /// the operator and plugin lanes. A device's write without it is 403.
+    may_choose: bool,
     targets: Vec<ScreenRow>,
+    /// The roles a device's own screen takes on this desk. Absent on a contract seat, a host
+    /// with no mirror backend, a gamescope session, and a desktop that lists no physical
+    /// monitor.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    role: Option<ScreenRoles>,
+}
+
+/// How a device's own screen sits among the host's monitors: its `topology`, from its side.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum ScreenRole {
+    /// `exclusive`: the host's monitors turn off.
+    Only,
+    /// `primary`: the monitors stay on and apps open on this screen.
+    Main,
+    /// `extend`: one more screen beside the monitors.
+    Second,
+}
+
+impl ScreenRole {
+    /// The role `topology` gives ([`crate::vdisplay::role_of`]).
+    fn of(topology: Topology, primary: bool) -> ScreenRole {
+        use punktfunk_core::quic::v2::hello::Role;
+        match crate::vdisplay::role_of(topology, primary) {
+            Role::Only => ScreenRole::Only,
+            Role::Main => ScreenRole::Main,
+            Role::Second => ScreenRole::Second,
+        }
+    }
+}
+
+/// The roles a device's own screen takes on the desk.
+#[derive(Debug, PartialEq, Serialize, ToSchema)]
+pub(crate) struct ScreenRoles {
+    /// The role of the calling device's own pick while it counts and its screen is its own.
+    /// Null with no pick, a monitor pick, no `GRANT_DISPLAY`, and on the operator lane.
+    yours: Option<ScreenRole>,
+    /// What a connect gets with no pick of the device's: the console's row for it, else the
+    /// host's topology.
+    host_default: ScreenRole,
+    /// The roles this host gives. `main` only where the desktop has a main screen.
+    offered: Vec<ScreenRole>,
+}
+
+/// The device's [`ScreenRoles`], or `None` off the desk ([`crate::vdisplay::on_the_desk`]).
+/// `main` is offered where `compositor` has a main screen.
+pub(super) fn screen_roles(
+    seat: bool,
+    compositor: Option<Compositor>,
+    physical: Option<bool>,
+    yours: Option<Topology>,
+    host_default: Topology,
+) -> Option<ScreenRoles> {
+    if !crate::vdisplay::on_the_desk(seat, compositor, physical) {
+        return None;
+    }
+    let primary = compositor.is_some_and(Compositor::has_primary);
+    let offered = [ScreenRole::Only, ScreenRole::Main, ScreenRole::Second]
+        .into_iter()
+        .filter(|r| *r != ScreenRole::Main || primary)
+        .collect();
+    Some(ScreenRoles {
+        yours: yours.map(|t| ScreenRole::of(t, primary)),
+        host_default: ScreenRole::of(host_default, primary),
+        offered,
+    })
+}
+
+/// The topology of the device `fp`'s own pick, when it set its own screen itself. The caller
+/// checks that the pick counts (`GRANT_DISPLAY`).
+fn own_pick_topology(fp: &str) -> Option<Topology> {
+    let policy = crate::vdisplay::policy::prefs().get();
+    let row = policy.overlay_for(Some(fp))?;
+    if row.set_by != Some(SetBy::Device) || row.screen != Some(DisplayTarget::Own) {
+        return None;
+    }
+    crate::vdisplay::wanted_topology(Some(fp), true)
 }
 
 /// Screen picker
 ///
 /// The device's own screen, then each of the host's monitors with the device streaming it
-/// now. A paired device also reads what it is set to. A host with no mirror backend lists its
-/// own screen alone.
+/// now. A paired device also reads what it is set to and whether it may choose. A host with no
+/// mirror backend lists its own screen alone. `role` names the roles its own screen takes on
+/// the desk.
 #[utoipa::path(
     get,
     path = "/display/targets",
@@ -817,9 +923,13 @@ pub(crate) struct DisplayTargets {
     )
 )]
 pub(crate) async fn get_display_targets(
+    State(st): State<Arc<MgmtState>>,
     device: Option<Extension<PairedDevice>>,
 ) -> Result<Json<DisplayTargets>, Response> {
     let me = device.map(|Extension(PairedDevice(fp))| fp.to_ascii_lowercase());
+    let may_choose = me
+        .as_deref()
+        .is_none_or(|fp| super::downloads::granted(&st, Some(fp), GRANT_DISPLAY));
     let own = ScreenRow {
         id: "own".into(),
         label: "Own screen".into(),
@@ -834,15 +944,34 @@ pub(crate) async fn get_display_targets(
             locked: false,
             host_default: DisplayTarget::Own,
             yours: me.map(|_| DisplayTarget::Own),
+            may_choose,
             targets: vec![own],
+            role: None,
         }));
     }
-    let (host_default, locked) = crate::vdisplay::screen_target(None);
+    let (host_default, locked) = crate::vdisplay::screen_target(None, false);
     let yours = me
         .as_deref()
-        .map(|fp| crate::vdisplay::screen_target(Some(fp)).0);
+        .map(|fp| crate::vdisplay::screen_target(Some(fp), may_choose).0);
     // Shells out / D-Bus / Wayland, or walks CCD on Windows: off the async worker.
-    let heads = blocking("monitor_list", || crate::vdisplay::heads(None)).await?;
+    let (compositor, heads) = blocking("monitor_list", || {
+        #[cfg(windows)]
+        let compositor = Some(Compositor::Windows);
+        #[cfg(not(windows))]
+        let compositor = crate::vdisplay::detect().ok();
+        (compositor, crate::vdisplay::heads(compositor))
+    })
+    .await?;
+    let role = screen_roles(
+        crate::vdisplay::policy::prefs().follows_contract(),
+        compositor,
+        heads.as_ref().ok().map(|h| h.iter().any(|m| !m.managed)),
+        me.as_deref()
+            .filter(|_| may_choose)
+            .and_then(own_pick_topology),
+        crate::vdisplay::wanted_topology(me.as_deref(), false)
+            .unwrap_or_else(|| crate::vdisplay::effective_topology(None)),
+    );
     let streamed = crate::vdisplay::streamed_monitors();
     let in_use_by = |connector: &str| {
         streamed.iter().find_map(|(c, owner)| {
@@ -872,7 +1001,9 @@ pub(crate) async fn get_display_targets(
         locked,
         host_default,
         yours,
+        may_choose,
         targets,
+        role,
     }))
 }
 

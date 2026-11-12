@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: =?UTF-8?q?Enrico=20B=C3=BChler?= <enrico.buehler@unom.io>
 Date: Tue, 28 Jul 2026 15:41:45 +0200
-Subject: [PATCH 02/33] pipewire: optionally composite the cursor into the
+Subject: [PATCH 02/38] pipewire: optionally composite the cursor into the
  capture stream
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
@@ -38,7 +38,7 @@ focus-appid branch hands back a plain focus_t, which carries no cursor.
  2 files changed, 64 insertions(+), 1 deletion(-)
 
 diff --git a/src/main.cpp b/src/main.cpp
-index 6a0fdb1..5e0bda2 100644
+index 925936bf..f74ad71a 100644
 --- a/src/main.cpp
 +++ b/src/main.cpp
 @@ -143,6 +143,7 @@ const struct option *gamescope_options = (struct option[]){
@@ -58,10 +58,10 @@ index 6a0fdb1..5e0bda2 100644
  	"                                 If this is not set, and there is a HDR client, it will be tonemapped SDR.\n"
  	"  --sdr-gamut-wideness           Set the 'wideness' of the gamut for SDR comment. 0 - 1.\n"
 diff --git a/src/steamcompmgr.cpp b/src/steamcompmgr.cpp
-index 5bc6d0f..b4b794a 100644
+index 745fe5d9..8dc8c512 100644
 --- a/src/steamcompmgr.cpp
 +++ b/src/steamcompmgr.cpp
-@@ -2863,6 +2863,13 @@ static void carry_override_underlay( focus_t *pFocus, steamcompmgr_win_t *pPrevi
+@@ -2988,6 +2988,13 @@ static void carry_override_underlay( focus_t *pFocus, steamcompmgr_win_t *pPrevi
  // Synthetic focus for the capture stream, connector fields never populated.
  static global_focus_t s_PipewireFocus{};
  
@@ -75,7 +75,7 @@ index 5bc6d0f..b4b794a 100644
  static void paint_pipewire()
  {
  	static struct pipewire_buffer *s_pPipewireBuffer = nullptr;
-@@ -2964,6 +2971,9 @@ static void paint_pipewire()
+@@ -3089,6 +3096,9 @@ static void paint_pipewire()
  	static uint64_t s_ulLastOverrideCommitId = 0;
  	static uint64_t s_ulLastUnderlayCommitId = 0;
  	static uint64_t s_ulLastDecorationCommitId = 0;
@@ -85,7 +85,7 @@ index 5bc6d0f..b4b794a 100644
  
  	uint64_t ulFocusCommitId = window_last_done_commit_id( pFocus->focusWindow );
  	uint64_t ulOverrideCommitId = window_last_done_commit_id( pFocus->overrideWindow );
-@@ -2977,16 +2987,45 @@ static void paint_pipewire()
+@@ -3102,16 +3112,45 @@ static void paint_pipewire()
  	for ( steamcompmgr_win_t *decoration : pFocus->decorationWindows )
  		ulDecorationCommitId = ulDecorationCommitId * 31 + window_last_done_commit_id( decoration );
  
@@ -132,7 +132,7 @@ index 5bc6d0f..b4b794a 100644
  
  	uint32_t uWidth = s_pPipewireBuffer->texture->width();
  	uint32_t uHeight = s_pPipewireBuffer->texture->height();
-@@ -3031,6 +3070,22 @@ static void paint_pipewire()
+@@ -3158,6 +3197,22 @@ static void paint_pipewire()
  				( cv_overlay_unmultiplied_alpha ? PaintWindowFlag::CoverageMode : 0 )  );
  	}
  
@@ -155,7 +155,7 @@ index 5bc6d0f..b4b794a 100644
  	gamescope::Rc<CVulkanTexture> pRGBTexture = s_pPipewireBuffer->texture->isYcbcr()
  		? vulkan_acquire_capture_texture( uWidth, uHeight, false, vulkan_get_rgb10_capture_format() )
  		: gamescope::Rc<CVulkanTexture>{ s_pPipewireBuffer->texture };
-@@ -9869,6 +9924,12 @@ steamcompmgr_main(int argc, char **argv)
+@@ -10396,6 +10451,12 @@ steamcompmgr_main(int argc, char **argv)
  					g_FadeOutDuration = atoi(optarg);
  				} else if (strcmp(opt_name, "force-windows-fullscreen") == 0) {
  					bForceWindowsFullscreen = true;

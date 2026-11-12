@@ -1917,6 +1917,7 @@ mod tests {
                     video_full_range: false,
                 },
             },
+            header_at: 0,
             tiles: Vec::new(),
             refs: [None; 7],
             dpb: pf_vaapi::DpbUpdateAv1::default(),

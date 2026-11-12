@@ -42,7 +42,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "box"
       }
     },
     "/api/v1/actions/{id}": {
@@ -138,7 +139,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "box"
       }
     },
     "/api/v1/auth/device/challenge": {
@@ -162,7 +164,8 @@
         },
         "security": [
           {}
-        ]
+        ],
+        "x-scope": "box"
       }
     },
     "/api/v1/auth/device/token": {
@@ -206,7 +209,8 @@
         },
         "security": [
           {}
-        ]
+        ],
+        "x-scope": "box"
       }
     },
     "/api/v1/client-logs": {
@@ -240,7 +244,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "box"
       },
       "post": {
         "tags": [
@@ -321,7 +326,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "box"
       }
     },
     "/api/v1/client-logs/{id}": {
@@ -383,7 +389,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "box"
       },
       "delete": {
         "tags": [
@@ -437,7 +444,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "box"
       }
     },
     "/api/v1/clients": {
@@ -471,7 +479,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "box"
       },
       "delete": {
         "tags": [
@@ -501,7 +510,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "box"
       }
     },
     "/api/v1/clients/{fingerprint}": {
@@ -557,7 +567,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "box"
       },
       "patch": {
         "tags": [
@@ -628,7 +639,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "box"
       }
     },
     "/api/v1/compositors": {
@@ -663,7 +675,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "host"
       }
     },
     "/api/v1/diagnostics": {
@@ -695,7 +708,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "host"
       }
     },
     "/api/v1/diagnostics/refresh": {
@@ -727,7 +741,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "host"
       }
     },
     "/api/v1/display/clients/{fingerprint}": {
@@ -770,14 +785,15 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "profile-data"
       },
       "put": {
         "tags": [
           "display"
         ],
         "summary": "Save one device's overlay",
-        "description": "The operator writes the WHOLE overlay: a field absent from the body stops being pinned and\nthe device follows the host again. An overlay that pins nothing is dropped, which is the\nsame as `DELETE`. A paired device writes only `screen`, and only on its own row; its other\nfields stay, and it is answered 204. `set_by` records which of the two wrote the screen.",
+        "description": "The operator writes the WHOLE overlay: a field absent from the body stops being pinned and\nthe device follows the host again. An overlay that pins nothing is dropped, which is the\nsame as `DELETE`. A paired device writes its pick on its own row while its access holds\n`GRANT_DISPLAY` (`0x100`): `screen` alone, keeping the row's `topology`, or `screen` with\n`topology` (`extend`, `primary` or `exclusive`). A monitor drops the row's topology, and a\nnull screen clears the device's pick. Its other fields stay, and it is answered 204.\n`set_by` records who last wrote the pick; the operator's write keeps it while the row's\nscreen and topology are unchanged.",
         "operationId": "setDisplayClient",
         "parameters": [
           {
@@ -812,7 +828,7 @@
             }
           },
           "204": {
-            "description": "A device's screen stored"
+            "description": "A device's pick stored"
           },
           "400": {
             "description": "Empty fingerprint",
@@ -835,7 +851,7 @@
             }
           },
           "403": {
-            "description": "A device wrote another row, or more than its screen",
+            "description": "A device wrote another row or more than its screen and topology, or may not choose its screen (`screen_choice_not_granted`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -845,7 +861,7 @@
             }
           },
           "422": {
-            "description": "The body is not an overlay",
+            "description": "The body is not an overlay, or a device's topology is not `extend`, `primary` or `exclusive`",
             "content": {
               "application/json": {
                 "schema": {
@@ -864,7 +880,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "profile-data"
       },
       "delete": {
         "tags": [
@@ -914,7 +931,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "profile-data"
       }
     },
     "/api/v1/display/layout": {
@@ -966,7 +984,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "box"
       }
     },
     "/api/v1/display/monitors": {
@@ -998,7 +1017,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "box"
       }
     },
     "/api/v1/display/presets": {
@@ -1033,7 +1053,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "box"
       },
       "post": {
         "tags": [
@@ -1093,7 +1114,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "box"
       }
     },
     "/api/v1/display/presets/{id}": {
@@ -1175,7 +1197,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "box"
       },
       "delete": {
         "tags": [
@@ -1229,7 +1252,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "box"
       }
     },
     "/api/v1/display/release": {
@@ -1271,7 +1295,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "box"
       }
     },
     "/api/v1/display/settings": {
@@ -1303,7 +1328,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "box"
       },
       "put": {
         "tags": [
@@ -1363,7 +1389,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "box"
       }
     },
     "/api/v1/display/state": {
@@ -1395,7 +1422,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "host"
       }
     },
     "/api/v1/display/targets": {
@@ -1404,7 +1432,7 @@
           "display"
         ],
         "summary": "Screen picker",
-        "description": "The device's own screen, then each of the host's monitors with the device streaming it\nnow. A paired device also reads what it is set to. A host with no mirror backend lists its\nown screen alone.",
+        "description": "The device's own screen, then each of the host's monitors with the device streaming it\nnow. A paired device also reads what it is set to and whether it may choose. A host with no\nmirror backend lists its own screen alone. `role` names the roles its own screen takes on\nthe desk.",
         "operationId": "getDisplayTargets",
         "responses": {
           "200": {
@@ -1427,7 +1455,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "profile-data"
       }
     },
     "/api/v1/downloads": {
@@ -1462,7 +1491,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "profile-data"
       }
     },
     "/api/v1/emulators": {
@@ -1507,7 +1537,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "profile-data"
       }
     },
     "/api/v1/emulators/catalog": {
@@ -1549,7 +1580,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "profile-data"
       }
     },
     "/api/v1/emulators/{id}/adopt": {
@@ -1649,7 +1681,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "profile-exec"
       }
     },
     "/api/v1/emulators/{id}/content": {
@@ -1735,7 +1768,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "profile-exec"
       }
     },
     "/api/v1/emulators/{id}/firmware": {
@@ -1833,7 +1867,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "profile-data"
       }
     },
     "/api/v1/emulators/{id}/install": {
@@ -1926,7 +1961,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "profile-exec"
       }
     },
     "/api/v1/emulators/{id}/prepare": {
@@ -2022,7 +2058,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "profile-exec"
       }
     },
     "/api/v1/emulators/{id}/remove": {
@@ -2098,7 +2135,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "profile-exec"
       }
     },
     "/api/v1/emulators/{id}/saves": {
@@ -2211,7 +2249,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "profile-data"
       }
     },
     "/api/v1/emulators/{id}/saves/export": {
@@ -2316,7 +2355,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "profile-exec"
       }
     },
     "/api/v1/emulators/{id}/saves/import": {
@@ -2421,7 +2461,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "profile-exec"
       }
     },
     "/api/v1/events": {
@@ -2499,7 +2540,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "host"
       }
     },
     "/api/v1/events/relay": {
@@ -2544,7 +2586,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "host"
       }
     },
     "/api/v1/game/end": {
@@ -2606,7 +2649,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "profile-data"
       }
     },
     "/api/v1/game/holds/{token}/release": {
@@ -2652,7 +2696,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "profile-exec"
       }
     },
     "/api/v1/gpus": {
@@ -2684,7 +2729,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "host"
       }
     },
     "/api/v1/gpus/preference": {
@@ -2746,7 +2792,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "box"
       }
     },
     "/api/v1/health": {
@@ -2771,7 +2818,8 @@
         },
         "security": [
           {}
-        ]
+        ],
+        "x-scope": "host"
       }
     },
     "/api/v1/hooks": {
@@ -2803,7 +2851,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "profile-exec"
       },
       "put": {
         "tags": [
@@ -2873,7 +2922,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "profile-exec"
       }
     },
     "/api/v1/host": {
@@ -2904,7 +2954,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "host"
       }
     },
     "/api/v1/host/audio/apps": {
@@ -2936,7 +2987,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "host"
       }
     },
     "/api/v1/host/settings": {
@@ -2968,7 +3020,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "host"
       },
       "patch": {
         "tags": [
@@ -3028,7 +3081,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "host"
       }
     },
     "/api/v1/host/theme": {
@@ -3060,7 +3114,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "host"
       }
     },
     "/api/v1/library": {
@@ -3069,7 +3124,7 @@
           "library"
         ],
         "summary": "List every title this host knows, sorted by title.",
-        "description": "Plugin-synced entries plus custom ones. Art the host can serve is rewritten to this API's\nart proxy, local paths and remote URLs alike; a URL the proxy already refused passes\nthrough. `?provider=` / `?platform=` (case-insensitive) narrow. `?as=` names the\nasking device's profile: each title it has launched carries its own numbers in `stats.mine`.\n\nThe operator lane sees hidden titles (`hidden: true`) so the console can un-hide them.\nEvery other lane is filtered upstream and cannot tell they exist.",
+        "description": "Plugin-synced entries plus custom ones. Art the host can serve is rewritten to this API's\nart proxy, local paths and remote URLs alike; a URL the proxy already refused passes\nthrough. `?provider=` / `?platform=` (case-insensitive) narrow. `?as=` names a profile: the\nlibrary as it plays it, the box's with the profile's own layer on top, and each title it has\nlaunched carries its own numbers in `stats.mine`.\n\nThe operator lane sees hidden titles (`hidden: true`) so the console can un-hide them; with\n`as`, those the profile hides, and none the box hides. Every other lane is filtered upstream\nand cannot tell they exist.",
         "operationId": "getLibrary",
         "parameters": [
           {
@@ -3093,7 +3148,7 @@
           {
             "name": "as",
             "in": "query",
-            "description": "Profile id whose own play stats fill `stats.mine`",
+            "description": "Profile id: the library as that profile plays it, its own play stats in `stats.mine`",
             "required": false,
             "schema": {
               "type": "string"
@@ -3123,8 +3178,19 @@
                 }
               }
             }
+          },
+          "404": {
+            "description": "`as` names no profile on this host",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
           }
-        }
+        },
+        "x-scope": "profile-data"
       }
     },
     "/api/v1/library/art/{id}/{kind}": {
@@ -3133,7 +3199,7 @@
           "library"
         ],
         "summary": "Stream one cover-art image for a library entry.",
-        "description": "Resolves `kind` (`portrait` | `hero` | `logo` | `header`) for a catalog id and returns the\nbytes: a launcher's cover cache on the host disk, or a remote URL the host fetches once on\nthe first miss and then serves from its own store. Unknown id or kind is 404 so the client\ncan try the next candidate, and so is a URL the fetch refused — `GET /library` advertises\nthat one verbatim again. The response carries `Cache-Control` and an `ETag` of the bytes; a\nrequest whose `If-None-Match` names that tag gets 304 with no body. On a Linux door the\ncovers are in the owner's home, and the owner's host serves them while it runs.",
+        "description": "Resolves `kind` (`portrait` | `hero` | `logo` | `header`) for a catalog id and returns the\nbytes: a launcher's cover cache on the host disk, or a remote URL the host fetches once on\nthe first miss and then serves from its own store. Unknown id or kind is 404 so the client\ncan try the next candidate, and so is a URL the fetch refused — `GET /library` advertises\nthat one verbatim again. The response carries `Cache-Control` and an `ETag` of the bytes; a\nrequest whose `If-None-Match` names that tag gets 304 with no body. On a Linux door the\ncovers are in the owner's home, and the owner's host serves them while it runs. With `as`,\nthe art as that profile sees it: its own picks first.",
         "operationId": "getLibraryArt",
         "parameters": [
           {
@@ -3150,6 +3216,15 @@
             "in": "path",
             "description": "`portrait` | `hero` | `logo` | `header`",
             "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "as",
+            "in": "query",
+            "description": "Profile id: the art as that profile sees it",
+            "required": false,
             "schema": {
               "type": "string"
             }
@@ -3188,7 +3263,7 @@
             }
           },
           "404": {
-            "description": "No art of that kind for that id",
+            "description": "No art of that kind for that id, or `as` names no profile on this host",
             "content": {
               "application/json": {
                 "schema": {
@@ -3197,7 +3272,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "profile-data"
       }
     },
     "/api/v1/library/custom": {
@@ -3206,7 +3282,7 @@
           "library"
         ],
         "summary": "Create a custom title",
-        "description": "A user-curated entry. The host assigns a stable id, returned in the body.",
+        "description": "A user-curated entry. The host assigns a stable id, returned in the body. On a seat host it is\nthat host's own title, under an `own:` id, kept in its own config folder and run as its\naccount; the box lists its name and picture for the seat's profile. A profile that uses an\nexisting account takes none.",
         "operationId": "createCustomGame",
         "requestBody": {
           "content": {
@@ -3249,6 +3325,16 @@
               }
             }
           },
+          "403": {
+            "description": "A field this lane may not set, or a seat on a person's own account",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
           "500": {
             "description": "Couldn't save the catalog",
             "content": {
@@ -3259,7 +3345,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "profile-data"
       }
     },
     "/api/v1/library/custom/{id}": {
@@ -3274,7 +3361,7 @@
           {
             "name": "id",
             "in": "path",
-            "description": "The custom entry id (without the `custom:` prefix)",
+            "description": "The custom entry id (without the `custom:` prefix), or a seat host's own `own:` id",
             "required": true,
             "schema": {
               "type": "string"
@@ -3312,7 +3399,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "profile-data"
       },
       "put": {
         "tags": [
@@ -3323,7 +3411,7 @@
           {
             "name": "id",
             "in": "path",
-            "description": "The custom entry id (without the `custom:` prefix)",
+            "description": "The custom entry id (without the `custom:` prefix), or a seat host's own `own:` id",
             "required": true,
             "schema": {
               "type": "string"
@@ -3391,6 +3479,16 @@
               }
             }
           },
+          "409": {
+            "description": "A seat host named a row of the box's",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
           "500": {
             "description": "Couldn't save the catalog",
             "content": {
@@ -3401,7 +3499,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "profile-data"
       },
       "delete": {
         "tags": [
@@ -3412,7 +3511,7 @@
           {
             "name": "id",
             "in": "path",
-            "description": "The custom entry id (without the `custom:` prefix)",
+            "description": "The custom entry id (without the `custom:` prefix), or a seat host's own `own:` id",
             "required": true,
             "schema": {
               "type": "string"
@@ -3453,6 +3552,16 @@
               }
             }
           },
+          "409": {
+            "description": "A seat host named a row of the box's",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
           "500": {
             "description": "Couldn't save the catalog",
             "content": {
@@ -3463,7 +3572,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "profile-data"
       }
     },
     "/api/v1/library/hidden/{id}": {
@@ -3472,7 +3582,7 @@
           "library"
         ],
         "summary": "Hide or un-hide one library title.",
-        "description": "Curation, not access control: the title leaves every play surface and launch resolution\nbut is not deleted. The operator console still lists it (`hidden: true`) so it can return.\nThe id is not required to exist now — a plugin mid-sync or an unmounted drive would\notherwise refuse a choice that should stick. Emits `library.changed` only on a real change.",
+        "description": "Curation, not access control: the title leaves every play surface and launch resolution\nbut is not deleted. The operator console still lists it (`hidden: true`) so it can return.\nThe id is not required to exist now — a plugin mid-sync or an unmounted drive would\notherwise refuse a choice that should stick. With `as`, the hide is that profile's own; it\ncannot bring back a title the box hides. Emits `library.changed` only on a real change.",
         "operationId": "setLibraryEntryHidden",
         "parameters": [
           {
@@ -3480,6 +3590,15 @@
             "in": "path",
             "description": "The library entry id (e.g. `steam:70`)",
             "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "as",
+            "in": "query",
+            "description": "Profile id: hide it for that profile only",
+            "required": false,
             "schema": {
               "type": "string"
             }
@@ -3526,6 +3645,16 @@
               }
             }
           },
+          "404": {
+            "description": "`as` names no profile on this host",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
           "500": {
             "description": "Couldn't save the settings",
             "content": {
@@ -3536,7 +3665,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "profile-data"
       }
     },
     "/api/v1/library/install/{id}": {
@@ -3619,7 +3749,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "profile-data"
       },
       "delete": {
         "tags": [
@@ -3693,7 +3824,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "profile-data"
       }
     },
     "/api/v1/library/install/{id}/cancel": {
@@ -3759,7 +3891,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "profile-data"
       }
     },
     "/api/v1/library/install/{id}/pause": {
@@ -3835,7 +3968,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "profile-data"
       }
     },
     "/api/v1/library/metadata": {
@@ -3870,7 +4004,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "profile-data"
       },
       "put": {
         "tags": [
@@ -3926,7 +4061,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "profile-data"
       }
     },
     "/api/v1/library/metadata/{source}": {
@@ -4009,7 +4145,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "profile-data"
       },
       "delete": {
         "tags": [
@@ -4080,7 +4217,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "profile-data"
       }
     },
     "/api/v1/library/overrides": {
@@ -4089,8 +4227,19 @@
           "library"
         ],
         "summary": "Read the game overrides",
-        "description": "The shared overrides, each game's entry and each source's, as `library-overrides.json`\nholds them. `GET /library` carries what each title resolves to.",
+        "description": "The shared overrides, each game's entry and each source's, as `library-overrides.json`\nholds them. `GET /library` carries what each title resolves to. With `as`, the profile's own\nfile: where it has an entry for a game or its source, that entry wins over the box's.",
         "operationId": "getLibraryOverrides",
+        "parameters": [
+          {
+            "name": "as",
+            "in": "query",
+            "description": "Profile id: that profile's own overrides",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "description": "The shared overrides and every game's and source's entry",
@@ -4111,8 +4260,19 @@
                 }
               }
             }
+          },
+          "404": {
+            "description": "`as` names no profile on this host",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
           }
-        }
+        },
+        "x-scope": "profile-data"
       }
     },
     "/api/v1/library/overrides/games/{id}": {
@@ -4121,7 +4281,7 @@
           "library"
         ],
         "summary": "Set one game's overrides",
-        "description": "`{ \"set\": id }` points the game at a shared override; fields alone are its own values;\n`{ \"none\": true }` leaves it to the device, whatever the source sets; `{}` clears its entry,\nand the game takes its source's. The id is not required to exist now, as with hiding.\nEmits `library.changed`.",
+        "description": "`{ \"set\": id }` points the game at a shared override; fields alone are its own values;\n`{ \"none\": true }` leaves it to the device, whatever the source sets; `{}` clears its entry,\nand the game takes its source's. The id is not required to exist now, as with hiding.\nWith `as`, the entry is that profile's own and `set` may name the box's shared override or\nthe profile's; `{}` hands the game back to the box's entry. Emits `library.changed`.",
         "operationId": "setGameOverrides",
         "parameters": [
           {
@@ -4129,6 +4289,15 @@
             "in": "path",
             "description": "The library entry id (e.g. `steam:70`)",
             "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "as",
+            "in": "query",
+            "description": "Profile id: set it for that profile only",
+            "required": false,
             "schema": {
               "type": "string"
             }
@@ -4176,7 +4345,7 @@
             }
           },
           "404": {
-            "description": "`set` names no shared override",
+            "description": "`set` names no shared override, or `as` names no profile on this host",
             "content": {
               "application/json": {
                 "schema": {
@@ -4195,7 +4364,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "profile-data"
       }
     },
     "/api/v1/library/overrides/sets": {
@@ -4204,8 +4374,19 @@
           "library"
         ],
         "summary": "Create a shared override",
-        "description": "A named set of stream settings that games and sources point at. The host assigns its id.",
+        "description": "A named set of stream settings that games and sources point at. The host assigns its id.\nWith `as`, it is that profile's own.",
         "operationId": "createOverrideSet",
+        "parameters": [
+          {
+            "name": "as",
+            "in": "query",
+            "description": "Profile id: create it for that profile",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -4247,6 +4428,16 @@
               }
             }
           },
+          "404": {
+            "description": "`as` names no profile on this host",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
           "409": {
             "description": "Another shared override has this name",
             "content": {
@@ -4267,7 +4458,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "profile-data"
       }
     },
     "/api/v1/library/overrides/sets/{id}": {
@@ -4276,7 +4468,7 @@
           "library"
         ],
         "summary": "Change a shared override",
-        "description": "A field left out keeps its value; `null` clears it. Every game and source that uses it\nfollows. Emits `library.changed` for each source they belong to.",
+        "description": "A field left out keeps its value; `null` clears it. Every game and source that uses it\nfollows. With `as`, one of that profile's own. Emits `library.changed` for each source they\nbelong to.",
         "operationId": "updateOverrideSet",
         "parameters": [
           {
@@ -4284,6 +4476,15 @@
             "in": "path",
             "description": "The shared override's id",
             "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "as",
+            "in": "query",
+            "description": "Profile id: one of that profile's own",
+            "required": false,
             "schema": {
               "type": "string"
             }
@@ -4331,7 +4532,7 @@
             }
           },
           "404": {
-            "description": "No shared override with that id",
+            "description": "No shared override with that id, or `as` names no profile on this host",
             "content": {
               "application/json": {
                 "schema": {
@@ -4360,14 +4561,15 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "profile-data"
       },
       "delete": {
         "tags": [
           "library"
         ],
         "summary": "Delete a shared override",
-        "description": "The games and sources that used it lose their entry and go back to what the device\ndecides. The answer counts them. Emits `library.changed` for each source they belong to.",
+        "description": "The games and sources that used it lose their entry and go back to what the device\ndecides. The answer counts them. With `as`, one of that profile's own, and only its entries\nlose theirs. Emits `library.changed` for each source they belong to.",
         "operationId": "deleteOverrideSet",
         "parameters": [
           {
@@ -4375,6 +4577,15 @@
             "in": "path",
             "description": "The shared override's id",
             "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "as",
+            "in": "query",
+            "description": "Profile id: one of that profile's own",
+            "required": false,
             "schema": {
               "type": "string"
             }
@@ -4402,7 +4613,7 @@
             }
           },
           "404": {
-            "description": "No shared override with that id",
+            "description": "No shared override with that id, or `as` names no profile on this host",
             "content": {
               "application/json": {
                 "schema": {
@@ -4421,7 +4632,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "profile-data"
       }
     },
     "/api/v1/library/overrides/sources/{source}": {
@@ -4430,7 +4642,7 @@
           "library"
         ],
         "summary": "Set one source's overrides",
-        "description": "The same body as a game's, without `none`: `{}` clears the source's entry. Each title of\nthe source without an entry of its own takes it. Emits `library.changed`.",
+        "description": "The same body as a game's, without `none`: `{}` clears the source's entry. Each title of\nthe source without an entry of its own takes it. With `as`, the entry is that profile's own.\nEmits `library.changed`.",
         "operationId": "setSourceOverrides",
         "parameters": [
           {
@@ -4438,6 +4650,15 @@
             "in": "path",
             "description": "The source, the store part of a library id (e.g. `lutris`)",
             "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "as",
+            "in": "query",
+            "description": "Profile id: set it for that profile only",
+            "required": false,
             "schema": {
               "type": "string"
             }
@@ -4485,7 +4706,7 @@
             }
           },
           "404": {
-            "description": "`set` names no shared override",
+            "description": "`set` names no shared override, or `as` names no profile on this host",
             "content": {
               "application/json": {
                 "schema": {
@@ -4504,7 +4725,142 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "profile-data"
+      }
+    },
+    "/api/v1/library/own": {
+      "get": {
+        "tags": [
+          "library"
+        ],
+        "summary": "A seat host's own titles, as the box may see them",
+        "description": "The custom entries this seat host keeps in its own config folder, each by its `own:` id,\ntitle, platform and `http(s)` art: never how it starts, and never a cover on its disk. The box\nasks when the seat's library changes and when the seat comes up, and lists them for the seat's\nprofile. A host that keeps none answers an empty list.",
+        "operationId": "listOwnTitles",
+        "responses": {
+          "200": {
+            "description": "This seat host's own titles",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/OwnTitle"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "x-scope": "profile-data"
+      },
+      "put": {
+        "tags": [
+          "library"
+        ],
+        "summary": "Store a seat's own titles for its profile",
+        "description": "What a seat host's `GET /library/own` answered, for the profile `as` names, on the host that\nwrites the library: the door hands it here, and a Windows box stores its seats' itself. Rows\nare checked as an Art & Metadata source's are: a row with a bad id or title, a cover that isn't\n`http(s)` and a bad platform are dropped. An answer that isn't a list, lists more than 500 or\nnames an id twice is refused, and the stored titles stay. Emits `library.changed` on a change.",
+        "operationId": "storeOwnTitles",
+        "parameters": [
+          {
+            "name": "as",
+            "in": "query",
+            "description": "Profile id: the profile whose seat answered",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/OwnTitle"
+                }
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Stored"
+          },
+          "400": {
+            "description": "Not an answer the box keeps",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not the admin lane",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`as` names no profile on this host",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`as` names no profile with a seat of its own",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Couldn't save the titles",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "x-scope": "box"
       }
     },
     "/api/v1/library/page": {
@@ -4593,7 +4949,7 @@
           {
             "name": "as",
             "in": "query",
-            "description": "Profile id whose own play stats fill `stats.mine`",
+            "description": "Profile id: the library as that profile plays it, its own play stats in `stats.mine`",
             "required": false,
             "schema": {
               "type": "string"
@@ -4630,8 +4986,19 @@
                 }
               }
             }
+          },
+          "404": {
+            "description": "`as` names no profile on this host",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
           }
-        }
+        },
+        "x-scope": "profile-data"
       }
     },
     "/api/v1/library/picks/{id}": {
@@ -4640,7 +5007,7 @@
           "library"
         ],
         "summary": "Pick the art for one slot of a library entry",
-        "description": "The operator's choice beats the entry's own art and every metadata source, and survives\nthe provider's next reconcile. `url: null` clears the pick. The id is not required to\nexist now, as with hiding. Emits `library.changed`.",
+        "description": "The operator's choice beats the entry's own art and every metadata source, and survives\nthe provider's next reconcile. `url: null` clears the pick. The id is not required to\nexist now, as with hiding. With `as`, the pick is that profile's own and beats the box's for\nthe same slot. Emits `library.changed`.",
         "operationId": "setLibraryArtPick",
         "parameters": [
           {
@@ -4648,6 +5015,15 @@
             "in": "path",
             "description": "The library entry id (e.g. `steam:70`)",
             "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "as",
+            "in": "query",
+            "description": "Profile id: pick it for that profile only",
+            "required": false,
             "schema": {
               "type": "string"
             }
@@ -4694,6 +5070,16 @@
               }
             }
           },
+          "404": {
+            "description": "`as` names no profile on this host",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
           "500": {
             "description": "Couldn't save the picks",
             "content": {
@@ -4704,7 +5090,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "profile-data"
       }
     },
     "/api/v1/library/provider/{provider}": {
@@ -4728,7 +5115,7 @@
           {
             "name": "store",
             "in": "query",
-            "description": "Claim this store for the provider ([a-z0-9_-], `custom`/`manual` reserved)",
+            "description": "Claim this store for the provider ([a-z0-9_-], `custom`/`own`/`manual` reserved)",
             "required": false,
             "schema": {
               "type": "string"
@@ -4802,7 +5189,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "profile-exec"
       },
       "delete": {
         "tags": [
@@ -4863,7 +5251,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "profile-exec"
       }
     },
     "/api/v1/library/provider/{provider}/downloads": {
@@ -4936,7 +5325,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "profile-exec"
       }
     },
     "/api/v1/library/provider/{provider}/running": {
@@ -5009,7 +5399,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "profile-exec"
       }
     },
     "/api/v1/library/scanners": {
@@ -5018,8 +5409,19 @@
           "library"
         ],
         "summary": "List library sources",
-        "description": "One row per installed library plugin, with its enable state. Sources default to\nenabled; disabling hides titles from the next read. The custom store is not a\nsource and is always on. Every row is\n`origin: \"plugin\"`.",
+        "description": "One row per installed library plugin, with its enable state. Sources default to\nenabled; disabling hides titles from the next read. The custom store is not a\nsource and is always on. Every row is\n`origin: \"plugin\"`. With `as`, a source is off when the box or the profile turned it off, and\n`off_by` says which.",
         "operationId": "listLibraryScanners",
+        "parameters": [
+          {
+            "name": "as",
+            "in": "query",
+            "description": "Profile id: the sources as that profile has them",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "description": "This host's scanners with their enable state",
@@ -5043,8 +5445,19 @@
                 }
               }
             }
+          },
+          "404": {
+            "description": "`as` names no profile on this host",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
           }
-        }
+        },
+        "x-scope": "profile-data"
       }
     },
     "/api/v1/library/scanners/{id}": {
@@ -5053,7 +5466,7 @@
           "library"
         ],
         "summary": "Enable or disable a library source.",
-        "description": "Takes effect on the next library read. Disabling hides titles; the plugin may keep\nreconciling while off. Nothing is deleted. Emits `library.changed` when the state changes.",
+        "description": "Takes effect on the next library read. Disabling hides titles; the plugin may keep\nreconciling while off. Nothing is deleted. With `as`, the switch is that profile's own: it\nturns a source off for the profile, and cannot turn on one the box turned off. Emits\n`library.changed` when the state changes.",
         "operationId": "setLibraryScanner",
         "parameters": [
           {
@@ -5061,6 +5474,15 @@
             "in": "path",
             "description": "The scanner id (e.g. `steam`)",
             "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "as",
+            "in": "query",
+            "description": "Profile id: switch it for that profile only",
+            "required": false,
             "schema": {
               "type": "string"
             }
@@ -5101,7 +5523,7 @@
             }
           },
           "403": {
-            "description": "A plugin toggled another plugin's source",
+            "description": "A plugin toggled another plugin's source, or named a profile",
             "content": {
               "application/json": {
                 "schema": {
@@ -5111,7 +5533,7 @@
             }
           },
           "404": {
-            "description": "No such scanner on this platform",
+            "description": "No such scanner on this platform, or `as` names no profile on this host",
             "content": {
               "application/json": {
                 "schema": {
@@ -5130,7 +5552,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "profile-data"
       }
     },
     "/api/v1/local/summary": {
@@ -5175,7 +5598,8 @@
         },
         "security": [
           {}
-        ]
+        ],
+        "x-scope": "host"
       }
     },
     "/api/v1/logs": {
@@ -5231,7 +5655,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "host"
       }
     },
     "/api/v1/native/clients": {
@@ -5265,7 +5690,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "box"
       },
       "delete": {
         "tags": [
@@ -5315,7 +5741,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "box"
       }
     },
     "/api/v1/native/clients/{fingerprint}": {
@@ -5370,7 +5797,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "box"
       },
       "patch": {
         "tags": [
@@ -5461,7 +5889,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "box"
       }
     },
     "/api/v1/native/pair": {
@@ -5493,7 +5922,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "box"
       },
       "delete": {
         "tags": [
@@ -5525,7 +5955,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "box"
       }
     },
     "/api/v1/native/pair/arm": {
@@ -5597,7 +6028,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "box"
       }
     },
     "/api/v1/native/pending": {
@@ -5632,7 +6064,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "box"
       }
     },
     "/api/v1/native/pending/{id}/approve": {
@@ -5737,7 +6170,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "box"
       }
     },
     "/api/v1/native/pending/{id}/deny": {
@@ -5795,7 +6229,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "box"
       }
     },
     "/api/v1/pair": {
@@ -5827,7 +6262,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "box"
       }
     },
     "/api/v1/pair/pin": {
@@ -5902,7 +6338,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "box"
       }
     },
     "/api/v1/plugin-access": {
@@ -5947,7 +6384,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "profile-exec"
       }
     },
     "/api/v1/plugin-access/requests": {
@@ -5989,7 +6427,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "profile-exec"
       },
       "post": {
         "tags": [
@@ -6052,7 +6491,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "profile-exec"
       }
     },
     "/api/v1/plugin-access/{plugin}/decide": {
@@ -6155,7 +6595,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "profile-exec"
       }
     },
     "/api/v1/plugin-access/{plugin}/release": {
@@ -6248,7 +6689,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "profile-exec"
       }
     },
     "/api/v1/plugins": {
@@ -6283,7 +6725,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "profile-exec"
       }
     },
     "/api/v1/plugins/logs": {
@@ -6328,7 +6771,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "profile-exec"
       }
     },
     "/api/v1/plugins/{id}": {
@@ -6384,7 +6828,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "profile-exec"
       },
       "delete": {
         "tags": [
@@ -6418,7 +6863,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "profile-exec"
       }
     },
     "/api/v1/plugins/{id}/ui-credential": {
@@ -6471,7 +6917,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "profile-exec"
       }
     },
     "/api/v1/plugins/{id}/ui/attach": {
@@ -6527,7 +6974,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "profile-exec"
       }
     },
     "/api/v1/profiles": {
@@ -6572,7 +7020,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "box"
       },
       "post": {
         "tags": [
@@ -6662,7 +7111,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "box"
       }
     },
     "/api/v1/profiles/default": {
@@ -6706,7 +7156,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "box"
       }
     },
     "/api/v1/profiles/doctor": {
@@ -6758,7 +7209,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "box"
       }
     },
     "/api/v1/profiles/door": {
@@ -6836,7 +7288,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "box"
       }
     },
     "/api/v1/profiles/enumerate": {
@@ -6881,7 +7334,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "box"
       }
     },
     "/api/v1/profiles/seating": {
@@ -6923,7 +7377,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "box"
       },
       "put": {
         "tags": [
@@ -6983,7 +7438,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "box"
       }
     },
     "/api/v1/profiles/windows-accounts": {
@@ -7018,7 +7474,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "box"
       }
     },
     "/api/v1/profiles/{id}": {
@@ -7111,7 +7568,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "box"
       },
       "delete": {
         "tags": [
@@ -7184,7 +7642,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "box"
       }
     },
     "/api/v1/profiles/{id}/avatar": {
@@ -7248,7 +7707,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "box"
       },
       "put": {
         "tags": [
@@ -7317,7 +7777,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "box"
       },
       "delete": {
         "tags": [
@@ -7360,7 +7821,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "box"
       }
     },
     "/api/v1/profiles/{id}/devices": {
@@ -7436,7 +7898,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "box"
       },
       "delete": {
         "tags": [
@@ -7500,7 +7963,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "box"
       }
     },
     "/api/v1/profiles/{id}/devices/{fingerprint}": {
@@ -7585,7 +8049,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "box"
       }
     },
     "/api/v1/profiles/{id}/end": {
@@ -7658,7 +8123,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "box"
       }
     },
     "/api/v1/profiles/{id}/start": {
@@ -7721,7 +8187,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "box"
       }
     },
     "/api/v1/profiles/{id}/stop": {
@@ -7794,7 +8261,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "box"
       }
     },
     "/api/v1/profiles/{id}/unlock-challenge": {
@@ -7887,7 +8355,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "box"
       }
     },
     "/api/v1/profiles/{id}/wake": {
@@ -7960,7 +8429,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "box"
       }
     },
     "/api/v1/session": {
@@ -7999,7 +8469,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "host"
       }
     },
     "/api/v1/session/idr": {
@@ -8032,7 +8503,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "host"
       }
     },
     "/api/v1/session/last": {
@@ -8064,7 +8536,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "profile-data"
       }
     },
     "/api/v1/session/settings": {
@@ -8073,6 +8546,17 @@
           "session"
         ],
         "operationId": "getSessionSettings",
+        "parameters": [
+          {
+            "name": "as",
+            "in": "query",
+            "description": "Profile id: what that profile's own seat plays with",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "description": "Stored settings + which axes this build enforces",
@@ -8093,16 +8577,48 @@
                 }
               }
             }
+          },
+          "404": {
+            "description": "`as` names no profile on this host",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`as` names a profile that plays on the host's own desktop",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
           }
-        }
+        },
+        "x-scope": "profile-data"
       },
       "put": {
         "tags": [
           "session"
         ],
         "summary": "Set the session policy",
-        "description": "Persisted clamped. Takes effect on the next decision, including a session\nalready streaming — policy is read at session end, not start.",
+        "description": "Persisted clamped. Takes effect on the next decision, including a session\nalready streaming — policy is read at session end, not start. With `as`, the settings of\nthat profile's own seat; a profile on the host's own desktop has none of its own.",
         "operationId": "setSessionSettings",
+        "parameters": [
+          {
+            "name": "as",
+            "in": "query",
+            "description": "Profile id: set what that profile's own seat plays with",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -8144,6 +8660,36 @@
               }
             }
           },
+          "403": {
+            "description": "`as` on a lane other than the operator's",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`as` names no profile on this host",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "A seat's own host, or `as` names a profile that plays on the host's own desktop",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
           "500": {
             "description": "Couldn't save the session settings",
             "content": {
@@ -8154,7 +8700,100 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "profile-data"
+      },
+      "delete": {
+        "tags": [
+          "session"
+        ],
+        "summary": "Drop a profile's own session settings",
+        "description": "Its seat plays with the box's Seat defaults again; the answer is what `GET` with the same\n`as` answers, `configured: false`. Dropping settings a profile never had is the same answer.\n`as` is required: the host's own settings are changed with `PUT`, never dropped.",
+        "operationId": "clearSessionSettings",
+        "parameters": [
+          {
+            "name": "as",
+            "in": "query",
+            "description": "Profile id: the profile whose own settings to drop",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Dropped; the profile's state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionSettingsState"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "No `as`, or `as` names the owner",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`as` on a lane other than the operator's",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`as` names no profile on this host",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "A seat's own host, or `as` names a profile that plays on the host's own desktop",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Couldn't remove the settings file",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "x-scope": "profile-data"
       }
     },
     "/api/v1/session/{id}": {
@@ -8202,7 +8841,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "host"
       }
     },
     "/api/v1/session/{id}/access": {
@@ -8277,7 +8917,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "host"
       }
     },
     "/api/v1/session/{id}/audio": {
@@ -8335,7 +8976,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "host"
       }
     },
     "/api/v1/session/{id}/idr": {
@@ -8382,7 +9024,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "host"
       }
     },
     "/api/v1/session/{id}/pads": {
@@ -8447,7 +9090,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "host"
       }
     },
     "/api/v1/session/{id}/player": {
@@ -8522,7 +9166,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "host"
       }
     },
     "/api/v1/stats/capture/live": {
@@ -8562,7 +9207,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "host"
       }
     },
     "/api/v1/stats/capture/start": {
@@ -8594,7 +9240,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "host"
       }
     },
     "/api/v1/stats/capture/status": {
@@ -8624,7 +9271,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "host"
       }
     },
     "/api/v1/stats/capture/stop": {
@@ -8668,7 +9316,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "host"
       }
     },
     "/api/v1/stats/recordings": {
@@ -8703,7 +9352,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "host"
       }
     },
     "/api/v1/stats/recordings/{id}": {
@@ -8764,7 +9414,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "host"
       },
       "delete": {
         "tags": [
@@ -8816,7 +9467,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "host"
       }
     },
     "/api/v1/status": {
@@ -8847,7 +9499,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "host"
       }
     },
     "/api/v1/store/catalog": {
@@ -8889,7 +9542,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "profile-exec"
       }
     },
     "/api/v1/store/install": {
@@ -8898,7 +9552,7 @@
           "store"
         ],
         "summary": "Install a plugin",
-        "description": "`{source, id}` installs the catalog pin after re-checking integrity, or `{spec,\naccept_unverified: true}` installs unreviewed code the operator owns. `202` + job id; watch at\n`GET /store/jobs/{id}`. A seat host on a person's own account installs from the built-in\nsource alone: anything else would run code the box chose as that person.\n\nOne package operation at a time (`409` otherwise): `bun` shares a lockfile and `node_modules`.",
+        "description": "`{source, id}` installs the catalog pin after re-checking integrity, or `{spec,\naccept_unverified: true}` installs unreviewed code the operator owns. `202` + job id; watch at\n`GET /store/jobs/{id}`. A Windows seat host installs none: the box's runner, which it shares,\nnever reads them. A seat host on a person's own account installs from the built-in source\nalone: anything else would run code the box chose as that person.\n\nOne package operation at a time (`409` otherwise): `bun` shares a lockfile and `node_modules`.",
         "operationId": "installPlugin",
         "requestBody": {
           "content": {
@@ -8952,7 +9606,7 @@
             }
           },
           "409": {
-            "description": "Another package operation is in flight",
+            "description": "Another package operation is in flight, or a Windows seat host",
             "content": {
               "application/json": {
                 "schema": {
@@ -8961,7 +9615,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "profile-exec"
       }
     },
     "/api/v1/store/installed": {
@@ -9006,7 +9661,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "profile-exec"
       }
     },
     "/api/v1/store/jobs": {
@@ -9050,7 +9706,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "profile-exec"
       }
     },
     "/api/v1/store/jobs/{id}": {
@@ -9113,7 +9770,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "profile-exec"
       }
     },
     "/api/v1/store/refresh": {
@@ -9155,7 +9813,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "profile-exec"
       }
     },
     "/api/v1/store/runtime": {
@@ -9197,7 +9856,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "profile-exec"
       },
       "post": {
         "tags": [
@@ -9256,7 +9916,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "profile-exec"
       }
     },
     "/api/v1/store/sources": {
@@ -9300,7 +9961,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "profile-exec"
       }
     },
     "/api/v1/store/sources/{name}": {
@@ -9366,7 +10028,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "profile-exec"
       },
       "delete": {
         "tags": [
@@ -9409,7 +10072,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "profile-exec"
       }
     },
     "/api/v1/store/uninstall": {
@@ -9481,7 +10145,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "profile-exec"
       }
     },
     "/api/v1/update/apply": {
@@ -9533,7 +10198,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "box"
       }
     },
     "/api/v1/update/check": {
@@ -9585,7 +10251,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "box"
       }
     },
     "/api/v1/update/status": {
@@ -9617,7 +10284,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "box"
       }
     },
     "/api/v1/webtransport": {
@@ -9651,7 +10319,8 @@
         },
         "security": [
           {}
-        ]
+        ],
+        "x-scope": "box"
       }
     }
   },
@@ -11124,7 +11793,7 @@
               },
               {
                 "$ref": "#/components/schemas/DisplayTarget",
-                "description": "What this device streams. `own` opts it out of a host-wide monitor; absent follows\nthe host. The device may write this field on its own row."
+                "description": "What this device streams. `own` opts it out of a host-wide monitor; absent follows\nthe host. The device may write this field and `topology` on its own row."
               }
             ]
           },
@@ -11135,7 +11804,7 @@
               },
               {
                 "$ref": "#/components/schemas/SetBy",
-                "description": "Who wrote `screen`. Absent with it."
+                "description": "Who last wrote `screen` or `topology`. Absent when neither is set."
               }
             ]
           },
@@ -11884,6 +12553,7 @@
         "required": [
           "locked",
           "host_default",
+          "may_choose",
           "targets"
         ],
         "properties": {
@@ -11894,6 +12564,21 @@
           "locked": {
             "type": "boolean",
             "description": "`PUNKTFUNK_CAPTURE_MONITOR` fixes the screen for every device."
+          },
+          "may_choose": {
+            "type": "boolean",
+            "description": "Whether the caller may choose the screen: a paired device's `GRANT_DISPLAY`, always on\nthe operator and plugin lanes. A device's write without it is 403."
+          },
+          "role": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ScreenRoles",
+                "description": "The roles a device's own screen takes on this desk. Absent on a contract seat, a host\nwith no mirror backend, a gamescope session, and a desktop that lists no physical\nmonitor."
+              }
+            ]
           },
           "targets": {
             "type": "array",
@@ -11908,7 +12593,7 @@
               },
               {
                 "$ref": "#/components/schemas/DisplayTarget",
-                "description": "What the calling device is set to, before a taken or missing monitor falls back to its\nown screen. Null on the operator and plugin lanes."
+                "description": "What the calling device is set to, before a taken or missing monitor falls back to its\nown screen. A screen it set itself counts only while `may_choose`. Null on the operator\nand plugin lanes."
               }
             ]
           }
@@ -13183,6 +13868,10 @@
                     "description": "The stream settings this host sets for the title (`overrides.rs`), resolved: its own, a\nshared override's with that one's `name`, or its source's. Joined at read time."
                   }
                 ]
+              },
+              "own": {
+                "type": "boolean",
+                "description": "One of the profile in view's own titles (`own:` id). Its seat host keeps how it starts;\nanywhere else it is a name and a picture, and starts nothing."
               },
               "provider": {
                 "type": [
@@ -14529,6 +15218,14 @@
           }
         }
       },
+      "Layer": {
+        "type": "string",
+        "description": "Whose file a value came from.",
+        "enum": [
+          "box",
+          "profile"
+        ]
+      },
       "Layout": {
         "type": "object",
         "properties": {
@@ -15203,7 +15900,7 @@
               "null"
             ],
             "format": "int32",
-            "description": "`GRANT_*` bits 0–5. `null` is a pre-grants record, which means full.",
+            "description": "`GRANT_*` bits 0–8 (`0x100` is choosing its screen), as this host reads the record: an\nolder host's Full reads `0x1FF`, and `0xFF` is everything but the screen choice. `null`\nis a pre-grants record, which means full.",
             "example": 1,
             "minimum": 0
           },
@@ -15309,7 +16006,18 @@
             "properties": {
               "hidden": {
                 "type": "boolean",
-                "description": "Set by [`set_entry_hidden`]. Omitted when false so the shape only grows for hidden titles."
+                "description": "Set by [`set_entry_hidden`]. Omitted when false so the shape only grows for hidden titles.\nWith a profile in view (`as`), the profile hid it: a title the box hides is not listed."
+              },
+              "profile": {
+                "oneOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "$ref": "#/components/schemas/ProfileValues",
+                    "description": "With a profile in view, the values on this row that are the profile's own."
+                  }
+                ]
               }
             }
           }
@@ -15463,6 +16171,35 @@
             "format": "int32",
             "example": 1,
             "minimum": 0
+          }
+        }
+      },
+      "OwnTitle": {
+        "type": "object",
+        "description": "One of a profile's own titles as its seat host publishes it to the box: what a shelf shows,\nnever what starts it. Built field by field, so a field added to [`CustomEntry`] stays on the\nseat until it is added here.",
+        "required": [
+          "id",
+          "title"
+        ],
+        "properties": {
+          "art": {
+            "$ref": "#/components/schemas/Artwork",
+            "description": "`http(s)` URLs alone: a cover on the seat's disk stays there."
+          },
+          "id": {
+            "type": "string",
+            "description": "`own:` and 12 lowercase hex, minted by the seat host.",
+            "example": "own:3f9a0c1b2d4e"
+          },
+          "platform": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "example": "PC"
+          },
+          "title": {
+            "type": "string"
           }
         }
       },
@@ -16540,6 +17277,23 @@
           }
         }
       },
+      "ProfileValues": {
+        "type": "object",
+        "description": "The values on a row that the profile in view (`as`) set itself.",
+        "properties": {
+          "overrides": {
+            "type": "boolean",
+            "description": "`overrides` is the profile's: its entry for the game, or for the game's source."
+          },
+          "picks": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The art slots the profile picked: `portrait`, `hero`, `logo`, `header`."
+          }
+        }
+      },
       "ProviderEntryInput": {
         "allOf": [
           {
@@ -17071,6 +17825,17 @@
             "type": "string",
             "example": "Steam"
           },
+          "off_by": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/Layer",
+                "description": "With a profile in view (`as`), who turned the source off. Only the box turns on what the\nbox turned off."
+              }
+            ]
+          },
           "origin": {
             "$ref": "#/components/schemas/SourceOrigin",
             "description": "Always `plugin` on this host. `Builtin` remains so OpenAPI still names it for N-1 consoles."
@@ -17092,6 +17857,47 @@
         "properties": {
           "enabled": {
             "type": "boolean"
+          }
+        }
+      },
+      "ScreenRole": {
+        "type": "string",
+        "description": "How a device's own screen sits among the host's monitors: its `topology`, from its side.",
+        "enum": [
+          "only",
+          "main",
+          "second"
+        ]
+      },
+      "ScreenRoles": {
+        "type": "object",
+        "description": "The roles a device's own screen takes on the desk.",
+        "required": [
+          "host_default",
+          "offered"
+        ],
+        "properties": {
+          "host_default": {
+            "$ref": "#/components/schemas/ScreenRole",
+            "description": "What a connect gets with no pick of the device's: the console's row for it, else the\nhost's topology."
+          },
+          "offered": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ScreenRole"
+            },
+            "description": "The roles this host gives. `main` only where the desktop has a main screen."
+          },
+          "yours": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ScreenRole",
+                "description": "The role of the calling device's own pick while it counts and its screen is its own.\nNull with no pick, a monitor pick, no `GRANT_DISPLAY`, and on the operator lane."
+              }
+            ]
           }
         }
       },
@@ -17901,7 +18707,7 @@
       },
       "SetBy": {
         "type": "string",
-        "description": "Who last wrote a device's `screen`.",
+        "description": "Who last wrote a device's pick: its `screen`, its `topology`, or both.",
         "enum": [
           "device",
           "console"

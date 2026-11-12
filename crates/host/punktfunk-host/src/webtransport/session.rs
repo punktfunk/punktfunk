@@ -117,6 +117,10 @@ pub(crate) async fn run(
     .await
 }
 
+/// Each step a browser takes before admission, the session request included: a peer still
+/// silent after this holds a slot, not a handshake.
+pub(super) const HANDSHAKE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
 /// A browser past admission: its link, and the control stream with the first message read.
 struct Admitted {
     link: SessionLink,
@@ -139,7 +143,6 @@ async fn admit_session(
     serving: &Serving,
     via: &Arc<Via>,
 ) -> Result<Option<Admitted>> {
-    const HANDSHAKE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
     let (tx, mut rx) = tokio::time::timeout(HANDSHAKE_TIMEOUT, conn.accept_bi())
         .await
         .context("control stream: handshake timeout")?
@@ -445,6 +448,7 @@ mod tests {
             access_only: false,
             screens: Vec::new(),
             view: None,
+            screen_wish: None,
         }
     }
 

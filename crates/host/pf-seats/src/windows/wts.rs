@@ -6,15 +6,17 @@
 //! local to this computer, and match the complete account name under Windows case rules.
 //! Multiple matches are an error; how long to wait for one is the supervisor's. Disconnected
 //! sessions remain visible to diagnostics but are never returned as display-capable.
-//! Logoff looks the account's session up when it runs, never by an ID recorded earlier: Windows
-//! reuses freed IDs.
+//! Logoff looks the account's session up when it runs, never by an ID recorded earlier alone:
+//! Windows reuses freed IDs, and only a session's logon time tells a reused one apart.
 
+use crate::seat_step::Logon;
 use crate::windows::util::{backend_error, computer_name, io_error, WinResult};
 use windows::core::PWSTR;
+use windows::Wdk::System::SystemServices::RtlCompareUnicodeStrings;
 use windows::Win32::System::RemoteDesktop::{
-    WTSActive, WTSDomainName, WTSEnumerateSessionsW, WTSFreeMemory, WTSGetActiveConsoleSessionId,
-    WTSLogoffSession, WTSQuerySessionInformationW, WTSUserName, WTS_CONNECTSTATE_CLASS,
-    WTS_SESSION_INFOW,
+    WTSActive, WTSDisconnected, WTSDomainName, WTSEnumerateSessionsW, WTSFreeMemory,
+    WTSGetActiveConsoleSessionId, WTSLogoffSession, WTSQuerySessionInformationW, WTSSessionInfo,
+    WTSUserName, WTSINFOW, WTS_CONNECTSTATE_CLASS, WTS_SESSION_INFOW,
 };
 
 #[derive(Clone, Debug)]
@@ -77,15 +79,63 @@ pub(super) fn enumerate() -> WinResult<Vec<Session>> {
         .collect())
 }
 
-/// Whether this computer's `account`, compared case-insensitively, has any session right now:
-/// console or not, active or disconnected.
+/// Whether this computer's `account` has any session right now: console or not, active or
+/// disconnected.
 pub(super) fn has_session(account: &str) -> WinResult<bool> {
+    has_session_besides(account, &[])
+}
+
+/// [`has_session`], counting no session in `except`: ones just logged off may linger.
+pub(super) fn has_session_besides(account: &str, except: &[u32]) -> WinResult<bool> {
     let machine = computer_name()?;
-    let account = account.to_lowercase();
-    Ok(enumerate()?.iter().any(|session| {
-        session.user.to_lowercase() == account
-            && (session.domain.is_empty() || session.domain.eq_ignore_ascii_case(&machine))
-    }))
+    Ok(enumerate()?
+        .iter()
+        .any(|session| !except.contains(&session.id) && belongs_to(session, account, &machine)))
+}
+
+/// `account`'s non-console local sessions with their logon times. One that ends meanwhile is
+/// left out.
+pub(super) fn logons_of(account: &str) -> WinResult<Vec<Logon>> {
+    Ok(sessions_of(account, false)?
+        .into_iter()
+        .filter_map(|session| {
+            Some(Logon {
+                id: session.id,
+                time: logon_time(session.id).ok()?,
+                connected: session.state != WTSDisconnected,
+            })
+        })
+        .collect())
+}
+
+/// When session `id` signed in, in 100 ns units since 1601.
+pub(super) fn logon_time(id: u32) -> WinResult<i64> {
+    let mut buffer = PWSTR::null();
+    let mut bytes = 0_u32;
+    // SAFETY: both outputs remain live and WTS owns any returned allocation until the free below.
+    unsafe { WTSQuerySessionInformationW(None, id, WTSSessionInfo, &mut buffer, &mut bytes) }
+        .map_err(|error| io_error("wts_query", "WTSQuerySessionInformationW failed", error))?;
+    let time = (!buffer.is_null() && bytes as usize >= size_of::<WTSINFOW>()).then(|| {
+        // SAFETY: WTS reports `bytes` readable bytes at `buffer`, which hold one WTSINFOW; the
+        // read makes no alignment assumption.
+        unsafe { buffer.0.cast::<WTSINFOW>().read_unaligned() }.LogonTime
+    });
+    if !buffer.is_null() {
+        // SAFETY: this is the allocation returned by WTSQuerySessionInformationW and is freed once.
+        unsafe { WTSFreeMemory(buffer.0.cast()) };
+    }
+    time.ok_or_else(|| backend_error("wts_query", "WTSSessionInfo returned no session record"))
+}
+
+/// Whether `session` is this computer's `account`. Names compare as Windows compares account
+/// names: case folded one UTF-16 unit at a time, so `ß` never matches `SS`.
+fn belongs_to(session: &Session, account: &str, machine: &str) -> bool {
+    let same = |a: &str, b: &str| {
+        let (a, b): (Vec<u16>, Vec<u16>) = (a.encode_utf16().collect(), b.encode_utf16().collect());
+        // SAFETY: both slices are live for the call; ntdll only reads them.
+        unsafe { RtlCompareUnicodeStrings(&a, &b, true) == 0 }
+    };
+    same(&session.user, account) && (session.domain.is_empty() || same(&session.domain, machine))
 }
 
 pub(super) fn active_for_account(account: &str) -> WinResult<Option<Session>> {
@@ -99,13 +149,14 @@ pub(super) fn any_for_account(account: &str) -> WinResult<Option<Session>> {
     one_account_session(account, false)
 }
 
-/// Logs off every session of `account`, whatever its state, and counts them. None is success.
-pub(super) fn logoff_account_if_present(account: &str) -> WinResult<usize> {
+/// Logs off every session of `account`, whatever its state, and answers their ids. None is
+/// success.
+pub(super) fn logoff_account_if_present(account: &str) -> WinResult<Vec<u32>> {
     let sessions = sessions_of(account, false)?;
     for session in &sessions {
         logoff(session.id)?;
     }
-    Ok(sessions.len())
+    Ok(sessions.iter().map(|session| session.id).collect())
 }
 
 /// The non-console local sessions of `account`, and only the active ones when `active_only`.
@@ -125,8 +176,7 @@ fn of_account(
         .filter(|session| {
             (!active_only || session.state == WTSActive)
                 && !session.console
-                && session.user.eq_ignore_ascii_case(account)
-                && (session.domain.is_empty() || session.domain.eq_ignore_ascii_case(machine))
+                && belongs_to(session, account, machine)
         })
         .collect()
 }
@@ -143,7 +193,7 @@ fn one_account_session(account: &str, active_only: bool) -> WinResult<Option<Ses
     }
 }
 
-fn logoff(session_id: u32) -> WinResult<()> {
+pub(super) fn logoff(session_id: u32) -> WinResult<()> {
     // SAFETY: the ID comes from an enumeration made moments ago; no memory is shared.
     unsafe { WTSLogoffSession(None, session_id, true) }
         .map_err(|error| io_error("wts_logoff", "WTSLogoffSession failed", error))
@@ -175,7 +225,6 @@ fn query_string(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use windows::Win32::System::RemoteDesktop::WTSDisconnected;
 
     fn session(id: u32, user: &str, domain: &str, state: WTS_CONNECTSTATE_CLASS) -> Session {
         Session {
@@ -210,5 +259,33 @@ mod tests {
         };
         assert_eq!(ids(false), [2, 3]);
         assert_eq!(ids(true), [3]);
+    }
+
+    /// A name matches as Windows folds it, one UTF-16 unit at a time, past ASCII too.
+    #[test]
+    fn an_account_name_folds_case_as_windows_does() {
+        for (user, domain, account, machine, same) in [
+            ("PF-SEAT-1", "box", "pf-seat-1", "BOX", true),
+            ("Ärger", "BOX", "ärger", "BOX", true),
+            ("ÄRGER", "", "ärger", "BOX", true),
+            ("ärger", "BÜRO", "Ärger", "büro", true),
+            ("STRAßE", "BOX", "straße", "BOX", true),
+            ("Arger", "BOX", "ärger", "BOX", false),
+            ("STRASSE", "BOX", "straße", "BOX", false),
+            ("pf-seat-10", "BOX", "pf-seat-1", "BOX", false),
+            ("ärger", "CORP", "ärger", "BOX", false),
+        ] {
+            let found = of_account(
+                vec![session(1, user, domain, WTSActive)],
+                account,
+                machine,
+                true,
+            );
+            assert_eq!(
+                found.len() == 1,
+                same,
+                "{user}@{domain} as {account}@{machine}"
+            );
+        }
     }
 }

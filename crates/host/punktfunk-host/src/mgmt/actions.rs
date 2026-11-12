@@ -215,7 +215,7 @@ fn next_monitor_target() -> Result<(String, String), Said> {
         pf_host_config::config().capture_monitor.as_deref(),
         crate::vdisplay::policy::prefs()
             .get()
-            .screen_for(None)
+            .screen_for(None, false)
             .and_then(crate::vdisplay::policy::DisplayTarget::into_monitor),
         host_monitors,
     )

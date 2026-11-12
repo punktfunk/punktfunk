@@ -94,8 +94,8 @@ internal fun ConnectGrid(
     /** What each paired host last said this device may stream, by fingerprint. Absent = no
      *  Screen section. */
     screens: Map<String, DisplayTargets.Targets>,
-    /** Write this device's screen on the host. */
-    onPickScreen: (KnownHost, DisplayTargets.Target) -> Unit,
+    /** Write a Screen row's pick on the host; a row without one writes nothing. */
+    onPickScreen: (KnownHost, DisplayTargets.ScreenRow) -> Unit,
     onCopyLink: (KnownHost, StreamPreset?) -> Unit,
     onTogglePin: (KnownHost, StreamPreset) -> Unit,
     /**
@@ -170,29 +170,33 @@ internal fun ConnectGrid(
                 },
             )
         }
-        // Which host screen a connect streams: the host's rows, its current one checked. A
-        // taken or off head stays listed, greyed, with why; a locked host shows only its note.
-        val shown = screens[kh.fpHex]?.takeIf { pin == null && kh.paired }
-        if (shown != null) {
+        // Which host screen a connect streams, as one choice: the host's rows with the current
+        // one checked, a taken or off head greyed with why. The note heads the section when
+        // the host or the card's preset decides; a section with neither is not drawn. A pinned
+        // card draws it only while its preset decides.
+        val under = pin ?: kh.presetId?.let { id -> presets.firstOrNull { it.id == id } }
+        val shown = screens[kh.fpHex]?.takeIf { kh.paired && (pin == null || it.presetRow(pin, res) != null) }
+        val rows = shown?.rowsUnder(under, res).orEmpty()
+        val note = shown?.noteUnder(under, res)
+        if (rows.isNotEmpty() || note != null) {
             add(
                 HostMenuItem(
                     stringResource(R.string.hostcard_section_screen),
                     startsSection = true,
-                    detail = if (shown.locked) stringResource(R.string.screen_locked_hint) else null,
+                    detail = note,
                     onClick = null,
                 ),
             )
-            if (!shown.locked) {
-                shown.targets.forEach { t ->
-                    val why = t.reason(res)
-                    // The check mark is a glyph, not part of the message.
-                    val name = t.name(res) + if (t.target() == shown.current()) " ✓" else ""
-                    add(
-                        HostMenuItem(name, enabled = why == null, detail = why ?: t.detail().ifEmpty { null }) {
-                            onPickScreen(kh, t)
-                        },
-                    )
-                }
+            rows.forEach { r ->
+                r.header?.let { add(HostMenuItem(it, subhead = true, onClick = null)) }
+                add(
+                    HostMenuItem(
+                        r.label,
+                        enabled = r.pickable,
+                        detail = r.reason ?: r.hint ?: r.detail.ifEmpty { null },
+                        selected = r.checked,
+                    ) { onPickScreen(kh, r) },
+                )
             }
         }
         if (presets.isEmpty()) return@buildList
@@ -238,12 +242,13 @@ internal fun ConnectGrid(
     // ANY saved card carries a preset chip, they all reserve its space. Nobody who doesn't use
     // presets ever sees the gap.
     val anyPresetChip = savedCards.any { it.pin != null || it.host.presetId != null }
-    // The card names its screen only when a connect mirrors a monitor; its own screen says nothing.
-    val mirrors = savedHosts.mapNotNull { kh ->
-        screens[kh.fpHex]?.takeIf { kh.paired && it.current() is DisplayTargets.DisplayTarget.Monitor }
-            ?.let { kh.fpHex to it }
-    }.toMap()
     val res = LocalContext.current.resources
+    // The card names its screen only when it is not the only screen: a role or a monitor, the
+    // card's preset's when that decides.
+    val screenLines = savedCards.mapNotNull { e ->
+        val under = e.pin ?: e.host.presetId?.let { id -> presets.firstOrNull { it.id == id } }
+        screens[e.host.fpHex]?.takeIf { e.host.paired }?.cardLineUnder(under, res)?.let { e.key to it }
+    }.toMap()
 
     Box(Modifier.fillMaxSize()) {
         LazyVerticalGrid(
@@ -308,8 +313,8 @@ internal fun ConnectGrid(
                         profilePicture = kh.asProfile?.avatar,
                         profileArt = if (kh.asProfile?.avatar != null) rememberProfileArt(kh) else null,
                         reservePresetSlot = anyPresetChip,
-                        screenLine = mirrors[kh.fpHex]?.summary(res),
-                        reserveScreenLine = mirrors.isNotEmpty(),
+                        screenLine = screenLines[entry.key],
+                        reserveScreenLine = screenLines.isNotEmpty(),
                     )
                 }
             }

@@ -154,6 +154,9 @@ async fn library_pages_by_cursor_with_search_and_counts() {
     let (_, found) = send(&app, get_req("/api/v1/library/page?q=HA")).await;
     assert_eq!(titles(&found), ["alpha", "Charlie"]);
     assert_eq!(found["total"], 2);
+    // `ＨＡ`, typed at full width.
+    let (_, wide) = send(&app, get_req("/api/v1/library/page?q=%EF%BC%A8%EF%BC%A1")).await;
+    assert_eq!(titles(&wide), ["alpha", "Charlie"]);
 
     // The platform filter narrows the page, not the counts beside it.
     let (_, n64) = send(&app, get_req("/api/v1/library/page?platform=n64")).await;
@@ -168,7 +171,7 @@ async fn library_pages_by_cursor_with_search_and_counts() {
     assert_eq!(titles(&one), ["bravo"]);
 
     // A hidden title leaves every page but the operator's, where it is flagged.
-    crate::library::set_entry_hidden(id, true).expect("hide");
+    crate::library::set_entry_hidden(&crate::library::View::here(), id, true).expect("hide");
     let (_, all) = send(&app, get_req("/api/v1/library/page")).await;
     assert_eq!(all["total"], 6);
     let flagged: Vec<_> = all["items"]
@@ -220,8 +223,8 @@ async fn a_seat_plays_the_boxs_library_and_changes_none_of_it() {
     let games = crate::library::sorted_games();
     let ids: Vec<&str> = games.iter().map(|g| g.id.as_str()).collect();
     assert_eq!(ids, ["steam:400"]);
-    assert!(crate::library::resolve_launch("steam:400").is_some());
-    let sources: Vec<String> = crate::library::list_scanners()
+    assert!(crate::library::resolve_launch(&crate::library::View::here(), "steam:400").is_some());
+    let sources: Vec<String> = crate::library::list_scanners(&crate::library::View::here())
         .into_iter()
         .map(|s| s.id)
         .collect();
@@ -490,7 +493,8 @@ async fn a_seat_reads_the_boxs_game_overrides_and_changes_none() {
         "{json}"
     );
     assert_eq!(
-        crate::library::overrides_for("steam:400").and_then(|o| o.hz),
+        crate::library::overrides_for(&crate::library::View::here(), "steam:400")
+            .and_then(|o| o.hz),
         Some(60)
     );
     let (s, got) = send(&app, get_req("/api/v1/library/overrides")).await;
@@ -522,8 +526,14 @@ async fn a_seat_reads_the_boxs_game_overrides_and_changes_none() {
 
 #[tokio::test]
 async fn library_stats_ride_on_the_entry() {
-    let _tmp = ConfigDirOverride::new();
-    let app = test_app(test_state(), None);
+    let tmp = ConfigDirOverride::new();
+    let (kid, enrico) = ("0a0b0c0d0e0f", "0f0e0d0c0b0a");
+    let shares = |id: &str| serde_json::json!({"id": id, "display_name": id, "os_account": {"kind": "operator"}});
+    let profiles = serde_json::json!({"profiles": [shares(enrico), shares(kid)]});
+    let app = test_app(
+        super::profile_view::profiles_state(tmp.path(), profiles),
+        None,
+    );
     let added = crate::library::add_custom(crate::library::CustomInput {
         title: "Chrono Trigger".into(),
         art: Default::default(),
@@ -547,9 +557,9 @@ async fn library_stats_ride_on_the_entry() {
         "a never-launched title carries no stats key: {json}"
     );
 
-    crate::library::record_launch(&id, Some("kid"));
-    crate::library::record_run_time(&id, Some("kid"), std::time::Duration::from_millis(1_500));
-    crate::library::record_run_time(&id, Some("kid"), std::time::Duration::from_millis(500));
+    crate::library::record_launch(&id, Some(kid));
+    crate::library::record_run_time(&id, Some(kid), std::time::Duration::from_millis(1_500));
+    crate::library::record_run_time(&id, Some(kid), std::time::Duration::from_millis(500));
     // A run credited to an id with no entry is kept but never surfaces.
     crate::library::record_run_time("steam:404", None, std::time::Duration::from_secs(1));
 
@@ -566,9 +576,10 @@ async fn library_stats_ride_on_the_entry() {
     assert!(stats.get("mine").is_none(), "no `as`, no `mine`: {json}");
 
     // Another profile's launch moves the totals, not the kid's own numbers.
-    crate::library::record_launch(&id, Some("enrico"));
-    for path in ["/api/v1/library?as=kid", "/api/v1/library/page?as=kid"] {
-        let (s, json) = send(&app, get_req(path)).await;
+    crate::library::record_launch(&id, Some(enrico));
+    for path in ["/api/v1/library", "/api/v1/library/page"] {
+        let path = format!("{path}?as={kid}");
+        let (s, json) = send(&app, get_req(&path)).await;
         assert_eq!(s, StatusCode::OK);
         let stats = json
             .get("items")
@@ -577,8 +588,11 @@ async fn library_stats_ride_on_the_entry() {
         assert_eq!(stats["mine"]["launch_count"], 1, "{path}: {json}");
         assert_eq!(stats["mine"]["play_time_ms"], 2_000, "{path}: {json}");
     }
-    let (_, json) = send(&app, get_req("/api/v1/library?as=nobody")).await;
-    assert!(json[0]["stats"].get("mine").is_none(), "{json}");
+    let (s, json) = send(&app, get_req("/api/v1/library?as=0123456789ab")).await;
+    assert_eq!(
+        (s, &json["code"]),
+        (StatusCode::NOT_FOUND, &"profile_unknown".into())
+    );
 }
 
 /// The lease watcher credits a recorded launch's run: seen running, then gone, lands on disk.

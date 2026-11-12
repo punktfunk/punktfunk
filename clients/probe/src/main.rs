@@ -968,6 +968,7 @@ async fn handshake(
         access_only: false,
         screens: screens_ask(args),
         view: args.view,
+        screen_wish: None,
     };
     v2io::send(send, &hello).await?;
     // `Pending` repeats while the host asks its console about this probe.

@@ -5,7 +5,12 @@ import { LauncherIcon } from "@/components/launcher-icon";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { m } from "@/paraglide/messages";
-import { type GameCardProps, SelectCover } from "./GameCard";
+import {
+	type GameCardProps,
+	hideLabel,
+	OwnBadge,
+	SelectCover,
+} from "./GameCard";
 import { isOperatorOwned, sourceLabel } from "./helpers";
 import { InstallBadge } from "./Install";
 import { streamSummary } from "./overrides";
@@ -13,7 +18,9 @@ import { streamSummary } from "./overrides";
 /**
  * One title as a line: a small cover, its name, where it comes from, the host's stream settings,
  * and the same two controls a card has. Many more fit a screen than posters do, which is the
- * point of the row view. In selection mode the row is one checkbox.
+ * point of the row view. In selection mode the row is one checkbox. In a profile's view its hide
+ * and its own stream settings carry its mark, and a game only it has is marked so in place of
+ * its source and deletes rather than hides.
  */
 export const GameRow: FC<GameCardProps> = ({
 	game,
@@ -26,10 +33,13 @@ export const GameRow: FC<GameCardProps> = ({
 	selecting,
 	selected = false,
 	onSelect,
+	who,
 }) => {
 	const hidden = game.hidden === true;
 	const isCustom = isOperatorOwned(game);
 	const stream = streamSummary(game.overrides);
+	const ownStream = who !== undefined && game.profile?.overrides === true;
+	const own = who !== undefined && game.own === true;
 	const [failed, setFailed] = useState<Record<string, boolean>>({});
 	const src = [game.art.portrait, game.art.header].find(
 		(u): u is string => !!u && !failed[u],
@@ -71,16 +81,37 @@ export const GameRow: FC<GameCardProps> = ({
 						)}
 					</p>
 					<div className="mt-1 flex flex-wrap gap-1">
-						<Badge variant={isCustom ? "secondary" : "outline"}>
-							{sourceLabel(game, nameOf)}
-						</Badge>
+						{own ? (
+							<OwnBadge label={m.profile_view_own({ name: who ?? "" })} />
+						) : (
+							<Badge variant={isCustom ? "secondary" : "outline"}>
+								{sourceLabel(game, nameOf)}
+							</Badge>
+						)}
 						{game.platform && game.platform.toUpperCase() !== "PC" && (
 							<Badge variant="outline">{game.platform}</Badge>
 						)}
-						{hidden && (
-							<Badge variant="secondary">{m.library_hidden_badge()}</Badge>
-						)}
-						{stream && <Badge variant="secondary">{stream}</Badge>}
+						{hidden &&
+							(who ? (
+								<OwnBadge label={m.profile_view_hidden_badge({ name: who })} />
+							) : (
+								<Badge variant="secondary">{m.library_hidden_badge()}</Badge>
+							))}
+						{stream &&
+							(ownStream ? (
+								<OwnBadge
+									label={stream}
+									mark={m.profile_view_own({ name: who ?? "" })}
+								/>
+							) : (
+								<Badge
+									variant="secondary"
+									className="max-w-full min-w-0"
+									title={stream}
+								>
+									<span className="truncate">{stream}</span>
+								</Badge>
+							))}
 						<InstallBadge
 							{...(game.install ? { install: game.install } : {})}
 							{...(download ? { download } : {})}
@@ -89,21 +120,25 @@ export const GameRow: FC<GameCardProps> = ({
 				</div>
 			</Link>
 			<div className={`flex shrink-0 gap-1${selecting ? " invisible" : ""}`}>
-				<Button
-					variant="ghost"
-					size="icon"
-					className="size-8"
-					aria-label={
-						hidden ? m.library_unhide_action() : m.library_hide_action()
-					}
-					title={hidden ? m.library_unhide_action() : m.library_hide_action()}
-					aria-pressed={hidden}
-					disabled={hiding}
-					onClick={onToggleHidden}
-				>
-					{hidden ? <Eye className="size-4" /> : <EyeOff className="size-4" />}
-				</Button>
-				{isCustom && (
+				{!own && (
+					<Button
+						variant="ghost"
+						size="icon"
+						className="size-8"
+						aria-label={hideLabel(hidden, who)}
+						title={hideLabel(hidden, who)}
+						aria-pressed={hidden}
+						disabled={hiding}
+						onClick={onToggleHidden}
+					>
+						{hidden ? (
+							<Eye className="size-4" />
+						) : (
+							<EyeOff className="size-4" />
+						)}
+					</Button>
+				)}
+				{isCustom && onDelete && (
 					<Button
 						variant="ghost"
 						size="icon"

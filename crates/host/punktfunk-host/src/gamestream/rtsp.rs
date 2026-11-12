@@ -252,13 +252,29 @@ fn handle_request(req: &Request, state: &Arc<AppState>, peer: Option<SocketAddr>
             }
             match stream_config(&map, super::apps::by_id(ls.appid).as_ref()) {
                 Some(mut cfg) => {
-                    let owner_hdr = (state.gs.joined.lock().unwrap_or_else(|e| e.into_inner()))
+                    let owner = (state.gs.joined.lock().unwrap_or_else(|e| e.into_inner()))
                         .as_ref()
-                        .map(|(_, d)| d.hdr);
-                    if !follow_joined_hdr(&mut cfg, &map, owner_hdr) {
+                        .map(|(_, d)| (d.hdr, d.format));
+                    if !follow_joined_hdr(&mut cfg, &map, owner.map(|o| o.0)) {
                         tracing::warn!(
                             "RTSP ANNOUNCE — refused: the shared display is HDR and this stream \
                              can't be"
+                        );
+                        return response_status("406 Not Acceptable", &req.cseq, &[], None);
+                    }
+                    // A Moonlight client decodes what it asked for, so it matches a shared
+                    // capture's format or is refused.
+                    let shared = owner.and_then(|o| o.1);
+                    let can = super::stream::sample_format(&cfg);
+                    let joined =
+                        shared.map(|shared| crate::vdisplay::admission::joined_format(shared, can));
+                    if let Some(Err(gap)) = joined {
+                        tracing::warn!(
+                            ?gap,
+                            ?shared,
+                            ?can,
+                            "RTSP ANNOUNCE — refused: this stream can't take the shared \
+                             capture's format"
                         );
                         return response_status("406 Not Acceptable", &req.cseq, &[], None);
                     }

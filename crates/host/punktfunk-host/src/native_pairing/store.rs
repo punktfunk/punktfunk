@@ -4,12 +4,12 @@
 //! pairing is a separate store. Pending knocks live in [`super::approval`].
 //! Persist failures roll back in-memory state so RAM never diverges from disk.
 //!
-//! Pin this via [`TrustStore`]. Grant masks are stored as written; readers AND
-//! with [`GRANT_ALL`]. Expiry is host wall clock, re-evaluated at each check.
+//! Pin this via [`TrustStore`]. Grant masks are stored as written; every reader goes
+//! through [`stored_grants`]. Expiry is host wall clock, re-evaluated at each check.
 //! A seat host opens the box's store read-only and re-reads it when it changes.
 
 use anyhow::Result;
-use punktfunk_core::quic::GRANT_ALL;
+use punktfunk_core::quic::{lift_pre_manage, normalize_legacy_full, GRANT_ALL};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
@@ -24,10 +24,14 @@ pub struct PairedClient {
     pub name: String,
     /// Hex SHA-256 of the client's certificate.
     pub fingerprint: String,
-    /// `GRANT_*` mask. `None` (pre-grants stores) is full control. Readers AND with
-    /// [`GRANT_ALL`] so reserved bits from a newer writer cannot take effect here.
+    /// `GRANT_*` mask. `None` (pre-grants stores) is full control. Read it through
+    /// [`stored_grants`], never directly.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub grants: Option<u32>,
+    /// [`GRANTS_REV`] once a host that knows `GRANT_DISPLAY` wrote `grants`. Without it, a
+    /// stored `0xFF` is an older host's Full.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub grants_rev: Option<u8>,
     /// Host wall-clock unix seconds. `None` is permanent. Re-evaluate at each check;
     /// do not cache against a monotonic offset — an NTP step must move the deadline.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -48,6 +52,20 @@ pub struct PairedClient {
     /// familiar, so its next device's knock may be approved. Never an authorization input.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub origin: Option<String>,
+}
+
+/// The vocabulary this host writes `grants` in, where [`GRANT_ALL`] is `0x1FF`.
+pub const GRANTS_REV: u8 = 1;
+
+/// The mask a record grants: absent is [`GRANT_ALL`], an unmarked older Full (`0x3F`, `0x7F`,
+/// `0xFF`) is lifted, and a marked `0xFF` stays "all but the screen choice". Reserved bits a
+/// newer writer stored are cleared.
+pub fn stored_grants(c: &PairedClient) -> u32 {
+    match (c.grants, c.grants_rev) {
+        (None, _) => GRANT_ALL,
+        (Some(m), None) => normalize_legacy_full(m) & GRANT_ALL,
+        (Some(m), Some(_)) => lift_pre_manage(m) & GRANT_ALL,
+    }
 }
 
 /// Operator access choice. `Option<Access>::None` means no choice: new records get
@@ -182,10 +200,8 @@ impl TrustStore {
         self.lock().clients.contains(fp_hex)
     }
 
-    /// Authorized mask right now: `None` if unpaired or expired. Absent grants are
-    /// [`GRANT_ALL`]. AND with [`GRANT_ALL`] on the way out; `normalize_legacy_full`
-    /// maps the old full-control value. `now_unix` is the caller's clock so expiry
-    /// and the decision it feeds share one instant.
+    /// Authorized mask right now ([`stored_grants`]): `None` if unpaired or expired.
+    /// `now_unix` is the caller's clock so expiry and the decision it feeds share one instant.
     pub(super) fn effective(&self, fp_hex: &str, now_unix: i64) -> Option<u32> {
         let p = self.lock();
         let c = p
@@ -196,7 +212,7 @@ impl TrustStore {
         if c.expires_unix.is_some_and(|t| now_unix >= t) {
             return None;
         }
-        Some(punktfunk_core::quic::normalize_legacy_full(c.grants.unwrap_or(GRANT_ALL)) & GRANT_ALL)
+        Some(stored_grants(c))
     }
 
     /// Stored record, verbatim: no expiry check and no grant mask.
@@ -217,8 +233,8 @@ impl TrustStore {
         self.add_with_access(name, fp_hex, None)
     }
 
-    /// Pair, optionally with [`Access`]. `Some` replaces grants and expiry; `None`
-    /// matches [`Self::add`]. Persist failure rolls back RAM. The caller clears any
+    /// Pair, optionally with [`Access`]. `Some` replaces grants and expiry and marks the
+    /// record [`GRANTS_REV`]; `None` matches [`Self::add`]. Persist failure rolls back RAM. The caller clears any
     /// pending knock ([`super::approval::ApprovalQueue::admit_and_clear`]).
     pub(super) fn add_with_access(
         &self,
@@ -239,6 +255,7 @@ impl TrustStore {
                 existing.name = name;
                 if let Some(a) = access {
                     existing.grants = Some(a.grants);
+                    existing.grants_rev = Some(GRANTS_REV);
                     existing.expires_unix = a.expires_unix;
                     existing.until_disconnect = a.until_disconnect;
                     existing.granted_unix = Some(crate::clock::unix_secs());
@@ -248,6 +265,7 @@ impl TrustStore {
                 name,
                 fingerprint: fp_hex.to_string(),
                 grants: access.map(|a| a.grants),
+                grants_rev: access.map(|_| GRANTS_REV),
                 expires_unix: access.and_then(|a| a.expires_unix),
                 granted_unix: access.map(|_| crate::clock::unix_secs()),
                 until_disconnect: access.is_some_and(|a| a.until_disconnect),
@@ -262,8 +280,9 @@ impl TrustStore {
         Ok(())
     }
 
-    /// Overwrite access on an existing record. Unknown fingerprint returns `false`
-    /// and writes nothing — this is not a pairing path. Persist failure rolls back RAM.
+    /// Overwrite access on an existing record and mark it [`GRANTS_REV`]. Unknown fingerprint
+    /// returns `false` and writes nothing — this is not a pairing path. Persist failure rolls
+    /// back RAM.
     pub(super) fn set_access(&self, fp_hex: &str, access: Access) -> Result<bool> {
         let mut p = self.lock();
         let snapshot = p.clients.clients.clone();
@@ -276,6 +295,7 @@ impl TrustStore {
             return Ok(false);
         };
         existing.grants = Some(access.grants);
+        existing.grants_rev = Some(GRANTS_REV);
         existing.expires_unix = access.expires_unix;
         existing.until_disconnect = access.until_disconnect;
         existing.granted_unix = Some(crate::clock::unix_secs());
@@ -402,6 +422,44 @@ mod tests {
         assert!(
             !seat.is_paired("aa"),
             "a revoke on the box reaches the seat"
+        );
+    }
+
+    /// Only an unmarked record lifts `0xFF`; both kinds lift the two older Fulls.
+    #[test]
+    fn a_marked_full_minus_the_screen_choice_reads_as_written() {
+        use punktfunk_core::quic::{
+            GRANT_ALL_PRE_DISPLAY, GRANT_ALL_PRE_MANAGE, GRANT_ALL_PRE_POWER,
+        };
+        let record = |grants, grants_rev| PairedClient {
+            name: "TV".into(),
+            fingerprint: "aa".into(),
+            grants,
+            grants_rev,
+            expires_unix: None,
+            granted_unix: None,
+            until_disconnect: false,
+            preferred_pad_slot: None,
+            origin: None,
+        };
+        let marked = Some(GRANTS_REV);
+        assert_eq!(stored_grants(&record(None, None)), GRANT_ALL);
+        assert_eq!(stored_grants(&record(None, marked)), GRANT_ALL);
+        assert_eq!(
+            stored_grants(&record(Some(GRANT_ALL_PRE_DISPLAY), None)),
+            GRANT_ALL
+        );
+        assert_eq!(
+            stored_grants(&record(Some(GRANT_ALL_PRE_DISPLAY), marked)),
+            GRANT_ALL_PRE_DISPLAY
+        );
+        for old_full in [GRANT_ALL_PRE_POWER, GRANT_ALL_PRE_MANAGE] {
+            assert_eq!(stored_grants(&record(Some(old_full), None)), GRANT_ALL);
+            assert_eq!(stored_grants(&record(Some(old_full), marked)), GRANT_ALL);
+        }
+        assert_eq!(
+            stored_grants(&record(Some(GRANT_ALL | 1 << 30), marked)),
+            GRANT_ALL
         );
     }
 

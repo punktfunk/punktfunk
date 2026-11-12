@@ -200,7 +200,7 @@ impl Launcher {
                     port,
                     pin,
                     self.identity.clone(),
-                    launch,
+                    (launch, profile.as_deref()),
                     gamepad,
                     native,
                     hdr,
@@ -288,7 +288,8 @@ pub fn run(target: Option<&str>) -> u8 {
         label: window_label,
         seed,
     } = console_entry(target, &known, fake, trust::Settings::load);
-    let opts = ConsoleOptions::desktop(trust::device_name(), is_steam_deck());
+    let mut opts = ConsoleOptions::desktop(trust::device_name(), is_steam_deck());
+    opts.device_code = trust::device_code(&identity);
     let (overlay, handles) = match SkiaOverlay::console(opts, entry) {
         Ok(v) => v,
         Err(e) => {
@@ -701,8 +702,12 @@ impl ServiceState {
                 mgmt,
                 fp_hex,
                 screen,
+                topology,
                 label,
-            } => self.set_screen(addr, mgmt, fp_hex, screen, label),
+            } => {
+                let pick = pf_client_core::display_targets::Pick { screen, topology };
+                self.set_screen(addr, mgmt, fp_hex, pick, label)
+            }
             ConsoleCmd::EndGame {
                 addr,
                 mgmt,
@@ -748,8 +753,12 @@ impl ServiceState {
                     port,
                     req,
                     trust::access_error_message,
-                    move |a, p, id| {
-                        trust::request_access_to_host(a, p, id, pin, &device_name, None)
+                    // The console offers a request only for a host that advertised a fingerprint.
+                    move |a, p, id| match pin {
+                        Some(pin) => {
+                            trust::request_access_to_host(a, p, id, pin, &device_name, None)
+                        }
+                        None => Err(punktfunk_core::PunktfunkError::InvalidArg("fingerprint")),
                     },
                 )
             }
@@ -841,17 +850,22 @@ impl ServiceState {
         // of the placeholder at `addr:port`. Empty with auto-wake off or no MAC on record: the
         // fetch then asks once instead of retrying across a boot.
         let known = trust::KnownHosts::load();
-        let macs = known
-            .resolve(Some(&fp_hex), &addr, port)
+        let host = known.resolve(Some(&fp_hex), &addr, port);
+        let macs = host
             .filter(|_| trust::Settings::load().auto_wake)
             .map(|h| h.mac.clone())
             .unwrap_or_default();
+        // The console plays as a remembered pick only, so its shelf is that profile's.
+        let profile = host
+            .and_then(|h| h.profile.as_ref())
+            .filter(|p| p.remember)
+            .map(|p| p.id.clone());
         spawn_fetch(
             self.library.clone(),
             addr,
             (port, mgmt),
             self.identity.clone(),
-            fp_hex,
+            (fp_hex, profile),
             macs,
             req,
         );
@@ -1046,14 +1060,14 @@ impl ServiceState {
             .ok();
     }
 
-    /// Write this device's screen on a worker, as [`Self::host_action`] does. Only a refusal
+    /// Write a Screen row's pick on a worker, as [`Self::host_action`] does. Only a refusal
     /// says anything: the pick itself shows on the card once the rows come back.
     fn set_screen(
         &self,
         addr: String,
         mgmt: u16,
         fp_hex: String,
-        screen: pf_client_core::display_targets::DisplayTarget,
+        pick: pf_client_core::display_targets::Pick,
         label: String,
     ) {
         let identity = self.identity.clone();
@@ -1062,11 +1076,11 @@ impl ServiceState {
             .name("punktfunk-screen".into())
             .spawn(move || {
                 let port = stream_port(&fp_hex);
-                let set = pf_client_core::display_targets::set_target(
-                    &addr, mgmt, port, &identity, &fp_hex, &screen,
+                let set = pf_client_core::display_targets::set_pick(
+                    &addr, mgmt, port, &identity, &fp_hex, &pick,
                 );
                 if let Err(e) = set {
-                    tracing::warn!(?screen, error = %e, "screen pick refused");
+                    tracing::warn!(?pick, error = %e, "screen pick refused");
                     console.set_notice(pf_l10n::client::hostcard_action_failed(&label, e));
                 }
             })
@@ -1499,6 +1513,7 @@ fn build_rows(
         // Only the speed test reads this: a preset that PINS bitrate is the layer its
         // host streams at, so the console must not offer to write the global instead.
         bitrate_kbps: p.overrides.bitrate_kbps,
+        host_screen: p.overrides.host_screen.clone(),
     };
     let mut rows: Vec<HostRow> = known
         .hosts
@@ -1708,7 +1723,8 @@ fn stream_port(fp_hex: &str) -> u16 {
 
 /// Fetch the library off the service thread, then stream poster art into the shared
 /// model as results land (the renderer drains `push_art` per frame). `(port, mgmt)`: the
-/// stream port the management tunnel tries first, then the HTTPS port.
+/// stream port the management tunnel tries first, then the HTTPS port. `profile`: the
+/// library as that profile plays it.
 ///
 /// Three things happen before the host is ever asked, and the order is the point:
 /// 1. the CACHED catalog goes up immediately, marked stale — a library is the screen a player
@@ -1725,7 +1741,7 @@ fn spawn_fetch(
     addr: String,
     (port, mgmt): (u16, u16),
     identity: (String, String),
-    fp_hex: String,
+    (fp_hex, profile): (String, Option<String>),
     macs: Vec<String>,
     req: RequestKey,
 ) -> Worker {
@@ -1745,9 +1761,9 @@ fn spawn_fetch(
             }
             // Whatever we already know about this host, on screen before a single packet goes
             // out. Keyed on the pinned fingerprint, so a box that came back on a new DHCP lease
-            // is still recognised as the same host with the same library.
+            // is still recognised as the same host, and on the profile the shelf is for.
             let mut cached_games = None;
-            if let Some(cached) = pf_client_core::library_cache::load(&fp_hex) {
+            if let Some(cached) = pf_client_core::library_cache::load(&fp_hex, profile.as_deref()) {
                 if !cached.games.is_empty() && mine() {
                     shared.set_games_cached(&req, to_model(&cached.games));
                     cached_games = Some(cached.games);
@@ -1767,11 +1783,11 @@ fn spawn_fetch(
             let started = Instant::now();
             let mut last_packet = started;
             let mut last_err = None;
-            let mut fetched = None;
+            let (mut fetched, mut served) = (None, None);
             loop {
-                match library::fetch_games(&addr, mgmt, port, &identity, pin) {
-                    Ok(games) => {
-                        fetched = Some(games);
+                match library::fetch_games(&addr, mgmt, port, &identity, pin, profile.as_deref()) {
+                    Ok((games, fetched_as)) => {
+                        (fetched, served) = (Some(games), fetched_as);
                         break;
                     }
                     Err(e) => {
@@ -1836,7 +1852,7 @@ fn spawn_fetch(
             if live {
                 shared.set_games(&req, to_model(&games));
                 // Remembered AFTER it is on screen: the disk write is not on the path to a shelf.
-                pf_client_core::library_cache::store(&fp_hex, &games);
+                pf_client_core::library_cache::store(&fp_hex, served, &games);
                 // What the host has up right now, so a title the player can return to says so.
                 // Deliberately after the catalog — a slow `/status` must not hold the titles
                 // back — and never fatal: an older host answers nothing and every badge stays off.

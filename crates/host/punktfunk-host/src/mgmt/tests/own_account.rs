@@ -91,7 +91,13 @@ async fn a_person_s_own_account_refuses_what_would_run_code_as_them() {
 
     let raw = serde_json::json!({"spec": "punktfunk-plugin-x", "accept_unverified": true});
     let (s, body) = send(&app, json_req(Method::POST, "/api/v1/store/install", raw)).await;
-    assert_eq!(s, StatusCode::FORBIDDEN, "{body}");
+    if cfg!(windows) {
+        // A Windows seat runs no plugin of its own, so it refuses every install first.
+        assert_eq!(s, StatusCode::CONFLICT, "{body}");
+        assert_eq!(body["code"], "seat_runs_no_plugins", "{body}");
+    } else {
+        assert_eq!(s, StatusCode::FORBIDDEN, "{body}");
+    }
 
     let copy = serde_json::json!({"exe": "/bin/sh"});
     let adopt = "/api/v1/emulators/rpcs3/adopt";
@@ -164,4 +170,59 @@ fn a_person_s_own_linux_account_refuses_every_plugin_and_emulator_write() {
     ] {
         assert_eq!(refusal(&method, path), None, "{method} {path}");
     }
+}
+
+/// The rule before the scope table: every write under three route groups.
+fn refused_by_group(method: &Method, path: &str) -> Option<&'static str> {
+    if matches!(*method, Method::GET | Method::HEAD) || path == "/api/v1/store/refresh" {
+        return None;
+    }
+    [
+        ("/api/v1/store", "plugins_own_account"),
+        ("/api/v1/plugin-access", "plugins_own_account"),
+        ("/api/v1/emulators", "emulators_own_account"),
+    ]
+    .into_iter()
+    .find(|(group, _)| {
+        path.strip_prefix(group)
+            .is_some_and(|rest| rest.is_empty() || rest.starts_with('/'))
+    })
+    .map(|(_, code)| code)
+}
+
+/// The table refuses every write the three groups did, with the same sentence, and the other
+/// writes that run code as the person, each listed here. No other answer changed.
+#[test]
+fn the_table_refuses_what_the_groups_did_and_the_rest_of_what_runs_code() {
+    use crate::mgmt::own_account::refusal;
+    const NEWLY_REFUSED: &[(&str, &str)] = &[
+        ("DELETE", "/api/v1/library/provider/{provider}"),
+        ("DELETE", "/api/v1/plugins/{id}"),
+        ("POST", "/api/v1/game/holds/{token}/release"),
+        ("POST", "/api/v1/plugins/logs"),
+        ("PUT", "/api/v1/library/provider/{provider}"),
+        ("PUT", "/api/v1/library/provider/{provider}/downloads"),
+        ("PUT", "/api/v1/library/provider/{provider}/running"),
+        ("PUT", "/api/v1/plugins/{id}"),
+    ];
+    let doc: serde_json::Value = serde_json::from_str(&openapi_json()).unwrap();
+    let mut changed = Vec::new();
+    for (path, ops) in doc["paths"].as_object().unwrap() {
+        for method in ops.as_object().unwrap().keys() {
+            let method = Method::from_bytes(method.to_uppercase().as_bytes()).unwrap();
+            let now = refusal(&method, path).map(|(code, _)| code);
+            let before = refused_by_group(&method, path);
+            if now != before {
+                assert_eq!(before, None, "{method} {path}: refused differently");
+                assert_eq!(now, Some("plugins_own_account"), "{method} {path}");
+                changed.push((method.to_string(), path.clone()));
+            }
+        }
+    }
+    changed.sort();
+    let want: Vec<(String, String)> = NEWLY_REFUSED
+        .iter()
+        .map(|(m, p)| (m.to_string(), p.to_string()))
+        .collect();
+    assert_eq!(changed, want);
 }

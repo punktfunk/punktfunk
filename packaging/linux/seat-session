@@ -3,8 +3,8 @@
 #
 # punktfunk-seat@.service runs this as the seat's user inside a logind session. The seat contract
 # (PUNKTFUNK_SEAT_*, the ports, the trust dir, PUNKTFUNK_MGMT_TOKEN) arrives in the environment.
-# The desktop mirrors scripts/headless/run-headless-kde.sh; without kwin_wayland the host starts
-# gamescope itself.
+# The desktop mirrors scripts/headless/run-headless-kde.sh; without a kwin_wayland that starts the
+# host starts gamescope itself.
 #
 # Game Mode is the host's: it answers steamos-manager's session switch on the seat's bus and moves
 # its streams between this desktop and a gamescope of its own, so the desktop keeps running.
@@ -33,6 +33,85 @@ H="${SIZE#*x}"
 # Only the host gets the management token; kwin, plasmashell and games never see it.
 TOKEN="${PUNKTFUNK_MGMT_TOKEN:-}"
 unset PUNKTFUNK_MGMT_TOKEN
+
+# Exports each KEY=value of $1 as systemd's EnvironmentFile= reads the lines host.env and the NixOS
+# settings hold, so the owner's row gets what their user unit gets. `#` and `;` lines are comments;
+# a value loses the whitespace around it and its quotes; in double quotes a backslash escapes
+# " \ ` $, unquoted it escapes any character. Nothing in the file runs.
+read_env_file() {
+    local line key value esc out i
+    while IFS= read -r line || [[ -n $line ]]; do
+        line=${line#"${line%%[![:space:]]*}"}
+        [[ $line == *=* && $line != [#\;]* ]] || continue
+        key=${line%%=*}
+        key=${key%"${key##*[![:space:]]}"}
+        [[ $key =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || continue
+        value=${line#*=}
+        value=${value#"${value%%[![:space:]]*}"}
+        value=${value%"${value##*[![:space:]]}"}
+        esc='?'
+        if [[ $value =~ ^\'(.*)\'$ ]]; then
+            value=${BASH_REMATCH[1]} esc=
+        elif [[ $value =~ ^\"(.*)\"$ ]]; then
+            value=${BASH_REMATCH[1]} esc='[\"\\`$]'
+        fi
+        out=
+        for ((i = 0; i < ${#value}; i++)); do
+            # shellcheck disable=SC2053 # $esc is the pattern of characters a backslash escapes
+            [[ -n $esc && ${value:i:1} == \\ && ${value:i+1:1} == $esc ]] && ((i += 1))
+            out+=${value:i:1}
+        done
+        export "$key=$out"
+    done <"$1"
+}
+
+# `seat-session --self-test`: read_env_file on the lines host.env and the NixOS settings hold.
+if [[ ${1-} == --self-test ]]; then
+    env_file=$(mktemp)
+    trap 'rm -f "$env_file"' EXIT
+    cat >"$env_file" <<'EOF'
+#PF_TEST_COMMENTED=1
+  ; PF_TEST_COMMENTED=2
+
+PUNKTFUNK_HOST_NAME=Living Room
+  PF_TEST_PADDED =  two  words
+PF_TEST_SINGLE='a "b" $HOME \n'
+PF_TEST_DOUBLE="say \"hi\" \$HOME \\ \n"
+PF_TEST_ESCAPED=a\ b\\c
+PF_TEST_RUN=$(echo ran)
+PF_TEST_EMPTY=
+not a setting
+export PF_TEST_EXPORT=1
+EOF
+    printf 'PF_TEST_LAST=no newline' >>"$env_file"
+    read_env_file "$env_file"
+    fails=0
+    want() {
+        [[ ${!1-unset} == "$2" ]] && return
+        echo "seat-session self-test: $1 is '${!1-unset}', not '$2'" >&2
+        fails=1
+    }
+    want PUNKTFUNK_HOST_NAME 'Living Room'
+    want PF_TEST_PADDED 'two  words'
+    want PF_TEST_SINGLE 'a "b" $HOME \n'
+    want PF_TEST_DOUBLE 'say "hi" $HOME \ \n'
+    want PF_TEST_ESCAPED 'a b\c'
+    want PF_TEST_RUN '$(echo ran)'
+    want PF_TEST_EMPTY ''
+    want PF_TEST_COMMENTED unset
+    want PF_TEST_EXPORT unset
+    want PF_TEST_LAST 'no newline'
+    # The compositor pick needs a runtime directory and the functions below: a second run.
+    run=$(mktemp -d)
+    if ! XDG_SESSION_ID=self-test RUNTIME_DIRECTORY=$run PUNKTFUNK_SEAT_OWNER='' \
+        PUNKTFUNK_SEAT_OWN_ACCOUNT='' bash "$0" --self-test-desktop; then
+        echo "seat-session self-test: a KWin that can't start doesn't hand over to gamescope" >&2
+        fails=1
+    fi
+    rm -rf "$run"
+    [[ $fails == 0 ]] && echo "seat-session self-test: ok"
+    exit "$fails"
+fi
 
 if [[ -z "${XDG_SESSION_ID:-}" || -z "${RUNTIME_DIRECTORY:-}" ]]; then
     echo "seat-session: no logind session or runtime directory; run it from punktfunk-seat@.service" >&2
@@ -96,8 +175,9 @@ EOF
 }
 
 # The owner's settings, under the seat contract: the files PUNKTFUNK_OWNER_ENV names (a NixOS
-# module's settings, which its user unit takes as EnvironmentFile), then host.env. The contract's
-# variables keep the values the supervisor wrote. A file the owner can't read is skipped.
+# module's settings, which its user unit takes as EnvironmentFile), then host.env, each read as
+# data by read_env_file. The contract's variables keep the values the supervisor wrote. A file the
+# owner can't read is skipped.
 load_owner_settings() {
     local file key extra=()
     local -A keep=()
@@ -107,12 +187,9 @@ load_owner_settings() {
         PUNKTFUNK_WEBTRANSPORT PUNKTFUNK_WEBTRANSPORT_PORT PUNKTFUNK_WEBTRANSPORT_ORIGINS; do
         keep[$key]="${!key-}"
     done
-    set -a
     for file in "${extra[@]}" "$HOME/.config/punktfunk/host.env"; do
-        # shellcheck disable=SC1090
-        [[ -r "$file" ]] && . "$file" 2>/dev/null
+        [[ -r "$file" ]] && read_env_file "$file"
     done
-    set +a
     for key in "${!keep[@]}"; do
         export "$key=${keep[$key]}"
     done
@@ -136,7 +213,7 @@ start_private_bus() {
 start_private_portal() {
     local exe
     for exe in /usr/libexec/xdg-desktop-portal /usr/lib/xdg-desktop-portal \
-        /usr/lib64/xdg-desktop-portal; do
+        /usr/lib64/xdg-desktop-portal /run/current-system/sw/libexec/xdg-desktop-portal; do
         if [[ -x "$exe" ]]; then
             "$exe" >/dev/null 2>&1 &
             return 0
@@ -176,16 +253,42 @@ mark_ready_when_serving() {
 
 alive() { [[ -z "$KWIN_PID" ]] || kill -0 "$KWIN_PID" 2>/dev/null; }
 
+# Whether the host finds a gamescope to start, by its own rungs.
+has_gamescope() {
+    [[ -x ${PUNKTFUNK_GAMESCOPE_BIN:-} || -x ${HOST%/*}/punktfunk-gamescope ]] ||
+        command -v punktfunk-gamescope >/dev/null 2>&1 || command -v gamescope >/dev/null 2>&1
+}
+
+# KWin where it is installed and comes up; otherwise the host starts gamescope itself.
+start_desktop() {
+    command -v kwin_wayland >/dev/null 2>&1 && start_kwin
+    if [[ -z "$KWIN_PID" ]]; then
+        [[ -n "$OWN" && -z "$BUS_PID" ]] && start_private_bus
+        export PUNKTFUNK_COMPOSITOR=gamescope
+    fi
+    return 0
+}
+
+# A KWin that exits before it is ready lacks something it needs (Plasma's integration on a GNOME
+# box): with gamescope installed it returns 1 with its environment taken back, the private bus
+# kept for gamescope. A KWin that dies once ready ends the seat.
 start_kwin() {
-    export XDG_CURRENT_DESKTOP=KDE XDG_MENU_PREFIX=plasma- KDE_FULL_SESSION=true
-    export KDE_SESSION_VERSION=6 DESKTOP_SESSION=plasma
     # The row shares the user's runtime dir, where a headless KDE session holds wayland-kde.
     # A taken name makes kwin exit.
-    export WAYLAND_DISPLAY=wayland-pf-seat KWIN_WAYLAND_NO_PERMISSION_CHECKS=1
-    export PUNKTFUNK_COMPOSITOR="${PUNKTFUNK_COMPOSITOR:-kwin}"
-    export PUNKTFUNK_VIDEO_SOURCE="${PUNKTFUNK_VIDEO_SOURCE:-virtual}"
-    export PUNKTFUNK_INPUT_BACKEND="${PUNKTFUNK_INPUT_BACKEND:-libei}"
-    export PUNKTFUNK_KWIN_VIRTUAL_PRIMARY="${PUNKTFUNK_KWIN_VIRTUAL_PRIMARY:-1}"
+    local kde=(XDG_CURRENT_DESKTOP=KDE XDG_MENU_PREFIX=plasma- KDE_FULL_SESSION=true
+        KDE_SESSION_VERSION=6 DESKTOP_SESSION=plasma
+        WAYLAND_DISPLAY=wayland-pf-seat KWIN_WAYLAND_NO_PERMISSION_CHECKS=1
+        "PUNKTFUNK_COMPOSITOR=${PUNKTFUNK_COMPOSITOR:-kwin}"
+        "PUNKTFUNK_VIDEO_SOURCE=${PUNKTFUNK_VIDEO_SOURCE:-virtual}"
+        "PUNKTFUNK_INPUT_BACKEND=${PUNKTFUNK_INPUT_BACKEND:-libei}"
+        "PUNKTFUNK_KWIN_VIRTUAL_PRIMARY=${PUNKTFUNK_KWIN_VIRTUAL_PRIMARY:-1}")
+    local pair name
+    local -A was=()
+    for pair in "${kde[@]}"; do
+        name=${pair%%=*}
+        [[ -n ${!name+set} ]] && was[$name]=${!name}
+        export "$name=${pair#*=}"
+    done
 
     [[ -n "$OWN" ]] && start_private_bus
     # Under the 0700 runtime dir: the DISPLAY detection below reads this file.
@@ -203,7 +306,18 @@ start_kwin() {
         if ! kill -0 "$KWIN_PID" 2>/dev/null; then
             echo "seat-session: kwin_wayland exited during startup:" >&2
             tail -n 20 "$log" >&2
-            exit 1
+            has_gamescope || exit 1
+            echo "seat-session: the seat runs on gamescope instead" >&2
+            KWIN_PID=""
+            for pair in "${kde[@]}"; do
+                name=${pair%%=*}
+                if [[ -n ${was[$name]+set} ]]; then
+                    export "$name=${was[$name]}"
+                else
+                    unset "$name"
+                fi
+            done
+            return 1
         fi
         if ((SECONDS >= deadline)); then
             echo "seat-session: kwin did not become ready within 30s" >&2
@@ -284,6 +398,24 @@ start_plasmashell() {
     SHELL_PID=$!
 }
 
+# `seat-session --self-test-desktop`, which --self-test runs: a KWin that exits while it starts
+# ends the seat without gamescope, and with it leaves gamescope the environment it found.
+if [[ ${1-} == --self-test-desktop ]]; then
+    fake=$RUNTIME_DIRECTORY/fake
+    mkdir -p "$fake"
+    printf '#!/bin/sh\nexit 1\n' >"$fake/kwin_wayland"
+    chmod 755 "$fake/kwin_wayland"
+    HOST=false XDG_RUNTIME_DIR=$RUNTIME_DIRECTORY
+    unset XDG_CURRENT_DESKTOP PUNKTFUNK_COMPOSITOR PUNKTFUNK_GAMESCOPE_BIN
+    export WAYLAND_DISPLAY=theirs PUNKTFUNK_VIDEO_SOURCE=mine
+    (PATH=$fake start_desktop 2>/dev/null) && exit 1
+    cp "$fake/kwin_wayland" "$fake/gamescope"
+    PATH=$fake start_desktop 2>/dev/null
+    [[ $PUNKTFUNK_COMPOSITOR == gamescope && -z $KWIN_PID && -z ${XDG_CURRENT_DESKTOP+set} &&
+        $WAYLAND_DISPLAY == theirs && $PUNKTFUNK_VIDEO_SOURCE == mine ]]
+    exit
+fi
+
 if [[ -n "$OWNER" ]]; then
     load_owner_settings
     # The owner's own host must not hold the row's ports. Nothing streams their headless desktop
@@ -292,12 +424,7 @@ if [[ -n "$OWNER" ]]; then
     mark_ready_when_serving
 fi
 install_switch_commands
-if command -v kwin_wayland >/dev/null 2>&1; then
-    start_kwin
-else
-    [[ -n "$OWN" ]] && start_private_bus
-    export PUNKTFUNK_COMPOSITOR=gamescope
-fi
+start_desktop
 
 # The host restarts on its own, backing off while it fails, for as long as the desktop lives. A
 # desktop that dies ends the seat and the unit's Restart= starts it over. PUNKTFUNK_SEAT_HEADLESS

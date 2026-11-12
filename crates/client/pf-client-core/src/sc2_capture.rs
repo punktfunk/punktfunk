@@ -77,6 +77,41 @@ pub(crate) fn raw_model(pref: GamepadPref, declared: GamepadPref, pid: u16) -> O
     }
 }
 
+/// The feature commands a host may send a 2015 pad, after the report id 0: settings, haptic
+/// pulses, the jingles, power-off and the IMU reset. Mirrors the host's `sc_forwards_to_pad`
+/// (`pf-inject` `steam_proto.rs`), which keeps every other command on its virtual pad.
+const CLASSIC_HOST_COMMANDS: [u8; 6] = [0x87, 0x8F, 0x9F, 0xB6, 0xC1, 0xCE];
+
+/// Feature commands the host never sends a Triton: lizard mode off and on, and the factory
+/// settings. Mirrors `pf_driver_proto::triton::forwards_to_pad`. The repo names no other
+/// command that rewrites the pad, so nothing else is held back.
+const TRITON_HELD_BACK: [u8; 3] = [0x81, 0x85, 0x8E];
+
+/// Why a report from the host must not reach the pad, or `None` to write it. A host that
+/// follows the rules above never sends what this refuses.
+fn refused(model: Model, kind: u8, data: &[u8]) -> Option<&'static str> {
+    match (model, kind) {
+        (Model::Triton { .. }, HID_RAW_FEATURE) => {
+            // Id first, or a bare command (`0x80` and above), as the host reads it.
+            let cmd = match data {
+                [first, ..] if *first >= 0x80 => first,
+                [_, cmd, ..] => cmd,
+                _ => return None,
+            };
+            TRITON_HELD_BACK
+                .contains(cmd)
+                .then_some("lizard mode and factory settings stay on the host")
+        }
+        (Model::Triton { .. }, _) => None,
+        (Model::Classic | Model::ClassicBle, HID_RAW_FEATURE) => match data {
+            [0, cmd, ..] if CLASSIC_HOST_COMMANDS.contains(cmd) => None,
+            [0, _, ..] => Some("command is not one the host forwards"),
+            _ => Some("not a feature frame with report id 0"),
+        },
+        (Model::Classic | Model::ClassicBle, _) => Some("a 2015 pad takes feature reports only"),
+    }
+}
+
 enum Cmd {
     Write(u8, Vec<u8>),
 }
@@ -333,6 +368,11 @@ fn run(dev: Dev, rx: &Receiver<Cmd>, client: &NativeClient, pad: u8, model: Mode
         loop {
             match rx.try_recv() {
                 Ok(Cmd::Write(kind, data)) => {
+                    if let Some(reason) = refused(model, kind, &data) {
+                        let head = data.get(..2);
+                        tracing::debug!(pad, kind, ?head, reason, "steam controller write refused");
+                        continue;
+                    }
                     let sent = match (model, kind) {
                         (Model::Classic, HID_RAW_FEATURE) => dev.send_classic_feature(&data),
                         (Model::ClassicBle, HID_RAW_FEATURE) => dev.send_ble_feature(&data),
@@ -434,5 +474,45 @@ mod tests {
             "a pad the player declared as something else stays typed"
         );
         assert_eq!(raw_model(P::Xbox360, P::SteamController, 0x028E), None);
+    }
+
+    /// A 2015 pad takes the commands the host forwards, framed with report id 0, and nothing
+    /// else: the host's own list of refusals stays refused, so does an output report.
+    #[test]
+    fn a_2015_pad_takes_only_the_commands_the_host_forwards() {
+        for model in [Model::Classic, Model::ClassicBle] {
+            for cmd in [0x87, 0x8F, 0x9F, 0xB6, 0xC1, 0xCE] {
+                assert_eq!(refused(model, HID_RAW_FEATURE, &[0, cmd, 3, 1]), None);
+            }
+            for cmd in [0x81, 0x85, 0x86, 0x8E, 0x90, 0xA7, 0xA9, 0xAD, 0xB3, 0xBF] {
+                assert!(refused(model, HID_RAW_FEATURE, &[0, cmd, 0]).is_some());
+            }
+            assert!(refused(model, HID_RAW_FEATURE, &[1, 0x87, 0]).is_some());
+            assert!(refused(model, HID_RAW_FEATURE, &[0x87, 0]).is_some());
+            assert!(refused(model, HID_RAW_FEATURE, &[0]).is_some());
+            assert!(refused(model, HID_RAW_OUTPUT, &[0, 0x87, 0]).is_some());
+        }
+    }
+
+    /// A Triton refuses lizard mode and the factory settings in either framing, and takes
+    /// settings, other feature reads and every output report.
+    #[test]
+    fn a_triton_keeps_lizard_mode_and_the_factory_settings_off_the_pad() {
+        let triton = Model::Triton { puck: false };
+        for cmd in [0x81, 0x85, 0x8E] {
+            assert!(refused(triton, HID_RAW_FEATURE, &[1, cmd, 0]).is_some());
+            assert!(refused(Model::Triton { puck: true }, HID_RAW_FEATURE, &[2, cmd]).is_some());
+            assert!(refused(triton, HID_RAW_FEATURE, &[cmd, 0]).is_some());
+        }
+        for frame in [
+            &[1, 0x87, 3, 0x2E, 0][..],
+            &[1, 0xAE, 0x15, 1],
+            &[0x87, 3],
+            &[],
+        ] {
+            assert_eq!(refused(triton, HID_RAW_FEATURE, frame), None);
+        }
+        assert_eq!(refused(triton, HID_RAW_OUTPUT, &[0x80, 1, 0, 0]), None);
+        assert_eq!(refused(triton, HID_RAW_OUTPUT, &[0x8E, 0]), None);
     }
 }

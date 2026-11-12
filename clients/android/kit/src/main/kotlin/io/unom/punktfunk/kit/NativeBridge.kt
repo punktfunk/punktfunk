@@ -65,6 +65,11 @@ object NativeBridge {
     /** The session on [handle] started on a screen another device opened and sized. */
     external fun nativeSharesScreen(handle: Long): Boolean
 
+    /** Why the session on [handle] did not get the screen it asked for, as the host's echo says:
+     *  `0` as asked (also with no echo), `1` not allowed, `2` monitors held, `3` unavailable,
+     *  `4` no monitors. */
+    external fun nativeScreenRoleReason(handle: Long): Int
+
     /**
      * Has the underlying QUIC session ended? `true` once the connection closed — a host suspend /
      * crash / network drop idle-timed it out (~8 s), or the host closed it — from then on no frame
@@ -459,8 +464,17 @@ object NativeBridge {
      */
     external fun nativeVideoDecodedSize(handle: Long): IntArray?
 
-    /** Stop + join the decode thread without closing the session. No-op on `0`. */
+    /**
+     * Stop the decode thread without closing the session, waiting at most 2 s for it. No-op on
+     * `0`.
+     */
     external fun nativeStopVideo(handle: Long)
+
+    /**
+     * Whether a call into the device's video decoder has gone unanswered for 5 s: the device's
+     * decoder service hung, and only a restart of the device brings it back. `false` on `0`.
+     */
+    external fun nativeVideoDecoderStuck(handle: Long): Boolean
 
     /**
      * The background keep-alive's video drain: pop access units and discard them while no decode
@@ -1107,6 +1121,9 @@ object NativeBridge {
 
     /** A one-shot toast from a service worker. */
     external fun nativeConsoleNotice(handle: Long, text: String)
+
+    /** This device's code, once its identity has loaded: shown while a request waits for approval. */
+    external fun nativeConsoleSetDeviceCode(handle: Long, code: String)
 
     /** `[{"heading", "text"}]`: what this app bundles, for the console's Licences screen. */
     external fun nativeConsoleSetLicenses(handle: Long, json: String)

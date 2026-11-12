@@ -269,6 +269,10 @@ final class ConsoleModel: ObservableObject, ConsoleViewDelegate {
             "settings": settings(hosts),
             "presets": presets.map { ["id": $0.id, "name": $0.name, "overrides": [:] as [String: Any]] },
         ]
+        // Shown while a request waits; the host's web console shows the same code.
+        if let code = (try? ClientIdentityStore.shared.load())?.identity.deviceCode {
+            options["device_code"] = code
+        }
         if let screen = screenSize {
             options["screen"] = [screen.0, screen.1]
             options["safe_area"] = [screen.0, screen.1]

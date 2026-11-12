@@ -215,6 +215,14 @@ export function usePairedDevices() {
 		unpairAllNative.isPending || unpairAllMoonlight.isPending;
 
 	const busy = (r: PairedRow) => isUnpairingAll || unpairing === r.fingerprint;
+	const editAccess = (r: PairedRow) =>
+		setEditing({
+			fingerprint: r.fingerprint,
+			name: r.name,
+			grants: r.grants,
+			expiresUnix: r.expiresUnix,
+			untilDisconnect: r.untilDisconnect,
+		});
 	return {
 		rows,
 		list,
@@ -234,16 +242,7 @@ export function usePairedDevices() {
 					? overlaySummary(displaySettings.data?.clients?.[r.fingerprint])
 					: undefined,
 				busy: busy(r),
-				onEditAccess: can.access
-					? () =>
-							setEditing({
-								fingerprint: r.fingerprint,
-								name: r.name,
-								grants: r.grants,
-								expiresUnix: r.expiresUnix,
-								untilDisconnect: r.untilDisconnect,
-							})
-					: undefined,
+				onEditAccess: can.access ? () => editAccess(r) : undefined,
 				onDisplaySettings: can.display ? () => setDisplayTarget(r) : undefined,
 				onRename: can.rename ? () => onRename(r) : undefined,
 				onUnpair: () => onUnpair(r.protocol, r.fingerprint, deviceName(r)),
@@ -257,6 +256,19 @@ export function usePairedDevices() {
 						onOpenChange={(open) => !open && setDisplayTarget(null)}
 						fingerprint={displayTarget.fingerprint}
 						deviceName={deviceName(displayTarget)}
+						grants={
+							hasAccess(displayTarget)
+								? (displayTarget.grants ?? null)
+								: undefined
+						}
+						onEditAccess={
+							hasAccess(displayTarget)
+								? () => {
+										setDisplayTarget(null);
+										editAccess(displayTarget);
+									}
+								: undefined
+						}
 					/>
 				)}
 				<EditAccessSheet

@@ -8,6 +8,8 @@ import io.unom.punktfunk.kit.NativeBridge
 import io.unom.punktfunk.kit.R
 import java.io.File
 import java.security.KeyStore
+import java.security.MessageDigest
+import java.util.Base64
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.ExecutionException
 import java.util.concurrent.Future
@@ -26,6 +28,23 @@ private const val PEM_DELIM = "\n-----PUNKTFUNK-KEY-----\n"
 
 /** This device's persistent punktfunk identity (presented to hosts via TLS client auth). */
 data class ClientIdentity(val certPem: String, val privateKeyPem: String)
+
+private const val CERT_BEGIN = "-----BEGIN CERTIFICATE-----"
+private const val CERT_END = "-----END CERTIFICATE-----"
+
+/**
+ * The code this device shows while it waits for approval, and the host's web console shows beside
+ * the request. `null` for a certificate that does not parse.
+ */
+fun ClientIdentity.deviceCode(): String? = runCatching {
+    require(CERT_BEGIN in certPem && CERT_END in certPem)
+    val der = Base64.getMimeDecoder().decode(certPem.substringAfter(CERT_BEGIN).substringBefore(CERT_END))
+    deviceCodeOf(MessageDigest.getInstance("SHA-256").digest(der))
+}.getOrNull()
+
+/** A fingerprint's first 16 hex digits, upper case, in fours. */
+internal fun deviceCodeOf(fingerprint: ByteArray): String =
+    fingerprint.take(8).joinToString("") { "%02X".format(it) }.chunked(4).joinToString(" ")
 
 /** Result of [IdentityStore.load] — four states so the caller never mints over a *recoverable* error. */
 sealed interface IdentityLoad {

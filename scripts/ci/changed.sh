@@ -73,6 +73,7 @@ classify() {
                 web/*|api/openapi.json|scripts/ci/retry.sh|clients/shared/library-id-vectors.json|\
                 l10n/messages/web/*|l10n/messages/common/*|l10n/messages/host/*|l10n/vectors.json|\
                 crates/host/punktfunk-host/src/library/custom.rs|plugin-kit/src/wire.ts|\
+                crates/host/punktfunk-host/src/mgmt/owner.rs|\
                 crates/core/punktfunk-core/testdata/grant-vectors.json|\
                 crates/core/punktfunk-core/testdata/gamepad-button-vectors.json)
                     web=true
@@ -186,6 +187,12 @@ self_test() {
     check web-locales 'web/project.inlang/settings.json' \
         'rust=true rust_arm64=false web=true docs_site=false sdk_plugin_kit=false decky_typecheck=false'
     check launch-kinds-host 'crates/host/punktfunk-host/src/library/custom.rs' \
+        'rust=true rust_arm64=false web=true docs_site=false sdk_plugin_kit=false decky_typecheck=false'
+    # The console's tests read the door's stream list from the source, and the scopes from the
+    # API document.
+    check seat-proxy-host 'crates/host/punktfunk-host/src/mgmt/seat_proxy.rs' \
+        'rust=true rust_arm64=false web=false docs_site=false sdk_plugin_kit=false decky_typecheck=false'
+    check door-table-host 'crates/host/punktfunk-host/src/mgmt/owner.rs' \
         'rust=true rust_arm64=false web=true docs_site=false sdk_plugin_kit=false decky_typecheck=false'
     check grant-vectors 'crates/core/punktfunk-core/testdata/grant-vectors.json' \
         'rust=true rust_arm64=true web=true docs_site=false sdk_plugin_kit=false decky_typecheck=false'

@@ -31,6 +31,21 @@ pub struct ScannerInfo {
     /// Titles this source currently contributes. `None` on `Builtin` (counting would walk launcher files).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub entries: Option<usize>,
+    /// With a profile in view (`as`), who turned the source off. Only the box turns on what the
+    /// box turned off.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(required = false)]
+    pub off_by: Option<Layer>,
+}
+
+/// Whose file a value came from.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, ToSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum Layer {
+    /// The box's library, which every profile sees.
+    Box,
+    /// The profile in view's own layer.
+    Profile,
 }
 
 /// Origin of a [`ScannerInfo`]. This host emits only `Plugin`.
@@ -59,18 +74,27 @@ const STORE_LABELS: &[(&str, &str)] = &[
 /// list (`windows-seat-trust-model.md` L1.1).
 const PER_ACCOUNT_PROVIDERS: &[&str] = &["playnite", "windows-games", "amazon", "itch", "hydra"];
 
-/// Whether this host leaves `provider`'s titles out of every surface.
-fn left_out_here(provider: &str) -> bool {
-    PER_ACCOUNT_PROVIDERS.contains(&provider) && pf_paths::seat::box_library_dir().is_some()
+/// Whether a host that plays as `reach` leaves `provider`'s titles out of every surface.
+fn left_out(provider: &str, reach: Reach) -> bool {
+    PER_ACCOUNT_PROVIDERS.contains(&provider) && reach.own_host
 }
 
-/// Whether `e` is out of every library surface: its source is switched off (`off` from
-/// [`disabled_scanners`]), its provider's titles are one account's and this host is a seat, or
-/// this is a Linux seat and `e` doesn't play there.
-pub(crate) fn source_off(e: &CustomEntry, off: &HashSet<String>) -> bool {
+/// Whether `e` is out of every library surface on a host that plays as `reach`: its source is
+/// switched off (`off` from [`disabled_scanners`]), its provider's titles are one account's and
+/// the host is a seat, the host is a Linux seat and `e` doesn't play there, or `e` starts the
+/// operator's own command and the host is on a person's own account.
+pub(crate) fn source_off(e: &CustomEntry, off: &HashSet<String>, reach: Reach) -> bool {
     source_id_for(e).is_some_and(|src| off.contains(src))
-        || e.provider.as_deref().is_some_and(left_out_here)
-        || (!plays_on_a_seat(e) && linux_seat())
+        || e.provider.as_deref().is_some_and(|p| left_out(p, reach))
+        || (!plays_on_a_seat(e) && reach.linux_seat)
+        || (starts_a_box_command(e) && reach.own_account)
+}
+
+/// Whether `e`'s launch is a program the operator wrote into the box's library, which must not
+/// run as a person on their own account ([`crate::hooks::own_account_refusal`]). A kind the host
+/// builds the command for itself names a title, not a program.
+fn starts_a_box_command(e: &CustomEntry) -> bool {
+    super::custom::privileged_field(e.launch.as_ref(), &[]).is_some()
 }
 
 /// A Linux seat reading the box's library: it plays as its own user, and has no plugins. The door
@@ -100,31 +124,43 @@ struct ScannerSettings {
     disabled: Vec<String>,
 }
 
-fn settings_path() -> PathBuf {
-    // Beside library.json (see `custom_path` for the rationale).
-    pf_paths::seat::library_dir().join("library-scanners.json")
-}
+/// Beside library.json (see `custom_path` for the rationale).
+const FILE: &str = "library-scanners.json";
 
 /// Absent or malformed file → all on (warn, do not fail the library read).
-fn load_settings() -> ScannerSettings {
-    read_json_or_default(&settings_path())
+fn load_settings(view: &View) -> ScannerSettings {
+    read_json_or_default(&view.path(FILE))
 }
 
-/// Disabled source ids. [`all_games`] filters each entry on this set.
-pub(crate) fn disabled_scanners() -> HashSet<String> {
-    load_settings().disabled.into_iter().collect()
+/// The source ids the box turned off, and those the profile in view turned off itself.
+fn disabled_layers(view: &View) -> (HashSet<String>, HashSet<String>) {
+    let ids = |s: ScannerSettings| s.disabled.into_iter().collect::<HashSet<_>>();
+    let own = view
+        .own_file(FILE)
+        .map(|path| ids(read_json_or_default(&path)));
+    (
+        ids(load_settings(&View::default())),
+        own.unwrap_or_default(),
+    )
 }
 
-/// Every source on this host with its enable state: claimed stores, then
+/// Source ids switched off in `view`, by the box or the profile. [`all_games`] filters each
+/// entry on this set.
+pub(crate) fn disabled_scanners(view: &View) -> HashSet<String> {
+    let (by_box, by_profile) = disabled_layers(view);
+    by_box.into_iter().chain(by_profile).collect()
+}
+
+/// Every source in `view` with its enable state: claimed stores, then
 /// providers that have entries but never claimed a store (rom-manager, playnite), then
 /// plugins with nothing published yet whose folder requests wait for the operator — the
 /// source line is where those requests are shown. Sorted by id for the console. A seat lists no
 /// per-account source, and a Linux seat only those with a title it plays.
-pub fn list_scanners() -> Vec<ScannerInfo> {
-    let off = disabled_scanners();
+pub fn list_scanners(view: &View) -> Vec<ScannerInfo> {
+    let (by_box, by_profile) = disabled_layers(view);
     let claims = crate::library::claimed_stores();
     let mut entries = crate::library::load_custom();
-    let seat = linux_seat();
+    let seat = view.reach.linux_seat;
     if seat {
         entries.retain(plays_on_a_seat);
     }
@@ -147,7 +183,7 @@ pub fn list_scanners() -> Vec<ScannerInfo> {
             plugin_ids.push((s.plugin.clone(), s.plugin));
         }
     }
-    plugin_ids.retain(|(_, provider)| !left_out_here(provider));
+    plugin_ids.retain(|(_, provider)| !left_out(provider, view.reach));
     if seat {
         plugin_ids.retain(|(id, _)| {
             entries
@@ -165,12 +201,18 @@ pub fn list_scanners() -> Vec<ScannerInfo> {
                 .iter()
                 .filter(|e| crate::library::source_id_for(e) == Some(id.as_str()))
                 .count();
+            let off_by = match (by_box.contains(&id), by_profile.contains(&id)) {
+                (true, _) => Some(Layer::Box),
+                (false, true) => Some(Layer::Profile),
+                (false, false) => None,
+            };
             ScannerInfo {
                 label: store_label(&id),
-                enabled: !off.contains(&id),
+                enabled: off_by.is_none(),
                 origin: SourceOrigin::Plugin,
                 provider: Some(provider),
                 entries: Some(count),
+                off_by: off_by.filter(|_| view.layer().is_some()),
                 id,
             }
         })
@@ -185,21 +227,21 @@ fn store_label(id: &str) -> String {
         .unwrap_or_else(|| id.to_string())
 }
 
-/// True if `id` is a claimed store or a provider with entries. Unknown or never-reconciled → 404.
-fn is_known_source(id: &str) -> bool {
-    list_scanners().iter().any(|s| s.id == id)
-}
-
-/// Enable or disable one source. `None` → mgmt maps to 404. Persists and emits
-/// `library.changed` only when the state actually changed (repeated PUT is a no-op).
-pub fn set_scanner_enabled(id: &str, enabled: bool) -> Result<Option<Vec<ScannerInfo>>> {
-    if !is_known_source(id) {
+/// Enable or disable one source in `view`'s layer. `None` (unknown or never reconciled) → mgmt
+/// maps to 404. Persists and emits `library.changed` only when the layer's state changed
+/// (repeated PUT is a no-op). A profile's `enabled` clears only its own switch.
+pub fn set_scanner_enabled(
+    view: &View,
+    id: &str,
+    enabled: bool,
+) -> Result<Option<Vec<ScannerInfo>>> {
+    if !list_scanners(view).iter().any(|s| s.id == id) {
         return Ok(None);
     }
-    let mut settings = load_settings();
+    let mut settings = load_settings(view);
     let was_disabled = settings.disabled.iter().any(|d| d == id);
     if enabled != was_disabled {
-        return Ok(Some(list_scanners()));
+        return Ok(Some(list_scanners(view)));
     }
     if enabled {
         settings.disabled.retain(|d| d != id);
@@ -208,11 +250,11 @@ pub fn set_scanner_enabled(id: &str, enabled: bool) -> Result<Option<Vec<Scanner
         settings.disabled.sort();
         settings.disabled.dedup();
     }
-    save_json(&settings_path(), &serde_json::to_string_pretty(&settings)?)?;
+    save_json(&view.path(FILE), &serde_json::to_string_pretty(&settings)?)?;
     crate::events::emit(crate::events::EventKind::LibraryChanged {
         source: id.to_string(),
     });
-    Ok(Some(list_scanners()))
+    Ok(Some(list_scanners(view)))
 }
 
 #[cfg(test)]
@@ -251,6 +293,26 @@ mod tests {
         assert!(!plays("command", "dolphin-emu"));
         assert!(!plays("exec", "custom"));
         assert!(!plays_on_a_seat(&entry(serde_json::Value::Null)));
+    }
+
+    /// A person's own account starts no program the operator wrote into the box's library; a
+    /// title the host builds the command for stays.
+    #[test]
+    fn only_a_command_tile_is_the_box_s_program() {
+        let entry = |launch: serde_json::Value| -> CustomEntry {
+            serde_json::from_value(serde_json::json!({"id": "r", "title": "T", "launch": launch}))
+                .unwrap()
+        };
+        let box_command = |kind: &str, value: &str| {
+            starts_a_box_command(&entry(serde_json::json!({"kind": kind, "value": value})))
+        };
+        assert!(box_command("command", "rsync ~/Games nas:/backup"));
+        assert!(box_command("a-kind-nobody-listed", "x"));
+        assert!(!box_command("steam_appid", "570"));
+        assert!(!box_command("steam_ui", "bigpicture"));
+        assert!(!box_command("emulator", "dolphin"));
+        assert!(!box_command("heroic", "legendary:Fortnite"));
+        assert!(!starts_a_box_command(&entry(serde_json::Value::Null)));
     }
 
     #[test]

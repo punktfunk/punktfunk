@@ -5,10 +5,11 @@
 //! table per source in `library-metadata/` and merges it at read time. Provider rows are rebuilt
 //! on every reconcile, so nothing is written onto them (the `hidden.rs` rule).
 //!
-//! Per art slot: the operator's pick, then sources set to replace, then the entry's own value,
-//! then the other sources in order. Per meta field: the entry's own value, then sources in
-//! order. A source never touches id, title, launch or detect, and a launcher tile takes nothing
-//! from one. [`GameEntry::filled`] names where each borrowed value came from.
+//! Per art slot: the pick (the profile in view's, else the box's), then sources set to replace,
+//! then the entry's own value, then the other sources in order. Per meta field: the entry's own
+//! value, then sources in order. A source never touches id, title, launch or detect, and a
+//! launcher tile takes nothing from one. [`GameEntry::filled`] names where each borrowed value
+//! came from.
 
 use super::*;
 use std::sync::{Arc, Mutex, MutexGuard};
@@ -148,8 +149,13 @@ fn settings_path() -> PathBuf {
     pf_paths::seat::library_dir().join("library-metadata.json")
 }
 
-fn picks_path() -> PathBuf {
-    pf_paths::seat::library_dir().join("library-picks.json")
+const PICKS: &str = "library-picks.json";
+
+/// The picks the profile in view made itself; none with no profile in view.
+pub(crate) fn own_picks(view: &View) -> BTreeMap<String, Artwork> {
+    view.own_file(PICKS)
+        .map(|path| read_json_or_default::<Picks>(&path).picks)
+        .unwrap_or_default()
 }
 
 /// The source id passed [`validate_provider_name`], so it is a safe file name.
@@ -414,12 +420,17 @@ pub fn set_metadata_sources(updates: &[MetadataSourceUpdate]) -> Result<Vec<Meta
     Ok(list_metadata_sources())
 }
 
-/// Set or clear the operator's art for one slot of `library_id`. The caller checked the URL.
-/// Returns the entry's picks after the change.
-pub fn set_art_pick(library_id: &str, kind: ArtKind, url: Option<String>) -> Result<Artwork> {
+/// Set or clear the art for one slot of `library_id` in `view`'s layer. The caller checked the
+/// URL. Returns the entry's picks in that layer after the change.
+pub fn set_art_pick(
+    view: &View,
+    library_id: &str,
+    kind: ArtKind,
+    url: Option<String>,
+) -> Result<Artwork> {
     let picked = {
         let _serial = lock();
-        let mut picks: Picks = read_json_or_default(&picks_path());
+        let mut picks: Picks = read_json_or_default(&view.path(PICKS));
         let art = picks.picks.entry(library_id.to_string()).or_default();
         *art_slot(art, kind) = url;
         let picked = art.clone();
@@ -429,21 +440,31 @@ pub fn set_art_pick(library_id: &str, kind: ArtKind, url: Option<String>) -> Res
         {
             picks.picks.remove(library_id);
         }
-        save_json(&picks_path(), &serde_json::to_string_pretty(&picks)?)?;
+        save_json(&view.path(PICKS), &serde_json::to_string_pretty(&picks)?)?;
         picked
     };
     emit_changed("manual");
     Ok(picked)
 }
 
-/// Every enabled source's result and the operator's picks, read once per catalog read.
+/// Every enabled source's result and the picks in a view, read once per catalog read.
 pub(crate) struct Fills {
     sources: Vec<(SourceSetting, Arc<Overlay>)>,
     picks: BTreeMap<String, Artwork>,
 }
 
 impl Fills {
-    pub(crate) fn load() -> Self {
+    /// The box's picks, each slot the profile in view picked replaced by its own.
+    pub(crate) fn load(view: &View) -> Self {
+        let mut picks = read_json_or_default::<Picks>(&View::default().path(PICKS)).picks;
+        for (id, own) in own_picks(view) {
+            let art = picks.entry(id).or_default();
+            for kind in ArtKind::ALL {
+                if let Some(url) = art_field(&own, kind) {
+                    *art_slot(art, kind) = Some(url);
+                }
+            }
+        }
         let sources = read_json_or_default::<Settings>(&settings_path())
             .sources
             .into_iter()
@@ -453,10 +474,7 @@ impl Fills {
                 (s, overlay)
             })
             .collect();
-        Self {
-            sources,
-            picks: read_json_or_default::<Picks>(&picks_path()).picks,
-        }
+        Self { sources, picks }
     }
 
     pub(crate) fn apply(&self, g: &mut GameEntry) {
@@ -573,6 +591,7 @@ mod tests {
             ids: BTreeMap::new(),
             filled: BTreeMap::new(),
             install: None,
+            own: false,
             meta: GameMeta::default(),
         }
     }

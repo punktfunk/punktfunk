@@ -65,7 +65,6 @@
 	"decky_open_app_hint": "Einstellungen, einen Host über seine Adresse hinzufügen und die Spiele eines Hosts durchsuchen – das alles findest du hier.",
 	"decky_play_menu": "Punktfunk im Spielen-Menü von Steam",
 	"decky_play_menu_hint": "Das ▾ neben der Spielen-Taste eines Spiels listet deine Hosts, die es haben, neben denen von Steam Link; wähl einen, und aus Spielen wird Streamen.",
-	"decky_section_host_menus": "Menüs des Hosts",
 	"decky_host_steam_menu_hint": "Drückt die Steam-/Guide-Taste auf dem Host",
 	"decky_host_steam_menu": "Steam-Menü auf dem Host",
 	"decky_host_qam_hint": "Öffnet das Schnellzugriffsmenü des Hosts",
@@ -73,6 +72,7 @@
 	"decky_end_game_hint": "Schließt {title} auf dem Host und beendet dann den Stream. Nicht gespeicherter Fortschritt geht verloren.",
 	"decky_end_game_confirm_title": "{title} beenden?",
 	"decky_section_about": "Info",
+	"decky_section_troubleshooting": "Fehlerbehebung",
 	"decky_version_dev": "v{version} · Entwickler-Build",
 	"decky_checking": "Prüfe…",
 	"decky_check_updates": "Nach Updates suchen",
@@ -119,6 +119,7 @@
 		}
 	],
 	"decky_host_asleep": "schläft",
+	"decky_host_awake": "{host} ist wach",
 	"decky_play_stream": "Streamen",
 	"decky_play_stop": "Beenden",
 	"decky_update_server_unreachable": "Der Update-Server war nicht erreichbar – bist du online?",

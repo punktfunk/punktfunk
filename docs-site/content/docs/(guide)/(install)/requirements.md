@@ -12,7 +12,7 @@ feature, is in the [Support matrix](/docs/support-matrix).
 |---|---|
 | [Ubuntu](/docs/ubuntu) | 26.04 or newer |
 | [Debian](/docs/debian) | 13 or newer, including LMDE 7 |
-| [Fedora](/docs/fedora) | 43 or 44 |
+| [Fedora](/docs/fedora) | 43, 44 or 45 |
 | [Arch](/docs/arch), CachyOS | current |
 | [Bazzite](/docs/bazzite), Fedora Atomic | current Bazzite; Fedora Atomic 43 or newer |
 | [SteamOS](/docs/steamos-host) | SteamOS 3 |
@@ -70,8 +70,8 @@ newer, including Arc, encoding needs the HuC firmware loaded: check `dmesg | gre
 fails. GeForce cards cap how many NVENC sessions run at once, which matters only when many devices
 stream together.
 
-HDR on Linux needs gamescope with `punktfunk-gamescope`, or GNOME 50 mirroring a real HDR monitor:
-[HDR](/docs/hdr).
+HDR on Linux needs gamescope with `punktfunk-gamescope`, Hyprland, or GNOME 50 mirroring a real HDR
+monitor: [HDR](/docs/hdr).
 
 ## Network
 

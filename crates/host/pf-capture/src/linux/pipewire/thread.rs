@@ -53,6 +53,7 @@ pub(super) struct LoopEnds {
     /// Arrivals awaiting their renders. A consumer that falls behind loses the oldest.
     pub(super) queue: FrameQueue,
     pub(super) wake: SyncSender<()>,
+    pub(super) viewers: Arc<super::share::Viewers>,
     pub(super) shared: StreamShared,
     pub(super) cursor_slot: CursorSlot,
     pub(super) importer: ImporterCell,
@@ -81,8 +82,10 @@ pub(super) fn pipewire_thread(
         let (quit_loop, seen) = (mainloop.clone(), quit_seen.clone());
         // This clone dies with the thread, like the one `.process` holds: the consumer
         // still sees the channel close when the loop ends.
-        let poke_wake = ends.wake.clone();
-        quit_rx.attach(loop_, move |ctl| on_ctl(ctl, &quit_loop, &seen, &poke_wake))
+        let (poke_wake, viewers) = (ends.wake.clone(), ends.viewers.clone());
+        quit_rx.attach(loop_, move |ctl| {
+            on_ctl(ctl, &quit_loop, &seen, &poke_wake, &viewers)
+        })
     };
     let context = pw::context::ContextRc::new(&mainloop, None).context("pw Context")?;
     let core = connect_core(&context, fd)?;
@@ -164,6 +167,7 @@ fn on_ctl(
     mainloop: &pw::main_loop::MainLoopRc,
     quit_seen: &Cell<bool>,
     wake: &SyncSender<()>,
+    viewers: &super::share::Viewers,
 ) {
     match ctl {
         PwCtl::Quit => {
@@ -174,6 +178,9 @@ fn on_ctl(
         // A full channel already holds an edge; the consumer wakes either way.
         PwCtl::Poke => {
             let _ = wake.try_send(());
+            if viewers.fanned() {
+                viewers.wake_joined();
+            }
         }
     }
 }
@@ -255,6 +262,7 @@ fn listener_state(
         modifier: 0,
         queue: ends.queue,
         wake: ends.wake,
+        viewers: ends.viewers,
         shared: ends.shared,
         cursor_slot: ends.cursor_slot,
         importer: ends.importer,
@@ -1879,6 +1887,7 @@ mod callbacks {
                 modifier: 0,
                 queue: Default::default(),
                 wake,
+                viewers: Default::default(),
                 shared,
                 cursor_slot: Default::default(),
                 importer: Default::default(),

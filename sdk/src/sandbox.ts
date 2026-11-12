@@ -210,25 +210,26 @@ export const bwrapArgv = (
 	// than a sandbox that refuses to start.
 	for (const p of [...(manifest.reads ?? []), ...(manifest.files ?? [])]) {
 		const abs = expandHome(p, paths.home);
-		if (bindable(abs, paths)) argv.push("--ro-bind-try", abs, at(abs));
+		if (bindable(abs, paths, false)) argv.push("--ro-bind-try", abs, at(abs));
 	}
 	for (const p of manifest.writes ?? []) {
 		const abs = expandHome(p, paths.home);
-		if (bindable(abs, paths)) argv.push("--bind-try", abs, at(abs));
+		if (bindable(abs, paths, true)) argv.push("--bind-try", abs, at(abs));
 	}
 	// Operator grants are read-only unless one opts into write.
 	for (const grant of grants) {
 		const abs = expandHome(grant.path, paths.home);
-		if (bindable(abs, paths))
+		if (bindable(abs, paths, grant.write))
 			argv.push(grant.write ? "--bind-try" : "--ro-bind-try", abs, at(abs));
 	}
-	// bwrap fails on a link it can't place, so none lands on, in or above anything placed.
+	// bwrap fails on a link it can't place, so none lands on, in or above anything placed. A
+	// link is a symlink inside the sandbox, not a bind, so it is judged as a read.
 	const placed = destinations(argv);
 	for (const grant of grants) {
-		if (!bindable(expandHome(grant.path, paths.home), paths)) continue;
+		if (!bindable(expandHome(grant.path, paths.home), paths, grant.write)) continue;
 		for (const link of grant.links ?? []) {
 			const dest = at(link.path);
-			if (link.path !== path.resolve(link.path) || !bindable(link.path, paths)) continue;
+			if (link.path !== path.resolve(link.path) || !bindable(link.path, paths, false)) continue;
 			if (placed.some((p) => under(p, dest) || under(dest, p))) continue;
 			argv.push("--symlink", link.target, dest);
 			placed.push(dest);
@@ -262,14 +263,46 @@ const destinations = (argv: readonly string[]): string[] => {
 	return out;
 };
 
+/** Under the home: what the user's login or session runs at start. A writable bind escapes the sandbox. */
+const STARTUP = [
+	".config/systemd",
+	".local/share/systemd",
+	".config/autostart",
+	".config/environment.d",
+	".config/fish",
+	".local/bin",
+	".bashrc",
+	".bash_profile",
+	".bash_login",
+	".bash_logout",
+	".profile",
+	".zshrc",
+	".zshenv",
+	".zprofile",
+	".zlogin",
+	".pam_environment",
+	".xprofile",
+	".xinitrc",
+	".config/plasma-workspace/env",
+	".config/autostart-scripts",
+	".local/share/applications",
+];
+
 /**
  * A root no manifest or grant may bind: the host's processes, devices, the session bus and
  * runtime sockets, the home or anything above it, keys, and the host's config dir (`configDir`,
  * and `~/.config/punktfunk*` wherever the config lives) or anything above it, which holds every
- * plugin's token. Checked on the path and on what it resolves to in the runner's view. The
- * host's `refusal_rule` is the other half; path-refusal-vectors.json pins the two.
+ * plugin's token. A read-write bind (`write`) also may not hold the login and session start-up
+ * files (`STARTUP`) or a parent of one; reading them is allowed. Checked on the path and on what
+ * it resolves to in the runner's view. The host's `refusal_rule` is the other half;
+ * path-refusal-vectors.json pins the two.
  */
-export const refusedRoot = (abs: string, home: string, configDir: string): boolean => {
+export const refusedRoot = (
+	abs: string,
+	home: string,
+	configDir: string,
+	write: boolean,
+): boolean => {
 	const refused = (p: string, h: string, c: string) => {
 		const under = (base: string) => p === base || p.startsWith(`${base}/`);
 		const above = (base: string) => `${base}/`.startsWith(`${p}/`);
@@ -282,6 +315,7 @@ export const refusedRoot = (abs: string, home: string, configDir: string): boole
 			["/proc", "/sys", "/dev"].some(under) ||
 			(under("/run") && !p.startsWith("/run/media/")) ||
 			[".ssh", ".gnupg"].some((d) => under(path.join(h, d))) ||
+			(write && STARTUP.some((d) => under(path.join(h, d)) || above(path.join(h, d)))) ||
 			p.startsWith(path.join(h, ".config", "punktfunk"))
 		);
 	};
@@ -300,8 +334,8 @@ export const refusedRoot = (abs: string, home: string, configDir: string): boole
 	return paths.some((x) => homes.some((h) => configs.some((c) => refused(x, h, c))));
 };
 
-const bindable = (abs: string, paths: SandboxPaths): boolean =>
-	path.isAbsolute(abs) && !refusedRoot(abs, paths.home, paths.configDir);
+const bindable = (abs: string, paths: SandboxPaths, write: boolean): boolean =>
+	path.isAbsolute(abs) && !refusedRoot(abs, paths.home, paths.configDir, write);
 
 /**
  * A seccomp program refusing netlink sockets, as the bytes bwrap reads from `--add-seccomp-fd`.

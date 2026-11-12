@@ -37,7 +37,10 @@ Two traps:
 | Scroll, wire and compatibility | `cargo test -p punktfunk-core --features quic scroll` |
 | Scroll, host mapping (any OS) | `cargo test -p pf-inject --lib scroll` |
 | Touch and scroll in the presenter (macOS too) | `cargo test -p pf-presenter --no-default-features` |
-| Linux GPU encode backends | `cargo test -p pf-encode --locked --features nvenc,vulkan-encode,pyrowave` |
+| Console UI, CPU raster (macOS too) | `cargo test -p pf-console-ui` |
+| Message files in `l10n/` | `cargo run -p pf-l10n --locked -- check` |
+| Linux GPU encode backends | `cargo test -p pf-encode -p pf-encode-core --locked --features nvenc,vulkan-encode,pyrowave` |
+| Ignored GPU tests under the Vulkan validation layer (a box with a device and the layer) | `sh scripts/vk-validation-tests.sh` |
 | Host without GameStream | `cargo clippy -p punktfunk-host --no-default-features --features pyrowave --all-targets -- -D warnings` |
 | Guided installer | `cargo test -p punktfunk-setup` and `sh scripts/ci/check-installer-behavior.sh` |
 | Settings table in the docs | `cargo test -p pf-host-config docs_table_is_current` |
@@ -45,10 +48,8 @@ Two traps:
 
 `scripts/xcheck.sh` type-checks and lints the Windows code of the capture, display and frame crates.
 It needs the target installed: `rustup target add x86_64-pc-windows-msvc`. Linux-only code needs a
-Linux box or container, because pipewire's build script needs the Linux library.
-
-A settings change regenerates the table in [Configuration](/docs/configuration) with
-`UPDATE_SETTINGS_DOCS=1 cargo test -p pf-host-config docs_table_is_current`.
+Linux box or container, because pipewire's build script needs the Linux library. Regenerating a
+checked-in file is under [Generated files](/docs/developers/contributing#generated-files).
 
 ## JavaScript packages
 
@@ -61,7 +62,7 @@ typecheck imports.
 | `docs-site/` | `bun run build && bun run lint` |
 | `sdk/` | `bun run typecheck && bun run test` |
 | `plugin-kit/` | `bun run check && bun run typecheck && bun run test` |
-| `clients/decky/` | `pnpm install && pnpm run typecheck`, then `python3.13 scripts/test-backend.py` |
+| `clients/decky/` | `pnpm install && pnpm run test`, then `python3 scripts/test-backend.py` (Python 3.10+) |
 
 For a docs change, also run `sh scripts/ci/check-docs-links.sh` and
 `sh scripts/ci/check-docs-drift.sh` from the repo root.
@@ -79,9 +80,11 @@ xcodebuild -project Punktfunk.xcodeproj -scheme Punktfunk-iOS \
   -destination 'generic/platform=iOS Simulator' CODE_SIGNING_ALLOWED=NO build
 ```
 
-The tvOS scheme is the same with `-scheme Punktfunk-tvOS` and `'generic/platform=tvOS Simulator'`.
-`ScrollCaptureTests` needs an xcframework built from the same tree, whose header defines
-`PUNKTFUNK_FEATURE_QUIC`; `build-xcframework.sh` produces that.
+The iOS and tvOS builds need those slices in the xcframework (`BUILD_IOS=1`, `BUILD_TVOS=1`). The
+tvOS scheme is the same with `-scheme Punktfunk-tvOS`, `'generic/platform=tvOS Simulator'` and
+`-skipMacroValidation -skipPackagePluginValidation`. `ScrollCaptureTests` needs an xcframework built
+from the same tree, whose header defines `PUNKTFUNK_FEATURE_QUIC`; `build-xcframework.sh` produces
+that.
 
 ## Android client
 
@@ -89,6 +92,7 @@ From `clients/android`, with the toolchain from
 [Build from source](/docs/developers/build-from-source#android-client):
 
 ```sh
+./gradlew :kit:cargoNdkClippy
 ./gradlew :kit:testDebugUnitTest :app:testDebugUnitTest -PexcludeScreenshots
 ```
 
@@ -99,6 +103,7 @@ From `packaging/windows/drivers`, as in
 
 ```powershell
 ..\drivers-cargo.ps1 'test --locked -p pf-umdf-util'
+..\drivers-cargo.ps1 'test --locked -p pf-vdisplay --lib'
 ..\drivers-cargo.ps1 'clippy --locked -p pf-umdf-util -p pf-xusb -p pf-gamepad -p pf-mouse -p wdk-iddcx -p pf-vdisplay --all-targets -- -D warnings'
 ```
 

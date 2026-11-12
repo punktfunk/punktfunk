@@ -13,7 +13,8 @@
 //! never signed in.
 //!
 //! A [`BackendError`]'s code is a string on the wire. [`Fault::from`] is the one place it is
-//! compared: the retry rule and the console's sentence match on [`Code`].
+//! compared: the retry rule and the console's sentence match on [`Code`]. [`marked_session`]
+//! decides which leftover session of a person's own account a cycle of ours signed in.
 
 // Off Windows only the tests read this module.
 #![cfg_attr(not(windows), allow(dead_code))]
@@ -80,10 +81,6 @@ pub(crate) enum Code {
     CredentialVerify,
     /// An adopted account's stored password no longer signs in.
     CredentialChanged,
-    CredentialWrong,
-    CredentialMustChange,
-    AccountLocked,
-    AccountSignedIn,
     HostMissing,
     RdpPinMissing,
     RdpPinInvalid,
@@ -107,10 +104,6 @@ impl Code {
             "credential_invalid" => Self::CredentialInvalid,
             "credential_verify" => Self::CredentialVerify,
             "credential_changed" => Self::CredentialChanged,
-            "credential_wrong" => Self::CredentialWrong,
-            "credential_must_change" => Self::CredentialMustChange,
-            "account_locked" => Self::AccountLocked,
-            "account_signed_in" => Self::AccountSignedIn,
             "host_missing" => Self::HostMissing,
             "rdp_pin_missing" => Self::RdpPinMissing,
             "rdp_pin_invalid" => Self::RdpPinInvalid,
@@ -135,10 +128,6 @@ impl Code {
             | Self::CredentialInvalid
             | Self::CredentialVerify
             | Self::CredentialChanged
-            | Self::CredentialWrong
-            | Self::CredentialMustChange
-            | Self::AccountLocked
-            | Self::AccountSignedIn
             | Self::HostMissing
             | Self::RdpPinMissing
             | Self::RdpPinInvalid
@@ -190,10 +179,6 @@ impl Fault {
             | Code::CredentialInvalid
             | Code::CredentialVerify
             | Code::CredentialChanged
-            | Code::CredentialWrong
-            | Code::CredentialMustChange
-            | Code::AccountLocked
-            | Code::AccountSignedIn
             | Code::HostMissing
             | Code::RdpPinMissing
             | Code::RdpPinInvalid
@@ -448,10 +433,6 @@ impl State {
             session_restart: SESSION_RESTART,
             host_restart: RESTART,
         }
-    }
-
-    pub(crate) fn account(&self) -> &str {
-        &self.account
     }
 
     pub(crate) fn status(&self) -> &RuntimeStatus {
@@ -806,6 +787,20 @@ impl State {
         self.phase = Phase::Finished;
         vec![Action::Finish]
     }
+
+    /// The worker left without [`Action::Finish`]: it panicked, and its children went with it.
+    /// A seat nobody stopped reads failed, and a start still waiting is answered.
+    pub(crate) fn abandon(&mut self) {
+        if self.finished() {
+            return;
+        }
+        if self.stop.is_none() {
+            let error = BackendError::new("seat_worker", "seat supervisor ended unexpectedly");
+            self.status = RuntimeStatus::failed(error.message.clone());
+            self.answer = Some(Err(error));
+        }
+        self.finish();
+    }
 }
 
 fn starting(detail: String) -> RuntimeStatus {
@@ -814,6 +809,35 @@ fn starting(detail: String) -> RuntimeStatus {
         detail: Some(detail),
         ..RuntimeStatus::default()
     }
+}
+
+/// One session of a seat's account as a start finds it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct Logon {
+    pub(crate) id: u32,
+    /// When it signed in, in 100 ns units. A later session given the same id has its own.
+    pub(crate) time: i64,
+    /// A client holds it.
+    pub(crate) connected: bool,
+}
+
+/// What a cycle records once its session is active: the seat, the session's id and logon time.
+pub(crate) fn session_mark(seat: &str, id: u32, time: i64) -> String {
+    format!("{seat} {id} {time}")
+}
+
+/// The session in `sessions` that `mark` names, when the mark is `seat`'s and the session is that
+/// exact one, left with no client. A session someone reconnected to is theirs.
+pub(crate) fn marked_session(mark: Option<&str>, seat: &str, sessions: &[Logon]) -> Option<u32> {
+    let mut fields = mark?.split(' ');
+    let (Some(owner), Some(id), Some(time), None) =
+        (fields.next(), fields.next(), fields.next(), fields.next())
+    else {
+        return None;
+    };
+    let (id, time) = (id.parse::<u32>().ok()?, time.parse::<i64>().ok()?);
+    let ours = |logon: &Logon| logon.id == id && logon.time == time && !logon.connected;
+    (owner == seat && sessions.iter().any(ours)).then_some(id)
 }
 
 #[cfg(test)]
@@ -826,7 +850,7 @@ mod tests {
     const MESSAGE: &str = "the operator's message";
 
     /// Code, whether a retry is pointless, and how the console's sentence starts.
-    const CODES: [(&str, bool, &str); 33] = [
+    const CODES: [(&str, bool, &str); 29] = [
         ("wts_timeout", false, SIGN_IN),
         ("rdp_keeper_exited", false, SIGN_IN),
         ("quality_failed", true, SCREEN),
@@ -847,10 +871,6 @@ mod tests {
         ("credential_invalid", true, MESSAGE),
         ("credential_verify", true, MESSAGE),
         ("credential_changed", true, MESSAGE),
-        ("credential_wrong", true, MESSAGE),
-        ("credential_must_change", true, MESSAGE),
-        ("account_locked", true, MESSAGE),
-        ("account_signed_in", true, MESSAGE),
         ("host_missing", true, MESSAGE),
         ("rdp_pin_missing", true, MESSAGE),
         ("rdp_pin_invalid", true, MESSAGE),
@@ -1422,10 +1442,12 @@ mod tests {
             (At::SigningIn, "wts_enumerate", true, false),
             (At::Entering, "seat_root", true, false),
             (At::Gating, "process_spawn", true, false),
+            (At::Gating, "wts_changed", true, false),
             (At::Collecting, "quality_empty", false, false),
             (At::Readying, "process_spawn", true, false),
             (At::Running, "process_wait", true, true),
             (At::HostDown, "process_spawn", true, true),
+            (At::HostDown, "wts_changed", true, true),
         ];
         for (at, code, retry, answered) in rows {
             let mut bench = bench(at);
@@ -1610,6 +1632,75 @@ mod tests {
         assert_eq!(bench.ending(), Some(STOPPED_READYING));
         assert_eq!(bench.run_out(), [Action::Finish]);
         assert_eq!(bench.answer(), Some(Err(STOPPED_READYING)));
+    }
+
+    /// A worker that dies mid-phase leaves the seat finished, so no caller waits on it: failed
+    /// and answered, or stopped when a stop was asked. One that finished stays as it was.
+    #[test]
+    fn a_worker_that_dies_leaves_the_seat_finished() {
+        const DIED: (&str, &str) = ("seat_worker", "seat supervisor ended unexpectedly");
+        let phases = [
+            At::Fresh,
+            At::Gating,
+            At::Readying,
+            At::HostDown,
+            At::Resting,
+        ];
+        for at in phases {
+            let mut bench = bench(at);
+            bench.state.abandon();
+            assert!(bench.state.finished(), "{at:?}");
+            let failed = shows(RuntimeState::Failed, DIED.1);
+            assert_eq!(bare(bench.state.status()), failed, "{at:?}");
+            assert_eq!(bench.answer(), Some(Err(DIED)), "{at:?}");
+            assert_eq!(bench.state.session(), None, "{at:?}");
+        }
+        let mut bench = bench(At::Running);
+        bench.asks(Observation::Stop);
+        bench.state.abandon();
+        assert!(bench.state.finished());
+        assert_eq!(bare(bench.state.status()), RuntimeStatus::stopped());
+        let before = bench.state.clone();
+        bench.state.abandon();
+        assert_eq!(bench.state, before);
+    }
+
+    /// Only the exact session a cycle of this seat marked, left with no client, is the seat's.
+    #[test]
+    fn a_mark_names_only_the_exact_session_its_cycle_left() {
+        const SEAT: &str = "0123456789abcdef0123456789abcdef";
+        const OTHER: &str = "fedcba9876543210fedcba9876543210";
+        let left = Logon {
+            id: 3,
+            time: 133_000_000_000_000_000,
+            connected: false,
+        };
+        let mark = session_mark(SEAT, left.id, left.time);
+        let reused = Logon {
+            time: left.time + 1,
+            ..left
+        };
+        let reconnected = Logon {
+            connected: true,
+            ..left
+        };
+        let elsewhere = Logon { id: 4, ..left };
+        let other_seat = session_mark(OTHER, left.id, left.time);
+        let rows: [(Option<&str>, &[Logon], Option<u32>); 9] = [
+            (Some(&mark), &[left], Some(3)),
+            (Some(&mark), &[elsewhere, left], Some(3)),
+            (None, &[left], None),
+            (Some(&mark), &[reused], None),
+            (Some(&mark), &[reconnected], None),
+            (Some(&mark), &[elsewhere], None),
+            (Some(&mark), &[], None),
+            (Some(&other_seat), &[left], None),
+            (Some("3 133000000000000000"), &[left], None),
+        ];
+        for (mark, sessions, ours) in rows {
+            let found = marked_session(mark, SEAT, sessions);
+            assert_eq!(found, ours, "{mark:?} {sessions:?}");
+        }
     }
 
     #[test]

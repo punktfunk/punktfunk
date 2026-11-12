@@ -29,7 +29,8 @@ export const GRANT_MIC = 0x10;
 export const GRANT_LAUNCH = 0x20;
 export const GRANT_POWER = 0x40;
 export const GRANT_MANAGE_GAMES = 0x80;
-export const GRANT_ALL = 0xff;
+export const GRANT_DISPLAY = 0x100;
+export const GRANT_ALL = 0x1ff;
 
 /** `GRANT_ALL` before the Power bit existed (hosts ≤ 0.32.x). */
 const GRANT_ALL_PRE_POWER = 0x3f;
@@ -37,9 +38,9 @@ const GRANT_ALL_PRE_POWER = 0x3f;
 const GRANT_ALL_PRE_MANAGE = 0x7f;
 
 /**
- * The legacy-full read rule (host-actions §4.3): a stored mask that is EXACTLY the pre-power
- * full mask was an explicit "Full control" from before Power existed — read it as today's
- * `GRANT_ALL`, so the chip stays "Full" and the edit sheet's toggles agree with it.
+ * The stored-mask read rule: exactly the Full of before Power or before Manage games reads as
+ * today's `GRANT_ALL`. `0xff` is not lifted: the host's API speaks the current vocabulary, where
+ * it means everything except Choose its screen.
  */
 export const normalizeLegacyFull = (mask: number): number =>
 	mask === GRANT_ALL_PRE_POWER || mask === GRANT_ALL_PRE_MANAGE
@@ -261,6 +262,11 @@ const GRANT_TOGGLES: {
 		bit: GRANT_MANAGE_GAMES,
 		label: () => m.access_grant_manage_games(),
 		caption: () => m.access_grant_manage_games_caption(),
+	},
+	{
+		bit: GRANT_DISPLAY,
+		label: () => m.access_grant_display(),
+		caption: () => m.access_grant_display_caption(),
 	},
 ];
 

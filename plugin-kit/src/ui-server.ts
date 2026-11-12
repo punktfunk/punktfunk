@@ -369,8 +369,8 @@ export interface ServeUiOptions {
 	 * then, persists it **raw**; defaults are never baked into the file. A rejected body comes back
 	 * 400 with the decode issue.
 	 *
-	 * Auth is the existing per-boot UI secret — the console reaches this through its session-gated
-	 * `/plugin-ui/<id>/…` proxy, so there is no new host surface and nothing new exposed to the LAN.
+	 * Auth is the existing per-boot UI secret — the console reaches this server-side, and this
+	 * plugin's own page through `/plugin-ui/<id>-…/`, so nothing new is exposed to the LAN.
 	 */
 	readonly config?: ServeUiConfig<Schema.Top>;
 	/**

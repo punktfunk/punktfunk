@@ -960,6 +960,8 @@ mod tests {
         let base = ScreenBase {
             compositor: crate::vdisplay::Compositor::Kwin,
             params: crate::vdisplay::SessionParams {
+                screen: None,
+                topology: None,
                 client_fp: Some([3; 32]),
                 client_hdr: None,
                 hdr: false,
@@ -987,7 +989,7 @@ mod tests {
                 slices: 1,
                 reframe_to: None,
                 mirrored: false,
-                rgb_full_range: true,
+                rgb_full_range: crate::encode::RgbFullRange::BOTH,
                 studio_asked: crate::session_plan::StudioAsk::default(),
             },
             pyrowave_max_kbps: None,

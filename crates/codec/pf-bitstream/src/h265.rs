@@ -57,6 +57,7 @@ use crate::sei;
 pub use crate::sei::RecoveryPointHevc;
 
 pub mod conceal;
+pub mod poc_widen;
 mod refs;
 
 pub use refs::CurrentRefs;
@@ -1803,7 +1804,7 @@ mod tests {
         conf_win: Option<(u32, u32, u32, u32)>,
         max_dec_pic_buffering_minus1: u32,
         max_num_reorder_pics: u32,
-        long_term: bool,
+        pub(super) long_term: bool,
         vui: VuiOpt,
     }
 
@@ -1967,25 +1968,25 @@ mod tests {
     const RASL_N: u8 = 8;
 
     #[derive(Clone)]
-    struct SliceOpts {
-        nalu_type: u8,
-        layer_id: u8,
+    pub(super) struct SliceOpts {
+        pub(super) nalu_type: u8,
+        pub(super) layer_id: u8,
         /// Continuation: `Some((address, address_bits, dependent))`.
-        segment: Option<(u32, usize, bool)>,
+        pub(super) segment: Option<(u32, usize, bool)>,
         /// Flag bit is written only when the PPS enables dependent segments.
-        pps_dependent_enabled: bool,
-        slice_type: u32, // 2 = I, 1 = P, 0 = B
-        poc_lsb: u32,
+        pub(super) pps_dependent_enabled: bool,
+        pub(super) slice_type: u32, // 2 = I, 1 = P, 0 = B
+        pub(super) poc_lsb: u32,
         /// Short-term RPS: (delta_poc_sX_minus1, used_by_curr_pic) pairs.
-        neg: Vec<(u32, bool)>,
-        pos: Vec<(u32, bool)>,
+        pub(super) neg: Vec<(u32, bool)>,
+        pub(super) pos: Vec<(u32, bool)>,
         /// When the SPS set long_term_ref_pics_present_flag:
         /// (poc_lsb_lt, used_by_curr_pic_lt, delta_poc_msb_cycle_lt).
-        lt: Vec<(u32, bool, Option<u32>)>,
-        sps_long_term: bool,
-        num_ref_idx_l0: u32,
-        num_ref_idx_l1: u32,
-        no_output_of_prior_pics: bool,
+        pub(super) lt: Vec<(u32, bool, Option<u32>)>,
+        pub(super) sps_long_term: bool,
+        pub(super) num_ref_idx_l0: u32,
+        pub(super) num_ref_idx_l1: u32,
+        pub(super) no_output_of_prior_pics: bool,
     }
 
     impl Default for SliceOpts {
@@ -2008,7 +2009,7 @@ mod tests {
         }
     }
 
-    fn synth_slice(o: &SliceOpts) -> Vec<u8> {
+    pub(super) fn synth_slice(o: &SliceOpts) -> Vec<u8> {
         let is_irap = (16..=23).contains(&o.nalu_type);
         let is_idr = o.nalu_type == IDR_W_RADL || o.nalu_type == 20;
         let mut s = BitSink::new();
@@ -2070,7 +2071,7 @@ mod tests {
         h265_nalu_with_layer(o.nalu_type, o.layer_id, &s.finish())
     }
 
-    fn idr_slice() -> Vec<u8> {
+    pub(super) fn idr_slice() -> Vec<u8> {
         synth_slice(&SliceOpts {
             nalu_type: IDR_W_RADL,
             slice_type: 2,
@@ -2087,7 +2088,7 @@ mod tests {
         })
     }
 
-    fn param_sets(sps: &SpsOpts) -> Vec<u8> {
+    pub(super) fn param_sets(sps: &SpsOpts) -> Vec<u8> {
         let mut au = synth_sps(sps);
         au.extend(synth_pps(false));
         au

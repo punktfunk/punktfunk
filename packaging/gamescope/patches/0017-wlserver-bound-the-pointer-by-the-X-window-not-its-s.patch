@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: =?UTF-8?q?Enrico=20B=C3=BChler?= <enrico.buehler@unom.io>
 Date: Thu, 17 Sep 2026 16:41:57 +0200
-Subject: [PATCH 17/33] wlserver: bound the pointer by the X window, not its
+Subject: [PATCH 17/38] wlserver: bound the pointer by the X window, not its
  swapchain
 
 wlserver_clampcursor() bounds the pointer with wlserver_get_surface_extent(),
@@ -28,10 +28,10 @@ to gate on.
  4 files changed, 42 insertions(+), 2 deletions(-)
 
 diff --git a/src/meson.build b/src/meson.build
-index b918dcc..cfe10d2 100644
+index 7b339d2c..eb9a3106 100644
 --- a/src/meson.build
 +++ b/src/meson.build
-@@ -197,7 +197,8 @@ vcs_tag = run_command(vcs_tag_cmd, check: false).stdout().strip()
+@@ -205,7 +205,8 @@ vcs_tag = run_command(vcs_tag_cmd, check: false).stdout().strip()
  #   +pfhdr12 — …and the capture push honours the consumer's maxFramerate
  #   +pfhdr13 — …and a P010 capture format (BT.2020 PQ, 4:2:0)
  #   +pfhdr14 — …and the headless connector reports HDR10 under --hdr-debug-force-support
@@ -42,10 +42,10 @@ index b918dcc..cfe10d2 100644
  gamescope_version_conf = configuration_data()
  gamescope_version_conf.set('VCS_TAG', version_tag)
 diff --git a/src/steamcompmgr.cpp b/src/steamcompmgr.cpp
-index eeec1dc..aa6d6e2 100644
+index 2524fa04..00dc2928 100644
 --- a/src/steamcompmgr.cpp
 +++ b/src/steamcompmgr.cpp
-@@ -5479,6 +5479,17 @@ determine_and_apply_focus( global_focus_t *pFocus )
+@@ -5646,6 +5646,17 @@ determine_and_apply_focus( global_focus_t *pFocus )
  	{
  		static gamescope::VirtualConnectorKey_t s_ulPreviousGlobalFocusKey;
  
@@ -64,10 +64,10 @@ index eeec1dc..aa6d6e2 100644
  		if ( pFocus->inputFocusWindow   != previousLocalFocus.inputFocusWindow ||
  			pFocus->overrideWindow      != previousLocalFocus.overrideWindow ||
 diff --git a/src/wlserver.cpp b/src/wlserver.cpp
-index f495d4b..b145169 100644
+index 6d9f9806..3d380341 100644
 --- a/src/wlserver.cpp
 +++ b/src/wlserver.cpp
-@@ -2789,10 +2789,22 @@ static void wlserver_drag_anchor_release()
+@@ -2988,10 +2988,22 @@ static void wlserver_drag_anchor_release()
  	MakeFocusDirty();
  	nudge_steamcompmgr();
  }
@@ -90,7 +90,7 @@ index f495d4b..b145169 100644
  	for ( auto iter : wlserver.current_dropdown_surfaces )
  	{
  		auto [nDropdownX, nDropdownY] = iter.second;
-@@ -2812,6 +2824,21 @@ static void wlserver_clampcursor()
+@@ -3011,6 +3023,21 @@ static void wlserver_clampcursor()
  	wlserver.mouse_surface_cursory = std::clamp( wlserver.mouse_surface_cursory, 0.0, double( std::max( nHeight - 1, 0 ) ) );
  }
  
@@ -112,7 +112,7 @@ index f495d4b..b145169 100644
  void wlserver_mousefocus( struct wlr_surface *wlrsurface, int x /* = 0 */, int y /* = 0 */ )
  {
  	assert( wlserver_is_lock_held() );
-@@ -2824,7 +2851,7 @@ void wlserver_mousefocus( struct wlr_surface *wlrsurface, int x /* = 0 */, int y
+@@ -3023,7 +3050,7 @@ void wlserver_mousefocus( struct wlr_surface *wlrsurface, int x /* = 0 */, int y
  	{
  		wlserver.mouse_focus_surface = wlrsurface;
  
@@ -122,10 +122,10 @@ index f495d4b..b145169 100644
  		if ( x < nWidth && y < nHeight )
  		{
 diff --git a/src/wlserver.hpp b/src/wlserver.hpp
-index 79a0723..e7b7506 100644
+index ec2b968f..270a772a 100644
 --- a/src/wlserver.hpp
 +++ b/src/wlserver.hpp
-@@ -267,6 +267,7 @@ void wlserver_key( uint32_t key, bool press, uint32_t time );
+@@ -287,6 +287,7 @@ void wlserver_keyboard_release_modifiers();
  void wlserver_set_keyboard_layout( const char *pszLayout );
  
  void wlserver_mousefocus( struct wlr_surface *wlrsurface, int x = 0, int y = 0 );

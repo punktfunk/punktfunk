@@ -1,6 +1,6 @@
 // Game overrides in the console: the Stream controls of a game or a source, and the Shared
 // overrides dialog. Each control writes to the host when it changes and then shows what the host
-// stored, apart from the entry page's draft and Save.
+// stored, apart from the entry page's draft and Save. In a profile's view they write its own.
 import { type QueryClient, useQueryClient } from "@tanstack/react-query";
 import { toast } from "@unom/ui/toast";
 import { Pencil, Plus, Trash2 } from "lucide-react";
@@ -15,6 +15,7 @@ import {
 	useUpdateOverrideSet,
 } from "@/api/gen/library/library";
 import type { OverrideEntry } from "@/api/gen/model/overrideEntry";
+import { type ProfileView, useAs, useProfileView } from "@/api/seat";
 import { useDialogs } from "@/components/dialogs";
 import { QueryState } from "@/components/query-state";
 import { Button } from "@/components/ui/button";
@@ -25,6 +26,7 @@ import {
 	DialogHeader,
 	DialogTitle,
 } from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
 	Select,
@@ -37,21 +39,28 @@ import { apiErrorMessage } from "@/lib/errors";
 import { useLocale } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 import { m } from "@/paraglide/messages";
+import { OwnBadge } from "./GameCard";
 import { refreshLibrary } from "./helpers";
 import {
 	applyPatch,
 	type Fields,
 	fieldsOf,
 	gameEntry,
+	HZ_RANGE,
+	LINES_RANGE,
 	linesLabel,
+	mergedSets,
 	type Patch,
 	padLabel,
 	padNames,
+	profileEntry,
+	profileStream,
 	REFRESH_RATES,
 	RESOLUTIONS,
 	setList,
 	storeOf,
 	usageOf,
+	wholeIn,
 } from "./overrides";
 
 /** `Select` values beside the set ids, which are 12 hex and never these. */
@@ -109,15 +118,27 @@ const Choice: FC<{
 	disabled: boolean;
 	/** Where the value comes from, when not from here; the value reads muted. */
 	note?: string;
+	/** The value is not this entry's own: it reads muted. */
+	muted?: boolean;
 	children?: ReactNode;
-}> = ({ id, label, value, options, onPick, disabled, note, children }) => (
+}> = ({
+	id,
+	label,
+	value,
+	options,
+	onPick,
+	disabled,
+	note,
+	muted,
+	children,
+}) => (
 	<div className="space-y-2">
 		<Label htmlFor={id}>{label}</Label>
 		<Select value={value} onValueChange={onPick} disabled={disabled}>
 			<SelectTrigger
 				id={id}
 				size="sm"
-				className={cn(note && "text-muted-foreground")}
+				className={cn((note || muted) && "text-muted-foreground")}
 			>
 				<SelectValue />
 			</SelectTrigger>
@@ -150,7 +171,60 @@ function choices<T extends string | number>(
 
 const picked = (v: string) => (v === DEVICE ? null : v);
 
-/** Resolution with its screen option, refresh rate, HDR and controller. */
+/** The `Select` value of a list with Custom: a stored value the list lacks reads Custom. */
+function listValue(
+	list: readonly number[],
+	stored: number | undefined,
+	custom: boolean,
+): string {
+	if (custom || (stored != null && !list.includes(stored))) return CUSTOM;
+	return stored != null ? String(stored) : DEVICE;
+}
+
+/**
+ * A custom value in `range`, written on blur or Enter rather than per keystroke as `InputNumber`
+ * does: each write goes to the host and locks the row until it answers.
+ */
+const CustomNumber: FC<{
+	id: string;
+	label: string;
+	unit: string;
+	value: number | undefined;
+	range: readonly [number, number];
+	onCommit: (n: number) => void;
+	disabled: boolean;
+}> = ({ id, label, unit, value, range, onCommit, disabled }) => {
+	// Null shows the stored value; typing holds a draft until it commits.
+	const [draft, setDraft] = useState<string | null>(null);
+	const commit = () => {
+		const n = draft == null ? null : wholeIn(draft, range);
+		setDraft(null);
+		if (n != null && n !== value) onCommit(n);
+	};
+	return (
+		<div className="flex items-center gap-2">
+			<Input
+				id={id}
+				type="number"
+				inputMode="numeric"
+				min={range[0]}
+				max={range[1]}
+				step={1}
+				placeholder={`${range[0]}–${range[1]}`}
+				aria-label={label}
+				className="w-24"
+				value={draft ?? value ?? ""}
+				onChange={(e) => setDraft(e.target.value)}
+				onBlur={commit}
+				onKeyDown={(e) => e.key === "Enter" && e.currentTarget.blur()}
+				disabled={disabled}
+			/>
+			<span className="text-sm text-muted-foreground">{unit}</span>
+		</div>
+	);
+};
+
+/** Resolution with its screen option, refresh rate (each a preset or Custom…), HDR, controller. */
 export const StreamFields: FC<{
 	id: string;
 	value: Fields;
@@ -158,18 +232,28 @@ export const StreamFields: FC<{
 	disabled: boolean;
 	/** The source these values come from, for a game that has none of its own. */
 	from?: string | undefined;
-}> = ({ id, value, onSet, disabled, from }) => {
+	/** The values are the owner's library's, in a profile's view: they read muted. */
+	muted?: boolean;
+}> = ({ id, value, onSet, disabled, from, muted }) => {
+	// Custom with nothing typed yet stores nothing; the pick holds until a value does.
+	const [customLines, setCustomLines] = useState(false);
+	const [customHz, setCustomHz] = useState(false);
 	const note = (set: boolean) =>
 		from && set ? m.library_stream_from({ source: from }) : undefined;
 	const hdr = value.hdr == null ? DEVICE : value.hdr ? "on" : "off";
+	const linesPick = listValue(RESOLUTIONS, value.lines, customLines);
+	const hzPick = listValue(REFRESH_RATES, value.hz, customHz);
+	const custom: [string, string] = [CUSTOM, m.library_stream_custom_value()];
 	return (
 		<div className="grid gap-4 @md:grid-cols-2">
 			<Choice
 				id={`${id}-lines`}
 				label={m.library_stream_resolution()}
-				value={value.lines != null ? String(value.lines) : DEVICE}
-				options={choices(RESOLUTIONS, value.lines, linesLabel)}
+				value={linesPick}
+				options={[...choices(RESOLUTIONS, null, linesLabel), custom]}
 				onPick={(v) => {
+					setCustomLines(v === CUSTOM);
+					if (v === CUSTOM) return;
 					const lines = picked(v);
 					onSet(
 						lines == null
@@ -179,7 +263,19 @@ export const StreamFields: FC<{
 				}}
 				disabled={disabled}
 				note={note(value.lines != null)}
+				muted={muted}
 			>
+				{linesPick === CUSTOM && (
+					<CustomNumber
+						id={`${id}-lines-custom`}
+						label={m.library_stream_resolution()}
+						unit="p"
+						value={value.lines}
+						range={LINES_RANGE}
+						onCommit={(n) => onSet({ lines: n })}
+						disabled={disabled}
+					/>
+				)}
 				{value.lines != null && (
 					<div className="flex items-center gap-2">
 						<Checkbox
@@ -197,17 +293,33 @@ export const StreamFields: FC<{
 			<Choice
 				id={`${id}-hz`}
 				label={m.library_stream_refresh()}
-				value={value.hz != null ? String(value.hz) : DEVICE}
-				options={choices(REFRESH_RATES, value.hz, (hz) =>
-					m.library_stream_hz({ hz }),
-				)}
+				value={hzPick}
+				options={[
+					...choices(REFRESH_RATES, null, (hz) => m.library_stream_hz({ hz })),
+					custom,
+				]}
 				onPick={(v) => {
+					setCustomHz(v === CUSTOM);
+					if (v === CUSTOM) return;
 					const hz = picked(v);
 					onSet({ hz: hz == null ? null : Number(hz) });
 				}}
 				disabled={disabled}
 				note={note(value.hz != null)}
-			/>
+				muted={muted}
+			>
+				{hzPick === CUSTOM && (
+					<CustomNumber
+						id={`${id}-hz-custom`}
+						label={m.library_stream_refresh()}
+						unit="Hz"
+						value={value.hz}
+						range={HZ_RANGE}
+						onCommit={(n) => onSet({ hz: n })}
+						disabled={disabled}
+					/>
+				)}
+			</Choice>
 			<Choice
 				id={`${id}-hdr`}
 				label={m.library_stream_hdr()}
@@ -220,6 +332,7 @@ export const StreamFields: FC<{
 				onPick={(v) => onSet({ hdr: v === DEVICE ? null : v === "on" })}
 				disabled={disabled}
 				note={note(value.hdr != null)}
+				muted={muted}
 			/>
 			<Choice
 				id={`${id}-pad`}
@@ -229,24 +342,37 @@ export const StreamFields: FC<{
 				onPick={(v) => onSet({ gamepad: picked(v) })}
 				disabled={disabled}
 				note={note(value.gamepad != null)}
+				muted={muted}
 			/>
 		</div>
 	);
 };
 
-/**
- * A game's or a source's stream settings: *Use* (none, its own values, or a shared override),
- * then the values. A shared override's values read here and change in its dialog. A game under a
- * source's entry also has *Same as <source>*: its source's values, muted. Editing one makes them
- * the game's own, and *Device decides* opts out of them.
- */
-export const StreamControls: FC<{
+type StreamControlsProps = {
 	kind: "game" | "source";
 	/** The library id, or the source id. */
 	id: string;
 	/** A game's source by name, for "from Lutris". */
 	from?: string;
-}> = ({ kind, id, from }) => {
+};
+
+/** A game's or a source's stream settings, the owner's library's or a profile's own. */
+export const StreamControls: FC<StreamControlsProps> = (props) => {
+	const view = useProfileView();
+	return view ? (
+		<ProfileStreamControls {...props} view={view} />
+	) : (
+		<OwnerStreamControls {...props} />
+	);
+};
+
+/**
+ * The owner's library: *Use* (none, its own values, or a shared override), then the values. A
+ * shared override's values read here and change in its dialog. A game under a source's entry
+ * also has *Same as <source>*: its source's values, muted. Editing one makes them the game's own,
+ * and *Device decides* opts out of them.
+ */
+const OwnerStreamControls: FC<StreamControlsProps> = ({ kind, id, from }) => {
 	const locale = useLocale();
 	const doc = useGetLibraryOverrides();
 	const setGame = useSetGameOverrides();
@@ -362,6 +488,132 @@ export const StreamControls: FC<{
 					onClose={() => setEditing(null)}
 				/>
 			)}
+		</QueryState>
+	);
+};
+
+/**
+ * The owner's library's overrides, and in a profile's view the profile's own file beside them.
+ * `sets` holds every shared override an entry may name there.
+ */
+export function useOverrideDocs(enabled = true) {
+	const as = useAs();
+	const box = useGetLibraryOverrides(undefined, { query: { enabled } });
+	const own = useGetLibraryOverrides(as, {
+		query: { enabled: enabled && as !== undefined },
+	});
+	return {
+		box: box.data,
+		own: as ? own.data : undefined,
+		sets: mergedSets(box.data, as ? own.data : undefined),
+		isLoading: box.isLoading || (as !== undefined && own.isLoading),
+		error: box.error ?? (as ? own.error : null),
+		refetch: () => {
+			void box.refetch();
+			if (as) void own.refetch();
+		},
+	};
+}
+
+/**
+ * A profile's own stream settings. *Use* starts with what applies without them, the owner's
+ * library's (*Same as Enrico*) or the profile's own source entry (*Same as Lutris*), whose
+ * values read muted. A value of the profile's own is marked, with one action back.
+ */
+const ProfileStreamControls: FC<
+	StreamControlsProps & { view: ProfileView }
+> = ({ kind, id, from, view }) => {
+	const locale = useLocale();
+	const as = useAs();
+	const docs = useOverrideDocs();
+	const setGame = useSetGameOverrides();
+	const setSource = useSetSourceOverrides();
+	const { busy, run } = useStreamWrite();
+	const [custom, setCustom] = useState(false);
+
+	const s = profileStream(kind, id, docs.box, docs.own);
+	const values = Object.keys(fieldsOf(s.mine)).length > 0;
+	const use = s.mine
+		? (s.setId ?? (values || custom ? CUSTOM : DEVICE))
+		: custom
+			? CUSTOM
+			: SAME;
+	const back = s.fallbackIsOwn
+		? m.library_stream_same_as_source({ source: from ?? storeOf(id) })
+		: m.profile_view_same_as_owner({ owner: view.ownerName });
+
+	const put = (data: OverrideEntry | null) => {
+		const entry = profileEntry(kind, data);
+		return kind === "game"
+			? setGame.mutateAsync({ id, data: entry, params: as })
+			: setSource.mutateAsync({ source: id, data: entry, params: as });
+	};
+	const onUse = async (v: string) => {
+		setCustom(v === CUSTOM);
+		if (v === CUSTOM) {
+			// What applied becomes the profile's own, to edit.
+			if (!s.mine && Object.keys(s.shown).length > 0)
+				await run(() => put(s.shown));
+			return;
+		}
+		await run(() => put(v === SAME ? null : v === DEVICE ? {} : { set: v }));
+	};
+
+	const htmlId = `stream-${kind}-${id}`;
+	return (
+		<QueryState
+			isLoading={docs.isLoading}
+			error={docs.error}
+			refetch={docs.refetch}
+		>
+			<div className="space-y-4">
+				{s.mine && (
+					<div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+						<OwnBadge label={m.profile_view_own({ name: view.name })} />
+						{!s.fallbackIsOwn && (
+							<Button
+								variant="link"
+								size="sm"
+								className="h-auto p-0"
+								disabled={busy}
+								onClick={() => void onUse(SAME)}
+							>
+								{m.profile_view_use_owner({ owner: view.ownerName })}
+							</Button>
+						)}
+					</div>
+				)}
+				<div className="max-w-sm">
+					<Choice
+						id={`${htmlId}-use`}
+						label={m.library_stream_use()}
+						value={use}
+						options={[
+							[SAME, back],
+							// A source's own entry cannot opt out; it hands back to the owner's.
+							...(kind === "game"
+								? [[DEVICE, m.library_stream_device()] as [string, string]]
+								: []),
+							[CUSTOM, m.library_stream_custom()],
+							...setList(docs.sets, locale).map((set): [string, string] => [
+								set.id,
+								set.name ?? set.id,
+							]),
+						]}
+						onPick={(v) => void onUse(v)}
+						disabled={busy}
+						muted={!s.mine && !custom}
+					/>
+				</div>
+				<StreamFields
+					id={htmlId}
+					value={s.shown}
+					onSet={(patch) => void run(() => put(applyPatch(s.shown, patch)))}
+					disabled={busy || s.setId !== undefined}
+					from={!s.mine && s.fallbackIsOwn ? from : undefined}
+					muted={!s.mine && !custom}
+				/>
+			</div>
 		</QueryState>
 	);
 };

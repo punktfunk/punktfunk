@@ -629,21 +629,50 @@ pub struct MediaSender {
 /// Where media goes, and the move it is waiting out.
 struct Route {
     to: SocketAddr,
-    /// The address quinn moved to and when, while media waits for it to validate.
-    moving: Option<(SocketAddr, std::time::Instant)>,
+    /// The address quinn moved to, when media first saw it, and how long media waits there.
+    /// The wait is fixed at that first sight: `conn.rtt()` moves with the new path's samples.
+    moving: Option<(SocketAddr, std::time::Instant, Duration)>,
+    /// `conn.rtt()` of the path to `to`, which quinn leaves on a move. Read every
+    /// [`RTT_EVERY`]th send: the read takes the connection's lock.
+    rtt: Duration,
+    sends: u8,
     /// The video mark toward `to`. A Windows flow is bound to one destination.
     qos: Option<super::QosFlow>,
 }
 
-/// Whether media to a client that moved `from` → `to`, `waited` ago, still waits for the new
-/// address to validate. Only a new IP waits: a port-only NAT rebind has no third party to hit.
+/// Whether media to a client that moved `from` → `to`, `waited` ago, is still inside `hold`.
+/// Only a new IP waits: a port-only NAT rebind has no third party to hit.
 fn still_validating(from: SocketAddr, to: SocketAddr, waited: Duration, hold: Duration) -> bool {
     from.ip() != to.ip() && waited < hold
 }
 
-/// quinn's path validation timer, 3 × PTO, with PTO taken as RTT plus the 25 ms ack delay.
-fn validation_hold(rtt: Duration) -> Duration {
-    3 * (rtt + Duration::from_millis(25))
+/// The RTT the host's quinn gives a path it has no sample for, set on its server config. It
+/// sizes [`validation_hold`]: 100 ms holds media about a second after a real IP change, and
+/// costs one early handshake retransmit on a link slower than 300 ms.
+pub(crate) const HOST_INITIAL_RTT: Duration = Duration::from_millis(100);
+
+/// Sends between two reads of the stable path's RTT. A smoothed RTT moves an eighth per sample.
+const RTT_EVERY: u8 = 16;
+
+/// The `max_ack_delay` every quinn endpoint advertises. A modified client may advertise up to
+/// 16 s, which stretches quinn's timer past the hold; quinn does not expose the peer's value.
+const PEER_MAX_ACK_DELAY: Duration = Duration::from_millis(25);
+
+/// An upper bound of quinn's path validation timer for a move to a new IP. quinn arms
+/// `3 × max(PTO of the new path, PTO of the old one)`, `PTO = rtt + max(4 × rttvar, 1 ms) +
+/// max_ack_delay`. The new path starts at [`HOST_INITIAL_RTT`] with `rttvar` half of it. quinn's
+/// `rttvar` is not exposed, but it stays within `2 × rtt` (each sample moves both toward it),
+/// so `old_rtt`, the old path's RTT, bounds the old PTO at `9 × rtt`. The margin covers timer
+/// granularity. Counted from the first sight of the move, which is no earlier than quinn's own
+/// start, the hold outlasts the timer for the RTT media last read. A client that inflates its
+/// RTT between two reads stretches quinn's timer past it.
+fn validation_hold(old_rtt: Duration) -> Duration {
+    let pto = |rtt: Duration, var: Duration| {
+        rtt + (4 * var).max(Duration::from_millis(1)) + PEER_MAX_ACK_DELAY
+    };
+    let new_path = pto(HOST_INITIAL_RTT, HOST_INITIAL_RTT / 2);
+    let old_path = pto(old_rtt, 2 * old_rtt);
+    3 * new_path.max(old_path) + Duration::from_millis(100)
 }
 
 impl MediaSender {
@@ -659,6 +688,8 @@ impl MediaSender {
             route: Mutex::new(Route {
                 to,
                 moving: None,
+                rtt: conn.rtt(),
+                sends: 0,
                 qos,
             }),
             socket,
@@ -679,22 +710,27 @@ impl MediaSender {
     /// Where the next packet goes and from which local address, or `None` while it is held.
     /// quinn moves `remote_address()` on the first authenticated packet from a new address and
     /// validates it afterwards; its own sends are capped against amplification and media is
-    /// not. So media follows a new IP only after [`validation_hold`], and the mark moves with it.
+    /// not. Media follows a new IP once [`validation_hold`] has passed since it was first seen,
+    /// by when quinn has validated it or moved back. The mark moves with the route.
     fn path(&self) -> Option<(SocketAddr, Option<IpAddr>)> {
         let seen = mapped(canonical(self.conn.remote_address()), self.v6_socket);
         let mut r = self.route.lock().unwrap_or_else(|e| e.into_inner());
         if seen == r.to {
             r.moving = None;
+            r.sends = r.sends.wrapping_add(1);
+            if r.sends % RTT_EVERY == 0 {
+                r.rtt = self.conn.rtt();
+            }
         } else {
             let now = std::time::Instant::now();
-            let since = match r.moving {
-                Some((addr, since)) if addr == seen => since,
+            let (since, hold) = match r.moving {
+                Some((addr, since, hold)) if addr == seen => (since, hold),
                 _ => {
-                    r.moving = Some((seen, now));
-                    now
+                    let hold = validation_hold(r.rtt);
+                    r.moving = Some((seen, now, hold));
+                    (now, hold)
                 }
             };
-            let hold = validation_hold(self.conn.rtt());
             if still_validating(r.to, seen, now.duration_since(since), hold) {
                 return None;
             }
@@ -1130,8 +1166,12 @@ mod tests {
         // A new IP holds media for the validation window; a port-only rebind does not.
         let held = sender.path().is_none();
         assert_eq!(held, proxy.backs[0].ip() != proxy.backs[1].ip());
+        let follow_by = std::time::Instant::now() + validation_hold(Duration::ZERO) * 2;
         while sender.path().is_none() {
-            assert!(std::time::Instant::now() < deadline, "media never followed");
+            assert!(
+                std::time::Instant::now() < follow_by,
+                "media never followed"
+            );
             tokio::time::sleep(Duration::from_millis(2)).await;
         }
         assert_eq!(canonical(sender.path().unwrap().0), proxy.backs[1]);
@@ -1157,10 +1197,56 @@ mod tests {
         let rebound: SocketAddr = "10.0.0.2:6000".parse().unwrap();
         let moved: SocketAddr = "10.0.1.7:5000".parse().unwrap();
         let hold = validation_hold(Duration::from_millis(10));
-        assert_eq!(hold, Duration::from_millis(105));
+        // 3 × (100 + 4 × 50 + 25) ms from the fresh path, plus the margin.
+        assert_eq!(hold, Duration::from_millis(1075));
         assert!(!still_validating(a, rebound, Duration::ZERO, hold));
         assert!(still_validating(a, moved, Duration::from_millis(100), hold));
         assert!(!still_validating(a, moved, hold, hold));
+    }
+
+    /// quinn-proto 0.11.19 `RttEstimator::update` and `pto_base`, which the hold must outlast.
+    fn quinn_rtt(samples: &[u64]) -> (Duration, Duration) {
+        let (mut smoothed, mut var) = (None::<Duration>, HOST_INITIAL_RTT / 2);
+        for &ms in samples {
+            let x = Duration::from_millis(ms);
+            (smoothed, var) = match smoothed {
+                None => (Some(x), x / 2),
+                Some(s) => (Some((7 * s + x) / 8), (3 * var + s.abs_diff(x)) / 4),
+            };
+        }
+        (smoothed.unwrap_or(HOST_INITIAL_RTT), var)
+    }
+
+    fn quinn_pto(rtt: Duration, var: Duration) -> Duration {
+        rtt + (4 * var).max(Duration::from_millis(1)) + Duration::from_millis(25)
+    }
+
+    /// The hold is never shorter than the timer quinn arms on a move to a new IP:
+    /// `3 × max(PTO of a fresh path, PTO of the old path)`.
+    #[test]
+    fn the_hold_outlasts_quinns_validation_timer() {
+        // The old path is fresh: no sample yet, the RTT is the initial one.
+        let fresh = 3 * quinn_pto(HOST_INITIAL_RTT, HOST_INITIAL_RTT / 2);
+        assert_eq!(fresh, Duration::from_millis(975));
+        assert!(validation_hold(HOST_INITIAL_RTT) >= fresh);
+        // Old paths at their worst: steady, slow, a spike after calm, a flapping link.
+        let mut runs: Vec<Vec<u64>> = vec![
+            vec![800; 20],
+            [vec![50; 20], vec![5000]].concat(),
+            [vec![10; 20], vec![9000, 10, 9000]].concat(),
+            (0..40).map(|i| if i % 2 == 0 { 5000 } else { 5 }).collect(),
+            (1..30).map(|i| i * i).collect(),
+        ];
+        runs.push((0..40).map(|i| 1 + (i * 7919) % 6000).collect());
+        for run in &runs {
+            for n in 1..=run.len() {
+                let (rtt, var) = quinn_rtt(&run[..n]);
+                assert!(var <= 2 * rtt, "rttvar stays within twice the RTT");
+                let quinn =
+                    3 * quinn_pto(HOST_INITIAL_RTT, HOST_INITIAL_RTT / 2).max(quinn_pto(rtt, var));
+                assert!(validation_hold(rtt) >= quinn, "{:?}", &run[..n]);
+            }
+        }
     }
 
     /// A lent buffer comes back on drop, and the pool never allocates past its bound.

@@ -2,19 +2,23 @@
 //! Desktop listener and its firewall scope, the seat listener, and the pinned RDP certificate.
 //!
 //! [`checks`] only reads. [`turn_on`] creates the Seats key and records there what it changed
-//! (`ListenerWasOff`, `AllowRdpFromNetwork`, `RdpRulesOpened`, `RdpRuleScopes`); [`turn_off`]
-//! undoes exactly that and deletes the key last, so a failed restore can be retried. A refusal
-//! carries one plain sentence for the operator; its cause goes to the log. The seat display
-//! driver stays in the driver store when seats go off.
+//! (`ListenerWasOff`, `AllowRdpFromNetwork`, `RdpRulesOpened`, `RdpRuleScopes`,
+//! `RdpRulesNarrowed`); [`turn_off`] undoes exactly that and deletes the key last, so a failed
+//! restore can be retried. Both read the key into [`Recorded`], take their steps from
+//! [`crate::seat_switch`] and [`perform`] them in order. A refusal carries one plain sentence for
+//! the operator; its cause goes to the log. The seat display driver stays in the driver store
+//! when seats go off.
 
 use super::util::{backend_error, WinResult};
 use super::{keeper, seats_enabled, server_edition, session_wrapper, ENABLING, SEATS_KEY};
 use crate::backend::BackendError;
 use crate::doctor::DriverState;
 use crate::ipc::Diagnostic;
+use crate::seat_switch::{self, Recorded, Step};
 use pf_paths::POWERSHELL;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::{Mutex, PoisonError, TryLockError};
 use std::time::{Duration, Instant};
 use winreg::enums::{RegDisposition, HKEY_LOCAL_MACHINE, KEY_READ, KEY_SET_VALUE, KEY_WOW64_64KEY};
 use winreg::RegKey;
@@ -33,6 +37,8 @@ const RDP_RULES_OPENED: &str = "RdpRulesOpened";
 /// Each `Remote Desktop` rule's `RemoteAddress` before [`turn_on`] narrowed it, `name|address`
 /// per line, for [`turn_off`] to write back.
 const RDP_RULE_SCOPES: &str = "RdpRuleScopes";
+/// Set before [`turn_on`] narrows the rules, deleted once [`restore_scopes`] put them back.
+const RDP_RULES_NARROWED: &str = "RdpRulesNarrowed";
 /// The `Remote Desktop` firewall group by the resource id every Windows language shares.
 const RDP_RULE_GROUP: &str = "@FirewallAPI.dll,-28752";
 /// `Remote Desktop Services`, the Session Host role's group, and its two rules on the
@@ -225,49 +231,130 @@ pub(super) fn prepare() -> Vec<Diagnostic> {
     rows
 }
 
+/// Held while seats turn on or off, so [`keep_rdp_local`] never narrows rules a switch is
+/// widening on the way.
+static SWITCHING: Mutex<()> = Mutex::new(());
+
 /// Turn seats on. A failure where seats were off puts the machine back, and a crash leaves the
 /// Seats key marked [`ENABLING`], so `enabled` never reports a half-done switch.
 pub(super) fn turn_on(host_path: &Path, allow_rdp_from_network: bool) -> WinResult<()> {
+    let _switching = SWITCHING.lock().unwrap_or_else(PoisonError::into_inner);
     let fresh = !seats_enabled();
     let done = apply(host_path, allow_rdp_from_network);
     if done.is_err() && fresh {
-        let _ = turn_off();
+        let _ = off();
     }
     done
 }
 
-/// Restore the listener and the firewall scope `turn_on` changed, then remove the Seats key.
-/// Nothing to do without the key.
+/// Undo what `turn_on` recorded ([`seat_switch::off`]), then remove the Seats key.
 pub(super) fn turn_off() -> WinResult<()> {
-    let hklm = RegKey::predef(HKEY_LOCAL_MACHINE);
-    let Ok(seats) = hklm.open_subkey_with_flags(SEATS_KEY, KEY_READ | KEY_WOW64_64KEY) else {
+    let _switching = SWITCHING.lock().unwrap_or_else(PoisonError::into_inner);
+    off()
+}
+
+/// [`turn_off`] under its caller's hold. Nothing to do without the key. Each restore forgets its
+/// value as it finishes, so the key is opened for writing.
+fn off() -> WinResult<()> {
+    let Ok(seats) = RegKey::predef(HKEY_LOCAL_MACHINE)
+        .open_subkey_with_flags(SEATS_KEY, KEY_READ | KEY_SET_VALUE | KEY_WOW64_64KEY)
+    else {
         return Ok(());
     };
-    close_rdp_rules(&seats)?;
-    if narrowed(&seats) {
-        restore_scopes(&seats)?;
+    // No step of seats off reads the host path.
+    perform_all(&seat_switch::off(&recorded(&seats)), seats, Path::new(""))
+}
+
+/// What the Seats key records of the changes a turn-on made.
+fn recorded(seats: &RegKey) -> Recorded {
+    Recorded {
+        enabling: seats.get_value::<u32, _>(ENABLING).is_ok(),
+        listener_was_off: seats.get_value::<u32, _>(LISTENER_WAS_OFF).ok() == Some(1),
+        choice: seats.get_value::<u32, _>(RDP_FROM_NETWORK).ok(),
+        rules_opened: !rules_opened(seats).is_empty(),
+        scopes_noted: seats.get_value::<String, _>(RDP_RULE_SCOPES).is_ok(),
+        narrowed_noted: seats.get_value::<u32, _>(RDP_RULES_NARROWED).is_ok(),
     }
-    if seats.get_value::<u32, _>(LISTENER_WAS_OFF).ok() == Some(1) {
-        deny_listener(true).map_err(|cause| {
+}
+
+/// [`perform`] each of `steps` in order and stop at the first refusal. The key is closed before
+/// [`Step::DeleteKey`] deletes it.
+fn perform_all(steps: &[Step], seats: RegKey, host_path: &Path) -> WinResult<()> {
+    for &step in steps {
+        if step == Step::DeleteKey {
+            drop(seats);
+            return delete_key();
+        }
+        perform(step, &seats, host_path)?;
+    }
+    Ok(())
+}
+
+/// One step of a switch, against the open Seats key. A refusal names what didn't happen.
+fn perform(step: Step, seats: &RegKey, host_path: &Path) -> WinResult<()> {
+    let key_on = |cause: std::io::Error| {
+        refuse("seats_key", "Couldn't turn seats on.", cause).said("seats_key_on")
+    };
+    let limit = |cause: String| {
+        refuse(
+            "rdp_firewall",
+            "Couldn't limit Remote Desktop to this machine.",
+            cause,
+        )
+        .said("rdp_firewall_limit")
+    };
+    match step {
+        Step::MarkEnabling => seats.set_value(ENABLING, &1_u32).map_err(key_on),
+        Step::InstallDriver => install_driver(&package_dir(host_path), true),
+        Step::RecordScopes => record_scopes(seats),
+        Step::NoteNarrowed => seats
+            .set_value(RDP_RULES_NARROWED, &1_u32)
+            .map_err(|cause| limit(cause.to_string())),
+        Step::NarrowScopes => firewall_scope(LOOPBACK).map_err(limit),
+        Step::RestoreScopes => restore_scopes(seats),
+        Step::OpenRules => open_rdp_rules(seats),
+        Step::CloseRules => close_rdp_rules(seats),
+        Step::WriteChoice(allow) => seats
+            .set_value(RDP_FROM_NETWORK, &u32::from(allow))
+            .map_err(key_on),
+        Step::AllowListener => allow_listener(seats),
+        Step::EnsureSeatListener => {
+            if let Err(cause) = super::seat_listener::ensure(host_path) {
+                tracing::warn!(%cause, "seat listener not ready — seats start without pad audio");
+            }
+            Ok(())
+        }
+        Step::TrustCertificate => trust_rdp_certificate(host_path),
+        Step::Finish => match seats.delete_value(ENABLING) {
+            Err(cause) if cause.kind() != std::io::ErrorKind::NotFound => Err(key_on(cause)),
+            _ => Ok(()),
+        },
+        Step::DenyListener => deny_listener(true).map_err(|cause| {
             refuse(
                 "rdp_listener",
                 "Couldn't turn Remote Desktop back off.",
                 cause,
             )
             .said("rdp_listener_off")
-        })?;
+        }),
+        Step::RemoveSeatListener => {
+            super::seat_listener::remove();
+            Ok(())
+        }
+        Step::RestoreShortcuts => super::steam::unwrap_box_shortcuts().map_err(|cause| {
+            refuse("steam_shortcuts", "Couldn't turn seats off.", cause).said("seats_key_off")
+        }),
+        Step::RestoreRegistration => {
+            super::steam::restore_registration();
+            Ok(())
+        }
+        Step::DeleteKey => delete_key(),
     }
-    super::seat_listener::remove();
-    // The box's Steam shortcuts go back first: they name the Seats key's record of them.
-    match crate::persistence::SecretRoot::open(crate::persistence::default_root())
-        .and_then(|root| root.open_child_dir("temp"))
-    {
-        Ok(temp) => super::steam::unwrap_box_shortcuts(temp.path()),
-        Err(error) => tracing::warn!(%error, "box steam shortcuts not restored"),
-    }
-    super::steam::restore_registration();
-    drop(seats);
-    hklm.delete_subkey_with_flags(SEATS_KEY, KEY_WOW64_64KEY)
+}
+
+fn delete_key() -> WinResult<()> {
+    RegKey::predef(HKEY_LOCAL_MACHINE)
+        .delete_subkey_with_flags(SEATS_KEY, KEY_WOW64_64KEY)
         .map_err(|cause| {
             refuse("seats_key", "Couldn't turn seats off.", cause).said("seats_key_off")
         })
@@ -288,6 +375,8 @@ pub(super) fn rdp_from_network() -> bool {
 /// Where Windows Firewall keeps its local rules, one `|`-separated string each.
 const FIREWALL_RULES: &str =
     r"SYSTEM\CurrentControlSet\Services\SharedAccess\Parameters\FirewallPolicy\FirewallRules";
+/// Where Group Policy puts its rules, in the same form.
+const POLICY_RULES: &str = r"SOFTWARE\Policies\Microsoft\WindowsFirewall\FirewallRules";
 
 /// The listener is on and a firewall rule lets any address reach it.
 fn rdp_open_today() -> bool {
@@ -298,32 +387,60 @@ fn rdp_open_today() -> bool {
     listening && rdp_rule_open()
 }
 
-/// A local firewall rule lets any address reach Remote Desktop. Read from the registry: the
-/// dialog asks every time it opens, and PowerShell's firewall cmdlets take seconds, a minute
-/// after a restart.
+/// A local firewall rule of the Remote Desktop groups lets any address reach Remote Desktop.
+/// Read from the registry: the dialog asks every time it opens, and PowerShell's firewall
+/// cmdlets take seconds, a minute after a restart.
 fn rdp_rule_open() -> bool {
-    RegKey::predef(HKEY_LOCAL_MACHINE)
-        .open_subkey_with_flags(FIREWALL_RULES, KEY_READ | KEY_WOW64_64KEY)
-        .is_ok_and(|rules| {
-            let names: Vec<String> = rules
-                .enum_values()
-                .flatten()
-                .map(|(name, _)| name)
-                .collect();
-            names
-                .iter()
-                .filter_map(|name| rules.get_value::<String, _>(name).ok())
-                .any(|rule| open_rdp_rule(&rule))
-        })
+    firewall_rules(FIREWALL_RULES)
+        .iter()
+        .any(|rule| open_rdp_rule(rule))
 }
 
-/// Narrow Remote Desktop again where the operator keeps it on this PC and a rule is open to
-/// the network: the Session Host role and Windows updates add rules of their own.
-pub(super) fn keep_rdp_local() {
-    let narrowed = RegKey::predef(HKEY_LOCAL_MACHINE)
+/// The rules under `store`, one `|`-separated string each; none when it can't be read.
+fn firewall_rules(store: &str) -> Vec<String> {
+    let Ok(rules) = RegKey::predef(HKEY_LOCAL_MACHINE)
+        .open_subkey_with_flags(store, KEY_READ | KEY_WOW64_64KEY)
+    else {
+        return Vec::new();
+    };
+    let names: Vec<String> = rules
+        .enum_values()
+        .flatten()
+        .map(|(name, _)| name)
+        .collect();
+    names
+        .iter()
+        .filter_map(|name| rules.get_value::<String, _>(name).ok())
+        .collect()
+}
+
+/// The operator keeps Remote Desktop to this PC: the Seats key's choice.
+pub(super) fn rdp_local_chosen() -> bool {
+    RegKey::predef(HKEY_LOCAL_MACHINE)
         .open_subkey_with_flags(SEATS_KEY, KEY_READ | KEY_WOW64_64KEY)
-        .is_ok_and(|seats| seats.get_value::<u32, _>(RDP_FROM_NETWORK).ok() == Some(0));
-    if narrowed && rdp_rule_open() {
+        .is_ok_and(|seats| seats.get_value::<u32, _>(RDP_FROM_NETWORK).ok() == Some(0))
+}
+
+/// A local or Group Policy firewall rule, in any group, lets an address other than this PC's
+/// reach Remote Desktop ([`seat_switch::reaches_rdp_from_network`]). For the doctor.
+pub(super) fn rdp_reachable() -> bool {
+    [FIREWALL_RULES, POLICY_RULES]
+        .iter()
+        .flat_map(|store| firewall_rules(store))
+        .any(|rule| seat_switch::reaches_rdp_from_network(&rule))
+}
+
+/// Narrow Remote Desktop again where the operator keeps it on this PC and a rule of its groups
+/// is open to the network: the Session Host role, Windows updates and a restore of the defaults
+/// add or reset them. A registry read decides whether PowerShell runs, so the service repeats
+/// this on its tick. A look while seats turn on or off is skipped.
+pub(super) fn keep_rdp_local() {
+    let _switching = match SWITCHING.try_lock() {
+        Ok(held) => held,
+        Err(TryLockError::Poisoned(held)) => held.into_inner(),
+        Err(TryLockError::WouldBlock) => return,
+    };
+    if rdp_local_chosen() && rdp_rule_open() {
         match firewall_scope(LOOPBACK) {
             Ok(()) => tracing::info!("remote desktop narrowed to this pc again"),
             Err(cause) => tracing::warn!(%cause, "remote desktop not narrowed to this pc"),
@@ -439,6 +556,8 @@ pub(super) fn refusal(error: BackendError) -> Diagnostic {
     row
 }
 
+/// Create or open the Seats key and perform [`seat_switch::on`] for what it records. A new key
+/// reads as off until the last step; a finished one stays on while it is redone.
 fn apply(host_path: &Path, allow_rdp_from_network: bool) -> WinResult<()> {
     let dir = package_dir(host_path);
     if PACKAGE.iter().any(|name| !dir.join(name).is_file()) {
@@ -454,49 +573,12 @@ fn apply(host_path: &Path, allow_rdp_from_network: bool) -> WinResult<()> {
         .map_err(|cause| {
             refuse("seats_key", "Couldn't turn seats on.", cause).said("seats_key_on")
         })?;
-    // A new key reads as off until the last step; a finished one stays on while it is redone.
-    if disposition == RegDisposition::REG_CREATED_NEW_KEY {
-        seats.set_value(ENABLING, &1_u32).map_err(|cause| {
-            refuse("seats_key", "Couldn't turn seats on.", cause).said("seats_key_on")
-        })?;
-    }
-    install_driver(&dir, true)?;
-    allow_listener(&seats)?;
-    // A choice made earlier narrowed the rules; allowing the network now puts them back.
-    let was_narrowed = narrowed(&seats);
-    record_scopes(&seats)?;
-    if !allow_rdp_from_network {
-        firewall_scope(LOOPBACK).map_err(|cause| {
-            refuse(
-                "rdp_firewall",
-                "Couldn't limit Remote Desktop to this machine.",
-                cause,
-            )
-            .said("rdp_firewall_limit")
-        })?;
-    } else if was_narrowed {
-        restore_scopes(&seats)?;
-    }
-    if allow_rdp_from_network {
-        open_rdp_rules(&seats)?;
-    } else {
-        close_rdp_rules(&seats)?;
-    }
-    seats
-        .set_value(RDP_FROM_NETWORK, &u32::from(allow_rdp_from_network))
-        .map_err(|cause| {
-            refuse("seats_key", "Couldn't turn seats on.", cause).said("seats_key_on")
-        })?;
-    if let Err(cause) = super::seat_listener::ensure(host_path) {
-        tracing::warn!(%cause, "seat listener not ready — seats start without pad audio");
-    }
-    trust_rdp_certificate(host_path)?;
-    match seats.delete_value(ENABLING) {
-        Err(cause) if cause.kind() != std::io::ErrorKind::NotFound => {
-            Err(refuse("seats_key", "Couldn't turn seats on.", cause).said("seats_key_on"))
-        }
-        _ => Ok(()),
-    }
+    let recorded = (disposition != RegDisposition::REG_CREATED_NEW_KEY).then(|| recorded(&seats));
+    perform_all(
+        &seat_switch::on(recorded, allow_rdp_from_network),
+        seats,
+        host_path,
+    )
 }
 
 /// `{app}\staging\pfvdisplay`: the packages setup leaves beside the host for the console.
@@ -682,15 +764,9 @@ fn scopes_script() -> String {
     )
 }
 
-/// Note each rule's scope before the first change, so [`restore_scopes`] writes back what the
-/// operator had, even when they narrow the rules in a later turn-on. Only a key this build
-/// created notes them: on an older one the rules may be narrowed already.
+/// Note each rule's scope, so [`restore_scopes`] writes back what the operator had, even when
+/// they narrow the rules in a later turn-on.
 fn record_scopes(seats: &RegKey) -> WinResult<()> {
-    if seats.get_value::<u32, _>(ENABLING).is_err()
-        || seats.get_value::<String, _>(RDP_RULE_SCOPES).is_ok()
-    {
-        return Ok(());
-    }
     let fail = |cause: String| {
         refuse(
             "rdp_firewall",
@@ -705,20 +781,6 @@ fn record_scopes(seats: &RegKey) -> WinResult<()> {
         .map_err(|cause| fail(cause.to_string()))
 }
 
-/// The rules may be narrowed to this PC: the operator chose so, or a turn-on was cut off after
-/// noting their scopes and before noting the choice. Restoring a rule that was not narrowed
-/// writes back the scope it has.
-fn narrowed(seats: &RegKey) -> bool {
-    narrowed_by(
-        seats.get_value::<u32, _>(RDP_FROM_NETWORK).ok(),
-        seats.get_value::<String, _>(RDP_RULE_SCOPES).is_ok(),
-    )
-}
-
-fn narrowed_by(choice: Option<u32>, scopes_noted: bool) -> bool {
-    choice.map_or(scopes_noted, |choice| choice == 0)
-}
-
 /// The `(rule, addresses)` pairs [`record_scopes`] wrote. A line with no address is dropped.
 fn parse_scopes(text: &str) -> Vec<(String, String)> {
     text.lines()
@@ -728,24 +790,28 @@ fn parse_scopes(text: &str) -> Vec<(String, String)> {
         .collect()
 }
 
-/// Set each recorded rule back to its scope. A rule the record lacks, one Windows added since,
-/// opens to `Any` as Windows creates it; with no record, which an older key lacks, every rule does.
+/// Set each recorded rule back to its scope, then drop the note that they are narrowed. A rule
+/// the record lacks, one Windows added since, opens to `Any` as Windows creates it; with no
+/// record, which an older key lacks, every rule does.
 fn restore_scopes(seats: &RegKey) -> WinResult<()> {
+    let fail = |cause: String| {
+        refuse(
+            "rdp_firewall",
+            "Couldn't restore Remote Desktop's firewall rules.",
+            cause,
+        )
+        .said("rdp_firewall_restore")
+    };
     let kept = parse_scopes(
         &seats
             .get_value::<String, _>(RDP_RULE_SCOPES)
             .unwrap_or_default(),
     );
-    powershell_lines(&restore_script(&kept), QUERY_LIMIT)
-        .map(drop)
-        .map_err(|cause| {
-            refuse(
-                "rdp_firewall",
-                "Couldn't restore Remote Desktop's firewall rules.",
-                cause,
-            )
-            .said("rdp_firewall_restore")
-        })
+    powershell_lines(&restore_script(&kept), QUERY_LIMIT).map_err(fail)?;
+    match seats.delete_value(RDP_RULES_NARROWED) {
+        Err(cause) if cause.kind() != std::io::ErrorKind::NotFound => Err(fail(cause.to_string())),
+        _ => Ok(()),
+    }
 }
 
 fn restore_script(kept: &[(String, String)]) -> String {
@@ -1158,15 +1224,6 @@ mod tests {
         assert!(script.contains("@('RemoteDesktop-UserMode-In-TCP','{guid-1}') -notcontains"));
         // With no record every rule opens, as before the scopes were kept.
         assert!(restore_script(&[]).contains("@() -notcontains $_.Name"));
-    }
-
-    #[test]
-    fn a_cut_off_turn_on_that_noted_the_scopes_may_have_narrowed_them() {
-        assert!(narrowed_by(Some(0), false));
-        assert!(!narrowed_by(Some(1), true));
-        assert!(narrowed_by(None, true));
-        // An older key has no record and always has the choice; a bare key has neither.
-        assert!(!narrowed_by(None, false));
     }
 
     #[test]

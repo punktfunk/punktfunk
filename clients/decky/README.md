@@ -67,11 +67,11 @@ sleeping host keeps its last set so its titles still list — the launch wakes i
 `needs-pairing` or `refused` loses its set; a forgotten record is pruned. The match is Steam's own
 appid against that set, so non-Steam shortcuts never match.
 
-## Request access is a launch, not a ceremony
+## Request access never streams
 
-The plugin saves the host with the fingerprint it **advertised**, then starts an ordinary identified
-connect with the handshake budget stretched to 185 s. The host parks that connection until its
-operator approves the device, then admits the same connection.
+The plugin saves the host with the fingerprint it **advertised**, then runs
+`punktfunk pair --request-access` pinned to it. The host parks that request for up to 185 s until its
+operator approves the device. The sheet closes paired, and the next press on the row streams.
 
 **No advertised fingerprint, no request access.** That pinned fingerprint is the only thing between
 a 185-second wait and an impostor answering for the host, so a host typed in by address gets the PIN
@@ -83,11 +83,15 @@ path only, and the sheet says why. The plugin never trusts-on-first-use past a m
 cd clients/decky
 pnpm install
 pnpm build                             # rollup → dist/index.js
+pnpm test                              # typecheck, then scripts/test-*.ts under plain node
 pnpm run package                       # → out/punktfunk/ + out/punktfunk-v<ver>.zip
 DECK=deck@<deck-ip> pnpm run deploy    # rsync → /tmp, sudo-install, restart loader
 
 python3.13 scripts/test-backend.py     # stdlib-only backend checks
 ```
+
+CI builds with pnpm 9, the lockfile's version. Where the installed pnpm is newer, run
+`npx --yes pnpm@9 …` so the lockfile stays as it is.
 
 `~/homebrew/plugins/` is root-owned (the loader runs as root), so `deploy.sh` stages to a temp dir
 then sudo-installs and restarts the loader — `DECKPASS=…` runs it non-interactively. A loader
@@ -95,21 +99,29 @@ restart is required for an out-of-band install to appear.
 
 ## Architecture
 
-Everything below the panel is the CLI. `main.py` builds argv and maps exit codes; it parses none of
-the client's data files and re-implements none of its rules.
+Everything below the panel is the CLI. The backend builds argv and maps exit codes; it parses none
+of the client's data files and re-implements none of its rules. The `model.ts` files are pure, so
+`scripts/test-*.ts` run them under plain node.
 
-| File | Role |
+| Path | Role |
 | --- | --- |
-| `src/index.tsx` | Plugin entry and the QAM panel. |
-| `src/hooks.ts` | The module-level host store (one scan merging discovery and the saved store), the update hooks, the launch action, the trust-state model. |
-| `src/catalog.ts` | Which paired hosts have which Steam appids. |
-| `src/library-page.tsx` · `src/play-from.tsx` | The game-page route patch and the descent to the play bar; Punktfunk hosts in Steam's "Play from" dropdown. |
-| `src/patch.ts` · `src/game.tsx` · `src/diag.ts` | MobX-observer-safe subclassing; the title record and lens mark; the diagnostics buffer. |
-| `src/trust.tsx` · `src/pair.tsx` | The trust sheet and the gamepad-navigable PIN keypad. |
+| `src/index.tsx` | Plugin entry: warms the host list, installs the game-page patch and the running feed, mounts the panel. |
+| `src/panel/` | The QAM panel. `Panel.tsx` stacks the sections: `UpdateSection`, `SessionSection` (the running stream), `HostsSection` with `HostRow`, `TroubleshootingSection`, About. `model.ts` holds its row decisions; `actions.ts` the one-tap actions. |
+| `src/hosts/` | `model.ts` joins discovery and the saved store into rows and splits them by access; `store.ts` is the one scan the panel and the game page share; `catalog.ts` which paired hosts have which Steam appids. |
+| `src/trust/` | The trust sheet and the gamepad-navigable PIN keypad. |
+| `src/game-page/` | The game-page route patch and the descent to the play bar (`library-page.tsx`, MobX-observer-safe subclassing in `patch.ts`); Punktfunk hosts in Steam's "Play from" dropdown (`play-from.tsx`); the title record and lens mark (`game.tsx`). |
+| `src/steam/` | Steam's side: the two fixed shortcuts and the per-game ones, their art, launch options and launches (`AddShortcut` / `SetAppLaunchOptions` / `RunGame`), the running-state feed, the compat-tool check. |
+| `src/update/` | The update check and the plugin and client installs; `model.ts` decides the panel's update row and what a check reports. |
+| `src/stream.ts` · `src/backend.ts` | The launch action behind a row and the game page; the typed bridge to the backend's callables. |
+| `src/lib/` | Storage, signals, toasts and the diagnostics buffer. Nothing else touches `localStorage` or Decky's toaster. |
 | `src/i18n.ts` · `src/l10n.ts` | `t(key, params)` over the shared messages in `l10n/messages`. `rollup.config.js` bundles the shipped languages; Steam's own language list picks one. |
-| `src/steam.ts` | Shortcut launch (`AddShortcut` / `SetAppLaunchOptions` / `RunGame`) and the running-state feed. |
-| `bin/punktfunkrun.sh` | The wrapper the shortcut runs. Reads `PF_REF` / `PF_PROFILE` / `PF_GAME` / `PF_REQUEST_ACCESS` / `PF_BROWSE`. |
-| `main.py` | Five thin CLI shells plus the Steam-side work only a plugin can do — `runner_info`, `shortcut_art`, `game_art`, `apply_controller_config`, `kill_stream`, `check_update` / `update_client` (with an explicit CA-bundle search: Decky's embedded Python has no usable default TLS roots on SteamOS). |
+| `src/os-icon.tsx` | The OS marks, generated by the repo's `scripts/gen_os_mark_table.py`. |
+| `bin/punktfunkrun.sh` | The wrapper the shortcut runs. Reads `PF_REF` / `PF_PRESET` / `PF_AS` / `PF_GAME` / `PF_BROWSE`. |
+| `main.py` | The bridge class Decky loads. Each method is a frontend callable and delegates to `pf_decky`. |
+| `py_modules/pf_decky/client.py` | Which client is installed, and the CLI verbs: discover, hosts, pair, request access, trust, library, profiles. |
+| `py_modules/pf_decky/session.py` | The running stream: the control socket, host buttons, end game, force stop. |
+| `py_modules/pf_decky/update.py` | Plugin and client update checks and the client install, with an explicit CA-bundle search: Decky's embedded Python has no usable default TLS roots on SteamOS. |
+| `py_modules/pf_decky/art.py` · `steam_input.py` | Shortcut and game artwork; the native-touch Steam Input layout. |
 
 The client must be **v0.22.0 or newer** — that is when the headless `punktfunk` CLI shipped, and the
 panel drives everything through it.
@@ -120,8 +132,3 @@ panel drives everything through it.
   desktop client or the client's own gamepad UI.
 - **Per-game pins are on hold.** The shared model pins host+preset; nothing persists a pinned
   *game* yet. The old `decky-pinned.json` is left on disk for a later migration.
-- **A parked connect looks like a hanging one.** The plugin toasts before a request-access launch to
-  set expectations, which is a patch, not a fix — the session's connect screen should learn the
-  "waiting for approval" copy the console shell already has.
-- **Our labels are English.** Steam's own "Stream" and "Stop" are localized; the tokens it uses are
-  not something to guess at from outside.

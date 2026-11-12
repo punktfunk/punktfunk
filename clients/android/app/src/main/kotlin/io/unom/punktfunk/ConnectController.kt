@@ -9,7 +9,6 @@ import io.unom.punktfunk.kit.NativeBridge
 import io.unom.punktfunk.kit.R
 import io.unom.punktfunk.kit.discovery.DiscoveredHost
 import io.unom.punktfunk.kit.discovery.HostDiscovery
-import io.unom.punktfunk.kit.library.GameOverrides
 import io.unom.punktfunk.kit.library.LibraryCache
 import io.unom.punktfunk.kit.link.DeepLinkResult
 import io.unom.punktfunk.kit.link.DeepLinks
@@ -195,9 +194,9 @@ internal class ConnectController(
     }
 
     // The dial itself, identity ready, through the profile's unlock. A TOFU dial saves what the
-    // host presented, unpaired. [overrides] are the host's for the [launch]ed title. [onFailure]
-    // takes an unreachable dial (the wake wait), [onMismatch] a refused pin; [redial] marks the
-    // one dial a [ProfileRetry] grants.
+    // host presented, unpaired. The [launch]ed title's overrides come from the catalog cached for
+    // the profile the dial plays as. [onFailure] takes an unreachable dial (the wake wait),
+    // [onMismatch] a refused pin; [redial] marks the one dial a [ProfileRetry] grants.
     private fun doConnectDirect(
         targetHost: String,
         targetPort: Int,
@@ -205,7 +204,6 @@ internal class ConnectController(
         pinHex: String?,
         preset: StreamPreset?,
         launch: String? = null,
-        overrides: GameOverrides? = null,
         onFailure: (() -> Unit)? = null,
         onMismatch: (() -> Unit)? = null,
         redial: Boolean = false,
@@ -247,6 +245,11 @@ internal class ConnectController(
             }
             attempt = thisAttempt
             refreshHosts()
+            val overrides = launch?.let { id ->
+                withContext(Dispatchers.IO) {
+                    LibraryCache.standard(context.cacheDir).load(LibraryCache.keyFor(record, pinHex ?: ""), choice.id)
+                }?.games?.firstOrNull { it.id == id }?.overrides
+            }
             val spec = DialSpec(
                 settings.effectiveFor(preset), id, targetHost, targetPort, pinHex ?: "", launch,
                 dialer = "touch/host-grid", preset = preset, profile = choice.id,
@@ -296,7 +299,7 @@ internal class ConnectController(
                 ) {
                     linkAs = choice.id
                     doConnectDirect(
-                        targetHost, targetPort, name, pinHex, preset, launch, overrides, onFailure, onMismatch,
+                        targetHost, targetPort, name, pinHex, preset, launch, onFailure, onMismatch,
                         redial = true,
                     )
                 } else {
@@ -367,14 +370,9 @@ internal class ConnectController(
         // The record this dial's pin names. A TOFU dial is to a host not saved yet, so only a
         // placeholder can be it — never the other OS of a dual-boot box at the same address.
         val kh = knownHostStore.resolve(pinHex ?: "", targetHost, targetPort)
-        // Latched here, not per dial attempt: a wake-and-redial must stream with the same preset
-        // and overrides, and the "applies from the next session" footers stay truthful. A title's
-        // overrides come from the cached catalog; a cold link has none.
+        // Latched here, not per dial attempt: a wake-and-redial must stream with the same preset,
+        // and the "applies from the next session" footers stay truthful.
         val preset = presetStore.resolveFor(kh, oneOffPreset, launch)
-        val overrides = launch?.let { id ->
-            LibraryCache.standard(context.cacheDir).load(LibraryCache.keyFor(kh, pinHex ?: ""))
-                ?.games?.firstOrNull { it.id == id }?.overrides
-        }
         val macs = kh?.mac ?: emptyList()
         // "Up" = a live advert that is THIS host — matched by fingerprint first (so it survives a DHCP
         // address change on a cold boot), else by address:port. Returns the CURRENT advert so we can
@@ -386,7 +384,7 @@ internal class ConnectController(
         if (settings.autoWakeEnabled && macs.isNotEmpty() && down) {
             // Fire-and-forget first packet (harmless if it's awake), then dial-first.
             scope.launch(Dispatchers.IO) { services.sendWake(macs, targetHost) }
-            doConnectDirect(targetHost, targetPort, name, pinHex, preset, launch, overrides, onMismatch = onMismatch, onFailure = {
+            doConnectDirect(targetHost, targetPort, name, pinHex, preset, launch, onMismatch = onMismatch, onFailure = {
                 waker.start(
                     hostName = name,
                     connectsAfter = true,
@@ -405,13 +403,13 @@ internal class ConnectController(
                         }
                         doConnectDirect(
                             live?.host ?: targetHost, live?.port ?: targetPort, name, pinHex,
-                            preset, launch, overrides, onMismatch = onMismatch,
+                            preset, launch, onMismatch = onMismatch,
                         )
                     },
                 )
             })
         } else {
-            doConnectDirect(targetHost, targetPort, name, pinHex, preset, launch, overrides, onMismatch = onMismatch)
+            doConnectDirect(targetHost, targetPort, name, pinHex, preset, launch, onMismatch = onMismatch)
         }
     }
 
@@ -421,6 +419,11 @@ internal class ConnectController(
      * streams only for a link. Cancel returns the UI at once; a late answer is dropped.
      */
     fun requestAccess(target: PendingTrust) {
+        // A request names the fingerprint the host must show. A typed host has none: PIN.
+        val pinHex = target.advertisedFp?.takeIf { it.isNotBlank() } ?: run {
+            pendingTrust = target.copy(kind = PendingTrust.Kind.PAIR)
+            return
+        }
         pendingTrust = null
         val id = requireIdentity() ?: return
         val req = RequestAccessState(target)
@@ -428,9 +431,7 @@ internal class ConnectController(
         connecting = true
         status = null
         scope.launch {
-            // Pin the advertised fingerprint for a discovered host (defence against an impostor while
-            // we wait); a manually-typed host has none, so trust-on-first-use.
-            val pinHex = target.advertisedFp ?: ""
+            // The advertised fingerprint is the pin: an impostor cannot answer while we wait.
             val paired = withContext(Dispatchers.IO) {
                 services.requestAccess(target.host, target.port, id, pinHex, deviceName(context))
             }

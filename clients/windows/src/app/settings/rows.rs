@@ -58,6 +58,7 @@ rows! {
     BITRATE: "bitrate_kbps", pf_l10n::client::player_bitrate_kbps(), "display", false;
     VIDEO_FIT: "video_fit", pf_l10n::client::player_video_fit(), "display", false;
     SCREENS: "screens", pf_l10n::client::player_screens(), "display", false;
+    HOST_SCREEN: "host_screen", pf_l10n::client::preset_host_screen(), "display", false;
     HDR: "hdr_enabled", pf_l10n::client::player_hdr_enabled(), "display", false;
     PRESENT: "present_priority", pf_l10n::client::player_present_priority(), "display", false;
     SMOOTH_BUFFER: "smooth_buffer", pf_l10n::client::player_smooth_buffer(), "display", true;
@@ -113,8 +114,9 @@ mod tests {
         ("host_grouping", "Group on the Hosts header"),
     ];
 
-    /// Rows with no catalog entry: this device's own pickers.
-    const LOCAL: &[&str] = &["adapter", "speaker_device", "mic_device"];
+    /// Rows with no catalog entry: this device's own pickers, and Host screen, which only a
+    /// preset holds.
+    const LOCAL: &[&str] = &["adapter", "speaker_device", "mic_device", "host_screen"];
 
     /// Rows on a sidebar page the catalog does not name, with that page: Quick actions and
     /// Shortcuts have their own.

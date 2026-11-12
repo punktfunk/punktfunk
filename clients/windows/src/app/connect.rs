@@ -54,8 +54,8 @@ fn send_wake(ctx: &Arc<AppCtx>, target: &Target) -> bool {
 }
 
 /// Opens the surface [`trust_route`] picks: the stored pin dials, a changed fingerprint or an
-/// unpaired host gets [`Screen::Pair`], and a new `pair=optional` host is pinned on its first
-/// connect (this shell has no TOFU confirmation screen). `launch` rides the connect.
+/// unpaired host gets [`Screen::Pair`], and a new `pair=optional` host gets [`Screen::Trust`],
+/// which shows its fingerprint before anything is pinned. `launch` rides the connect.
 fn initiate_opts(
     ctx: &Arc<AppCtx>,
     target: Target,
@@ -77,7 +77,14 @@ fn initiate_opts(
         target.pair_optional,
     ) {
         TrustRoute::Pinned(fp_hex) => trust::parse_hex32(&fp_hex),
-        TrustRoute::OfferTofu(_) => None,
+        TrustRoute::OfferTofu(_) => {
+            // The page reads the target back, so the launch has to be on it.
+            if launch.is_some() {
+                ctx.shared.target.lock().unwrap().launch = launch;
+            }
+            set_screen.call(Screen::Trust);
+            return;
+        }
         TrustRoute::FingerprintChanged => {
             set_status.call(client::dial_fingerprint_changed().to_string());
             set_screen.call(Screen::Pair);
@@ -485,9 +492,15 @@ pub(crate) fn open_console(
 /// Approval saves the host as paired, so later connects are silent. It never starts a stream.
 pub(crate) fn request_access(props: &Svc, target: &Target) {
     let ctx = &props.ctx;
-    // Pin the advertised certificate for a discovered host (defence against a host impostor while
-    // we wait); a manually-typed host has no advertised fingerprint, so trust-on-first-use.
-    let pin = target.host.fp_hex.as_deref().and_then(trust::parse_hex32);
+    // The request names the advertised certificate, so an impostor cannot answer while we wait.
+    // A typed host has none and pairs by PIN; the pair page offers a request only with one.
+    let Some(pin) = target.host.fp_hex.as_deref().and_then(trust::parse_hex32) else {
+        props
+            .set_status
+            .call(desktop::desktop_pair_no_advert().to_string());
+        props.set_screen.call(Screen::Pair);
+        return;
+    };
     // A fresh cancel flag per request, where the waiting screen's Cancel button reads it.
     let cancel = Arc::new(AtomicBool::new(false));
     *ctx.shared.cancel.lock().unwrap() = Some(cancel.clone());
@@ -631,6 +644,64 @@ pub(crate) fn connecting_page(pal: &Palette, ctx: &Arc<AppCtx>, status: &str) ->
     busy_page(pal, &headline, detail, Vec::new())
 }
 
+/// First connect to a host that takes new devices: its advertised fingerprint, to compare with
+/// the one the host logs. Trust dials and pins it; the PIN ceremony is the other way in.
+pub(crate) fn trust_page(
+    pal: &Palette,
+    ctx: &Arc<AppCtx>,
+    set_screen: &AsyncSetState<Screen>,
+    set_status: &AsyncSetState<String>,
+) -> View {
+    let target = ctx.shared.target.lock().unwrap().clone();
+    let address = format!("{}:{}", target.host.addr, target.host.port);
+    let fingerprint = text(trust::grouped(
+        target.host.fp_hex.as_deref().unwrap_or_default(),
+    ))
+    .font_size(16.0)
+    .font_weight(FontWeight::SEMI_BOLD)
+    .horizontal_alignment(HorizontalAlignment::Center);
+    let trust_btn = {
+        let (ctx, ss, st, target) = (
+            ctx.clone(),
+            set_screen.clone(),
+            set_status.clone(),
+            target.clone(),
+        );
+        icon_button("check", client::trust_accept())
+            .style(ButtonStyle::Accent)
+            .on_click(move || {
+                let opts = ConnectOpts {
+                    launch: target.launch.clone(),
+                    ..ConnectOpts::default()
+                };
+                // `None`: the dial pins the advertised fingerprint.
+                ask_then_connect(&ctx, target.clone(), None, &ss, &st, opts)
+            })
+    };
+    let pair_btn = {
+        let ss = set_screen.clone();
+        icon_button("arrow-right", client::pair_use_pin()).on_click(move || ss.call(Screen::Pair))
+    };
+    let cancel_btn = {
+        let ss = set_screen.clone();
+        icon_button("x", common::common_cancel()).on_click(move || ss.call(Screen::Hosts))
+    };
+    let actions = hstack((trust_btn, pair_btn, cancel_btn))
+        .spacing(8.0)
+        .horizontal_alignment(HorizontalAlignment::Center);
+    notice_page(
+        pal,
+        None,
+        client::trust_title(),
+        &format!(
+            "{}\n\n{}",
+            client::trust_first_connection(&address),
+            client::trust_explain()
+        ),
+        vec![fingerprint.into(), actions.into()],
+    )
+}
+
 /// The cancelable "waiting for approval" screen (request-access flow): a spinner + guidance while
 /// the request sits parked on the host, plus a Cancel that returns to the host list and trips the
 /// shared cancel flag, which withdraws the request.
@@ -661,11 +732,19 @@ pub(crate) fn request_access_page(
             })
             .horizontal_alignment(HorizontalAlignment::Center)
     };
+    // The host's console shows the same code beside this request.
+    let code = trust::device_code(&ctx.identity).map(|code| {
+        text(client::pair_device_code(&code))
+            .font_size(16.0)
+            .font_weight(FontWeight::SEMI_BOLD)
+            .horizontal_alignment(HorizontalAlignment::Center)
+            .into()
+    });
     busy_page(
         pal,
         &headline,
         &client::dial_approve_no_pin(&target_name),
-        vec![cancel_btn.into()],
+        code.into_iter().chain([cancel_btn.into()]).collect(),
     )
 }
 

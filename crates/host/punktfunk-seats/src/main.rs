@@ -60,7 +60,9 @@ mod linux {
         \x20 serve-usb                   a seat's USB pad server, which the supervisor starts\n\
         \x20 pam-check <account>         the supervisor's password check: password on stdin, a code out\n\
         \x20 login <account>             a seat unit's login helper, which the supervisor starts\n\
-        \x20 loopback <account>          a made seat's own address for Steam's UI link (ExecStartPost)\n";
+        \x20 loopback <account>          a made seat's own address for Steam's UI link (ExecStartPost)\n\
+        \x20 stage <check> <mount> <options> <source> <stage>\n\
+        \x20                             an owner's folder, checked, at a seat's stage (ExecStartPre)\n";
 
     pub fn main() -> ExitCode {
         let args: Vec<String> = std::env::args().skip(1).collect();
@@ -72,6 +74,13 @@ mod linux {
             if verb == pf_seats::linux::loopback::VERB {
                 return ExitCode::from(pf_seats::linux::loopback::run(account));
             }
+        }
+        // No flags here: every word is data from a seat unit's drop-in.
+        if let [verb, check, mount, options, source, stage] = args.as_slice()
+            && verb == pf_seats::linux::stage::VERB
+        {
+            let code = pf_seats::linux::stage::run(check, mount, options, source, stage);
+            return ExitCode::from(code);
         }
         match run(args) {
             Ok(()) => ExitCode::SUCCESS,
@@ -289,6 +298,11 @@ mod linux {
         pf_seats::logging::to_stderr();
         // Adopts systemd's kept fds close-on-exec before anything here can spawn a child.
         crate::uinput::resume(pads::resume());
+        // Before the broker makes a pad: a uhid pad's record waits unbound for the fence.
+        pf_seats::linux::fence::vouch::prune(
+            std::path::Path::new(pf_seats::linux::fence::vouch::DIR),
+            std::path::Path::new("/sys"),
+        );
         socket::ensure_door_group();
         crate::uinput::listen_for_drain();
         let state = PathBuf::from(pf_seats::linux::STATE_DIR);

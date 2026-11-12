@@ -423,6 +423,7 @@ install -Dm0644 packaging/linux/punktfunk-seats.tmpfiles %{buildroot}%{_tmpfiles
 install -Dm0644 packaging/linux/65-punktfunk-seats.rules %{buildroot}%{_udevrulesdir}/65-punktfunk-seats.rules
 # The door: the box's host as a system service, and the root helper the console turns it on with.
 install -Dm0755 packaging/linux/door-helper %{buildroot}%{_libexecdir}/punktfunk/door-helper
+install -Dm0755 packaging/linux/door-remove.sh %{buildroot}%{_libexecdir}/punktfunk/door-remove
 for f in punktfunk-door.service punktfunk-web-door.service punktfunk-door-on@.service punktfunk-door-off@.service; do
   install -Dm0644 packaging/linux/$f %{buildroot}%{_unitdir}/$f
 done
@@ -716,6 +717,7 @@ install -Dm0755 "$(command -v bun)" %{buildroot}%{_libexecdir}/punktfunk-bun/bun
 %{_libexecdir}/punktfunk/seat-session
 %{_libexecdir}/punktfunk/seat-reap
 %{_libexecdir}/punktfunk/door-helper
+%{_libexecdir}/punktfunk/door-remove
 %{_unitdir}/punktfunk-seats.service
 %{_unitdir}/punktfunk-seat@.service
 %{_unitdir}/user@.service.d/50-punktfunk-seats.conf
@@ -827,10 +829,12 @@ fi
 
 %if %{with host}
 %preun seats
-# No %%systemd_post: nothing here enables the daemon. door-helper enables the door's units, so
-# removal disables them. The host's %%post makes the directories and its file trigger restarts
-# the daemon, which leaves running seats up.
-%systemd_preun punktfunk-web-door.service punktfunk-door.service punktfunk-seats.service
+# No %%systemd_post: nothing here enables the daemon. A removal ($1 is 0), not an upgrade, turns
+# the door off for its owner or disables its units. The host's %%post makes the directories and
+# its file trigger restarts the daemon, which leaves running seats up.
+if [ "$1" -eq 0 ]; then
+    %{_libexecdir}/punktfunk/door-remove || :
+fi
 %endif
 
 %if %{with web}

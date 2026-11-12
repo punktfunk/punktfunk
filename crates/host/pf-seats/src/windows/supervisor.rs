@@ -10,13 +10,17 @@
 //! has passed and the host holds both ports. A cycle that ends closes the keeper's job
 //! and logs off the account's session. Explicit stop is idempotent and waits for
 //! that teardown to finish. A service that died leaves the sessions of children that broke
-//! away from the job; the first look at each seat logs them off.
+//! away from the job; the first look at each seat logs them off: all of a made account's, and
+//! of an adopted account only the session its cycle marked. Any other session of an adopted
+//! account is its person's: a start refuses one, nothing logs it off.
 
 use crate::bootstrap::RdpBootstrap;
 use crate::model::{RuntimeStatus, Seat};
 use crate::persistence::SecretRoot;
-use crate::seat_step::{Action, Look, Observation, Probe, State, START_TIMEOUT};
-use crate::windows::accounts::AccountManager;
+use crate::seat_step::{
+    marked_session, session_mark, Action, Look, Observation, Probe, State, START_TIMEOUT,
+};
+use crate::windows::accounts::{self, AccountManager};
 use crate::windows::process::{self, ChildProcess, Job};
 use crate::windows::rdp;
 use crate::windows::util::{backend_error, io_error, port_open, udp_port_owners, WinResult};
@@ -30,6 +34,8 @@ use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 const STOP_TIMEOUT: Duration = Duration::from_secs(15);
+/// In a seat's host root: the session its cycle signed in ([`session_mark`]).
+const SESSION_MARK: &str = "session-mark";
 
 #[derive(Clone)]
 pub(super) struct Supervisor {
@@ -42,6 +48,7 @@ pub(super) struct Supervisor {
 }
 
 struct Runtime {
+    seat: Seat,
     state: Mutex<State>,
     changed: Condvar,
     join: Mutex<Option<JoinHandle<()>>>,
@@ -54,9 +61,10 @@ pub(super) struct RuntimeSnapshot {
 }
 
 impl Runtime {
-    fn new(account: String) -> Self {
+    fn new(seat: &Seat) -> Self {
         Self {
-            state: Mutex::new(State::new(account)),
+            seat: seat.clone(),
+            state: Mutex::new(State::new(seat.account.clone())),
             changed: Condvar::new(),
             join: Mutex::new(None),
         }
@@ -132,9 +140,13 @@ impl Supervisor {
         }
         let _ = rdp::load_pin(&self.root)?;
         let _ = self.accounts.credential_for_start(seat)?;
-        // No runtime of ours holds this seat, so a session left on its account is an orphan of
-        // a supervisor that died. Its host would still hold the seat's ports.
-        wts::logoff_account_if_present(&seat.account)?;
+        // No runtime of ours holds this seat: what `logoff_owned` takes is the orphan of a
+        // supervisor that died, whose host holds the ports. Any other adopted session is its
+        // person's.
+        let orphans = logoff_owned(&self.root, &self.accounts, seat, false)?;
+        if seat.adopted_sid.is_some() && wts::has_session_besides(&seat.account, &orphans)? {
+            return Err(accounts::signed_in(&seat.account));
+        }
         ensure_ports_free(seat)?;
 
         let runtime = {
@@ -142,7 +154,7 @@ impl Supervisor {
                 .runtimes
                 .lock()
                 .unwrap_or_else(|poison| poison.into_inner());
-            let runtime = Arc::new(Runtime::new(seat.account.clone()));
+            let runtime = Arc::new(Runtime::new(seat));
             runtimes.insert(key.clone(), runtime.clone());
             runtime
         };
@@ -199,9 +211,8 @@ impl Supervisor {
         }
     }
 
-    /// Ends `seat`'s runtime, then logs its account's sessions off unless `logoff` is false:
-    /// the name holds a stranger's account, whose sessions stay.
-    pub(super) fn stop(&self, seat: &Seat, logoff: bool) -> WinResult<RuntimeStatus> {
+    /// Ends `seat`'s runtime, then logs off its account's sessions that are the seat's.
+    pub(super) fn stop(&self, seat: &Seat) -> WinResult<RuntimeStatus> {
         let key = seat.id.to_string();
         let runtime = self
             .runtimes
@@ -210,9 +221,7 @@ impl Supervisor {
             .get(&key)
             .cloned();
         let Some(runtime) = runtime else {
-            if logoff {
-                self.logoff_owned(seat)?;
-            }
+            logoff_owned(&self.root, &self.accounts, seat, false)?;
             return Ok(RuntimeStatus::stopped());
         };
         runtime.step(Observation::Stop);
@@ -241,9 +250,7 @@ impl Supervisor {
         {
             let _ = worker.join();
         }
-        if logoff {
-            wts::logoff_account_if_present(&seat.account)?;
-        }
+        logoff_owned(&self.root, &self.accounts, seat, false)?;
         let mut runtimes = self
             .runtimes
             .lock()
@@ -262,23 +269,18 @@ impl Supervisor {
         Ok(RuntimeStatus::stopped())
     }
 
-    /// Logs off `seat`'s account for a caller that holds no runtime of it, so nothing here
-    /// proved the account is the seat's. A stranger's account of that name keeps its sessions.
-    fn logoff_owned(&self, seat: &Seat) -> WinResult<usize> {
-        self.accounts.ensure_owned_or_absent(seat)?;
-        wts::logoff_account_if_present(&seat.account)
-    }
-
     /// Logs off what a service that died left in `seat`'s account: a child that broke away from
     /// the job outlives it, in a disconnected session. The first look at a seat this process
-    /// doesn't run does it, and the service's ledger lock keeps a start from overlapping it.
+    /// doesn't run does it, and the service's ledger lock keeps a start from overlapping it. Of
+    /// an adopted account only the session its cycle marked goes.
     pub(super) fn sweep_leftovers(&self, seat: &Seat) {
         if !self.claim_sweep(seat) {
             return;
         }
-        match self.logoff_owned(seat) {
-            Ok(0) => {}
+        match logoff_owned(&self.root, &self.accounts, seat, false) {
+            Ok(sessions) if sessions.is_empty() => {}
             Ok(sessions) => {
+                let sessions = sessions.len();
                 tracing::info!(seat = %seat.id, sessions, "leftover seat session logged off");
             }
             Err(cause) => {
@@ -335,9 +337,10 @@ impl Supervisor {
                     .unwrap_or_else(|poison| poison.into_inner());
                 state = next;
             }
-            let account = state.account().to_owned();
+            // A runtime that didn't finish still holds its cycle's session.
+            let cycle = !state.finished();
             drop(state);
-            let _ = wts::logoff_account_if_present(&account);
+            let _ = logoff_owned(&self.root, &self.accounts, &runtime.seat, cycle);
             if runtime.lock().finished()
                 && let Some(worker) = runtime
                     .join
@@ -361,8 +364,55 @@ impl Supervisor {
     }
 }
 
+/// Logs off the sessions on `seat`'s account that are the seat's, and answers their ids. Every
+/// logoff goes through here. A stranger's account of the seat's name keeps its sessions. An
+/// adopted account is a person's own: unless `cycle`, a running cycle of ours signed it in, only
+/// the session the seat's mark names ([`marked_session`]) goes. The mark goes either way.
+fn logoff_owned(
+    root: &SecretRoot,
+    accounts: &AccountManager,
+    seat: &Seat,
+    cycle: bool,
+) -> WinResult<Vec<u32>> {
+    let ids = if seat.adopted_sid.is_some() && !cycle {
+        let mark = host_root(root, seat)?
+            .read_current(SESSION_MARK, 128)
+            .map_err(|error| io_error("seat_mark", "read the seat's session mark", error))?
+            .and_then(|mark| String::from_utf8(mark).ok());
+        let logons = wts::logons_of(&seat.account)?;
+        let ours = marked_session(mark.as_deref(), seat.id.as_str(), &logons);
+        if let Some(id) = ours {
+            wts::logoff(id)?;
+        }
+        Vec::from_iter(ours)
+    } else {
+        accounts.ensure_owned_or_absent(seat)?;
+        wts::logoff_account_if_present(&seat.account)?
+    };
+    // The session a mark named is gone now, or was never the seat's to end.
+    let unmarked = host_root(root, seat).and_then(|dir| {
+        dir.remove_file(SESSION_MARK)
+            .map_err(|error| io_error("seat_mark", "remove the seat's session mark", error))
+    });
+    if let Err(error) = unmarked {
+        tracing::warn!(seat = %seat.id, %error, "seat session mark not removed");
+    }
+    Ok(ids)
+}
+
+/// `<root>\hosts\<seat id>`: the seat host's config dir, which the supervisor writes too.
+fn host_root(root: &SecretRoot, seat: &Seat) -> WinResult<SecretRoot> {
+    root.open_child_dir("hosts")
+        .and_then(|hosts| hosts.open_child_dir(seat.id.as_str()))
+        .map_err(|error| io_error("seat_root", "open per-seat host root", error))
+}
+
 /// One seat's loop: probe what the state names, step, perform what it answers.
-fn run_worker(runtime: &Runtime, mut rig: Rig) {
+fn run_worker(runtime: &Runtime, rig: Rig) {
+    let _finished = MarkFinished(runtime);
+    // Declared after the guard, so a panic drops the rig's children before the runtime reads
+    // finished.
+    let mut rig = rig;
     loop {
         let look = runtime.lock().look();
         let observation = match rig.probe(look) {
@@ -379,6 +429,17 @@ fn run_worker(runtime: &Runtime, mut rig: Rig) {
                 actions = runtime.step(Observation::Failed(error.into())).into();
             }
         }
+    }
+}
+
+/// Marks its runtime finished when the worker leaves, by a panic too, and wakes the waiters:
+/// `start` and `stop` wait on a phase only the worker moves.
+struct MarkFinished<'a>(&'a Runtime);
+
+impl Drop for MarkFinished<'_> {
+    fn drop(&mut self) {
+        self.0.lock().abandon();
+        self.0.changed.notify_all();
     }
 }
 
@@ -494,11 +555,7 @@ impl Rig {
         let pin = rdp::load_pin(&self.root)?;
         rdp::require_live(&self.host_path, pin)?;
         let credential = self.accounts.credential_for_start(&self.seat)?;
-        let host_root = self
-            .root
-            .open_child_dir("hosts")
-            .and_then(|hosts| hosts.open_child_dir(self.seat.id.as_str()))
-            .map_err(|error| io_error("seat_root", "open per-seat host root", error))?;
+        let host_root = host_root(&self.root, &self.seat)?;
         let bootstrap = RdpBootstrap::new(
             self.seat.account.clone(),
             credential.copy_zeroizing(),
@@ -519,15 +576,21 @@ impl Rig {
     fn enter_session(&mut self, id: u32) -> WinResult<()> {
         self.session = Some(id);
         let seat = &self.seat;
+        let host_root = host_root(&self.root, seat)?;
+        // A service that dies leaves this session behind: the mark tells the next start it is ours.
+        let marked = wts::logon_time(id).and_then(|time| {
+            let mark = session_mark(seat.id.as_str(), id, time);
+            host_root
+                .write_atomic(SESSION_MARK, mark.as_bytes())
+                .map_err(|error| io_error("seat_mark", "write the seat's session mark", error))
+        });
+        if let Err(error) = marked {
+            tracing::warn!(seat = %seat.id, %error, "seat session not marked");
+        }
         // The profile exists once the session does. A first copy runs beside the start; the seat's
         // Steam titles start once it lands, and its launchers are pointed at it then.
         super::steam::ensure_copy(id, &seat.account, seat.id.as_str());
         let steam = super::steam::box_install().and(super::steam::seat_exe(&seat.account));
-        let host_root = self
-            .root
-            .open_child_dir("hosts")
-            .and_then(|hosts| hosts.open_child_dir(seat.id.as_str()))
-            .map_err(|error| io_error("seat_root", "open per-seat host root", error))?;
         let temp_root = self
             .root
             .open_child_dir("temp")
@@ -567,10 +630,26 @@ impl Rig {
         }
     }
 
+    /// [`Self::launch`], once the session is still the seat account's. Windows reuses a freed
+    /// id, so a child started into one that ended could run on another seat's desktop.
+    fn launch_live(&self) -> WinResult<(u32, &Launch)> {
+        let (session, launch) = self.launch()?;
+        match wts::any_for_account(&self.seat.account)? {
+            Some(found) if found.id == session => Ok((session, launch)),
+            _ => Err(backend_error(
+                "wts_changed",
+                format!(
+                    "session {session} no longer belongs to '{}'",
+                    self.seat.account
+                ),
+            )),
+        }
+    }
+
     /// Start the gate: one second of the host's own encode from a virtual display in the
     /// seat's session. It extends the display instead of isolating it.
     fn start_gate(&mut self) -> WinResult<()> {
-        let (session, launch) = self.launch()?;
+        let (session, launch) = self.launch_live()?;
         let job = self.keeper.as_ref().map(|(_, job)| job);
         let environment = process::seat_environment(
             launch.host_root.path(),
@@ -665,7 +744,7 @@ impl Rig {
     }
 
     fn start_host(&mut self) -> WinResult<()> {
-        let (session, launch) = self.launch()?;
+        let (session, launch) = self.launch_live()?;
         let host = process::spawn_in_session(
             self.keeper.as_ref().map(|(_, job)| job),
             session,
@@ -681,8 +760,8 @@ impl Rig {
 
     /// End the cycle in this order: the host and the gate, the keeper and its job, then
     /// the account's session. A session child ends when its handle drops. The session is found
-    /// by account: Windows reuses the id this cycle recorded. An adopted name that now holds a
-    /// new account keeps that account's sessions.
+    /// by account: Windows reuses the id this cycle recorded. A cycle that started no keeper
+    /// signed no session in.
     fn end_cycle(&mut self) {
         self.host = None;
         if let (Some(gate), Some(launch)) = (self.gate.take(), &self.launch) {
@@ -690,12 +769,10 @@ impl Rig {
             let _ = launch.temp_root.remove_file(&gate.output);
         }
         self.launch = None;
+        let signed_in = self.keeper.is_some();
         self.keeper = None;
         self.session = None;
-        if self.accounts.name_reassigned(&self.seat) {
-            return;
-        }
-        if let Err(error) = wts::logoff_account_if_present(&self.seat.account) {
+        if let Err(error) = logoff_owned(&self.root, &self.accounts, &self.seat, signed_in) {
             tracing::warn!(seat = %self.seat.id, %error, "seat session not logged off");
         }
     }
@@ -751,10 +828,12 @@ mod tests {
             autostart: false,
             runtime: RuntimeStatus::stopped(),
             owner: false,
+            owner_uid: None,
             fingerprint: None,
             adopted_sid: None,
             adopted_uid: None,
             rdp_granted: false,
+            console_deny_kept: false,
         }
     }
 
@@ -799,8 +878,9 @@ mod tests {
         }
     }
 
-    /// A stop with no runtime logs off only an account that is the seat's or is not there.
-    /// It needs LocalSystem to make an account, so it runs nowhere else.
+    /// A stop logs off only an account that is the seat's or is not there, whether a runtime
+    /// ended first or none ran, and leaves an adopted account to its person. It needs
+    /// LocalSystem to make an account, so it runs nowhere else.
     #[test]
     fn a_stop_leaves_a_strangers_account_alone() {
         if !util::is_local_system().unwrap_or(false) {
@@ -811,9 +891,36 @@ mod tests {
         let supervisor = supervisor(temp.path());
         let name = format!("pfs{}", std::process::id());
         let _stranger = Stranger::add(&name);
-        let refused = supervisor.stop(&seat(&name), true).unwrap_err();
+        let stranger = seat(&name);
+        let refused = supervisor.stop(&stranger).unwrap_err();
         assert_eq!(refused.code, "account_not_owned");
-        assert!(supervisor.stop(&seat("pfs-absent"), true).is_ok());
+        let ended = Arc::new(Runtime::new(&stranger));
+        ended.step(Observation::Stop);
+        ended.step(Observation::Probe(Probe::default()));
+        assert!(ended.lock().finished());
+        let key = stranger.id.to_string();
+        supervisor.runtimes.lock().unwrap().insert(key, ended);
+        let refused = supervisor.stop(&stranger).unwrap_err();
+        assert_eq!(refused.code, "account_not_owned");
+        assert!(supervisor.stop(&seat("pfs-absent")).is_ok());
+        let adopted = Seat {
+            adopted_sid: Some("S-1-5-21-1-2-3-1001".into()),
+            ..seat(&name)
+        };
+        assert!(supervisor.stop(&adopted).is_ok());
+    }
+
+    /// A worker that panics leaves its runtime finished, so a stop doesn't wait out its limit.
+    #[test]
+    fn a_worker_that_panics_leaves_its_runtime_finished() {
+        let runtime = Arc::new(Runtime::new(&seat("pfs-panic")));
+        let worker = runtime.clone();
+        let died = std::thread::spawn(move || {
+            let _finished = MarkFinished(&worker);
+            panic!("the worker panics");
+        });
+        assert!(died.join().is_err());
+        assert!(runtime.lock().finished());
     }
 
     /// The sweep looks at a seat once, and not while a runtime of ours holds it.
@@ -826,7 +933,7 @@ mod tests {
         assert!(!supervisor.claim_sweep(&idle));
 
         let running = seat("pfs-running");
-        let runtime = Arc::new(Runtime::new(running.account.clone()));
+        let runtime = Arc::new(Runtime::new(&running));
         let key = running.id.to_string();
         supervisor
             .runtimes

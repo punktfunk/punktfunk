@@ -364,7 +364,7 @@ struct ConnectFlow {
     ) {
         let profileID = profile.id
         learnAdvert(of: host)
-        launchOverrides(host, launchID) { overrides in
+        launchOverrides(host, launchID, as: profileID) { overrides in
             guard life.isOpen else { return }
             // THE resolution point (design §4.4): the globals plus this connect's preset, once,
             // here, then the host's overrides for the game. The model latches the result for the
@@ -443,17 +443,18 @@ struct ConnectFlow {
     }
 
     /// Runs `go` with the launched game's overrides: a tile's entry at once (the hold mounts in
-    /// this turn), else the cached catalog's once read. A title never fetched here gets nil and
-    /// dials as before; the host still lowers the mode and swaps the pad.
+    /// this turn), else the catalog cached for `profile`, the one this connect plays as, once
+    /// read. A title never fetched here gets nil and dials as before; the host still lowers the
+    /// mode and swaps the pad.
     private func launchOverrides(
-        _ host: StoredHost, _ launchID: String?,
+        _ host: StoredHost, _ launchID: String?, as profile: String?,
         go: @escaping @MainActor (GameOverrides?) -> Void
     ) {
         guard let launchID else { return go(nil) }
         if let entry = LaunchedEntry.peek(launchID) { return go(entry.overrides) }
         guard let cache = LibraryCache.shared else { return go(nil) }
         Task { @MainActor in
-            let cached = await cache.load(hostID: host.id.uuidString)
+            let cached = await cache.load(hostID: host.id.uuidString, profile: profile)
             go(cached?.games.first { $0.id == launchID }?.overrides)
         }
     }
@@ -486,12 +487,17 @@ struct ConnectFlow {
     /// The no-PIN delegated-approval flow: ask the host, which parks the request until the
     /// operator approves it in the console, under the cancelable "Waiting for approval" prompt.
     /// Approval pins the host as paired and streams only for a link. The advertised certificate
-    /// is the pin (impostor defence during the long wait); a typed host has none, so first use.
+    /// is the pin (impostor defence during the long wait); a typed host has none and pairs by
+    /// PIN, so it goes back to the choice, which then offers only that.
     func requestAccess(_ req: ApprovalRequest) {
         guard !model.isBusy else { return }
+        guard let pin = req.advertisedFingerprint else {
+            approvalChoice = req
+            return
+        }
         awaitingApproval = req
         let (store, model, awaiting) = (store, model, $awaitingApproval)
-        let (address, port, pin) = (req.host.address, req.host.port, req.advertisedFingerprint)
+        let (address, port) = (req.host.address, req.host.port)
         Task { @MainActor in
             let result = await Task.detached(priority: .userInitiated) {
                 Result {

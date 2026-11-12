@@ -9,7 +9,9 @@
 //! - **paired cert** — `GET /library` (hidden titles filtered, `command` values cleared) and
 //!   the art proxy.
 //!
-//! Pin: `mgmt::tests` lane matrix and `crate::library` art/privilege tests.
+//! `?as=<profile id>` names the profile a read or write is for ([`AsProfile`]); a contract seat
+//! plays only its own. Pin: `mgmt::tests` lane matrix, `mgmt::tests::profile_view` and
+//! `crate::library` art/privilege tests.
 
 use super::auth::{AnyId, AuthLane, OwnedId, PluginIdentity, ProviderId};
 use super::shared::*;
@@ -21,8 +23,9 @@ use axum::Extension;
 use sha2::{Digest, Sha256};
 
 /// A seat host reading the box's library ([`pf_paths::seat::box_library_dir`], `box_library`)
-/// changes none of it: every write under `/api/v1/library` answers 409. The box host is the
-/// library's one writer.
+/// changes none of it: every write under `/api/v1/library` answers 409, but the custom-entry
+/// writes, which land in its own titles ([`crate::library::keeps_own_titles`]). The box host is
+/// the library's one writer. On a person's own account no custom-entry write lands at all.
 pub(super) async fn box_library_is_read_only(
     box_library: bool,
     req: Request,
@@ -30,15 +33,30 @@ pub(super) async fn box_library_is_read_only(
 ) -> Response {
     let path = req.uri().path();
     let library = path == "/api/v1/library" || path.starts_with("/api/v1/library/");
+    let custom = path == "/api/v1/library/custom" || path.starts_with("/api/v1/library/custom/");
     let write = !matches!(*req.method(), Method::GET | Method::HEAD);
-    if box_library && library && write {
+    if custom && write && pf_paths::seat::own_account() {
         return api_error_coded(
-            StatusCode::CONFLICT,
-            "seat_library_read_only",
-            "This seat plays the box's library, so it can't be changed here. Change it on the box.",
+            StatusCode::FORBIDDEN,
+            "library_own_account",
+            "Games can't be added to a profile that uses an existing account, because they would \
+             run as that person.",
         );
     }
+    let own = custom && crate::library::keeps_own_titles();
+    if box_library && library && write && !own {
+        return seat_library_read_only();
+    }
     next.run(req).await
+}
+
+/// The 409 a seat host answers a write to the box's library with.
+fn seat_library_read_only() -> Response {
+    api_error_coded(
+        StatusCode::CONFLICT,
+        "seat_library_read_only",
+        "This seat plays the box's library, so it can't be changed here. Change it on the box.",
+    )
 }
 
 /// Refuse a custom-entry write that carries an operator-privileged field on a lane that may
@@ -104,19 +122,153 @@ fn check_privileged_fields(
     None
 }
 
-/// `?as=<profile id>`: the profile whose own numbers ride as `stats.mine`.
+/// `?as=<profile id>`: the profile a library call is for. Absent or empty: this host's own view.
+/// A write that names one changes that profile's own layer, which only the admin lane may do;
+/// any other lane gets 403. Reads stay open.
 #[derive(Deserialize)]
 pub(crate) struct AsProfile {
     #[serde(rename = "as")]
     profile: Option<String>,
 }
 
+impl<S: Send + Sync> axum::extract::FromRequestParts<S> for AsProfile {
+    type Rejection = Response;
+
+    async fn from_request_parts(
+        parts: &mut axum::http::request::Parts,
+        state: &S,
+    ) -> Result<Self, Response> {
+        let Query(who) = Query::<Self>::from_request_parts(parts, state)
+            .await
+            .map_err(IntoResponse::into_response)?;
+        let names = who.profile.as_deref().is_some_and(|p| !p.is_empty());
+        let admin = parts.extensions.get::<AuthLane>() == Some(&AuthLane::Admin);
+        if names && !admin && !matches!(parts.method, Method::GET | Method::HEAD) {
+            return Err(api_error_coded(
+                StatusCode::FORBIDDEN,
+                "profile_layer_console_only",
+                "Couldn't change this profile's own settings. Change them in the host's web \
+                 console.",
+            ));
+        }
+        Ok(who)
+    }
+}
+
+/// Where the profile a call names plays.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Whose {
+    /// No profile named, or a contract seat, which plays only its own.
+    Here,
+    /// The owner: the box's own session, whose layer is the box's.
+    Owner,
+    /// A seat's host of its own, on a person's own account when `own_account`.
+    Seat { own_account: bool },
+    /// The owner's host: a profile that shares the owner's desktop, or takes turns at it.
+    Shares,
+}
+
+/// The view a call reads or writes, and the profile whose play stats ride as `stats.mine`.
+pub(crate) struct Scoped {
+    pub(crate) view: crate::library::View,
+    pub(crate) whose: Whose,
+    mine: Option<String>,
+}
+
 impl AsProfile {
+    /// The view this call is for. A profile the box doesn't hold, or an id that is no minted
+    /// one, is 404 before it touches a path.
+    pub(crate) async fn scope(&self, st: &MgmtState) -> Result<Scoped, Response> {
+        use crate::library::{Reach, View};
+        let Some(id) = self.profile.as_deref().filter(|p| !p.is_empty()) else {
+            return Ok(Scoped {
+                view: View::here(),
+                whose: Whose::Here,
+                mine: None,
+            });
+        };
+        let found = st
+            .app
+            .profiles
+            .get()
+            .filter(|_| crate::library::is_profile_id(id))
+            .and_then(|store| Some((store.get(id)?, store.owner_id())));
+        let Some((profile, owner)) = found else {
+            return Err(api_error_coded(
+                StatusCode::NOT_FOUND,
+                "profile_unknown",
+                "That profile is gone from this host. Pick another one.",
+            ));
+        };
+        let mine = Some(id.to_string());
+        let (whose, reach) = if pf_paths::seat::role().follows_contract() {
+            (Whose::Here, Reach::here())
+        } else if owner.as_deref() == Some(id) {
+            (Whose::Owner, Reach::default())
+        } else if let crate::profiles::OsAccount::Seat { seat: Some(seat) } = profile.os_account {
+            let own_account = on_own_account(seat).await?;
+            (Whose::Seat { own_account }, Reach::seat(own_account))
+        } else {
+            (Whose::Shares, Reach::default())
+        };
+        let view = match whose {
+            Whose::Here => View::here(),
+            _ => View::of(id, whose == Whose::Owner, reach),
+        };
+        Ok(Scoped { view, whose, mine })
+    }
+}
+
+impl Scoped {
     fn fill<'a>(&self, games: impl IntoIterator<Item = &'a mut crate::library::GameEntry>) {
-        if let Some(p) = self.profile.as_deref().filter(|p| !p.is_empty()) {
+        if let Some(p) = self.mine.as_deref() {
             crate::library::fill_mine(games, p);
         }
     }
+}
+
+/// Whether seat row `seat` runs on a person's own account, by the seat ledger. On Linux a seat
+/// lists no command tile either way, so only Windows asks. A row the ledger doesn't name counts
+/// as one: the view never shows a tile that seat would not.
+async fn on_own_account(seat: String) -> Result<bool, Response> {
+    if !cfg!(windows) {
+        return Ok(false);
+    }
+    let ledger = blocking("seat_check", crate::seats::ledger).await?;
+    let row = ledger.seats.iter().find(|s| s.id.as_str() == seat);
+    Ok(row.is_none_or(pf_seats::Seat::adopted))
+}
+
+/// [`crate::library::proxy_art`], each URL asking for the art of the view's profile.
+fn proxy_art_in(view: &crate::library::View, id: &str, art: &mut crate::library::Artwork) {
+    crate::library::proxy_art(id, art);
+    let Some(profile) = view.layer() else {
+        return;
+    };
+    for slot in [
+        &mut art.portrait,
+        &mut art.hero,
+        &mut art.logo,
+        &mut art.header,
+    ] {
+        if let Some(url) = slot
+            .as_mut()
+            .filter(|u| u.starts_with("/api/v1/library/art/"))
+        {
+            url.push_str("&as=");
+            url.push_str(profile);
+        }
+    }
+}
+
+/// `who.scope(st)`, or return its refusal from the handler.
+macro_rules! scoped {
+    ($who:expr, $st:expr) => {
+        match $who.scope(&$st).await {
+            Ok(s) => s,
+            Err(refused) => return refused,
+        }
+    };
 }
 
 #[derive(Deserialize)]
@@ -129,11 +281,13 @@ pub(crate) struct LibraryQuery {
 ///
 /// Plugin-synced entries plus custom ones. Art the host can serve is rewritten to this API's
 /// art proxy, local paths and remote URLs alike; a URL the proxy already refused passes
-/// through. `?provider=` / `?platform=` (case-insensitive) narrow. `?as=` names the
-/// asking device's profile: each title it has launched carries its own numbers in `stats.mine`.
+/// through. `?provider=` / `?platform=` (case-insensitive) narrow. `?as=` names a profile: the
+/// library as it plays it, the box's with the profile's own layer on top, and each title it has
+/// launched carries its own numbers in `stats.mine`.
 ///
-/// The operator lane sees hidden titles (`hidden: true`) so the console can un-hide them.
-/// Every other lane is filtered upstream and cannot tell they exist.
+/// The operator lane sees hidden titles (`hidden: true`) so the console can un-hide them; with
+/// `as`, those the profile hides, and none the box hides. Every other lane is filtered upstream
+/// and cannot tell they exist.
 #[utoipa::path(
     get,
     path = "/library",
@@ -142,39 +296,43 @@ pub(crate) struct LibraryQuery {
     params(
         ("provider" = Option<String>, Query, description = "Only entries owned by this external provider"),
         ("platform" = Option<String>, Query, description = "Only entries on this platform (case-insensitive, e.g. `PS2`)"),
-        ("as" = Option<String>, Query, description = "Profile id whose own play stats fill `stats.mine`"),
+        ("as" = Option<String>, Query, description = "Profile id: the library as that profile plays it, its own play stats in `stats.mine`"),
     ),
     responses(
         (status = OK, description = "Unified library across all stores (the operator's lane also gets hidden entries, flagged)", body = [crate::library::OperatorGameEntry]),
         (status = UNAUTHORIZED, description = "Missing or invalid bearer token", body = ApiError),
+        (status = NOT_FOUND, description = "`as` names no profile on this host", body = ApiError),
     )
 )]
 pub(crate) async fn get_library(
+    State(st): State<Arc<MgmtState>>,
     Extension(lane): Extension<AuthLane>,
     Query(q): Query<LibraryQuery>,
-    Query(who): Query<AsProfile>,
+    who: AsProfile,
 ) -> Response {
+    let scoped = scoped!(who, st);
+    let view = &scoped.view;
     // Operator list is a different type, not a flag, so a hidden title cannot reach a paired
     // client by forgetting a filter. Skip redaction here: this arm is the operator's token,
     // and the command line being shown is the one they typed.
     if lane.is_operator() {
-        let mut rows = crate::library::all_games_for_operator();
+        let mut rows = crate::library::all_games_for_operator(view);
         rows.retain(|r| matches_query(&r.entry, &q));
         crate::library::downloads::fill_free(rows.iter_mut().map(|r| &mut r.entry));
-        who.fill(rows.iter_mut().map(|r| &mut r.entry));
+        scoped.fill(rows.iter_mut().map(|r| &mut r.entry));
         for r in &mut rows {
-            crate::library::proxy_art(&r.entry.id, &mut r.entry.art);
+            proxy_art_in(view, &r.entry.id, &mut r.entry.art);
         }
         return Json(rows).into_response();
     }
-    let mut games = crate::library::all_games();
+    let mut games = crate::library::all_games_for(view);
     games.retain(|g| matches_query(g, &q));
     crate::library::downloads::fill_free(games.iter_mut());
-    who.fill(games.iter_mut());
+    scoped.fill(games.iter_mut());
     // Rewrite to the art proxy: an on-host path a client cannot reach, and a CDN URL every
     // client would otherwise fetch over the WAN for itself.
     for g in &mut games {
-        crate::library::proxy_art(&g.id, &mut g.art);
+        proxy_art_in(view, &g.id, &mut g.art);
     }
     for g in &mut games {
         redact_for_lane(g, &lane);
@@ -288,19 +446,23 @@ fn decode_cursor(cursor: &str) -> Option<(String, String)> {
         ("role" = Option<String>, Query, description = "`game` or `launcher`"),
         ("id" = Option<String>, Query, description = "Only the entry with this library id"),
         ("install" = Option<String>, Query, description = "`installed` (on this host) or `missing` (not installed)"),
-        ("as" = Option<String>, Query, description = "Profile id whose own play stats fill `stats.mine`"),
+        ("as" = Option<String>, Query, description = "Profile id: the library as that profile plays it, its own play stats in `stats.mine`"),
     ),
     responses(
         (status = OK, description = "One page, the total and the platform counts", body = LibraryPage),
         (status = BAD_REQUEST, description = "The cursor isn't one this host issued", body = ApiError),
         (status = UNAUTHORIZED, description = "Missing or invalid bearer token", body = ApiError),
+        (status = NOT_FOUND, description = "`as` names no profile on this host", body = ApiError),
     )
 )]
 pub(crate) async fn get_library_page(
+    State(st): State<Arc<MgmtState>>,
     Extension(lane): Extension<AuthLane>,
     Query(q): Query<LibraryPageQuery>,
-    Query(who): Query<AsProfile>,
+    who: AsProfile,
 ) -> Response {
+    let scoped = scoped!(who, st);
+    let view = &scoped.view;
     let after = match q.cursor.as_deref().filter(|c| !c.is_empty()) {
         None => None,
         Some(c) => match decode_cursor(c) {
@@ -316,21 +478,23 @@ pub(crate) async fn get_library_page(
     };
     let limit = q.limit.unwrap_or(PAGE_DEFAULT).clamp(1, PAGE_MAX) as usize;
     // Rows borrow the kept list: only the titles of this page are copied out of it.
-    let library = crate::library::sorted_games();
-    let hidden = crate::library::hidden_ids();
-    let needle = q.q.as_deref().map(str::trim).unwrap_or("").to_lowercase();
+    let library = crate::library::sorted_games_for(view);
+    let (by_box, by_profile) = crate::library::hidden_layers(view);
+    let needle = punktfunk_core::search::fold(q.q.as_deref().map(str::trim).unwrap_or(""));
     let narrow = LibraryQuery {
         provider: q.provider.clone(),
         platform: None,
     };
     let mut rows: Vec<(&crate::library::GameEntry, bool)> = library
         .iter()
-        .map(|g| (g, hidden.contains(&g.id)))
+        // A profile's view leaves out what the box hides; only the box brings it back.
+        .filter(|g| view.layer().is_none() || !by_box.contains(&g.id))
+        .map(|g| (g, by_box.contains(&g.id) || by_profile.contains(&g.id)))
         // Only the operator's lane sees a hidden title.
         .filter(|(_, hidden)| lane.is_operator() || !hidden)
         .filter(|(g, _)| {
             matches_query(g, &narrow)
-                && (needle.is_empty() || g.title.to_lowercase().contains(&needle))
+                && (needle.is_empty() || punktfunk_core::search::fold(&g.title).contains(&needle))
                 && q.id.as_deref().is_none_or(|id| g.id == id)
                 && match q.role.as_deref() {
                     Some("launcher") => g.role == crate::library::GameRole::Launcher,
@@ -367,6 +531,11 @@ pub(crate) async fn get_library_page(
     // The library arrives sorted by `sort_key` and the filters keep that order.
     let start = after.map_or(0, |key| rows.partition_point(|(g, _)| sort_key(g) <= key));
     let more = rows.len() > start + limit;
+    let own = if lane.is_operator() {
+        crate::library::OwnValues::load(view)
+    } else {
+        Default::default()
+    };
     let mut items: Vec<crate::library::OperatorGameEntry> = rows
         .into_iter()
         .skip(start)
@@ -374,15 +543,16 @@ pub(crate) async fn get_library_page(
         .map(|(g, hidden)| crate::library::OperatorGameEntry {
             entry: g.clone(),
             hidden,
+            profile: own.of(&g.id),
         })
         .collect();
     let next_cursor = more
         .then(|| items.last().map(|r| encode_cursor(&sort_key(&r.entry))))
         .flatten();
     crate::library::downloads::fill_free(items.iter_mut().map(|r| &mut r.entry));
-    who.fill(items.iter_mut().map(|r| &mut r.entry));
+    scoped.fill(items.iter_mut().map(|r| &mut r.entry));
     for r in &mut items {
-        crate::library::proxy_art(&r.entry.id, &mut r.entry.art);
+        proxy_art_in(view, &r.entry.id, &mut r.entry.art);
         redact_for_lane(&mut r.entry, &lane);
     }
     Json(LibraryPage {
@@ -431,29 +601,37 @@ pub(crate) struct HiddenState {
 /// Curation, not access control: the title leaves every play surface and launch resolution
 /// but is not deleted. The operator console still lists it (`hidden: true`) so it can return.
 /// The id is not required to exist now — a plugin mid-sync or an unmounted drive would
-/// otherwise refuse a choice that should stick. Emits `library.changed` only on a real change.
+/// otherwise refuse a choice that should stick. With `as`, the hide is that profile's own; it
+/// cannot bring back a title the box hides. Emits `library.changed` only on a real change.
 #[utoipa::path(
     put,
     path = "/library/hidden/{id}",
     tag = "library",
     operation_id = "setLibraryEntryHidden",
-    params(("id" = String, Path, description = "The library entry id (e.g. `steam:70`)")),
+    params(
+        ("id" = String, Path, description = "The library entry id (e.g. `steam:70`)"),
+        ("as" = Option<String>, Query, description = "Profile id: hide it for that profile only"),
+    ),
     request_body = HiddenToggle,
     responses(
         (status = OK, description = "Stored; the entry's visibility after the call", body = HiddenState),
         (status = BAD_REQUEST, description = "Empty entry id", body = ApiError),
         (status = UNAUTHORIZED, description = "Missing or invalid bearer token", body = ApiError),
+        (status = NOT_FOUND, description = "`as` names no profile on this host", body = ApiError),
         (status = INTERNAL_SERVER_ERROR, description = "Couldn't save the settings", body = ApiError),
     )
 )]
 pub(crate) async fn set_library_entry_hidden(
+    State(st): State<Arc<MgmtState>>,
     Path(id): Path<String>,
+    who: AsProfile,
     ApiJson(toggle): ApiJson<HiddenToggle>,
 ) -> Response {
     if id.trim().is_empty() {
         return api_error(StatusCode::BAD_REQUEST, "entry id must not be empty");
     }
-    match crate::library::set_entry_hidden(&id, toggle.hidden) {
+    let scoped = scoped!(who, st);
+    match crate::library::set_entry_hidden(&scoped.view, &id, toggle.hidden) {
         Ok(hidden) => {
             tracing::info!(entry = %id, hidden, "management API: library entry visibility set");
             Json(HiddenState { id, hidden }).into_response()
@@ -472,45 +650,60 @@ pub(crate) struct ScannerToggle {
 /// One row per installed library plugin, with its enable state. Sources default to
 /// enabled; disabling hides titles from the next read. The custom store is not a
 /// source and is always on. Every row is
-/// `origin: "plugin"`.
+/// `origin: "plugin"`. With `as`, a source is off when the box or the profile turned it off, and
+/// `off_by` says which.
 #[utoipa::path(
     get,
     path = "/library/scanners",
     tag = "library",
     operation_id = "listLibraryScanners",
+    params(("as" = Option<String>, Query, description = "Profile id: the sources as that profile has them")),
     responses(
         (status = OK, description = "This host's scanners with their enable state", body = [crate::library::ScannerInfo]),
         (status = UNAUTHORIZED, description = "Missing or invalid bearer token", body = ApiError),
+        (status = NOT_FOUND, description = "`as` names no profile on this host", body = ApiError),
     )
 )]
-pub(crate) async fn list_library_scanners() -> Json<Vec<crate::library::ScannerInfo>> {
-    Json(crate::library::list_scanners())
+pub(crate) async fn list_library_scanners(
+    State(st): State<Arc<MgmtState>>,
+    who: AsProfile,
+) -> Response {
+    let scoped = scoped!(who, st);
+    Json(crate::library::list_scanners(&scoped.view)).into_response()
 }
 
 /// Enable or disable a library source.
 ///
 /// Takes effect on the next library read. Disabling hides titles; the plugin may keep
-/// reconciling while off. Nothing is deleted. Emits `library.changed` when the state changes.
+/// reconciling while off. Nothing is deleted. With `as`, the switch is that profile's own: it
+/// turns a source off for the profile, and cannot turn on one the box turned off. Emits
+/// `library.changed` when the state changes.
 #[utoipa::path(
     put,
     path = "/library/scanners/{id}",
     tag = "library",
     operation_id = "setLibraryScanner",
-    params(("id" = String, Path, description = "The scanner id (e.g. `steam`)")),
+    params(
+        ("id" = String, Path, description = "The scanner id (e.g. `steam`)"),
+        ("as" = Option<String>, Query, description = "Profile id: switch it for that profile only"),
+    ),
     request_body = ScannerToggle,
     responses(
         (status = OK, description = "Toggle stored; the full scanner list", body = [crate::library::ScannerInfo]),
         (status = UNAUTHORIZED, description = "Missing or invalid bearer token", body = ApiError),
-        (status = FORBIDDEN, description = "A plugin toggled another plugin's source", body = ApiError),
-        (status = NOT_FOUND, description = "No such scanner on this platform", body = ApiError),
+        (status = FORBIDDEN, description = "A plugin toggled another plugin's source, or named a profile", body = ApiError),
+        (status = NOT_FOUND, description = "No such scanner on this platform, or `as` names no profile on this host", body = ApiError),
         (status = INTERNAL_SERVER_ERROR, description = "Couldn't save the settings", body = ApiError),
     )
 )]
 pub(crate) async fn set_library_scanner(
+    State(st): State<Arc<MgmtState>>,
     OwnedId(id, _): OwnedId<AnyId>,
+    who: AsProfile,
     ApiJson(toggle): ApiJson<ScannerToggle>,
 ) -> Response {
-    match crate::library::set_scanner_enabled(&id, toggle.enabled) {
+    let scoped = scoped!(who, st);
+    match crate::library::set_scanner_enabled(&scoped.view, &id, toggle.enabled) {
         Ok(Some(scanners)) => {
             tracing::info!(
                 scanner = %id,
@@ -526,7 +719,10 @@ pub(crate) async fn set_library_scanner(
 
 /// Create a custom title
 ///
-/// A user-curated entry. The host assigns a stable id, returned in the body.
+/// A user-curated entry. The host assigns a stable id, returned in the body. On a seat host it is
+/// that host's own title, under an `own:` id, kept in its own config folder and run as its
+/// account; the box lists its name and picture for the seat's profile. A profile that uses an
+/// existing account takes none.
 #[utoipa::path(
     post,
     path = "/library/custom",
@@ -537,6 +733,7 @@ pub(crate) async fn set_library_scanner(
         (status = CREATED, description = "Entry created", body = crate::library::CustomEntry),
         (status = BAD_REQUEST, description = "Empty title", body = ApiError),
         (status = UNAUTHORIZED, description = "Missing or invalid bearer token", body = ApiError),
+        (status = FORBIDDEN, description = "A field this lane may not set, or a seat on a person's own account", body = ApiError),
         (status = INTERNAL_SERVER_ERROR, description = "Couldn't save the catalog", body = ApiError),
     )
 )]
@@ -571,7 +768,7 @@ pub(crate) async fn create_custom_game(
     path = "/library/custom/{id}",
     tag = "library",
     operation_id = "getCustomGame",
-    params(("id" = String, Path, description = "The custom entry id (without the `custom:` prefix)")),
+    params(("id" = String, Path, description = "The custom entry id (without the `custom:` prefix), or a seat host's own `own:` id")),
     responses(
         (status = OK, description = "The stored entry", body = crate::library::CustomEntry),
         (status = UNAUTHORIZED, description = "Missing or invalid bearer token", body = ApiError),
@@ -590,7 +787,7 @@ pub(crate) async fn get_custom_game(Path(id): Path<String>) -> Response {
     path = "/library/custom/{id}",
     tag = "library",
     operation_id = "updateCustomGame",
-    params(("id" = String, Path, description = "The custom entry id (without the `custom:` prefix)")),
+    params(("id" = String, Path, description = "The custom entry id (without the `custom:` prefix), or a seat host's own `own:` id")),
     request_body = crate::library::CustomInput,
     responses(
         (status = OK, description = "Entry updated", body = crate::library::CustomEntry),
@@ -598,6 +795,7 @@ pub(crate) async fn get_custom_game(Path(id): Path<String>) -> Response {
         (status = UNAUTHORIZED, description = "Missing or invalid bearer token", body = ApiError),
         (status = FORBIDDEN, description = "A plugin named a row its own provider does not publish", body = ApiError),
         (status = NOT_FOUND, description = "No custom entry with that id", body = ApiError),
+        (status = CONFLICT, description = "A seat host named a row of the box's", body = ApiError),
         (status = INTERNAL_SERVER_ERROR, description = "Couldn't save the catalog", body = ApiError),
     )
 )]
@@ -607,6 +805,9 @@ pub(crate) async fn update_custom_game(
     Path(id): Path<String>,
     ApiJson(input): ApiJson<crate::library::CustomInput>,
 ) -> Response {
+    if let Some(refused) = not_this_seats_own(&id) {
+        return refused;
+    }
     if input.title.trim().is_empty() {
         return api_error(StatusCode::BAD_REQUEST, "title must not be empty");
     }
@@ -647,12 +848,13 @@ pub(crate) async fn update_custom_game(
     path = "/library/custom/{id}",
     tag = "library",
     operation_id = "deleteCustomGame",
-    params(("id" = String, Path, description = "The custom entry id (without the `custom:` prefix)")),
+    params(("id" = String, Path, description = "The custom entry id (without the `custom:` prefix), or a seat host's own `own:` id")),
     responses(
         (status = NO_CONTENT, description = "Entry deleted"),
         (status = UNAUTHORIZED, description = "Missing or invalid bearer token", body = ApiError),
         (status = FORBIDDEN, description = "A plugin named a row its own provider does not publish", body = ApiError),
         (status = NOT_FOUND, description = "No custom entry with that id", body = ApiError),
+        (status = CONFLICT, description = "A seat host named a row of the box's", body = ApiError),
         (status = INTERNAL_SERVER_ERROR, description = "Couldn't save the catalog", body = ApiError),
     )
 )]
@@ -661,6 +863,9 @@ pub(crate) async fn delete_custom_game(
     who: Option<Extension<PluginIdentity>>,
     Path(id): Path<String>,
 ) -> Response {
+    if let Some(refused) = not_this_seats_own(&id) {
+        return refused;
+    }
     if let Some(denied) = not_the_plugins_row(lane, who, &id) {
         return denied;
     }
@@ -686,6 +891,13 @@ pub(crate) async fn delete_custom_game(
     }
 }
 
+/// On a seat host a custom-entry write reaches its own titles alone: a row of the box's answers
+/// the 409 every other library write there gets.
+fn not_this_seats_own(id: &str) -> Option<Response> {
+    let box_row = crate::library::keeps_own_titles() && !crate::library::is_own_id(id);
+    box_row.then(seat_library_read_only)
+}
+
 /// On the plugin lane, a stored row its caller's provider does not publish answers 403: the
 /// operator's rows and another plugin's are not a plugin's to change. The shared runner token
 /// names no provider, so it owns none. An unknown id falls through to the 404.
@@ -705,6 +917,75 @@ fn not_the_plugins_row(
             "A plugin can change only the library rows it publishes.",
         )
     })
+}
+
+/// A seat host's own titles, as the box may see them
+///
+/// The custom entries this seat host keeps in its own config folder, each by its `own:` id,
+/// title, platform and `http(s)` art: never how it starts, and never a cover on its disk. The box
+/// asks when the seat's library changes and when the seat comes up, and lists them for the seat's
+/// profile. A host that keeps none answers an empty list.
+#[utoipa::path(
+    get,
+    path = "/library/own",
+    tag = "library",
+    operation_id = "listOwnTitles",
+    responses(
+        (status = OK, description = "This seat host's own titles", body = [crate::library::OwnTitle]),
+        (status = UNAUTHORIZED, description = "Missing or invalid bearer token", body = ApiError),
+    )
+)]
+pub(crate) async fn list_own_titles() -> Json<Vec<crate::library::OwnTitle>> {
+    Json(crate::library::published_own_titles())
+}
+
+/// Store a seat's own titles for its profile
+///
+/// What a seat host's `GET /library/own` answered, for the profile `as` names, on the host that
+/// writes the library: the door hands it here, and a Windows box stores its seats' itself. Rows
+/// are checked as an Art & Metadata source's are: a row with a bad id or title, a cover that isn't
+/// `http(s)` and a bad platform are dropped. An answer that isn't a list, lists more than 500 or
+/// names an id twice is refused, and the stored titles stay. Emits `library.changed` on a change.
+#[utoipa::path(
+    put,
+    path = "/library/own",
+    tag = "library",
+    operation_id = "storeOwnTitles",
+    params(("as" = String, Query, description = "Profile id: the profile whose seat answered")),
+    request_body = Vec<crate::library::OwnTitle>,
+    responses(
+        (status = NO_CONTENT, description = "Stored"),
+        (status = BAD_REQUEST, description = "Not an answer the box keeps", body = ApiError),
+        (status = UNAUTHORIZED, description = "Missing or invalid bearer token", body = ApiError),
+        (status = FORBIDDEN, description = "Not the admin lane", body = ApiError),
+        (status = NOT_FOUND, description = "`as` names no profile on this host", body = ApiError),
+        (status = CONFLICT, description = "`as` names no profile with a seat of its own", body = ApiError),
+        (status = INTERNAL_SERVER_ERROR, description = "Couldn't save the titles", body = ApiError),
+    )
+)]
+pub(crate) async fn store_own_titles(
+    State(st): State<Arc<MgmtState>>,
+    who: AsProfile,
+    body: axum::body::Bytes,
+) -> Response {
+    let scoped = scoped!(who, st);
+    let profile = match (scoped.whose, scoped.view.layer()) {
+        (Whose::Seat { .. }, Some(profile)) => profile.to_string(),
+        _ => {
+            return api_error(
+                StatusCode::CONFLICT,
+                "`as` names no profile with a seat of its own",
+            )
+        }
+    };
+    let titles = match crate::library::checked_own_titles(&profile, &body) {
+        Ok(titles) => titles,
+        Err(why) => return api_error(StatusCode::BAD_REQUEST, &why),
+    };
+    match crate::library::store_own_titles(&profile, titles) {
+        Ok(_) => StatusCode::NO_CONTENT.into_response(),
+        Err(e) => host_error("library change refused", &e),
+    }
 }
 
 #[derive(Serialize, ToSchema)]
@@ -734,7 +1015,7 @@ pub(crate) struct ReconcileQuery {
     operation_id = "reconcileProviderEntries",
     params(
         ("provider" = String, Path, description = "The provider id ([a-z0-9._-], `manual` reserved)"),
-        ("store" = Option<String>, Query, description = "Claim this store for the provider ([a-z0-9_-], `custom`/`manual` reserved)"),
+        ("store" = Option<String>, Query, description = "Claim this store for the provider ([a-z0-9_-], `custom`/`own`/`manual` reserved)"),
     ),
     request_body = Vec<crate::library::ProviderEntryInput>,
     responses(
@@ -1103,23 +1384,30 @@ pub(crate) async fn set_library_metadata(
 ///
 /// The operator's choice beats the entry's own art and every metadata source, and survives
 /// the provider's next reconcile. `url: null` clears the pick. The id is not required to
-/// exist now, as with hiding. Emits `library.changed`.
+/// exist now, as with hiding. With `as`, the pick is that profile's own and beats the box's for
+/// the same slot. Emits `library.changed`.
 #[utoipa::path(
     put,
     path = "/library/picks/{id}",
     tag = "library",
     operation_id = "setLibraryArtPick",
-    params(("id" = String, Path, description = "The library entry id (e.g. `steam:70`)")),
+    params(
+        ("id" = String, Path, description = "The library entry id (e.g. `steam:70`)"),
+        ("as" = Option<String>, Query, description = "Profile id: pick it for that profile only"),
+    ),
     request_body = crate::library::ArtPickInput,
     responses(
         (status = OK, description = "Stored; the entry's picks after the call", body = crate::library::Artwork),
         (status = BAD_REQUEST, description = "Empty id, unknown kind, or a URL that is not http(s)", body = ApiError),
         (status = UNAUTHORIZED, description = "Missing or invalid bearer token", body = ApiError),
+        (status = NOT_FOUND, description = "`as` names no profile on this host", body = ApiError),
         (status = INTERNAL_SERVER_ERROR, description = "Couldn't save the picks", body = ApiError),
     )
 )]
 pub(crate) async fn set_library_art_pick(
+    State(st): State<Arc<MgmtState>>,
     Path(id): Path<String>,
+    who: AsProfile,
     ApiJson(input): ApiJson<crate::library::ArtPickInput>,
 ) -> Response {
     if id.trim().is_empty() {
@@ -1141,7 +1429,8 @@ pub(crate) async fn set_library_art_pick(
             "url must be an http(s) URL of at most 2048 characters",
         );
     }
-    match crate::library::set_art_pick(&id, kind, input.url) {
+    let scoped = scoped!(who, st);
+    match crate::library::set_art_pick(&scoped.view, &id, kind, input.url) {
         Ok(picks) => {
             tracing::info!(entry = %id, kind = kind.name(), "management API: library art picked");
             Json(picks).into_response()
@@ -1184,42 +1473,55 @@ fn override_refused(e: crate::library::OverrideError) -> Response {
 /// Read the game overrides
 ///
 /// The shared overrides, each game's entry and each source's, as `library-overrides.json`
-/// holds them. `GET /library` carries what each title resolves to.
+/// holds them. `GET /library` carries what each title resolves to. With `as`, the profile's own
+/// file: where it has an entry for a game or its source, that entry wins over the box's.
 #[utoipa::path(
     get,
     path = "/library/overrides",
     tag = "library",
     operation_id = "getLibraryOverrides",
+    params(("as" = Option<String>, Query, description = "Profile id: that profile's own overrides")),
     responses(
         (status = OK, description = "The shared overrides and every game's and source's entry", body = crate::library::OverridesDoc),
         (status = UNAUTHORIZED, description = "Missing or invalid bearer token", body = ApiError),
+        (status = NOT_FOUND, description = "`as` names no profile on this host", body = ApiError),
     )
 )]
-pub(crate) async fn get_library_overrides() -> Json<crate::library::OverridesDoc> {
-    Json(crate::library::load_overrides())
+pub(crate) async fn get_library_overrides(
+    State(st): State<Arc<MgmtState>>,
+    who: AsProfile,
+) -> Response {
+    let scoped = scoped!(who, st);
+    Json(crate::library::load_overrides(&scoped.view)).into_response()
 }
 
 /// Create a shared override
 ///
 /// A named set of stream settings that games and sources point at. The host assigns its id.
+/// With `as`, it is that profile's own.
 #[utoipa::path(
     post,
     path = "/library/overrides/sets",
     tag = "library",
     operation_id = "createOverrideSet",
+    params(("as" = Option<String>, Query, description = "Profile id: create it for that profile")),
     request_body = crate::library::GameOverridesSchema,
     responses(
         (status = CREATED, description = "Created, with its id", body = crate::library::OverrideSet),
         (status = BAD_REQUEST, description = "No name, or a value out of range", body = ApiError),
         (status = UNAUTHORIZED, description = "Missing or invalid bearer token", body = ApiError),
+        (status = NOT_FOUND, description = "`as` names no profile on this host", body = ApiError),
         (status = CONFLICT, description = "Another shared override has this name", body = ApiError),
         (status = INTERNAL_SERVER_ERROR, description = "Couldn't save the overrides", body = ApiError),
     )
 )]
 pub(crate) async fn create_override_set(
+    State(st): State<Arc<MgmtState>>,
+    who: AsProfile,
     ApiJson(values): ApiJson<punktfunk_core::game_overrides::GameOverrides>,
 ) -> Response {
-    match crate::library::create_override_set(values) {
+    let scoped = scoped!(who, st);
+    match crate::library::create_override_set(&scoped.view, values) {
         Ok(set) => {
             tracing::info!(set = %set.id, "management API: shared override created");
             (StatusCode::CREATED, Json(set)).into_response()
@@ -1231,28 +1533,35 @@ pub(crate) async fn create_override_set(
 /// Change a shared override
 ///
 /// A field left out keeps its value; `null` clears it. Every game and source that uses it
-/// follows. Emits `library.changed` for each source they belong to.
+/// follows. With `as`, one of that profile's own. Emits `library.changed` for each source they
+/// belong to.
 #[utoipa::path(
     put,
     path = "/library/overrides/sets/{id}",
     tag = "library",
     operation_id = "updateOverrideSet",
-    params(("id" = String, Path, description = "The shared override's id")),
+    params(
+        ("id" = String, Path, description = "The shared override's id"),
+        ("as" = Option<String>, Query, description = "Profile id: one of that profile's own"),
+    ),
     request_body = crate::library::OverrideSetPatch,
     responses(
         (status = OK, description = "Stored; the shared override after the call", body = crate::library::OverrideSet),
         (status = BAD_REQUEST, description = "No name left, or a value out of range", body = ApiError),
         (status = UNAUTHORIZED, description = "Missing or invalid bearer token", body = ApiError),
-        (status = NOT_FOUND, description = "No shared override with that id", body = ApiError),
+        (status = NOT_FOUND, description = "No shared override with that id, or `as` names no profile on this host", body = ApiError),
         (status = CONFLICT, description = "Another shared override has this name", body = ApiError),
         (status = INTERNAL_SERVER_ERROR, description = "Couldn't save the overrides", body = ApiError),
     )
 )]
 pub(crate) async fn update_override_set(
+    State(st): State<Arc<MgmtState>>,
     Path(id): Path<String>,
+    who: AsProfile,
     ApiJson(patch): ApiJson<crate::library::OverrideSetPatch>,
 ) -> Response {
-    match crate::library::update_override_set(&id, patch) {
+    let scoped = scoped!(who, st);
+    match crate::library::update_override_set(&scoped.view, &id, patch) {
         Ok(set) => {
             tracing::info!(set = %id, "management API: shared override changed");
             Json(set).into_response()
@@ -1264,22 +1573,31 @@ pub(crate) async fn update_override_set(
 /// Delete a shared override
 ///
 /// The games and sources that used it lose their entry and go back to what the device
-/// decides. The answer counts them. Emits `library.changed` for each source they belong to.
+/// decides. The answer counts them. With `as`, one of that profile's own, and only its entries
+/// lose theirs. Emits `library.changed` for each source they belong to.
 #[utoipa::path(
     delete,
     path = "/library/overrides/sets/{id}",
     tag = "library",
     operation_id = "deleteOverrideSet",
-    params(("id" = String, Path, description = "The shared override's id")),
+    params(
+        ("id" = String, Path, description = "The shared override's id"),
+        ("as" = Option<String>, Query, description = "Profile id: one of that profile's own"),
+    ),
     responses(
         (status = OK, description = "Deleted; how many games and sources used it", body = crate::library::OverrideUsers),
         (status = UNAUTHORIZED, description = "Missing or invalid bearer token", body = ApiError),
-        (status = NOT_FOUND, description = "No shared override with that id", body = ApiError),
+        (status = NOT_FOUND, description = "No shared override with that id, or `as` names no profile on this host", body = ApiError),
         (status = INTERNAL_SERVER_ERROR, description = "Couldn't save the overrides", body = ApiError),
     )
 )]
-pub(crate) async fn delete_override_set(Path(id): Path<String>) -> Response {
-    match crate::library::delete_override_set(&id) {
+pub(crate) async fn delete_override_set(
+    State(st): State<Arc<MgmtState>>,
+    Path(id): Path<String>,
+    who: AsProfile,
+) -> Response {
+    let scoped = scoped!(who, st);
+    match crate::library::delete_override_set(&scoped.view, &id) {
         Ok(users) => {
             tracing::info!(
                 set = %id,
@@ -1298,30 +1616,37 @@ pub(crate) async fn delete_override_set(Path(id): Path<String>) -> Response {
 /// `{ "set": id }` points the game at a shared override; fields alone are its own values;
 /// `{ "none": true }` leaves it to the device, whatever the source sets; `{}` clears its entry,
 /// and the game takes its source's. The id is not required to exist now, as with hiding.
-/// Emits `library.changed`.
+/// With `as`, the entry is that profile's own and `set` may name the box's shared override or
+/// the profile's; `{}` hands the game back to the box's entry. Emits `library.changed`.
 #[utoipa::path(
     put,
     path = "/library/overrides/games/{id}",
     tag = "library",
     operation_id = "setGameOverrides",
-    params(("id" = String, Path, description = "The library entry id (e.g. `steam:70`)")),
+    params(
+        ("id" = String, Path, description = "The library entry id (e.g. `steam:70`)"),
+        ("as" = Option<String>, Query, description = "Profile id: set it for that profile only"),
+    ),
     request_body = crate::library::OverrideEntry,
     responses(
         (status = OK, description = "Stored; the game's entry after the call", body = crate::library::OverrideEntry),
         (status = BAD_REQUEST, description = "Empty id, a value out of range, or `set` or `none` beside another field", body = ApiError),
         (status = UNAUTHORIZED, description = "Missing or invalid bearer token", body = ApiError),
-        (status = NOT_FOUND, description = "`set` names no shared override", body = ApiError),
+        (status = NOT_FOUND, description = "`set` names no shared override, or `as` names no profile on this host", body = ApiError),
         (status = INTERNAL_SERVER_ERROR, description = "Couldn't save the overrides", body = ApiError),
     )
 )]
 pub(crate) async fn set_game_overrides(
+    State(st): State<Arc<MgmtState>>,
     Path(id): Path<String>,
+    who: AsProfile,
     ApiJson(entry): ApiJson<crate::library::OverrideEntry>,
 ) -> Response {
     if id.trim().is_empty() {
         return api_error(StatusCode::BAD_REQUEST, "entry id must not be empty");
     }
-    match crate::library::set_game_overrides(&id, entry) {
+    let scoped = scoped!(who, st);
+    match crate::library::set_game_overrides(&scoped.view, &id, entry) {
         Ok(entry) => {
             tracing::info!(entry = %id, "management API: game overrides set");
             Json(entry).into_response()
@@ -1333,24 +1658,30 @@ pub(crate) async fn set_game_overrides(
 /// Set one source's overrides
 ///
 /// The same body as a game's, without `none`: `{}` clears the source's entry. Each title of
-/// the source without an entry of its own takes it. Emits `library.changed`.
+/// the source without an entry of its own takes it. With `as`, the entry is that profile's own.
+/// Emits `library.changed`.
 #[utoipa::path(
     put,
     path = "/library/overrides/sources/{source}",
     tag = "library",
     operation_id = "setSourceOverrides",
-    params(("source" = String, Path, description = "The source, the store part of a library id (e.g. `lutris`)")),
+    params(
+        ("source" = String, Path, description = "The source, the store part of a library id (e.g. `lutris`)"),
+        ("as" = Option<String>, Query, description = "Profile id: set it for that profile only"),
+    ),
     request_body = crate::library::OverrideEntry,
     responses(
         (status = OK, description = "Stored; the source's entry after the call", body = crate::library::OverrideEntry),
         (status = BAD_REQUEST, description = "Empty source, a value out of range, `set` beside values, or `none`", body = ApiError),
         (status = UNAUTHORIZED, description = "Missing or invalid bearer token", body = ApiError),
-        (status = NOT_FOUND, description = "`set` names no shared override", body = ApiError),
+        (status = NOT_FOUND, description = "`set` names no shared override, or `as` names no profile on this host", body = ApiError),
         (status = INTERNAL_SERVER_ERROR, description = "Couldn't save the overrides", body = ApiError),
     )
 )]
 pub(crate) async fn set_source_overrides(
+    State(st): State<Arc<MgmtState>>,
     Path(source): Path<String>,
+    who: AsProfile,
     ApiJson(entry): ApiJson<crate::library::OverrideEntry>,
 ) -> Response {
     if source.trim().is_empty() || source.contains(':') {
@@ -1359,7 +1690,8 @@ pub(crate) async fn set_source_overrides(
             "source must be a store name, with no `:`",
         );
     }
-    match crate::library::set_source_overrides(&source, entry) {
+    let scoped = scoped!(who, st);
+    match crate::library::set_source_overrides(&scoped.view, &source, entry) {
         Ok(entry) => {
             tracing::info!(source = %source, "management API: source overrides set");
             Json(entry).into_response()
@@ -1376,7 +1708,8 @@ pub(crate) async fn set_source_overrides(
 /// can try the next candidate, and so is a URL the fetch refused — `GET /library` advertises
 /// that one verbatim again. The response carries `Cache-Control` and an `ETag` of the bytes; a
 /// request whose `If-None-Match` names that tag gets 304 with no body. On a Linux door the
-/// covers are in the owner's home, and the owner's host serves them while it runs.
+/// covers are in the owner's home, and the owner's host serves them while it runs. With `as`,
+/// the art as that profile sees it: its own picks first.
 #[utoipa::path(
     get,
     path = "/library/art/{id}/{kind}",
@@ -1385,26 +1718,30 @@ pub(crate) async fn set_source_overrides(
     params(
         ("id" = String, Path, description = "The store-qualified library id, e.g. `steam:570`"),
         ("kind" = String, Path, description = "`portrait` | `hero` | `logo` | `header`"),
+        ("as" = Option<String>, Query, description = "Profile id: the art as that profile sees it"),
         ("If-None-Match" = Option<String>, Header, description = "An `ETag` from an earlier response"),
     ),
     responses(
         (status = OK, description = "Image bytes", content_type = "image/jpeg"),
         (status = NOT_MODIFIED, description = "The tag in `If-None-Match` is current"),
         (status = UNAUTHORIZED, description = "Missing or invalid credentials", body = ApiError),
-        (status = NOT_FOUND, description = "No art of that kind for that id", body = ApiError),
+        (status = NOT_FOUND, description = "No art of that kind for that id, or `as` names no profile on this host", body = ApiError),
     )
 )]
 pub(crate) async fn get_library_art(
+    State(st): State<Arc<MgmtState>>,
     Path((id, kind)): Path<(String, String)>,
+    who: AsProfile,
     headers: axum::http::HeaderMap,
 ) -> Response {
     let Some(kind) = crate::library::ArtKind::parse(&kind) else {
         return api_error(StatusCode::NOT_FOUND, "unknown art kind");
     };
+    let view = scoped!(who, st).view;
     // Any catalog id (manual, provider, claimed-store) serves its local file from here.
     // The proxy does not know which store the id belongs to.
     let stored = tokio::task::spawn_blocking(move || {
-        crate::library::library_art_bytes(&id, kind).or_else(|| owner_art(&id, kind))
+        crate::library::library_art_bytes(&view, &id, kind).or_else(|| owner_art(&id, kind))
     })
     .await;
     if let Ok(Some((bytes, ctype))) = stored {

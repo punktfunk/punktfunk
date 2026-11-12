@@ -61,6 +61,7 @@ seats usr/libexec/punktfunk/punktfunk-seats
 seats usr/libexec/punktfunk/seat-session
 seats usr/libexec/punktfunk/seat-reap
 seats usr/libexec/punktfunk/door-helper
+seats usr/libexec/punktfunk/door-remove
 seats usr/lib/systemd/system/punktfunk-seats.service
 seats usr/lib/systemd/system/punktfunk-seat@.service
 seats usr/lib/systemd/system/punktfunk-door.service

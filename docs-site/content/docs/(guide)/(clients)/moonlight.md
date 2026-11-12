@@ -14,7 +14,7 @@ turn on **GameStream**, then click **Restart Punktfunk**. Or:
 
 | Where | How |
 |---|---|
-| Windows installer | Turn on **Moonlight compat** |
+| Windows installer | Turn on **Moonlight support** |
 | Guided installer (Linux, SteamOS) | Add `--gamestream` |
 | NixOS | `services.punktfunk.host.gamestream = true;` (also opens the firewall) |
 | `serve` by hand | `punktfunk-host serve --gamestream` |
@@ -62,7 +62,7 @@ The device appears under **Paired devices**. See [Pairing & Trust](/docs/pairing
 
 Moonlight lists **Desktop** and the games in the host's [library](/docs/game-library). The host
 creates a display at the resolution and frame rate set in Moonlight's settings. **Resume** returns
-to a session you left; the console's **Stop** ends it.
+to a session you left; the console's **Stop session** ends it.
 
 An `apps.json` in the host's config directory replaces that list, **Desktop** included.
 

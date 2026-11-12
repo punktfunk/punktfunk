@@ -197,8 +197,7 @@ pub fn parked_previous_render() -> Option<String> {
 ///
 /// The default endpoints are machine-global while a seat host is one of several
 /// on the box, so parking them would hand every seat's playback to whichever
-/// seat streamed last. A seat's own endpoints carry its marker and the wiring
-/// plan finds them by id.
+/// seat streamed last. A seat captures its own session's endpoints.
 pub fn keep_default_devices() -> bool {
     pf_host_config::config().audio_output_mode.keeps_default()
         || crate::capture_policy::session_keeps_default()
@@ -251,8 +250,7 @@ fn pad_render_ids(renders: &[Endpoint]) -> Vec<String> {
 /// playback on the loopback sink and recording on the virtual mic. The idle mic pump
 /// passes false — it must neither silence speakers nor steal the default microphone.
 /// Set once a wait has timed out: minting succeeded but MMDevice never listed the result, so
-/// every later pass would pay the ceiling for endpoints that are not coming. True inside a seat,
-/// where minting lands a machine-wide devnode the remote session cannot enumerate at all.
+/// every later pass would pay the ceiling for endpoints that are not coming.
 static MINTED_NEVER_LISTED: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
 
@@ -308,8 +306,7 @@ fn enumerate_including_minted(with_hidden_sink: bool) -> (Vec<Endpoint>, Vec<End
     if !MINTED_NEVER_LISTED.swap(true, Ordering::Relaxed) {
         tracing::info!(
             "a minted audio endpoint never appeared in this session's device enumeration — \
-             planning without it, and not waiting for it again (a seat's remote session cannot \
-             enumerate the machine-wide devnode minting creates)"
+             planning without it, and not waiting for it again"
         );
     }
     finish(

@@ -19,16 +19,19 @@ Apple and Android apps in their own storage.
 
 ## Creating and editing one
 
-1. Open **Settings** and pick **New preset** from the switcher at the top.
+1. Open **Settings** and pick **New preset…** from the switcher at the top.
 2. Name it and pick a colour. The colour tints the preset's chip on host cards.
 3. Change the rows you want. A changed row shows a marker and **Reset**.
 
 | App | Switcher | Rename, duplicate, delete |
 |---|---|---|
-| Linux, Windows, iPhone, iPad, Apple TV | **Editing** row | Linux: next to the switcher. Windows: **Edit preset…** in the switcher. Apple: the switcher's menu. |
+| Linux, Windows, iPhone, iPad, Apple TV | **Editing** row | Linux: next to the switcher. Windows: **Edit** with the preset's name, in the switcher. Apple: the switcher's menu. |
 | Mac | Menu at the top of the settings window | The same menu |
 | Android | Row of chips | Tap the selected chip again |
 | Console | **Settings** → **Presets** → **New preset…** | Pick a preset: **Edit settings…**, **Rename…**, **Delete preset** |
+
+**Second screen**, offered beside an empty preset, starts one that sets only the
+[host screen](/docs/client-settings#host-screen-in-a-preset).
 
 Windows creates *Preset 1* and opens it; rename it there. Names are unique, ignoring case. In the
 console (the controller interface) a changed row shows a dot, and **X** puts it back on the global
@@ -37,9 +40,7 @@ value.
 ## What a preset can't change
 
 Rows that describe this device rather than the stream don't show in a preset: the list is on
-[Client settings](/docs/client-settings#settings-that-are-facts-about-your-device). **Share
-clipboard** is a per-host switch on the host's page or in its edit sheet, not a setting: see
-[Shared clipboard](/docs/clipboard).
+[Client settings](/docs/client-settings#settings-that-are-facts-about-your-device).
 
 ## Using a preset
 
@@ -52,8 +53,8 @@ clipboard** is a per-host switch on the host's page or in its edit sheet, not a 
   **Default settings** there streams without the host's preset.
 - **Pin it as a card.** A pinned preset gets its own card beside the host. Pin it in the host's edit
   sheet (Android), on the host page (Linux, Apple), with **Pin as card: …** (Android) or **Pin
-  tiles** (Windows) in the card menu, or from the console's **Presets** tab. Unpinning changes
-  neither the preset nor the host.
+  cards** (Windows) in the card menu, or with **Pin to hosts…** under the console's **Settings →
+  Presets**. Unpinning changes neither the preset nor the host.
 
 The active preset's name shows in the [stats overlay](/docs/stats).
 
@@ -89,7 +90,8 @@ order. A name that matches two hosts is refused.
 
 Scheme and route are case-insensitive, unknown parameters are ignored, and a repeated parameter's
 first value wins. Limits: 2048 characters for the URL, 128 for `<host-ref>` and `launch`, 64 for
-`preset`, `as` and `name`. `launch` must be printable ASCII without spaces, quotes, `\`, `$` or backticks.
+`preset`, `as` and `name`. `launch` must be printable ASCII without spaces, quotes, `\`, `$` or
+backticks, and must not start with `-`.
 
 `browse` takes the same form and opens the host's game library instead. The Apple apps and the
 Linux app handle it; Apple's library widget and **Open Game Library** shortcut use it. Other apps
@@ -123,7 +125,7 @@ A link can do what clicking a card you already have does, and no more.
 
 ## Getting a link, and making a shortcut
 
-**Copy link** (**Copy Link** on Apple) is in the host card's menu on Linux, Windows, Mac, iPhone,
+**Copy link** is in the host card's menu on Linux, Windows, Mac, iPhone,
 iPad and Android, and in the console's host options (press **Up** on a host). On Linux, Windows,
 Android and the console a game in the library has one too, with its `launch=`. A pinned card's link
 carries its preset, except on Windows. A copied link carries the

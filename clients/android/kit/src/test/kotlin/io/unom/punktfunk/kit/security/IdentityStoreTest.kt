@@ -8,6 +8,17 @@ import org.junit.Test
 class IdentityStoreTest {
     private val identity = ClientIdentity("cert", "key")
 
+    /** The vector `punktfunk_core::fp::device_code` is tested against. */
+    @Test
+    fun deviceCodeSpellsTheCoresVector() {
+        val fingerprint = ByteArray(32)
+        intArrayOf(0x4f, 0x2a, 0x91, 0xc3, 0x07, 0xbe, 0xd5, 0x12)
+            .forEachIndexed { i, b -> fingerprint[i] = b.toByte() }
+
+        assertEquals("4F2A 91C3 07BE D512", deviceCodeOf(fingerprint))
+        assertEquals(null, identity.deviceCode())
+    }
+
     @Test
     fun firstMintFailureRetriesInsideTheSameCall() {
         var mints = 0

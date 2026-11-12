@@ -64,6 +64,7 @@ import io.unom.punktfunk.kit.security.ClientIdentity
 import io.unom.punktfunk.kit.security.IdentityHolder
 import io.unom.punktfunk.kit.security.KnownHost
 import io.unom.punktfunk.kit.security.KnownHostStore
+import io.unom.punktfunk.kit.security.deviceCode
 import io.unom.punktfunk.kit.security.nowSecs
 import io.unom.punktfunk.models.ActiveSession
 import java.util.concurrent.Executors
@@ -367,8 +368,15 @@ object SkiaConsole {
         // a start entry queues its shelf fetch or desktop dial before that, and a cold-start
         // link waits in `parkedLink`.
         main.post(object : Runnable {
+            var codeSent = false
+
             override fun run() {
                 if (handle == 0L) return
+                // Once, when the identity is there: the console shows it while a request waits.
+                if (!codeSent) identity?.let { id ->
+                    codeSent = true
+                    id.deviceCode()?.let { NativeBridge.nativeConsoleSetDeviceCode(handle, it) }
+                }
                 if (identities.settled) {
                     state.now { parkedLink.also { parkedLink = null } }?.let(::handleDeepLink)
                     drainCommands()
@@ -781,7 +789,8 @@ object SkiaConsole {
 
     /**
      * `OverlayAction::PinShortcut`: the title's link as a home-screen shortcut. The record and
-     * the cached shelf the link names give the shortcut its key and its poster.
+     * the cached shelf the link names give the shortcut its key and its poster: the link's
+     * profile's shelf, else the console's.
      */
     private fun pinShortcut(a: JSONObject) {
         val app = appContext ?: return
@@ -792,7 +801,8 @@ object SkiaConsole {
         val me = identity
         ioPool.execute {
             val posters = link.launch?.let { id ->
-                LibraryCache.standard(app.cacheDir).load(LibraryCache.keyFor(host, host.fpHex))
+                LibraryCache.standard(app.cacheDir)
+                    .load(LibraryCache.keyFor(host, host.fpHex), link.asProfile ?: consoleProfile(host))
                     ?.games?.firstOrNull { it.id == id }?.art?.posterCandidates
             }.orEmpty()
             val key = shortcutId(host.id, link.launch, link.preset)
@@ -834,9 +844,10 @@ object SkiaConsole {
             NativeBridge.nativeConsoleSessionPhase(handle, 2, identities.blockedMessage())
             return
         }
-        // The cached catalog the shelf was drawn from: it holds the host's overrides for the title.
+        // The catalog cached for the profile this launch plays as: it holds the host's overrides
+        // for the title.
         val entry = launchId?.let { id ->
-            LibraryCache.standard(app.cacheDir).load(LibraryCache.keyFor(kh, fp))?.games?.firstOrNull { it.id == id }
+            LibraryCache.standard(app.cacheDir).load(LibraryCache.keyFor(kh, fp), profile)?.games?.firstOrNull { it.id == id }
         }
         val preset: StreamPreset? = presetStore.resolveFor(kh, presetId, launchId)
         val effective = settings.effectiveFor(preset)
@@ -1182,12 +1193,13 @@ object SkiaConsole {
     }
 
     /**
-     * Write this device's screen on the host, then ask again: the row the card shows is the
-     * host's answer, refused or not. The console already toasted the pick; a refusal is a notice.
+     * Write a Screen row's pick on the host, a role's topology with it, then ask again: the row
+     * the card shows is the host's answer, refused or not. The console already toasted the pick;
+     * a refusal is a notice.
      */
     private fun setScreen(c: JSONObject) {
         val addr = c.optString("addr"); val mgmt = c.optInt("mgmt"); val fp = c.optString("fp_hex")
-        val target = DisplayTargets.DisplayTarget.of(c.opt("screen")) ?: return
+        val pick = DisplayTargets.Pick.of(c) ?: return
         val label = c.optString("label")
         val id = identity
         if (id == null) {
@@ -1196,7 +1208,7 @@ object SkiaConsole {
         }
         val res = appContext?.resources ?: return
         ioPool.execute {
-            val refused = DisplayTargets.setScreen(id, addr, mgmt, fp, target, label, streamPort(fp))
+            val refused = DisplayTargets.setPick(id, addr, mgmt, fp, pick, label, streamPort(fp))
             val found = DisplayTargets.fetch(id, addr, mgmt, fp, streamPort(fp))
             state.launch {
                 services.screensAt[fp] = android.os.SystemClock.elapsedRealtime()

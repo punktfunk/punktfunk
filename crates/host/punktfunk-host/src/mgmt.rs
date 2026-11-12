@@ -52,6 +52,9 @@ mod plugin_access;
 mod plugin_channel;
 mod plugins;
 mod profiles;
+mod scope;
+mod seat_proxy;
+mod seating;
 mod session;
 mod settings;
 pub(crate) mod shared;
@@ -512,7 +515,8 @@ fn api_router_parts() -> (Router<Arc<MgmtState>>, utoipa::openapi::OpenApi) {
         .routes(routes!(session::stream_session_pads))
         .routes(routes!(
             session::get_session_settings,
-            session::set_session_settings
+            session::set_session_settings,
+            session::clear_session_settings
         ))
         .routes(routes!(session::end_game))
         .routes(routes!(session::release_game_hold))
@@ -527,6 +531,7 @@ fn api_router_parts() -> (Router<Arc<MgmtState>>, utoipa::openapi::OpenApi) {
             library::update_custom_game,
             library::delete_custom_game
         ))
+        .routes(routes!(library::list_own_titles, library::store_own_titles))
         // A plugin sends its whole set in one PUT; descriptions across a big library outgrow
         // axum's 2 MB default and a 413 fails the entire sync.
         .merge(
@@ -619,9 +624,9 @@ fn api_router_parts() -> (Router<Arc<MgmtState>>, utoipa::openapi::OpenApi) {
         .routes(routes!(store::put_source, store::delete_source))
         .routes(routes!(store::get_runtime, store::set_runtime))
         .routes(routes!(profiles::enumerate_profiles))
-        .routes(routes!(profiles::get_seating, profiles::put_seating))
-        .routes(routes!(profiles::get_seats_doctor))
-        .routes(routes!(profiles::put_door))
+        .routes(routes!(seating::get_seating, seating::put_seating))
+        .routes(routes!(seating::get_seats_doctor))
+        .routes(routes!(seating::put_door))
         .routes(routes!(profiles::list_profiles, profiles::create_profile))
         .routes(routes!(profiles::list_windows_accounts))
         .routes(routes!(profiles::set_default_profile))
@@ -646,13 +651,14 @@ fn api_router_parts() -> (Router<Arc<MgmtState>>, utoipa::openapi::OpenApi) {
         .routes(routes!(update::apply_update))
         .routes(routes!(actions::list_actions))
         .routes(routes!(actions::invoke_action));
-    let (router, api) = OpenApiRouter::with_openapi(ApiDoc::openapi())
+    let (router, mut api) = OpenApiRouter::with_openapi(ApiDoc::openapi())
         .nest("/api/v1", api_v1)
         .split_for_parts();
+    scope::stamp(&mut api);
     // Any method passes through to the seat's host, so the spec has no one shape to document.
     let router = router.route(
         "/api/v1/profiles/{id}/proxy/{*rest}",
-        axum::routing::any(profiles::proxy_profile_seat),
+        axum::routing::any(seat_proxy::proxy_profile_seat),
     );
     // A plugin page's root and paths, any method: the channel proxy (a wildcard never matches an
     // empty rest). Not an API, so not in the document; admin-lane, as no plugin allowlist names it.

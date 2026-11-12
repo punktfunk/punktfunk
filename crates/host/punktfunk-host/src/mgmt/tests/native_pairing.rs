@@ -376,6 +376,72 @@ async fn patch_native_access_validates_and_404s() {
     assert_eq!(s, StatusCode::SERVICE_UNAVAILABLE);
 }
 
+/// An access write marks the record, so "all but the screen choice" survives a reload. An
+/// older host's `0xFF` lists as Full, and an expiry-only PATCH keeps it Full.
+#[tokio::test]
+async fn an_access_write_keeps_all_but_the_screen_choice() {
+    use punktfunk_core::quic::{GRANT_ALL, GRANT_ALL_PRE_DISPLAY, GRANT_DISPLAY};
+    let path = crate::test_support::scratch().join("pf-mgmt-grants-rev.json");
+    std::fs::write(
+        &path,
+        br#"{ "clients": [ { "name": "Old", "fingerprint": "aa11", "grants": 255 },
+                           { "name": "New", "fingerprint": "bb22" } ] }"#,
+    )
+    .unwrap();
+    let np = Arc::new(
+        crate::native_pairing::NativePairing::load_with(Some(path.clone()), None, false).unwrap(),
+    );
+    let app = test_app_native(test_state(), np.clone());
+    let patch = |fp: &str, body: serde_json::Value| {
+        json_req(Method::PATCH, &format!("/api/v1/native/clients/{fp}"), body)
+    };
+
+    let (_, list) = send(&app, get_req("/api/v1/native/clients")).await;
+    let old = list
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["fingerprint"] == "aa11")
+        .unwrap();
+    assert_eq!(old["grants"], GRANT_ALL, "an older host's Full: {old}");
+    assert_eq!(old["access_level"], "full");
+
+    let (s, b) = send(
+        &app,
+        patch("bb22", serde_json::json!({"grants": GRANT_DISPLAY})),
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK, "the screen grant is a known bit: {b}");
+    let (s, b) = send(
+        &app,
+        patch("bb22", serde_json::json!({"grants": GRANT_ALL_PRE_DISPLAY})),
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK);
+    assert_eq!(b["grants"], GRANT_ALL_PRE_DISPLAY);
+    assert_eq!(b["access_level"], "custom");
+    let (s, b) = send(
+        &app,
+        patch("aa11", serde_json::json!({"expires_in_secs": 3600})),
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK);
+    assert_eq!(
+        b["grants"], GRANT_ALL,
+        "an expiry edit re-stores what is in force"
+    );
+
+    let reloaded =
+        crate::native_pairing::NativePairing::load_with(Some(path), None, false).unwrap();
+    let now = wall_now();
+    assert_eq!(reloaded.effective("bb22", now), Some(GRANT_ALL_PRE_DISPLAY));
+    assert_eq!(reloaded.effective("aa11", now), Some(GRANT_ALL));
+    assert!(reloaded
+        .list()
+        .iter()
+        .all(|c| c.grants_rev == Some(crate::native_pairing::GRANTS_REV)));
+}
+
 /// `until_disconnect` replaces nothing on its own. Honouring it alone would hand a re-pairing
 /// device full permanent control, because `Access` replaces the whole record.
 #[tokio::test]

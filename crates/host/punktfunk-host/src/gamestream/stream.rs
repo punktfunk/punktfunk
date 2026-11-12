@@ -333,7 +333,7 @@ fn run(
         .as_deref()
         .and_then(|h| <[u8; 32] as hex::FromHex>::from_hex(h).ok());
     // Decided once: every plan of this stream, and the pooled capturer's key, read this pick.
-    let screen = crate::vdisplay::resolve_screen(device);
+    let screen = crate::vdisplay::resolve_screen(device, None);
     cfg.mirrored = crate::vdisplay::mirrors(&screen.target);
 
     // Not pooled: a reconnect at a different resolution needs a freshly-sized output.
@@ -349,10 +349,15 @@ fn run(
             pad: punktfunk_core::config::GamepadPref::Xbox360,
             pad_slots: None,
         };
-        // The entry's own `apps.json` prep, then its library entry's. `PF_APP_TITLE` and the
-        // `PF_STREAM_*` names the native plane's prep env and the marker file use.
+        // The entry's own `apps.json` prep, then its library entry's when that entry is what
+        // launches: a hidden title's steps don't run. `PF_APP_TITLE` and the `PF_STREAM_*`
+        // names the native plane's prep env and the marker file use.
         let mut prep_cmds = app.map(|a| a.prep.clone()).unwrap_or_default();
-        if let Some(lib_id) = app.and_then(|a| a.library_id.as_deref()) {
+        let launched = target.as_ref().and_then(|t| t.game.id.as_deref());
+        if let Some(lib_id) = app
+            .and_then(|a| a.library_id.as_deref())
+            .filter(|id| launched == Some(*id))
+        {
             prep_cmds.extend(crate::library::prep_for(lib_id));
         }
         let mut prep_env = vec![(
@@ -407,6 +412,8 @@ fn run(
                     isolation: None,
                     audio_sink: Default::default(),
                     hdr: cfg.hdr,
+                    format: crate::vdisplay::admission::shares_capture(Some(compositor))
+                        .then(|| sample_format(&cfg)),
                 },
             ),
         };
@@ -720,7 +727,7 @@ fn open_gs_mirror_source(
 fn resolve_gs_app(app: Option<&super::apps::AppEntry>) -> Option<crate::library::LaunchTarget> {
     let app = app?;
     if let Some(id) = app.library_id.as_deref() {
-        match crate::library::resolve_launch(id) {
+        match crate::library::resolve_launch(&crate::library::View::here(), id) {
             Some(t) => return Some(t),
             None => tracing::warn!(
                 launch_id = id,
@@ -842,7 +849,8 @@ fn open_gs_virtual_source(
             revive,
         )?
     };
-    let mut vd = crate::vdisplay::open_for(compositor, device).context("open virtual display")?;
+    let mut vd =
+        crate::vdisplay::open_for(compositor, device, None).context("open virtual display")?;
     vd.set_hw_cursor(host_composites_metadata_cursor(compositor, cfg));
     // gamescope takes its HDR flags and display-reuse key from this. An HDR plan captures PQ
     // only, so without it an SDR gamescope streams SDR inside a PQ container.
@@ -931,6 +939,23 @@ fn gs_capture_output(
 /// cursor-forward (GameStream has no client cursor channel), exactly the slices the client asked
 /// for (a TV decoder wedges on more), and the device's screen ([`StreamConfig::mirrored`]). A
 /// joined display is fitted into the client's size: Moonlight cannot be told another mode.
+/// The samples `cfg` streams: what a capture it shares must deliver, and what its own hands
+/// a joiner.
+pub(super) fn sample_format(cfg: &StreamConfig) -> crate::vdisplay::admission::SampleFormat {
+    let bit_depth = if cfg.hdr { 10 } else { 8 };
+    crate::vdisplay::admission::SampleFormat {
+        bit_depth,
+        chroma_444: cfg.chroma.is_444(),
+        full_range: crate::session_plan::full_range_for(
+            &cfg.encoder,
+            cfg.studio_asked,
+            cfg.codec,
+            cfg.hdr,
+            bit_depth,
+        ),
+    }
+}
+
 fn gs_session_plan(cfg: &StreamConfig, cursor_blend: bool) -> crate::session_plan::SessionPlan {
     let mut plan = crate::session_plan::SessionPlan::resolve(
         &cfg.encoder,

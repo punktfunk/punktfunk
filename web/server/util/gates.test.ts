@@ -80,19 +80,16 @@ test("a row's handler and condition are its own file's", async () => {
 	}
 });
 
-test("a row with no seat gate is a path the seat's host refuses", () => {
-	const rust = readFileSync(
-		join(repo, "crates/host/punktfunk-host/src/mgmt/profiles.rs"),
-		"utf8",
-	);
-	const list = /fn proxy_refuses[^}]*matches!\(\s*first,([^)]*)\)/.exec(
-		rust,
-	)?.[1];
-	expect(list, "proxy_refuses in mgmt/profiles.rs").toBeDefined();
-	const refused = [...(list ?? "").matchAll(/"([^"]+)"/g)].map((m) => m[1]);
-	const relayed = GATES.filter(
-		(r) => !r.open && !r.seat && !refused.includes(r.pattern.split("/")[0]),
-	);
+test("a row has a seat gate exactly when the seat proxy passes its route", () => {
+	const spec: {
+		paths: Record<string, Record<string, { "x-scope"?: string }>>;
+	} = JSON.parse(readFileSync(join(repo, "api/openapi.json"), "utf8"));
+	const box = (r: Route) =>
+		spec.paths[`/api/v1/${r.pattern}`]?.[r.method.toLowerCase()]?.[
+			"x-scope"
+		] === "box";
+	expect(GATES.filter((r) => r.seat && box(r)).map(routeFile)).toEqual([]);
+	const relayed = GATES.filter((r) => !r.open && !r.seat && !box(r));
 	expect(relayed.map(routeFile)).toEqual([]);
 });
 

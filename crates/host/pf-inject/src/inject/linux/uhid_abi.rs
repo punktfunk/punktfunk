@@ -311,12 +311,21 @@ impl UhidDevice {
 
     /// The supervisor's side of a seat's relay: `seat`'s events into the kernel, the kernel's
     /// to `seat`, until the seat hangs up. Blocks; drop destroys the device. Only what a device
-    /// answers with crosses from the seat, only whole events, and an input report only when
-    /// `takes` passes its bytes.
-    pub fn relay(self, seat: UnixDatagram, takes: impl Fn(&[u8]) -> bool) {
+    /// answers with crosses from the seat, only whole events, an input report only when `takes`
+    /// passes its bytes, and a GET_REPORT reply only to the request last handed the seat.
+    /// `answer` is a feature report the supervisor answers itself, its id first: the seat never
+    /// sees that request, so it can't pick the bytes.
+    pub fn relay(
+        mut self,
+        seat: UnixDatagram,
+        takes: impl Fn(&[u8]) -> bool,
+        answer: Option<&[u8]>,
+    ) {
         use rustix::event::{poll, PollFd, PollFlags};
         let _ = seat.set_nonblocking(true);
         let mut ev = [0u8; UHID_EVENT_SIZE];
+        // The kernel holds one GET_REPORT at a time; a reply to any other id is the seat's guess.
+        let mut handed: Option<u32> = None;
         loop {
             let mut fds = [
                 PollFd::new(&seat, PollFlags::IN),
@@ -336,6 +345,7 @@ impl UhidDevice {
                         if n == UHID_EVENT_SIZE
                             && SEAT_MAY_WRITE.contains(&type_)
                             && (type_ != UHID_INPUT2 || takes(input2_data(&ev)))
+                            && (type_ != UHID_GET_REPORT_REPLY || handed == Some(request_id(&ev)))
                         {
                             let _ = (&self.fd).write_all(&ev);
                         } else {
@@ -350,6 +360,15 @@ impl UhidDevice {
                 while let Ok(n) = (&self.fd).read(&mut ev) {
                     if n < UHID_EVENT_SIZE {
                         break;
+                    }
+                    if u32::from_ne_bytes([ev[0], ev[1], ev[2], ev[3]]) == UHID_GET_REPORT {
+                        // uhid_get_report_req: id u32 [4..8], rnum u8 [8].
+                        let id = request_id(&ev);
+                        if let Some(data) = answer.filter(|a| a.first() == Some(&ev[8])) {
+                            let _ = self.reply_get_report(id, Some(data));
+                            continue;
+                        }
+                        handed = Some(id);
                     }
                     match seat.send(&ev) {
                         Ok(_) => {}
@@ -431,7 +450,7 @@ mod tests {
             relayed: false,
             dead: false,
         };
-        let relay = std::thread::spawn(move || supervisor.relay(sup_end, |r| r[0] != 0x41));
+        let relay = std::thread::spawn(move || supervisor.relay(sup_end, |r| r[0] != 0x41, None));
         let mut seat = UhidDevice::relayed(OwnedFd::from(seat_end)).unwrap();
         kernel.set_nonblocking(true).unwrap();
 
@@ -479,6 +498,70 @@ mod tests {
 
     fn event_type(ev: &[u8]) -> u32 {
         u32::from_ne_bytes([ev[0], ev[1], ev[2], ev[3]])
+    }
+
+    /// The supervisor answers the pairing report itself and the seat never sees it; a seat's
+    /// reply reaches the kernel only for a request it was handed, so it can't claim a MAC.
+    #[test]
+    fn the_relay_answers_the_pairing_report_and_drops_a_seats_guess() {
+        let (kernel_side, kernel) = seqpacket_pair();
+        kernel_side.set_nonblocking(true).unwrap(); // as `/dev/uhid` is opened
+        let (sup_end, seat_end) = seqpacket_pair();
+        let supervisor = UhidDevice {
+            fd: File::from(OwnedFd::from(kernel_side)),
+            relayed: false,
+            dead: false,
+        };
+        let pairing = [0x09, 0xAA, 0xBB];
+        let relay =
+            std::thread::spawn(move || supervisor.relay(sup_end, |_| true, Some(&pairing[..])));
+        let seat = UnixDatagram::from(OwnedFd::from(seat_end));
+        seat.set_nonblocking(true).unwrap();
+        kernel.set_nonblocking(true).unwrap();
+        let settle = || std::thread::sleep(std::time::Duration::from_millis(50));
+        let get_report = |id: u32, rnum: u8| {
+            let mut ev = blank();
+            ev[0..4].copy_from_slice(&UHID_GET_REPORT.to_ne_bytes());
+            ev[OFF_ID..OFF_ID + 4].copy_from_slice(&id.to_ne_bytes());
+            ev[8] = rnum;
+            ev
+        };
+        let seat_reply = |id: u32| {
+            let mut ev = blank();
+            ev[0..4].copy_from_slice(&UHID_GET_REPORT_REPLY.to_ne_bytes());
+            ev[OFF_ID..OFF_ID + 4].copy_from_slice(&id.to_ne_bytes());
+            ev[OFF_DATA] = 0x09;
+            seat.send(&ev).unwrap();
+        };
+        let mut got = blank();
+
+        seat_reply(1); // sent before the kernel asks
+        settle();
+        kernel.send(&get_report(1, 0x09)).unwrap();
+        settle();
+        assert_eq!(kernel.recv(&mut got).unwrap(), UHID_EVENT_SIZE);
+        assert_eq!(event_type(&got), UHID_GET_REPORT_REPLY);
+        assert_eq!(request_id(&got), 1);
+        assert_eq!(&got[OFF_DATA..OFF_DATA + 3], &pairing);
+        assert!(kernel.recv(&mut got).is_err(), "the seat's early guess");
+        assert!(
+            seat.recv(&mut got).is_err(),
+            "the seat never sees the request"
+        );
+
+        kernel.send(&get_report(2, 0x05)).unwrap();
+        settle();
+        assert_eq!(seat.recv(&mut got).unwrap(), UHID_EVENT_SIZE);
+        assert_eq!((event_type(&got), request_id(&got)), (UHID_GET_REPORT, 2));
+        seat_reply(1);
+        seat_reply(2);
+        settle();
+        assert_eq!(kernel.recv(&mut got).unwrap(), UHID_EVENT_SIZE);
+        assert_eq!(request_id(&got), 2, "calibration still answers");
+        assert!(kernel.recv(&mut got).is_err(), "a reply to the pairing id");
+
+        drop(kernel);
+        relay.join().unwrap();
     }
 
     /// A pad whose handler ignores SET_REPORT (the Switch Pro's) must still ack it, or a

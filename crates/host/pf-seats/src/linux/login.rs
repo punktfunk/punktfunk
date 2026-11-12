@@ -102,24 +102,35 @@ pub fn run(account: &str) -> u8 {
     run_in(account, SERVICE, socket, &program)
 }
 
+/// Turns core dumps off in this process before it holds a password, and answers the core limit
+/// it replaced. The soft limit is the one a dump obeys; the hard one stays, so a child gets the
+/// old one back without a capability.
+#[cfg(target_os = "linux")]
+pub(super) fn no_core_dumps() -> rustix::io::Result<rustix::process::Rlimit> {
+    use rustix::process::{getrlimit, setrlimit, DumpableBehavior, Resource, Rlimit};
+    let core = getrlimit(Resource::Core);
+    rustix::process::set_dumpable_behavior(DumpableBehavior::NotDumpable)?;
+    setrlimit(
+        Resource::Core,
+        Rlimit {
+            current: Some(0),
+            ..core
+        },
+    )?;
+    Ok(core)
+}
+
 /// [`run`] on the PAM service `service`, asking `socket`, starting `program`.
 #[cfg(target_os = "linux")]
 fn run_in(account: &str, service: &str, socket: &Path, program: &Path) -> u8 {
-    use rustix::process::{getrlimit, setrlimit, Resource, Rlimit};
-    let core = getrlimit(Resource::Core);
-    // The soft limit is the one a dump obeys; the hard one stays, so the session gets its own
-    // back without a capability.
-    let none = Rlimit {
-        current: Some(0),
-        maximum: core.maximum,
+    use rustix::process::{getrlimit, Resource, Rlimit};
+    let core = match no_core_dumps() {
+        Ok(core) => core,
+        Err(error) => {
+            tracing::error!(%error, "core dumps not turned off");
+            return NO_SESSION;
+        }
     };
-    let hardened =
-        rustix::process::set_dumpable_behavior(rustix::process::DumpableBehavior::NotDumpable)
-            .and_then(|()| setrlimit(Resource::Core, none));
-    if let Err(error) = hardened {
-        tracing::error!(%error, "core dumps not turned off");
-        return NO_SESSION;
-    }
     // Before any PAM step: a session with nothing to run in it would fail the start.
     use std::os::unix::fs::PermissionsExt as _;
     let runnable = std::fs::metadata(program)
@@ -176,6 +187,10 @@ fn run_in(account: &str, service: &str, socket: &Path, program: &Path) -> u8 {
         tracing::error!(account, %cause, "PAM opened no session");
         return NO_SESSION;
     }
+    let none = Rlimit {
+        current: Some(0),
+        ..core
+    };
     let core = (getrlimit(Resource::Core) == none).then_some(core);
     let mut child = match person.spawn(program, login.env(), core) {
         Ok(child) => child,
@@ -355,15 +370,35 @@ fn signal_set(signals: &[libc::c_int]) -> libc::sigset_t {
 }
 
 /// The signals the parent takes from here on, blocked so they wait for [`wait_forwarding`].
-/// A child inherits the mask: [`Person::spawn`] clears it.
+/// A process forked after it starts with the mask from before ([`unblock_in_child`]), so a wallet
+/// daemon `pam_open_session` starts still stops on SIGTERM.
 #[cfg(target_os = "linux")]
 fn block_signals() -> libc::sigset_t {
     use libc::{SIGALRM, SIGCHLD, SIGHUP, SIGINT, SIGQUIT, SIGTERM};
     let set = signal_set(&[SIGTERM, SIGINT, SIGHUP, SIGQUIT, SIGALRM, SIGCHLD]);
-    // SAFETY: pthread_sigmask reads an initialized set and changes this thread's mask alone; the
-    // helper has no other thread.
-    unsafe { libc::pthread_sigmask(libc::SIG_BLOCK, &set, std::ptr::null_mut()) };
+    let mut before = std::mem::MaybeUninit::<libc::sigset_t>::uninit();
+    // SAFETY: pthread_sigmask reads an initialized set, writes the old mask into `before` and
+    // changes this thread's mask alone; the helper has no other thread.
+    let blocked = unsafe { libc::pthread_sigmask(libc::SIG_BLOCK, &set, before.as_mut_ptr()) };
+    // SAFETY: a call that answered 0 filled `before`.
+    if blocked == 0 && UNBLOCKED.set(unsafe { before.assume_init() }).is_ok() {
+        // SAFETY: registers a child handler that makes async-signal-safe calls only.
+        unsafe { libc::pthread_atfork(None, None, Some(unblock_in_child)) };
+    }
     set
+}
+
+/// The helper's mask from before [`block_signals`].
+#[cfg(target_os = "linux")]
+static UNBLOCKED: std::sync::OnceLock<libc::sigset_t> = std::sync::OnceLock::new();
+
+/// In each child this process forks, before the child runs anything: [`UNBLOCKED`] as its mask.
+#[cfg(target_os = "linux")]
+extern "C" fn unblock_in_child() {
+    if let Some(mask) = UNBLOCKED.get() {
+        // SAFETY: pthread_sigmask reads an initialized set and changes the child's only thread.
+        unsafe { libc::pthread_sigmask(libc::SIG_SETMASK, mask, std::ptr::null_mut()) };
+    }
 }
 
 /// Waits for `child` to end, forwarding each stop signal in `signals` to it.
@@ -444,6 +479,39 @@ mod tests {
                 "{signal}"
             );
         }
+    }
+
+    /// A process forked once the helper blocks its stop signals, as a PAM session module forks a
+    /// wallet daemon, starts with them unblocked; the helper keeps them blocked.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn what_pam_forks_takes_stop_signals() {
+        let mut before = std::mem::MaybeUninit::<libc::sigset_t>::uninit();
+        // SAFETY: a null set only reads this thread's mask into `before`.
+        unsafe { libc::pthread_sigmask(libc::SIG_BLOCK, std::ptr::null(), before.as_mut_ptr()) };
+        block_signals();
+        // SAFETY: the child makes async-signal-safe calls only, then `_exit`s.
+        let pid = unsafe { libc::fork() };
+        if pid == 0 {
+            let mut mask = std::mem::MaybeUninit::<libc::sigset_t>::uninit();
+            // SAFETY: as above, in the child's only thread; `_exit` runs no destructor.
+            unsafe {
+                libc::pthread_sigmask(libc::SIG_BLOCK, std::ptr::null(), mask.as_mut_ptr());
+                libc::_exit(libc::sigismember(mask.as_ptr(), libc::SIGTERM));
+            }
+        }
+        let (mut status, mut helper) = (0, std::mem::MaybeUninit::<libc::sigset_t>::uninit());
+        // SAFETY: `pid` is this process's child and `status` an int; then the test thread gets
+        // its own mask back, and `helper` the one it replaced.
+        unsafe {
+            libc::waitpid(pid, &mut status, 0);
+            libc::pthread_sigmask(libc::SIG_SETMASK, before.as_ptr(), helper.as_mut_ptr());
+        }
+        // SAFETY: the call above filled `helper`.
+        let held = unsafe { libc::sigismember(helper.as_ptr(), libc::SIGTERM) };
+        assert_eq!(held, 1, "the helper keeps SIGTERM blocked");
+        assert!(libc::WIFEXITED(status), "{status}");
+        assert_eq!(libc::WEXITSTATUS(status), 0, "SIGTERM blocked in the child");
     }
 
     /// The built helper as `punktfunk-seat@.service` runs it, as root, through this package's PAM

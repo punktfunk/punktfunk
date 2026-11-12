@@ -1986,16 +1986,12 @@ public final class Stage2Pipeline {
         let flight = PresentFlight()
         let latePick = cadence == nil
 
-        // The link starts LAZILY — the render thread triggers this after the FIRST decoded
-        // frame's reconcileLayer. Started eagerly it vends into the layer's initial 0×0
-        // drawableSize for the whole connect window: every vend fails allocation and the system
-        // logs "[CAMetalLayer nextDrawable] returning nil because allocation failed" once per
-        // refresh until the first frame arrives. Before that frame there is nothing to present
-        // anyway, and the first frame waits at most one refresh for the first vend.
-        // Per-GENERATION stop flag (the session `token` still stops every generation): the
-        // watchdog below retires a link that stopped vending and starts a fresh one, and the
-        // retired thread must exit without taking the session with it.
-        let startLink: (StopFlag) -> Void = { linkStop in
+        // Started by the render thread after the first frame's reconcileLayer: before it the
+        // layer is 0×0 and every vend fails allocation. Each link has its own stop flag, so
+        // retiring one leaves the session running. Returns the signal the link's thread gives
+        // once the link is invalidated.
+        let startLink: (StopFlag) -> DispatchSemaphore = { linkStop in
+            let gone = DispatchSemaphore(value: 0)
             let linkThread = Thread {
                 let delegate = DeadlineLinkDelegate(
                     presenter: presenter,
@@ -2021,10 +2017,12 @@ public final class Stage2Pipeline {
                     }
                 }
                 link.invalidate()
+                gone.signal()
             }
             linkThread.name = "punktfunk-stage4-link"
             linkThread.qualityOfService = .userInteractive
             linkThread.start()
+            return gone
         }
 
         let renderThread = Thread {
@@ -2039,11 +2037,17 @@ public final class Stage2Pipeline {
             // The live link generation's stop flag — nil until the first frame starts one.
             // Render-thread confined (only this thread starts, retires or reads it).
             var linkStop: StopFlag?
+            var linkGone: DispatchSemaphore?
+            // One link on the layer at a time. A link started while its predecessor is still
+            // attached vends two drawables in three refreshes for good: 40 presents a second
+            // at 60 Hz, none of them late. The old thread leaves within one run-loop pass.
             let restartLink = {
                 linkStop?.stop()
+                _ = linkGone?.wait(timeout: .now() + 0.5)
+                _ = stash.take() // the retired link's last vend
                 let stop = StopFlag()
                 linkStop = stop
-                startLink(stop)
+                linkGone = startLink(stop)
             }
             // What became of the last drawable this thread handled, for the late line.
             var lastFate = "presented"

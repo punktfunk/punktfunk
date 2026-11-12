@@ -12,8 +12,8 @@ The library fills from [plugins](/docs/plugins), one per launcher. A fresh host 
 you add one:
 
 1. Open the web console's **Library** page.
-2. In **Game sources**, under **Add a source**, click each launcher you use. **Detected** marks the
-   ones found on this host.
+2. On its **Sources** tab, in **Game sources**, under **Add a source**, click each launcher you
+   use. **Detected** marks the ones found on this host.
 
 Each plugin reads its launcher's own files on the host, with no account or API key.
 [Plugins](/docs/plugins) lists them all and what each one covers.
@@ -36,8 +36,8 @@ A source marked **Stopped** has a plugin that isn't running: see
 ## A game's page
 
 Click a poster to open its page: **Information**, **Media** and **Launch**, plus a tab for each
-plugin that keeps something per game. A title a plugin syncs is read-only there, marked
-**Managed by** its source: change it in the launcher and the plugin syncs it again.
+plugin that keeps something per game. A title a plugin syncs is read-only there, and the page
+names the source that keeps its details: change it in the launcher and the plugin syncs it again.
 
 ## Adding a game by hand
 
@@ -103,16 +103,15 @@ details away again.
 
 ## Launching a game
 
-The client sends only the title's id. The host runs its own launch recipe for it, so a client can
-never make the host run a command. The host must be [paired](/docs/pairing).
+The host must be [paired](/docs/pairing).
 
 Every library starts with a **Desktop** tile that streams the host and launches nothing. While a
 game runs on the host, the tile reads **Resume** and the game's name.
 
 | From | How |
 |---|---|
-| Linux | The **Library** tab, or a host card's menu → **Browse Library** |
-| Windows, Android (touch) | A host card's menu → **Browse library…** |
+| Linux | The **Library** tab, or a host card's menu → **Browse library** |
+| Windows, Android (touch) | A host card's menu → **Browse library** |
 | Mac | **Library** in the window's sidebar |
 | iPhone, iPad, Apple TV | The **Library** tab |
 | Controller home (TV, Steam Deck, a client with a controller) | **Y** on a saved host, or the host's options → **Library** |
@@ -124,7 +123,7 @@ game runs on the host, the tile reads **Resume** and the game's name.
 Where the game opens (your desktop, a gamescope session, or a headless session of its own) is
 display policy: see [Dedicated game sessions](/docs/virtual-displays#dedicated-game-sessions).
 Whether quitting the game ends the session, and the reverse, is under
-[When a game ends](/docs/virtual-displays#when-a-game-ends-and-when-a-session-does).
+[When a game ends](/docs/when-a-game-ends).
 
 ## Stream settings for a game
 
@@ -136,6 +135,8 @@ override or **New shared override…**. A change saves right away, even on a tit
 A value you set wins over the device's own pick, within what the device can show. The resolution
 stays within what it decodes, and at or below its screen unless **Also on smaller screens** is
 ticked. The refresh rate stays at or below the screen's; HDR **On** reaches only an HDR screen.
+**Custom…** under **Resolution** takes any height from 360 to 4320 lines, and under **Refresh
+rate** any rate from 24 to 240 Hz.
 The width follows the screen's shape: a 16:10 laptop under **1080p** streams 1728×1080.
 
 ### Shared overrides
@@ -194,7 +195,8 @@ entry with no **Process** hint, gets no play time.
 A Punktfunk session also credits its profile: the title's numbers count every launch, and each
 profile keeps its own beside them. A Moonlight session counts toward the title only.
 
-The Apple apps sort by **Recent** and **Most played** and keep a **Recently Played** row.
+The Apple, Linux and Windows apps and the controller home sort by **Recent** and **Most played**.
+The Apple and Linux apps and the controller home keep a **Recently played** row.
 
 The numbers live in `library-stats.json` in the host config directory. Delete a title's line to
 reset it.

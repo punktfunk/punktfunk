@@ -5,9 +5,10 @@
 //! in the owner's session. The two kind sets are disjoint, so nothing comes back around.
 //!
 //! A seat's `game.*` also reaches the host with the plugins: the owner's on Linux, the box host
-//! itself on Windows, which tails its seats' games alone. A held launch is released on the seat
-//! once those plugins are done. An event that already names a seat is one a host relayed and is
-//! never taken back.
+//! itself on Windows, which tails its seats' games and library changes alone. A held launch is
+//! released on the seat once those plugins are done. An event that already names a seat is one a
+//! host relayed and is never taken back. A seat's own titles go to the library's writer when its
+//! tail starts and on each `library.changed` it sends ([`publish_own_titles`]).
 
 use crate::events::{EventKind, HostEvent};
 use std::collections::HashMap;
@@ -18,11 +19,18 @@ use std::time::Duration;
 /// Event kinds the door hands to the owner's host: what happens on the door alone.
 const RELAYED: &[&str] = &["pairing.*", "access.*", "host.*", "action.*", "update.*"];
 
-/// Whether `kind` is the door's own, handed to the owner's host.
-fn relayed(kind: &str) -> bool {
-    RELAYED
-        .iter()
-        .any(|pattern| crate::events::kind_matches(pattern, kind))
+/// Whether `kind` is the door's own, handed to the owner's host. A `packaged` install updates
+/// through the owner's host (`mgmt::update`), so there `update.*` is the owner's row's.
+fn relayed(kind: &str, packaged: bool) -> bool {
+    !(packaged && crate::events::kind_matches("update.*", kind))
+        && RELAYED
+            .iter()
+            .any(|pattern| crate::events::kind_matches(pattern, kind))
+}
+
+/// Whether the owner's host applies this box's updates: an install the root helper updates.
+fn packaged() -> bool {
+    crate::update::helper_kind(crate::update::detect::detect().0)
 }
 
 /// How often the door looks for a running seat it has no tail on.
@@ -85,7 +93,9 @@ fn profile_of(seat: &pf_seats::Seat) -> Option<String> {
 
 /// Reads `seat`'s events from where this host last saw them, into this host's bus as
 /// `profile`'s, until the connection ends. The next tick starts it over. A seat's games also
-/// go to [`hand_on`], in order, on a thread of their own.
+/// go to [`hand_on`], in order, on a thread of their own. Once the seat answers, and on each of
+/// its library changes, its own titles go to the library's writer; when the owner's host comes
+/// up, every running seat's do.
 fn tail(
     seat: &pf_seats::Seat,
     profile: String,
@@ -104,6 +114,12 @@ fn tail(
     let Some(body) = super::tail(seat, &format!("events?since={since}{kinds}")) else {
         return;
     };
+    if seat.owner {
+        // Off this tail: a seat that never answers must not hold the owner's events.
+        std::thread::spawn(publish_every_seat_s_own_titles);
+    } else {
+        publish_own_titles(seat, &profile);
+    }
     let games = (!seat.owner).then(|| games_of(seat.clone())).flatten();
     for (event, data) in frames(std::io::BufReader::new(body)) {
         if event == "dropped" || event == "live" {
@@ -116,7 +132,14 @@ fn tail(
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .insert(id.clone(), ev.seq);
-        let what = take(&ev);
+        if publishes(&ev, seat.owner) {
+            publish_own_titles(seat, &profile);
+            // The Windows box's bus carries its seats' games alone.
+            if cfg!(windows) {
+                continue;
+            }
+        }
+        let what = take(&ev, seat.owner, packaged());
         if what == Take::Skip {
             continue;
         }
@@ -139,15 +162,76 @@ enum Take {
 }
 
 /// One that names a seat already was relayed there, and the door's own kinds start here: both
-/// skipped. A game goes on to the plugins.
-fn take(ev: &HostEvent) -> Take {
+/// skipped. An update is taken from the owner's row alone. A game goes on to the plugins.
+fn take(ev: &HostEvent, from_owner: bool, packaged: bool) -> Take {
     let kind = ev.kind.name();
-    if ev.seat.is_some() || relayed(kind) {
+    let update = crate::events::kind_matches("update.*", kind);
+    if ev.seat.is_some() || relayed(kind, packaged) || (update && !from_owner) {
         Take::Skip
     } else if crate::events::kind_matches("game.*", kind) {
         Take::HandOn
     } else {
         Take::Emit
+    }
+}
+
+/// Whether `ev` off a seat's stream changes what that seat lists of its own: its own library
+/// change, never one relayed there, and never the owner's row, which writes the box's.
+fn publishes(ev: &HostEvent, from_owner: bool) -> bool {
+    !from_owner && ev.seat.is_none() && matches!(ev.kind, EventKind::LibraryChanged { .. })
+}
+
+/// What `seat`'s host lists of its own, to the library's writer as `profile`'s: this host on
+/// Windows, else the owner's host while it runs. A seat or a writer that doesn't answer leaves
+/// the stored titles as they were; the writer logs an answer it refuses.
+fn publish_own_titles(seat: &pf_seats::Seat, profile: &str) {
+    use crate::mgmt::owner::{Answer, Forwarded};
+    let asked = super::forward(seat, Forwarded::get("library/own".into()));
+    let Some(body) = asked.and_then(Answer::ok_body) else {
+        tracing::debug!(seat = %seat.name, "seat's own titles not fetched");
+        return;
+    };
+    if cfg!(windows) {
+        let stored = crate::library::checked_own_titles(profile, &body)
+            .map(|titles| crate::library::store_own_titles(profile, titles));
+        if let Ok(Err(error)) = stored {
+            tracing::warn!(seat = %seat.name, error = %format!("{error:#}"), "seat's own titles not stored");
+        }
+        return;
+    }
+    let ledger = super::ledger();
+    let Ok(Some(owner)) = ledger.owner() else {
+        return;
+    };
+    if owner.runtime.state != pf_seats::RuntimeState::Running {
+        tracing::debug!(seat = %seat.name, "seat's own titles wait for the owner's host");
+        return;
+    }
+    let call = Forwarded {
+        method: "PUT".into(),
+        target: format!("library/own?as={profile}"),
+        content_type: Some("application/json".into()),
+        body,
+        device: None,
+        stream: false,
+        start: false,
+    };
+    if !matches!(super::forward(owner, call), Some(Answer::Reply(204, ..))) {
+        tracing::debug!(seat = %seat.name, "seat's own titles not stored by the owner's host");
+    }
+}
+
+/// Every running seat's own titles, as [`publish_own_titles`]: the owner's host just came up.
+fn publish_every_seat_s_own_titles() {
+    let ledger = super::ledger();
+    let running = ledger
+        .seats
+        .iter()
+        .filter(|s| !s.owner && s.runtime.state == pf_seats::RuntimeState::Running);
+    for seat in running {
+        if let Some(profile) = profile_of(seat) {
+            publish_own_titles(seat, &profile);
+        }
     }
 }
 
@@ -299,7 +383,7 @@ pub(crate) async fn relay_to_owner() {
             Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
             Err(tokio::sync::broadcast::error::RecvError::Closed) => return,
         };
-        if ev.seat.is_some() || !relayed(ev.kind.name()) {
+        if ev.seat.is_some() || !relayed(ev.kind.name(), packaged()) {
             continue;
         }
         let wakes = ev.kind.name() == WAKES;
@@ -386,7 +470,7 @@ mod tests {
             "host.started",
             "update.applied",
         ] {
-            assert!(relayed(kind), "{kind}");
+            assert!(relayed(kind, false), "{kind}");
         }
         for kind in [
             "session.started",
@@ -397,8 +481,23 @@ mod tests {
             "settings.changed",
             "display.created",
         ] {
-            assert!(!relayed(kind), "{kind}");
+            assert!(!relayed(kind, false), "{kind}");
         }
+    }
+
+    /// A packaged install updates through the owner's host, so the door takes the owner's row's
+    /// `update.*` and keeps its own. A Deck build updates on the door, and the reverse holds.
+    #[test]
+    fn a_packaged_box_takes_its_updates_from_the_owner_s_row() {
+        let applied: HostEvent = serde_json::from_value(serde_json::json!({"seq": 1, "ts_ms": 1,
+            "schema": 1, "kind": "update.applied", "from": "0.46.0", "to": "0.47.0"}))
+        .unwrap();
+        assert_eq!(take(&applied, true, true), Take::Emit);
+        assert_eq!(take(&applied, false, true), Take::Skip, "another seat's");
+        assert!(!relayed("update.applied", true));
+        assert!(relayed("pairing.pending", true));
+        assert_eq!(take(&applied, true, false), Take::Skip, "a Deck build");
+        assert!(relayed("update.applied", false));
     }
 
     /// A seat's games go on to the plugins; anything already tagged with a seat came from a
@@ -420,12 +519,35 @@ mod tests {
         let knock = serde_json::json!({"seq": 1, "ts_ms": 1, "schema": 1,
             "kind": "pairing.pending",
             "device": {"name": "Deck", "fingerprint": "ab", "plane": "native"}});
+        let take = |ev: &HostEvent| super::take(ev, false, false);
         assert_eq!(take(&ev(game("game.launching"), None)), Take::HandOn);
         assert_eq!(take(&ev(game("game.exited"), None)), Take::HandOn);
         assert_eq!(take(&ev(library.clone(), None)), Take::Emit);
         assert_eq!(take(&ev(knock, None)), Take::Skip);
         assert_eq!(take(&ev(game("game.exited"), Some("9a3f"))), Take::Skip);
         assert_eq!(take(&ev(library, Some("9a3f"))), Take::Skip);
+    }
+
+    /// A seat's own library change sends its own titles to the writer; a relayed one, another
+    /// kind and anything off the owner's row, which writes the box's library, send nothing.
+    #[test]
+    fn only_a_seat_s_own_library_change_publishes_its_titles() {
+        let ev = |kind: serde_json::Value, seat: Option<&str>| {
+            let mut ev: HostEvent = serde_json::from_value(kind).unwrap();
+            ev.seat = seat.map(str::to_string);
+            ev
+        };
+        let library = serde_json::json!({"seq": 1, "ts_ms": 1, "schema": 1,
+            "kind": "library.changed", "source": "manual"});
+        let host = serde_json::json!({"seq": 1, "ts_ms": 1, "schema": 1,
+            "kind": "host.started", "version": "0.47.0", "gamestream": false});
+        assert!(publishes(&ev(library.clone(), None), false));
+        assert!(
+            !publishes(&ev(library.clone(), None), true),
+            "the owner's row"
+        );
+        assert!(!publishes(&ev(library, Some("9a3f")), false), "relayed");
+        assert!(!publishes(&ev(host, None), false));
     }
 
     #[test]

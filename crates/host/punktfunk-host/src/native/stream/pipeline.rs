@@ -99,6 +99,10 @@ pub(in crate::native) struct DisplayPrep {
     pub(in crate::native) encoder: Arc<crate::encode::Resolved>,
     /// The session streams a host monitor ([`SessionPlan::mirrored`](crate::session_plan::SessionPlan::mirrored)).
     pub(in crate::native) mirrored: bool,
+    /// The screen the session wants ([`crate::vdisplay::SessionParams::screen`]).
+    pub(in crate::native) screen: Option<crate::vdisplay::policy::DisplayTarget>,
+    /// The topology of its own screen ([`crate::vdisplay::SessionParams::topology`]).
+    pub(in crate::native) topology: Option<crate::vdisplay::policy::Topology>,
 }
 
 /// A virtual-display session's plan on `compositor`, `pyrowave_bpp` and `encoder` the
@@ -191,6 +195,8 @@ pub(in crate::native) fn prepare_display(
         join_live,
         encoder,
         mirrored,
+        screen,
+        topology,
     } = prep;
     let plan = resolve_plan(
         &encoder,
@@ -214,8 +220,10 @@ pub(in crate::native) fn prepare_display(
         cursor_forward,
         compositor == pf_vdisplay::Compositor::Gamescope,
     );
-    let mut vd = crate::vdisplay::open_for(compositor, client_identity)?;
+    let mut vd = crate::vdisplay::open_for(compositor, client_identity, screen.clone())?;
     crate::vdisplay::SessionParams {
+        screen,
+        topology,
         client_fp: client_identity,
         client_hdr,
         hdr,
@@ -452,6 +460,8 @@ pub(super) fn is_permanent_build_error(chain: &str) -> bool {
         "predates virtual outputs",
         // Every request to this Umbriel fails the same way until the host is updated.
         "parses neither request shape",
+        // The screen's one stream stays in the other session's format while that one lives.
+        "shared capture is taken",
     ];
     let lower = chain.to_ascii_lowercase();
     PERMANENT.iter().any(|p| lower.contains(p))
@@ -900,7 +910,7 @@ mod tests {
             slices,
             reframe_to: None,
             mirrored: false,
-            rgb_full_range: true,
+            rgb_full_range: crate::encode::RgbFullRange::BOTH,
             studio_asked: crate::session_plan::StudioAsk::default(),
         }
     }
@@ -1167,6 +1177,9 @@ mod tests {
             "spawn gamescope (is it installed? `apt install gamescope`)"
         ));
         assert!(is_permanent_build_error("virtual displays require Linux"));
+        assert!(is_permanent_build_error(
+            "first frame: shared capture is taken in another format: no PipeWire frame within 10s"
+        ));
         assert!(is_permanent_build_error(
             "open capture: direct capture refused and the backend has no PipeWire node: no \
              ext_image_copy_capture_manager_v1"

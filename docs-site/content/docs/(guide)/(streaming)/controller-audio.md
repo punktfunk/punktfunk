@@ -12,14 +12,17 @@ haptics and its built-in speaker. Nothing is sent while the pad is quiet.
   paired over [Bluetooth](#over-bluetooth). On Android it needs USB.
 - **A Linux, Windows or Android client.** **Controller haptics** is on by default; **Controller
   speaker** is on by default on Linux and Windows, off on Android
-  ([client settings](/docs/client-settings#input)). On Android both also need **DualSense /
-  DualShock passthrough (USB)** on. The Apple clients play neither.
+  ([client settings](/docs/client-settings#input)). On Android both also need **DualSense over
+  USB** on. The Apple clients play neither.
 - **Controller speaker** on for the host, in the web console under **Host → Audio**. It
   is on by default and covers the haptics too.
 - **On a Linux host**, a game running under **GE-Proton 11-5 or newer**. Stock Proton doesn't
   route controller audio.
 - **On a Windows host**, Steam installed: the pad's audio device uses Steam's streaming speaker
   driver.
+
+To make one controller's speaker quieter, open the **Controllers** tab of the controller home,
+select that DualSense's card, and set **Speaker volume**. 100 % is what the game sends.
 
 ## Over Bluetooth
 

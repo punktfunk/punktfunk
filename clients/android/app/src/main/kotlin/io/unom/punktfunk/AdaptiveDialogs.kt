@@ -14,6 +14,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.DialogProperties
@@ -127,9 +128,10 @@ fun FingerprintChangedPrompt(
 }
 
 /**
- * A fresh pair=required (or manual/unknown-policy) host: offer the two ways in. "Request access" is
+ * A fresh pair=required (or manual/unknown-policy) host: offer the ways in. "Request access" is
  * the no-PIN path — connect and wait for the operator to click Approve in the host's console;
- * "Use a PIN…" switches to the SPAKE2 ceremony.
+ * "Use a PIN…" switches to the SPAKE2 ceremony. A request names the fingerprint the host must
+ * show, so a typed host, which has none, is offered the PIN only.
  */
 @Composable
 fun RequestAccessPrompt(
@@ -138,17 +140,19 @@ fun RequestAccessPrompt(
     onUsePin: () -> Unit,
     onDismiss: () -> Unit,
 ) {
+    val canRequest = !pt.advertisedFp.isNullOrBlank()
     PunktfunkDialog(
         title = stringResource(R.string.pair_required_title),
         onDismiss = onDismiss,
-        actions = listOf(
-            DialogAction(stringResource(R.string.pair_request_access), primary = true, onClick = onRequestAccess),
-            DialogAction(stringResource(R.string.pair_use_pin), onClick = onUsePin),
+        actions = listOfNotNull(
+            DialogAction(stringResource(R.string.pair_request_access), primary = true, onClick = onRequestAccess)
+                .takeIf { canRequest },
+            DialogAction(stringResource(R.string.pair_use_pin), primary = !canRequest, onClick = onUsePin),
             DialogAction(stringResource(R.string.common_cancel), onClick = onDismiss),
         ),
     ) {
         PromptText(stringResource(R.string.pair_required_body, pt.host))
-        PromptText(stringResource(R.string.pair_intro))
+        PromptText(stringResource(if (canRequest) R.string.pair_intro else R.string.pair_intro_pin_only))
     }
 }
 
@@ -187,7 +191,7 @@ fun LinkConnectPrompt(
  * a decision to abandon it.
  */
 @Composable
-fun AwaitingApprovalPrompt(hostLabel: String, onCancel: () -> Unit) {
+fun AwaitingApprovalPrompt(hostLabel: String, deviceCode: String?, onCancel: () -> Unit) {
     PunktfunkDialog(
         title = stringResource(R.string.pair_waiting_for_approval),
         onDismiss = onCancel,
@@ -205,6 +209,15 @@ fun AwaitingApprovalPrompt(hostLabel: String, onCancel: () -> Unit) {
             )
             Text(
                 stringResource(R.string.dial_approve_no_pin, hostLabel),
+                color = MaterialTheme.colorScheme.onSurface,
+            )
+        }
+        // The host's web console shows the same code beside this request.
+        if (deviceCode != null) {
+            Text(
+                stringResource(R.string.pair_device_code, deviceCode),
+                fontFamily = FontFamily.Monospace,
+                fontWeight = FontWeight.Medium,
                 color = MaterialTheme.colorScheme.onSurface,
             )
         }

@@ -197,7 +197,8 @@ fun List<GameEntry>.launchersFirst(): List<GameEntry> {
 
 /** Fetch outcome — three states so the UI can guide setup (the common case is "not paired yet"). */
 sealed class LibraryResult {
-    data class Ok(val games: List<GameEntry>) : LibraryResult()
+    /** [profile]: the one the catalog was fetched as, which its cache entry is filed under; null the box's. */
+    data class Ok(val games: List<GameEntry>, val profile: String? = null) : LibraryResult()
     data class Unauthorized(val message: Say) : LibraryResult()
     data class Error(val message: Say) : LibraryResult()
 
@@ -547,12 +548,42 @@ object LibraryClient {
     }
 
     /**
-     * The host's catalog, walked by `GET /api/v1/library/page` over [mtlsHttpClient]'s lanes:
-     * [streamPort] first, then [mgmtBase] over HTTPS. A host older than the paged route refuses
-     * it, so `GET /api/v1/library` answers whole instead. [fpHex] is the pinned host-cert
-     * SHA-256 (64 hex, from the paired [io.unom.punktfunk.kit.security.KnownHost]); a blank value
-     * means the host was never paired. A refusal maps through [refused]. BLOCKING — call from a
-     * background dispatcher.
+     * The catalog as [profile] plays it (`as=`), else the box's. [get] answers one path's status
+     * and body. A host older than the paged route refuses it, so `GET /api/v1/library` answers
+     * whole instead. A profile the host no longer holds (404 `profile_unknown`) is asked once more
+     * as the box, and that answer stands, as the box's. `clients/shared/library-profile-vectors.json`
+     * pins this here, in Rust and in Swift. A refusal maps through [refused].
+     */
+    internal fun catalog(profile: String?, base: String, get: (path: String) -> Pair<Int, String>): LibraryResult {
+        var gone = false
+        fun walk(profile: String?): LibraryResult {
+            val ask = { path: String ->
+                val scoped = if (profile == null) path else
+                    path + (if ('?' in path) "&as=" else "?as=") + java.net.URLEncoder.encode(profile, "UTF-8")
+                get(scoped).also { (code, body) ->
+                    gone = profile != null && code == 404 &&
+                        runCatching { JSONObject(body).optString("code") }.getOrNull() == "profile_unknown"
+                }
+            }
+            return when (val walked = walkPages(base) { cursor -> ask(pagePath(cursor)) }) {
+                is Walk.Done -> LibraryResult.Ok(walked.games.launchersFirst(), profile)
+                is Walk.Refused -> if (walked.code in setOf(401, 403, 404) && !gone) {
+                    val (code, body) = ask("/api/v1/library")
+                    if (code == 200) LibraryResult.Ok(parse(body, base), profile) else refused(code)
+                } else {
+                    refused(walked.code)
+                }
+            }
+        }
+        val first = walk(profile)
+        return if (gone) walk(null) else first
+    }
+
+    /**
+     * [catalog] over [mtlsHttpClient]'s lanes: [streamPort] first, then [mgmtBase] over HTTPS.
+     * [fpHex] is the pinned host-cert SHA-256 (64 hex, from the paired
+     * [io.unom.punktfunk.kit.security.KnownHost]); a blank value means the host was never paired.
+     * BLOCKING — call from a background dispatcher.
      */
     fun fetch(
         address: String,
@@ -561,6 +592,7 @@ object LibraryClient {
         keyPem: String,
         fpHex: String,
         streamPort: Int = 0,
+        profile: String?,
     ): LibraryResult {
         if (fpHex.isBlank()) {
             return LibraryResult.Unauthorized(say(R.string.android_lib_error_unpaired_first))
@@ -577,15 +609,7 @@ object LibraryClient {
                 .use { it.code to it.body.string() }
         }
         return try {
-            when (val walked = walkPages(base) { cursor -> get(pagePath(cursor)) }) {
-                is Walk.Done -> LibraryResult.Ok(walked.games.launchersFirst())
-                is Walk.Refused -> if (walked.code in setOf(401, 403, 404)) {
-                    val (code, body) = get("/api/v1/library")
-                    if (code == 200) LibraryResult.Ok(parse(body, base)) else refused(code)
-                } else {
-                    refused(walked.code)
-                }
-            }
+            catalog(profile, base, get)
         } catch (e: Exception) {
             Log.w(TAG, "library fetch from $base", e)
             LibraryResult.Error(say(R.string.android_lib_error_unreachable))
@@ -714,7 +738,8 @@ object LibraryClient {
     internal const val WAKE_RESEND_EVERY = 2
 
     /**
-     * [fetch] across a host's boot window, for both Android shells (the desktop's `spawn_fetch`).
+     * [fetch] across a host's boot window, for both Android shells (the desktop's `spawn_fetch`),
+     * as [profile] plays the library.
      *
      * With [autoWake] on and a MAC to send to, a magic packet goes out first, [onWaking] runs
      * once, and the fetch is retried [WAKE_ATTEMPTS] times while it stays transient, resending
@@ -729,12 +754,13 @@ object LibraryClient {
         fpHex: String,
         macs: List<String>,
         autoWake: Boolean,
+        profile: String?,
         streamPort: Int = 0,
         isCancelled: () -> Boolean = { false },
         onWaking: () -> Unit = {},
     ): LibraryResult? = acrossWake(
         waking = autoWake && macs.isNotEmpty(),
-        fetch = { fetch(address, mgmtPort, certPem, keyPem, fpHex, streamPort) },
+        fetch = { fetch(address, mgmtPort, certPem, keyPem, fpHex, streamPort, profile) },
         wake = { NativeBridge.nativeWakeOnLan(macs.joinToString(","), address) },
         isCancelled = isCancelled,
         onWaking = onWaking,

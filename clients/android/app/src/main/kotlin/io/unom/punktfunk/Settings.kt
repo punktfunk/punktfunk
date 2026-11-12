@@ -134,6 +134,12 @@ data class Settings(
      */
     val keepHostAudio: Boolean = false,
     /**
+     * The screen a preset asks the host for, as the cross-client `host_screen` spells it: `only`,
+     * `main`, `second` or `monitor:<connector>`. Empty is the pick on the host's card. Only a
+     * preset sets it: no global value is stored ([SettingsFields.Field.global]).
+     */
+    val hostScreen: String = "",
+    /**
      * How much the in-stream stats overlay shows — see [StatsVerbosity]. Defaults to
      * [StatsVerbosity.NORMAL] (the res/fps line + latency headline + reliability counters); the full
      * decoder/feed/equation HUD is [StatsVerbosity.DETAILED], and a single terse line is

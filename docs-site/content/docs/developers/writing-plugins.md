@@ -19,9 +19,10 @@ Linux and `%ProgramData%\punktfunk` on Windows.
   definition.
 - A crash restarts the plugin with backoff, from 1 s up to 60 s. A clean return ends it.
 - On stop, the plugin's Effect fiber is interrupted, so scoped finalizers run.
-- The plugin calls the [management API](/docs/developers/management-api) with a token of its own.
-  It reaches the plugin allowlist only: it can write its own library titles and registration,
-  but not hooks, pairing, the plugin store, or a `command` launch.
+- The plugin calls the [management API](/docs/developers/management-api) with a credential of its
+  own: its own token, or in a Windows AppContainer its own named pipe. It reaches the plugin
+  allowlist only: it can write its own library titles and registration, but not hooks, pairing,
+  the plugin store, or a `command` launch.
 - Lines it logs with `Effect.log` show on the console's **Troubleshooting** page as
   `plugin:<id>`.
 
@@ -46,11 +47,15 @@ nothing the plugin does at runtime widens it. Without it, a plugin does not star
 | `files` | Folders the plugin reads the files of, nothing below them. Use it for a folder that holds a game tree: on Windows a `reads` entry rewrites every file below it, and a `files` entry lands at once. One `*` component names each folder under it: `%ProgramFiles%/EA Games/*/__Installer` is every game's `__Installer`, new ones within a minute. Needs host 0.46; an older host drops the entry, so also ask for it from `wants`. |
 | `writes` | Paths it also writes. |
 | `network` | `true` to reach the network. |
-| `registry` | Windows registry keys it reads, as `HKLM\…` or `HKCU\…`. A key under `HKCU`, like a path under `~/`, marks a source that belongs to one account; the host grants it in every signed-in account's hive. |
+| `registry` | Windows registry keys it reads, as `HKLM\Software\…` or `HKCU\Software\…`: a launcher's own key, never one that holds credentials or policy, nor a parent of one. A key under `HKCU`, like a path under `~/`, marks a source that belongs to one account; the host grants it in every signed-in account's hive. |
 | `exec` | Named argv templates the host may run for this plugin's titles. |
 
 The sandbox never binds `/`, the home directory or its parents, `/proc`, `/sys`, `/dev`, `/run`
-(except `/run/media`), `~/.ssh`, `~/.gnupg` or `~/.config/punktfunk`.
+(except `/run/media`), `~/.ssh`, `~/.gnupg` or `~/.config/punktfunk`. On Linux a `writes` entry
+(or a write grant) also never binds what runs at login or session start, nor a parent of it:
+`~/.config/systemd`, `~/.config/autostart`, `~/.local/bin`, `~/.local/share/applications`, the
+shell and X start-up files such as `~/.bashrc`, `~/.profile` and `~/.xinitrc`, and so `~/.config`
+and `~/.local`. Reading them with `reads` is fine.
 
 An `exec` template names a program and its arguments with `{param}` placeholders. A title supplies
 the values, and the host builds the argv itself. `exe` is a program name looked up on `PATH`, or an absolute path inside the plugin's roots; it may
@@ -69,8 +74,9 @@ No other value may start with `-`. The host drops a title whose values don't fit
 publishes it.
 
 A ROM needs no template. `launch: { kind: "emulator", value: "pcsx2", args: [...] }` names a
-catalog emulator, and the arguments `platform`, `file`, and optionally `core` and `extra`. The host
-starts `file` in its best copy of that emulator, after first-run setup and the platform's firmware.
+catalog emulator, and the arguments `platform`, `file`, and optionally `core` and `extra`; `file`
+must lie inside the plugin's roots. The host starts `file` in its best copy of that emulator,
+after first-run setup and the platform's firmware.
 `GET /api/v1/emulators/catalog` lists the platforms and emulators. A plugin that moves saves asks
 once with `saves: true` on `POST /api/v1/plugin-access/requests`.
 
@@ -92,8 +98,8 @@ the console settings form and the CLI. Four files:
     "test": "bun test"
   },
   "dependencies": {
-    "@punktfunk/host": "^0.4.0",
-    "@punktfunk/plugin-kit": "^0.13.0",
+    "@punktfunk/host": "^0.6.0",
+    "@punktfunk/plugin-kit": "^0.15.0",
     "effect": "4.0.1"
   },
   "punktfunk": {
@@ -170,6 +176,12 @@ tell when the game quits.
 
 Keep Effect values inside the plugin: the runner bundles its own copy of Effect, so the default
 export must be a plain async `main`. `definePluginKit` and `defineLibraryPlugin` build that for you.
+
+A console page runs sandboxed, with an origin of its own: no cookies, `localStorage` or
+`indexedDB`, and no access to the console or another plugin's page. Its address carries its
+credential in the first path segment, so reach your API with relative URLs or through
+`resolvePluginBase()` from `@punktfunk/plugin-kit/react`, never a hand-written `/plugin-ui/<id>/`.
+Keep state in your plugin's backend, and don't send `fetch` with `credentials: "include"`.
 
 ## A tab on each game's page
 
@@ -259,8 +271,8 @@ yield* serveUi({
 });
 ```
 
-- `game` is the event's `GameRef`: app id, title, client, fingerprint, plane and the preset the
-  device dialled with.
+- `game` is the event's `GameRef`: app id, store, title, client, fingerprint, plane, profile and
+  the preset the device dialled with.
 - The stage fires only when the host starts the game, not when it picks up one still running.
 - `holdTimeoutMs` is 1–120 000, default 30 000. Past it the host starts the game anyway and logs
   the plugin; the handler's Effect is interrupted.

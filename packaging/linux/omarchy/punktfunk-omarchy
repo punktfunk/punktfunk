@@ -833,8 +833,8 @@ cmd_status() {
     if hyprctl -j getoption ecosystem:enforce_permissions 2>/dev/null | grep -q '"int": *[1-9]'; then
       bad "Hyprland ecosystem.enforce_permissions is ON — streams may show black frames"
       say "     add to ~/.config/hypr/hyprland.lua (or a permissions module):"
-      say "       o.permission(\"/usr/bin/punktfunk-host\", \"screencopy\", \"allow\")"
-      say "       o.permission(\"/usr/bin/punktfunk-host\", \"plugin\",     \"allow\")"
+      say "       hl.permission(\"/usr/bin/punktfunk-host\", \"screencopy\", \"allow\")"
+      say "       hl.permission(\"/usr/(lib|libexec|lib64)/xdg-desktop-portal-hyprland\", \"screencopy\", \"allow\")"
     else
       ok "Hyprland permission enforcement off (nothing to grant)"
     fi

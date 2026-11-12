@@ -18,6 +18,7 @@ fn a_bound_preset_marks_the_row_it_overrides() {
             name: "Living room".into(),
             accent: None,
             bitrate_kbps: None,
+            host_screen: None,
         }),
         ..crate::model::HostRow::fixture("bb", "Desk")
     };
@@ -118,6 +119,7 @@ fn a_preset_aspect_note_labels_against_the_devices_shapes() {
             name: "Living room".into(),
             accent: None,
             bitrate_kbps: None,
+            host_screen: None,
         }),
         ..crate::model::HostRow::fixture("bb", "Desk")
     }];
@@ -225,6 +227,7 @@ fn catalog_key(id: RowId) -> Option<&'static str> {
         RowId::QuickActions => "overlay_actions",
         RowId::ShortcutsPage => "shortcuts",
         RowId::CursorGestures => "cursor_gestures",
+        RowId::GamePicture => "game_picture",
         RowId::PadType => "gamepad",
         RowId::PadRumble => "pad_rumble",
         RowId::PhoneRumble => "rumble_on_phone",
@@ -1593,6 +1596,7 @@ fn preset_rows_navigate_instead_of_editing() {
             name: "Work".into(),
             accent: None,
             bitrate_kbps: None,
+            host_screen: None,
         }),
         ..crate::model::HostRow::fixture("aa", "Tower")
     };
@@ -1642,7 +1646,7 @@ fn preset_rows_navigate_instead_of_editing() {
     assert!(fx.nav.is_none() && fx.cmds.is_empty());
 }
 
-/// With no presets the tab still offers New preset, which opens the name screen.
+/// With no presets the tab still offers New preset, which opens the starters.
 #[test]
 fn empty_catalog_offers_a_new_preset() {
     let mut settings = Settings::default();
@@ -1659,7 +1663,7 @@ fn empty_catalog_offers_a_new_preset() {
     let mut fx = Outbox::default();
     s.menu(MenuEvent::Confirm, &mut ctx, &mut fx);
     assert!(matches!(fx.nav, Some(crate::screens::Nav::Push(b))
-        if matches!(*b, Screen::PresetName(_))));
+        if matches!(*b, Screen::PresetStarter(_))));
 }
 
 #[test]
@@ -1704,6 +1708,7 @@ fn platform_row_split_hides_only_the_other_platforms_concepts() {
             RowId::Screen,
             RowId::SecondScreen,
             RowId::LowLatency,
+            RowId::GamePicture,
             RowId::SpatialAudio,
             RowId::AudioRoute,
             RowId::CursorGestures,
@@ -1734,6 +1739,7 @@ fn platform_row_split_hides_only_the_other_platforms_concepts() {
             RowId::Vsync,
             RowId::AllowVrr,
             RowId::Decoder,
+            RowId::GamePicture,
             RowId::SpatialAudio,
             RowId::AudioRoute,
             RowId::InhibitShortcuts,
@@ -2059,7 +2065,7 @@ fn every_row_has_exactly_one_tab() {
             seen.push(*id);
         }
     }
-    assert_eq!(seen.len(), 73, "{seen:?}");
+    assert_eq!(seen.len(), 74, "{seen:?}");
     assert!(
         !seen.contains(&RowId::AdvancedChanged),
         "built per tab, never listed"

@@ -1,8 +1,8 @@
 //! Pinned IronRDP keeper and credential-free trust handshake.
 //!
-//! Both roles connect only to `127.0.0.2`: the seat listener on its own port when it listens,
-//! else Remote Desktop's 3389. They advertise CredSSP/NLA without
-//! legacy TLS login, and require a HYBRID security selection. `trust` stops
+//! Both roles connect only to `127.0.0.2`, on the one port [`keeper::rdp_port`] names: the
+//! seat listener's while it is in place, else Remote Desktop's 3389. They advertise CredSSP/NLA
+//! without legacy TLS login, and require a HYBRID security selection. `trust` stops
 //! immediately after RDP negotiation and the TLS handshake, before CredSSP, and
 //! reports the observed SHA-256 leaf pin. Runtime TLS verifies that exact pin
 //! before `connect_finalize` can serialize credentials. The keeper requests a
@@ -10,7 +10,7 @@
 //! remains connected until its job is closed or the server disconnects it.
 
 use ironrdp::connector::{
-    self, ClientConnector, ClientConnectorState, ConnectionResult, Credentials,
+    self, ClientConnector, ClientConnectorState, ConnectionResult, ConnectorErrorKind, Credentials,
 };
 use ironrdp::graphics::image_processing::PixelFormat;
 use ironrdp::pdu::gcc::KeyboardType;
@@ -29,8 +29,6 @@ use zeroize::Zeroize as _;
 type WinResult<T> = Result<T, BackendError>;
 
 const LOOPBACK: IpAddr = IpAddr::V4(Ipv4Addr::new(127, 0, 0, 2));
-const RDP_ADDRESS: SocketAddr = SocketAddr::new(LOOPBACK, 3389);
-const SEAT_ADDRESS: SocketAddr = SocketAddr::new(LOOPBACK, keeper::SEAT_LISTENER_PORT);
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(15);
 const ACTIVE_READ_TIMEOUT: Duration = Duration::from_secs(2);
@@ -78,7 +76,9 @@ const HELD: Duration = Duration::from_secs(30);
 ///
 /// The session's existence is the test, not the disconnect reason: a logoff removes it, anything
 /// recoverable leaves it. That needs no match on the server's English description. A drop the
-/// seat host marked as its own ([`keeper::host_disconnected`]) spends no attempt.
+/// seat host marked as its own ([`keeper::host_disconnected`]) spends no attempt. A sign-in the
+/// server refuses ([`REFUSED`]) ends the keeper at once: every retry is one more bad logon
+/// toward the account's lockout, and the supervisor's next start names the changed password.
 pub(crate) fn keep_from_stdin() -> WinResult<()> {
     let mut input = std::io::stdin().lock();
     let mut bootstrap = RdpBootstrap::read_from(&mut input)
@@ -92,6 +92,9 @@ pub(crate) fn keep_from_stdin() -> WinResult<()> {
         let Err(error) = keep_session(&bootstrap, domain.clone(), &account) else {
             return Ok(());
         };
+        if error.code == REFUSED {
+            break error;
+        }
         // No session left means the seat is gone (logged off, or it never came up): hand the
         // error back so the supervisor restarts the seat rather than reconnecting to nothing.
         let Ok(Some(session)) = keeper::session_of(&account) else {
@@ -120,7 +123,8 @@ pub(crate) fn keep_from_stdin() -> WinResult<()> {
 }
 
 /// One connect-and-hold. The password is copied per attempt because the connector consumes it;
-/// the copy is wiped on every path but the one that hands it to IronRDP.
+/// the copy is wiped on every path but the one that hands it to IronRDP. A sign-in the server
+/// refuses answers [`REFUSED`].
 fn keep_session(bootstrap: &RdpBootstrap, domain: Option<String>, account: &str) -> WinResult<()> {
     let config = connector_config(account.to_owned(), bootstrap.password.to_string(), domain);
     let mut attempt = Wiped(Some(ClientConnector::new(config, UNBOUND)));
@@ -148,13 +152,27 @@ fn keep_session(bootstrap: &RdpBootstrap, domain: Option<String>, account: &str)
         None,
     )
     .map_err(|error| {
-        io_error(
-            "rdp_connect",
-            "IronRDP connection finalization failed",
-            error,
-        )
+        let code = if refused(error.kind()) {
+            REFUSED
+        } else {
+            "rdp_connect"
+        };
+        io_error(code, "IronRDP connection finalization failed", error)
     })?;
     active_loop(result, framed)
+}
+
+/// The code of a sign-in the server refused.
+const REFUSED: &str = "rdp_signin_refused";
+
+/// The server refused the credential: CredSSP carried its error status back, or HYBRID_EX's
+/// early result denied the account. A dropped or garbled link is neither.
+fn refused(kind: &ConnectorErrorKind) -> bool {
+    match kind {
+        ConnectorErrorKind::Credssp(error) => error.nstatus.is_some(),
+        ConnectorErrorKind::AccessDenied => true,
+        _ => false,
+    }
 }
 
 /// The client address before a connect learns the real one, which [`negotiate_tls`] sets.
@@ -235,17 +253,24 @@ fn connector_config(
     }
 }
 
-/// The seat listener, or Remote Desktop's own when nothing listens there: same TermService, same
-/// certificate, but only the seat listener's sessions get pad audio endpoints.
+/// The listener [`keeper::rdp_port`] names: same TermService and certificate either way, but
+/// only the seat listener's sessions get pad audio endpoints. A seat listener that is in place
+/// and refuses has not been opened by TermService yet: nothing answers there, so Remote
+/// Desktop's own port serves the seat, without pad audio.
 fn connect() -> WinResult<TcpStream> {
-    match TcpStream::connect_timeout(&SEAT_ADDRESS, CONNECT_TIMEOUT) {
-        Err(error) if error.kind() == std::io::ErrorKind::ConnectionRefused => {
-            TcpStream::connect_timeout(&RDP_ADDRESS, CONNECT_TIMEOUT)
-                .map_err(|error| io_error("rdp_connect", "connect to 127.0.0.2:3389", error))
+    let dial = |port| {
+        let address = SocketAddr::new(LOOPBACK, port);
+        TcpStream::connect_timeout(&address, CONNECT_TIMEOUT)
+            .map_err(|error| (error.kind(), format!("connect to {address}"), error))
+    };
+    let port = keeper::rdp_port();
+    let connected = match dial(port) {
+        Err((std::io::ErrorKind::ConnectionRefused, ..)) if port != keeper::RDP_PORT => {
+            dial(keeper::RDP_PORT)
         }
-        connected => connected
-            .map_err(|error| io_error("rdp_connect", &format!("connect to {SEAT_ADDRESS}"), error)),
-    }
+        connected => connected,
+    };
+    connected.map_err(|(_, what, error)| io_error("rdp_connect", &what, error))
 }
 
 /// Connects `connector` and runs it to the TLS upgrade, then the TLS handshake against
@@ -411,5 +436,27 @@ impl connector::sspi::network_client::NetworkClient for NoExternalNetwork {
             connector::sspi::ErrorKind::NoAuthenticatingAuthority,
             "external Kerberos transport is disabled for local seat login",
         ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{refused, ConnectorErrorKind};
+    use ironrdp::connector::sspi::{self, credssp};
+
+    /// A status the server sends back in CredSSP is a refusal; a local or transport error is not.
+    #[test]
+    fn only_the_servers_refusal_ends_the_keeper() {
+        let answer = credssp::TsRequest {
+            error_code: Some(credssp::NStatusCode::LOGON_FAILURE),
+            ..Default::default()
+        };
+        let status = answer.check_error().unwrap_err();
+        assert!(refused(&ConnectorErrorKind::Credssp(status)));
+        assert!(refused(&ConnectorErrorKind::AccessDenied));
+        let local = sspi::Error::new(sspi::ErrorKind::InternalError, "local");
+        assert!(!refused(&ConnectorErrorKind::Credssp(local)));
+        assert!(!refused(&ConnectorErrorKind::Custom));
+        assert!(!refused(&ConnectorErrorKind::General));
     }
 }

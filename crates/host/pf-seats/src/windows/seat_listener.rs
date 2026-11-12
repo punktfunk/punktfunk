@@ -1,6 +1,7 @@
 //! The seat listener: a copy of Remote Desktop's `RDP-Tcp` on loopback port 3390 whose
 //! sessions load `pf_seat_audio.dll`, the enumerator that gives each seat its pads' audio
-//! endpoints (`pf_driver_proto::seat_audio`). The keeper connects here when it listens.
+//! endpoints (`pf_driver_proto::seat_audio`). The keeper connects here when it is
+//! [`configured`], and to 3389 otherwise.
 //!
 //! TermService opens and closes a listener as its key appears and goes, so nothing restarts.
 //! The DLL loads into every process of a seat session at that process's bitness: the x64 build
@@ -47,6 +48,26 @@ pub(super) fn ensure(host_path: &Path) -> Result<(), String> {
     sweep(&native_dir(), Some(&dll));
     sweep(&wow_dir(), Some(&dll));
     block_network()
+}
+
+/// The listener [`ensure`] wrote is in place and enabled on [`LISTENER_PORT`]. Never on ARM64,
+/// where `ensure` writes nothing.
+pub(super) fn configured() -> bool {
+    cfg!(target_arch = "x86_64")
+        && RegKey::predef(HKEY_LOCAL_MACHINE)
+            .open_subkey_with_flags(
+                format!(r"{WINSTATIONS}\{LISTENER}"),
+                KEY_READ | KEY_WOW64_64KEY,
+            )
+            .is_ok_and(|ours| {
+                [
+                    (MARKER, 1),
+                    ("fEnableWinStation", 1),
+                    ("PortNumber", u32::from(LISTENER_PORT)),
+                ]
+                .iter()
+                .all(|&(name, want)| ours.get_value::<u32, _>(name).ok() == Some(want))
+            })
 }
 
 /// Remove the listener, its rules and the DLLs. A DLL still loaded goes at the next restart.

@@ -160,6 +160,29 @@ fn vendor_keys(codec_name: &str, aggressive: bool) -> Vec<(&'static str, i32)> {
     keys
 }
 
+/// Whether the fed stream is recoded with a 16-bit POC: HEVC on an Amlogic decoder, whose
+/// long-term references fail behind a POC lsb wrap. `forced` is the debug override.
+pub(crate) fn widens_poc(codec: u8, codec_name: &str, forced: Option<bool>) -> bool {
+    let name = codec_name.to_ascii_lowercase();
+    let amlogic = name.starts_with("omx.amlogic") || name.starts_with("c2.amlogic");
+    codec == punktfunk_core::quic::CODEC_HEVC && forced.unwrap_or(amlogic)
+}
+
+/// Whether each fed AU goes through the concealer first. HEVC on a Realtek decoder, which keeps
+/// showing garbage past the host's anchor after a picture naming a lost reference. AV1 on a
+/// `strict` decoder (Tensor G5, Realtek), which refuses a stale wave start: the concealer makes
+/// an error-resilient one conformant, so the wave heals it. `forced` is the debug override.
+pub(crate) fn conceals(codec: u8, codec_name: &str, strict: bool, forced: Option<bool>) -> bool {
+    use punktfunk_core::quic::{CODEC_AV1, CODEC_HEVC};
+    let name = codec_name.to_ascii_lowercase();
+    let pick = match codec {
+        CODEC_HEVC => name.starts_with("omx.realtek") || name.starts_with("c2.realtek"),
+        CODEC_AV1 => strict,
+        _ => return false,
+    };
+    forced.unwrap_or(pick)
+}
+
 /// Whether a decoder tolerates `operating-rate = Short.MAX` rather than regressing on it. Follows
 /// Moonlight's allowlist: only Qualcomm decoders honour the sentinel. The Adreno 620 generation
 /// is the known exception Moonlight excludes by GPU model, which native code cannot see; it rides
@@ -208,6 +231,97 @@ pub(crate) fn p50_max_ms(mut v: Vec<u64>) -> (f64, f64) {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn only_amlogic_hevc_takes_the_wide_poc() {
+        use punktfunk_core::quic::{CODEC_AV1, CODEC_HEVC};
+        assert!(super::widens_poc(
+            CODEC_HEVC,
+            "c2.amlogic.hevc.decoder",
+            None
+        ));
+        assert!(super::widens_poc(
+            CODEC_HEVC,
+            "OMX.amlogic.hevc.decoder.awesome2",
+            None
+        ));
+        assert!(!super::widens_poc(CODEC_HEVC, "c2.qti.hevc.decoder", None));
+        assert!(!super::widens_poc(
+            CODEC_AV1,
+            "c2.amlogic.av1.decoder",
+            None
+        ));
+        // The override moves the decoder pick, never the codec.
+        assert!(super::widens_poc(
+            CODEC_HEVC,
+            "c2.qti.hevc.decoder",
+            Some(true)
+        ));
+        assert!(!super::widens_poc(
+            CODEC_HEVC,
+            "c2.amlogic.hevc.decoder",
+            Some(false)
+        ));
+        assert!(!super::widens_poc(
+            CODEC_AV1,
+            "c2.amlogic.av1.decoder",
+            Some(true)
+        ));
+    }
+
+    #[test]
+    fn realtek_hevc_and_strict_av1_are_concealed() {
+        use punktfunk_core::quic::{CODEC_AV1, CODEC_H264, CODEC_HEVC};
+        assert!(super::conceals(
+            CODEC_HEVC,
+            "OMX.realtek.video.dec.hevc",
+            false,
+            None
+        ));
+        assert!(!super::conceals(
+            CODEC_HEVC,
+            "c2.qti.hevc.decoder",
+            false,
+            None
+        ));
+        assert!(super::conceals(
+            CODEC_AV1,
+            "c2.google.av1.decoder",
+            true,
+            None
+        ));
+        assert!(!super::conceals(
+            CODEC_AV1,
+            "c2.qti.av1.decoder",
+            false,
+            None
+        ));
+        assert!(!super::conceals(
+            CODEC_H264,
+            "OMX.realtek.video.dec.avc",
+            true,
+            None
+        ));
+        // The override moves the decoder pick, never the codec.
+        assert!(super::conceals(
+            CODEC_AV1,
+            "c2.qti.av1.decoder",
+            false,
+            Some(true)
+        ));
+        assert!(!super::conceals(
+            CODEC_H264,
+            "c2.qti.avc.decoder",
+            false,
+            Some(true)
+        ));
+        assert!(!super::conceals(
+            CODEC_HEVC,
+            "OMX.realtek.video.dec.hevc",
+            false,
+            Some(false)
+        ));
+    }
+
     use super::*;
 
     #[test]

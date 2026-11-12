@@ -684,6 +684,7 @@ fn a_pinned_cards_library_launches_with_its_preset() {
             name: "HDR".into(),
             accent: None,
             bitrate_kbps: None,
+            host_screen: None,
         }),
         ..rows[0].clone()
     };
@@ -2176,6 +2177,7 @@ fn apply_is_offered_only_when_the_default_is_the_layer_that_wins() {
             name: "Work".into(),
             accent: None,
             bitrate_kbps,
+            host_screen: None,
         })
     };
     for (bound, want) in [

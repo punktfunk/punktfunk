@@ -79,6 +79,8 @@ pub(crate) enum Screen {
     /// Shortcuts button).
     Help,
     Pair,
+    /// First connect to a host that takes new devices: its fingerprint, to trust or decline.
+    Trust,
     /// Per-host network speed test (probe burst + recommended bitrate).
     SpeedTest,
     /// The target host's game library (poster grid; tap-to-launch) — paired hosts only,
@@ -633,6 +635,7 @@ impl Component for Shell {
                 help::help_page(pal, &self.ctx, &svc.set_screen, &self.set(Msg::SettingsNav))
             }
             Screen::Pair => component::<pair::PairPage>("pair", svc.clone()).into(),
+            Screen::Trust => connect::trust_page(pal, &self.ctx, &svc.set_screen, &svc.set_status),
             Screen::SpeedTest => component::<speed::SpeedPage>(
                 "speed",
                 SpeedProps {
@@ -969,14 +972,14 @@ fn route_link(
         Ok(PlanOutcome::Connect(mut p)) => {
             // The plan's profile is the link's `as=`, else the saved pick: only the
             // link's own wins over the picker.
-            p.profile = link.as_profile.clone();
+            p.play_as(link.as_profile.clone());
             dial_link(ctx, &p, set_screen, set_status)
         }
         // A pinned host named by its label or address, which any web page could guess: arm
         // the confirmation, whose OK runs `dial_link` on this same plan. Not the PIN
         // ceremony: re-pairing would throw the pin away.
         Ok(PlanOutcome::ConfirmConnect(mut p)) => {
-            p.profile = link.as_profile.clone();
+            p.play_as(link.as_profile.clone());
             set_link_confirm.call(Some(p))
         }
         // Known but never pinned, or unknown: a link may not pair or trust on its own,

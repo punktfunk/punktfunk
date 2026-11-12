@@ -722,6 +722,10 @@ pub(crate) struct VulkanEncodeCaps {
     pub eight_bit: bool,
     /// HEVC Main10 / AV1 Main at 10 bits (the HDR session profile).
     pub ten_bit: bool,
+    /// The pairs the device's EFC converts; `None` without an EFC.
+    pub efc: Option<crate::vcn_firmware::EfcPairs>,
+    /// The device's VCN firmware; `None` off amdgpu.
+    pub vcn: Option<crate::vcn_firmware::VcnFirmware>,
 }
 
 /// Probe [`VulkanEncodeCaps`] for `codec`. Uncached — [`crate::vulkan_encode_caps`] owns the
@@ -755,10 +759,13 @@ pub(crate) fn probe_encode_caps(codec: Codec) -> VulkanEncodeCaps {
         let caps = match found {
             Some(pd) => {
                 let vq_inst = ash::khr::video_queue::Instance::new(&entry, &instance);
+                let eight_bit = depth_supported(&vq_inst, pd, codec_op, av1, false);
                 VulkanEncodeCaps {
                     supported: true,
-                    eight_bit: depth_supported(&vq_inst, pd, codec_op, av1, false),
+                    eight_bit,
                     ten_bit: depth_supported(&vq_inst, pd, codec_op, av1, true),
+                    efc: build::probe_efc_pairs(&instance, &vq_inst, pd, codec_op, av1, !eight_bit),
+                    vcn: build::vcn_firmware_of(&instance, pd),
                 }
             }
             None => VulkanEncodeCaps::default(),
@@ -967,6 +974,21 @@ fn trusted_refs(slot_wire: &[i64]) -> Vec<(usize, i64)> {
         .collect()
 }
 
+/// The slot a P-frame's picture overwrites: round robin from `enc_count`, past the reference
+/// and the two [`crate::rfi::Kept`] pictures a late loss anchors on.
+fn setup_slot(
+    enc_count: u64,
+    ref_slot: usize,
+    slot_wire: &[i64],
+    kept: &crate::rfi::Kept,
+) -> usize {
+    let n = slot_wire.len();
+    (0..n)
+        .map(|k| (enc_count as usize + k) % n)
+        .find(|&s| s != ref_slot && !(slot_wire[s] >= 0 && kept.holds(slot_wire[s])))
+        .expect("a DPB larger than the reference and the two kept pictures")
+}
+
 /// S0 (past-reference) half of an HEVC short-term RPS that retains every resident DPB picture,
 /// not just the active reference. HEVC 8.3.2: any DPB picture absent from the current RPS is
 /// marked unused and reclaimed — an RPS naming only the active ref lets the decoder evict the
@@ -1127,6 +1149,10 @@ pub struct VulkanVideoEncoder {
     prev_slot: usize,
     /// The newest frame the client confirmed, while the host holds confirmed references.
     reference_floor: Option<crate::Acked>,
+    /// What the client confirmed it decoded clean, whatever the link.
+    confirmed: Option<crate::Acked>,
+    /// The two pictures [`setup_slot`] never overwrites: a late loss's anchor.
+    kept: crate::rfi::Kept,
 
     csc_pipe: vk::Pipeline,
     csc_layout: vk::PipelineLayout,
@@ -1904,6 +1930,8 @@ impl VulkanVideoEncoder {
             dpb_views,
             slot_wire: vec![-1; DPB_SLOTS as usize],
             reference_floor: None,
+            confirmed: None,
+            kept: crate::rfi::Kept::default(),
             slot_poc: vec![-1; DPB_SLOTS as usize],
             prev_slot: 0,
             csc_pipe,
@@ -2606,6 +2634,10 @@ impl Encoder for VulkanVideoEncoder {
 
     fn set_reference_floor(&mut self, acked: Option<crate::Acked>) {
         self.reference_floor = acked;
+    }
+
+    fn note_confirmed(&mut self, acked: Option<crate::Acked>) {
+        self.confirmed = acked;
     }
 
     /// Withdraw anchor trust from every resident reference. Blank `slot_wire` only;

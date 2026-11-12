@@ -15,6 +15,7 @@ import { usePasswordFailure } from "@/components/password-confirm";
 import { ROW } from "@/components/stagger";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { deviceCode } from "@/lib/format";
 import { fmtAge } from "@/lib/utils";
 import { m } from "@/paraglide/messages";
 import { ApproveDialog } from "./ApproveDialog";
@@ -133,7 +134,7 @@ export const PendingRow: FC<{
 				? m.devices_will_play_as({ name: p.profile.display_name })
 				: null,
 			p.origin,
-			`${p.fingerprint.slice(0, 16)}…`,
+			deviceCode(p.fingerprint),
 		]
 			.filter(Boolean)
 			.join(" · ")}

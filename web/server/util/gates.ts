@@ -4,7 +4,7 @@
 // row's file answers and never forwards. `seat` is that file's handler when the same call can
 // arrive for a seat's host through `/api/v1/profiles/<id>/proxy/`, where the box holds the bearer.
 // gates.test.ts fails on an operation in api/openapi.json with no row or no decision, and pins
-// the rows to the route files and to the paths a seat's host refuses.
+// the rows to the route files and to each operation's `x-scope`: the seat proxy refuses `box`.
 import type { EventHandler } from "h3";
 import adoptPost from "../routes/api/v1/emulators/[id]/adopt.post";
 import removePost, {
@@ -59,10 +59,11 @@ const gated = (
 /** `route`, asking only on the calls `when` names. */
 const onlyWhen = (when: When, route: Route): Route => ({ ...route, when });
 
+/** `seat` is absent on a `box` row: the seat proxy refuses its path before any handler. */
 const refused = (
 	method: Method,
 	pattern: string,
-	seat: EventHandler,
+	seat?: EventHandler,
 ): Route => ({ method, pattern, refused: true, seat });
 
 const open = (method: Method, pattern: string, reason: string): Route => ({
@@ -138,6 +139,7 @@ export const GATES: readonly Route[] = [
 	open("PUT", "library/metadata", SETTING),
 	open("PUT", "library/metadata/{source}", REPORT),
 	open("DELETE", "library/metadata/{source}", NARROWS),
+	refused("PUT", "library/own"),
 	open("POST", "library/overrides/sets", SETTING),
 	open("PUT", "library/overrides/sets/{id}", SETTING),
 	open("DELETE", "library/overrides/sets/{id}", SETTING),
@@ -181,6 +183,7 @@ export const GATES: readonly Route[] = [
 	open("DELETE", "session", STEERS),
 	open("POST", "session/idr", STEERS),
 	open("PUT", "session/settings", SETTING),
+	open("DELETE", "session/settings", SETTING),
 	open("DELETE", "session/{id}", STEERS),
 	open("PUT", "session/{id}/access", WITHIN),
 	open("PUT", "session/{id}/audio", STEERS),

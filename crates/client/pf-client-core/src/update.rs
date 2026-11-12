@@ -25,9 +25,9 @@ use std::process::Command;
 const HELPER_UNIT: &str = "punktfunk-client-update.service";
 const HELPER_UNIT_PATH: &str = "/usr/lib/systemd/system/punktfunk-client-update.service";
 
-/// Outcome of `apply-client`. Separate from the host's record so a dual-product box cannot
-/// read the other run.
-const HELPER_RESULT: &str = "/var/lib/punktfunk/client-update-result.json";
+/// Outcome of `apply-client`, in the helper's own root-only directory. Separate from the
+/// host's record so a dual-product box cannot read the other run.
+const HELPER_RESULT: &str = "/var/lib/punktfunk-update/client-update-result.json";
 
 /// Pacman full-sysupgrade hatch (root-owned). Shared with the host: one box, one answer.
 const PACMAN_OPTIN_CONF: &str = "/etc/punktfunk/update.conf";

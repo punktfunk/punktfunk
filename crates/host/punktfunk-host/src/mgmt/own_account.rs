@@ -1,6 +1,7 @@
 //! What a seat host on a person's own Linux account keeps out of their account: the console
 //! manages no plugin and no emulator there. Reads stay, so the console can show the profile.
 
+use super::scope::{row_of, Scope};
 use super::shared::*;
 use axum::extract::Request;
 use axum::http::Method;
@@ -16,27 +17,22 @@ const EMULATORS: (&str, &str) = (
     "The console doesn't manage emulators inside a profile that uses an existing Linux account.",
 );
 
-/// The route groups refused, each with the sentence the console shows.
-const REFUSED: [(&str, (&str, &str)); 3] = [
-    ("/api/v1/store", PLUGINS),
-    ("/api/v1/plugin-access", PLUGINS),
-    ("/api/v1/emulators", EMULATORS),
-];
-
-/// Why `method` on `path` is refused there, if it is: every write in a [`REFUSED`] group. A
-/// catalog refresh only fetches the catalogs, so it stays with the reads.
+/// Why `method` on `path` is refused there, if it is: a write to a route that runs code as the
+/// person ([`Scope::ProfileExec`]), read as the router reads the path. Hooks refuse themselves,
+/// on every system. A catalog refresh only fetches the catalogs, so it stays with the reads.
 pub(super) fn refusal(method: &Method, path: &str) -> Option<(&'static str, &'static str)> {
-    if matches!(*method, Method::GET | Method::HEAD) || path == "/api/v1/store/refresh" {
+    if matches!(*method, Method::GET | Method::HEAD)
+        || matches!(path, "/api/v1/store/refresh" | "/api/v1/hooks")
+    {
         return None;
     }
-    let within = |group: &str| {
-        path.strip_prefix(group)
-            .is_some_and(|rest| rest.is_empty() || rest.starts_with('/'))
-    };
-    REFUSED
-        .iter()
-        .find(|(group, _)| within(group))
-        .map(|(_, why)| *why)
+    (row_of(method, path)? == Scope::ProfileExec).then(|| {
+        if path.starts_with("/api/v1/emulators/") {
+            EMULATORS
+        } else {
+            PLUGINS
+        }
+    })
 }
 
 /// [`refusal`] on a seat host on a person's own Linux account; every other host passes.

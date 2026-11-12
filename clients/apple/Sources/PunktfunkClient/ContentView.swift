@@ -190,6 +190,15 @@ struct ContentView: View {
             fullscreenAlways: fullscreenAlways)
     }
 
+    /// This device's code as a paragraph under the approval wait's message. The identity is
+    /// loaded by the time a request waits, so this reads the store's cached copy.
+    private var deviceCodeLine: String {
+        guard let code = (try? ClientIdentityStore.shared.load())?.identity.deviceCode else {
+            return ""
+        }
+        return "\n\n" + L10n.pairDeviceCode(code: code)
+    }
+
     /// A console that could not be built hands the screen back to this app's own UI.
     private var gamepadUIActive: Bool {
         !consoleFailed
@@ -213,8 +222,11 @@ struct ContentView: View {
                 isPresented: approvalChoicePresented,
                 presenting: approvalChoice
             ) { req in
-                Button(L10n.pairRequestAccess) {
-                    DispatchQueue.main.async { flow.requestAccess(req) }
+                // A request names the fingerprint the host must show. A typed host has none.
+                if req.advertisedFingerprint != nil {
+                    Button(L10n.pairRequestAccess) {
+                        DispatchQueue.main.async { flow.requestAccess(req) }
+                    }
                 }
                 Button(L10n.pairUsePin) {
                     DispatchQueue.main.async {
@@ -226,7 +238,9 @@ struct ContentView: View {
             } message: { req in
                 Text(
                     L10n.pairRequiredBody(host: req.host.displayName) + "\n\n"
-                        + String(localized: L10n.pairIntro))
+                        + String(
+                            localized: req.advertisedFingerprint == nil
+                                ? L10n.pairIntroPinOnly : L10n.pairIntro))
             }
             // One "Connection failed" surface for every home screen (touch grid, gamepad launcher)
             // and platform — SessionModel funnels all connect/session errors into `errorMessage`.
@@ -244,7 +258,7 @@ struct ContentView: View {
             ) { req in
                 Button(L10n.commonCancel, role: .cancel) { flow.cancelApproval(req) }
             } message: { req in
-                Text(L10n.dialApproveNoPin(host: req.host.displayName))
+                Text(L10n.dialApproveNoPin(host: req.host.displayName) + deviceCodeLine)
             }
             // Who is playing: shown by a connect when its host lists several profiles.
             .sheet(item: $profileAsk) { ProfilePickerView(ask: $0) }

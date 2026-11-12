@@ -7,9 +7,12 @@
 //!
 //! `prep` and `command` run as the host user; other kinds name a title the host
 //! resolves. Tests pin the id scheme, the v1→v2 load, and the privileged-field allowlist.
+//!
+//! A seat host keeps a second `library.json`, its own, in its own config folder: the same rows,
+//! under `own:<12 hex>` ids the box never mints, which no other row may carry ([`Shelf`]).
 
 use super::*;
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, Mutex};
 
 /// One stored row. Same shape the API returns and the console edits.
 #[derive(Clone, Debug, Serialize, Deserialize, ToSchema)]
@@ -155,8 +158,10 @@ impl From<CustomEntry> for GameEntry {
             .map(|l| crate::library::spec_from_command(&l.value))
             .unwrap_or_default()
             .or_hint(&c.detect);
+        let id = library_id_for(&c);
         GameEntry {
-            id: library_id_for(&c),
+            own: is_own_id(&id),
+            id,
             store: c.store.clone().unwrap_or_else(|| "custom".into()),
             title: c.title,
             art: c.art,
@@ -177,10 +182,75 @@ impl From<CustomEntry> for GameEntry {
     }
 }
 
-fn custom_path() -> PathBuf {
-    // Hardened config dir, not CWD: `prep`/`launch` run as the host user, so this file is
-    // DACL/0600-locked like hooks.json. A Windows seat host reads the box's copy.
-    pf_paths::seat::library_dir().join("library.json")
+/// Where a seat host's own ids start. No store may claim `own` ([`validate_store_claim`]).
+const OWN_PREFIX: &str = "own:";
+
+/// Whether `id` is one a seat host minted for an entry of its own: `own:` and 12 lowercase hex.
+pub(crate) fn is_own_id(id: &str) -> bool {
+    id.strip_prefix(OWN_PREFIX).is_some_and(|hex| {
+        hex.len() == 12 && hex.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
+    })
+}
+
+/// Whether this host keeps entries of its own beside the box's: a seat host reading the box's
+/// library, on an account made for its seat. Their recipes stay in its own config folder. A
+/// person's own account keeps none: its config folder is that person's.
+pub(crate) fn keeps_own_titles() -> bool {
+    pf_paths::seat::role().is_seat_host()
+        && pf_paths::seat::box_library_dir().is_some()
+        && !pf_paths::seat::own_account()
+}
+
+/// One `library.json`: the box's, or a seat host's own.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Shelf {
+    Box,
+    Own,
+}
+
+impl Shelf {
+    /// The shelf an entry with row id `id` is on: an own id on a host that keeps them, else the
+    /// box's.
+    fn of(id: &str) -> Self {
+        if is_own_id(id) && keeps_own_titles() {
+            Shelf::Own
+        } else {
+            Shelf::Box
+        }
+    }
+
+    /// Where an entry added on this host goes.
+    fn here() -> Self {
+        if keeps_own_titles() {
+            Shelf::Own
+        } else {
+            Shelf::Box
+        }
+    }
+
+    /// Hardened config dir, not CWD: `prep`/`launch` run as the host user, so the file is
+    /// DACL/0600-locked like hooks.json. A seat host reads the box's from its library dir.
+    fn path(self) -> PathBuf {
+        match self {
+            Shelf::Box => pf_paths::seat::library_dir(),
+            Shelf::Own => pf_paths::config_dir(),
+        }
+        .join("library.json")
+    }
+
+    /// Whether `e` may sit on this shelf. An own row claims no store, so it lists under its id
+    /// and never under one of the box's.
+    fn holds(self, e: &CustomEntry) -> bool {
+        match self {
+            Shelf::Box => !is_own_id(&e.id),
+            Shelf::Own => {
+                is_own_id(&e.id)
+                    && e.provider.is_none()
+                    && e.store.is_none()
+                    && e.external_id.is_none()
+            }
+        }
+    }
 }
 
 /// `library.json` v2: entries plus the store-claim map.
@@ -204,9 +274,10 @@ enum LibraryFile {
     Legacy(Vec<CustomEntry>),
 }
 
-/// Absent or malformed file → empty catalog, never an error.
-pub fn load_catalog() -> Catalog {
-    match std::fs::read_to_string(custom_path()) {
+/// `shelf`'s rows; an absent or malformed file is an empty catalog, never an error. A row the
+/// shelf may not hold ([`Shelf::holds`]) is left out.
+fn load_catalog(shelf: Shelf) -> Catalog {
+    let mut catalog = match std::fs::read_to_string(shelf.path()) {
         Ok(raw) => match serde_json::from_str::<LibraryFile>(&raw) {
             Ok(LibraryFile::V2(c)) => c,
             Ok(LibraryFile::Legacy(entries)) => Catalog {
@@ -219,46 +290,76 @@ pub fn load_catalog() -> Catalog {
             }
         },
         Err(_) => Catalog::default(),
+    };
+    let before = catalog.entries.len();
+    catalog.entries.retain(|e| shelf.holds(e));
+    if catalog.entries.len() < before {
+        let left_out = before - catalog.entries.len();
+        tracing::warn!(
+            ?shelf,
+            left_out,
+            "library rows outside this file's ids left out"
+        );
     }
+    catalog
 }
 
 type CatalogCache = Mutex<Option<((Option<SystemTime>, u64), Arc<Catalog>)>>;
 
-fn catalog_cache() -> &'static CatalogCache {
-    static CACHE: OnceLock<CatalogCache> = OnceLock::new();
-    CACHE.get_or_init(Default::default)
+fn catalog_cache(shelf: Shelf) -> &'static CatalogCache {
+    static CACHES: [CatalogCache; 2] = [Mutex::new(None), Mutex::new(None)];
+    &CACHES[shelf as usize]
 }
 
-/// The catalog for readers, parsed once and kept until `library.json`'s mtime or length moves.
+/// The box's catalog for readers ([`catalog_of`]).
+pub(crate) fn catalog() -> Arc<Catalog> {
+    catalog_of(Shelf::Box)
+}
+
+/// `shelf`'s catalog for readers, parsed once and kept until its file's mtime or length moves.
 /// Every list, launch and cover request reads it; parsing megabytes for each would dominate a
 /// large library. Writers parse their own copy ([`load_catalog`]) and drop this one on save.
-pub(crate) fn catalog() -> Arc<Catalog> {
-    let Ok(md) = std::fs::metadata(custom_path()) else {
+fn catalog_of(shelf: Shelf) -> Arc<Catalog> {
+    let Ok(md) = std::fs::metadata(shelf.path()) else {
         return Arc::default();
     };
     let stamp = (md.modified().ok(), md.len());
-    if let Some((s, c)) = catalog_cache()
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .as_ref()
-    {
+    let cache = catalog_cache(shelf);
+    if let Some((s, c)) = cache.lock().unwrap_or_else(|e| e.into_inner()).as_ref() {
         if *s == stamp {
             return c.clone();
         }
     }
-    let parsed = Arc::new(load_catalog());
-    *catalog_cache().lock().unwrap_or_else(|e| e.into_inner()) = Some((stamp, parsed.clone()));
+    let parsed = Arc::new(load_catalog(shelf));
+    *cache.lock().unwrap_or_else(|e| e.into_inner()) = Some((stamp, parsed.clone()));
     parsed
 }
 
+/// The box's rows.
 pub fn load_custom() -> Vec<CustomEntry> {
     catalog().entries.clone()
 }
 
 /// One stored row by host id, as written — `detect` and `prep` included, which the
-/// catalog read model leaves out.
+/// catalog read model leaves out. An own id reads this seat host's own shelf.
 pub fn get_custom(id: &str) -> Option<CustomEntry> {
-    catalog().entries.iter().find(|e| e.id == id).cloned()
+    catalog_of(Shelf::of(id))
+        .entries
+        .iter()
+        .find(|e| e.id == id)
+        .cloned()
+}
+
+/// The profile in view's own titles: on a seat host its own rows, on any other host the names
+/// its seat published ([`own_titles`]), which start nothing there.
+pub(crate) fn own_entries(view: &View) -> Vec<CustomEntry> {
+    if keeps_own_titles() {
+        return catalog_of(Shelf::Own).entries.clone();
+    }
+    own_titles(view)
+        .into_iter()
+        .map(CustomEntry::from)
+        .collect()
 }
 
 /// Store ids a plugin has claimed, so library scans skip the matching built-in scanner.
@@ -268,10 +369,11 @@ pub fn claimed_stores() -> BTreeMap<String, String> {
 
 /// Surfaced library id. Every `GameEntry` mapping and id→entry lookup goes through here.
 /// Claimed: `<store>:<external_id>` (GameStream FNV-1a ids, art caches, Moonlight pins).
-/// Unclaimed: opaque `custom:<id>`.
+/// A seat host's own row: its `own:` id. Unclaimed: opaque `custom:<id>`.
 pub(crate) fn library_id_for(e: &CustomEntry) -> String {
     match (e.store.as_deref(), e.external_id.as_deref()) {
         (Some(store), Some(external)) => format!("{store}:{external}"),
+        _ if is_own_id(&e.id) => e.id.clone(),
         _ => format!("custom:{}", e.id),
     }
 }
@@ -283,31 +385,45 @@ pub(crate) fn source_id_for(e: &CustomEntry) -> Option<&str> {
     e.store.as_deref().or(e.provider.as_deref())
 }
 
-/// Gated like [`super::collect_games`]: a source switched off, or left out on a seat, must not
-/// serve art (`GET /library/art` is on the paired-cert allowlist). Per-entry hide is not applied
-/// here — the console draws a dimmed cover, and this resolver cannot see the caller's lane.
+/// [`entry_in`] this host's own view.
 pub fn entry_for_library_id(library_id: &str) -> Option<CustomEntry> {
-    let off = disabled_scanners();
+    entry_in(&View::here(), library_id)
+}
+
+/// Gated like [`super::collect_games`]: a source switched off in `view`, or left out on a seat,
+/// must not serve art (`GET /library/art` is on the paired-cert allowlist). Per-entry hide is not
+/// applied here — the console draws a dimmed cover, and this resolver cannot see the caller's lane.
+/// An own id is the profile in view's own title ([`own_entries`]).
+fn entry_in(view: &View, library_id: &str) -> Option<CustomEntry> {
+    if is_own_id(library_id) {
+        return own_entries(view).into_iter().find(|e| e.id == library_id);
+    }
+    let off = disabled_scanners(view);
     catalog()
         .entries
         .iter()
         .find(|e| library_id_for(e) == library_id)
-        .filter(|e| !source_off(e, &off))
+        .filter(|e| !source_off(e, &off, view.reach))
         .cloned()
 }
 
-/// The entry's art as `GET /library` lists it: its own, merged with picks and metadata sources.
-pub(crate) fn merged_art(library_id: &str) -> Option<Artwork> {
-    let mut g = GameEntry::from(entry_for_library_id(library_id)?);
-    Fills::load().apply(&mut g);
+/// The entry's art as `GET /library` lists it in `view`: its own, merged with picks and
+/// metadata sources.
+pub(crate) fn merged_art(view: &View, library_id: &str) -> Option<Artwork> {
+    let mut g = GameEntry::from(entry_in(view, library_id)?);
+    Fills::load(view).apply(&mut g);
     Some(g.art)
 }
 
-/// Art bytes for one [`ArtKind`], or `None` — no row, no such field, or art the proxy may not
-/// serve. A remote URL comes from the host's store, which fetches it on the first miss.
+/// Art bytes for one [`ArtKind`] in `view`, or `None` — no row, no such field, or art the proxy
+/// may not serve. A remote URL comes from the host's store, which fetches it on the first miss.
 /// Blocking IO — call off the async runtime.
-pub fn library_art_bytes(library_id: &str, kind: ArtKind) -> Option<(Vec<u8>, String)> {
-    let field = art_field(&merged_art(library_id)?, kind)?;
+pub fn library_art_bytes(
+    view: &View,
+    library_id: &str,
+    kind: ArtKind,
+) -> Option<(Vec<u8>, String)> {
+    let field = art_field(&merged_art(view, library_id)?, kind)?;
     resolve_art_bytes(&field)
 }
 
@@ -341,12 +457,27 @@ fn catalog_lock() -> std::sync::MutexGuard<'static, ()> {
 }
 
 /// Every mutation path goes through here, so the first write upgrades v1. Owner-only, like
-/// hooks.json: a local user must not plant `prep`/`launch`.
-fn save_catalog(catalog: &Catalog) -> Result<()> {
-    save_json(&custom_path(), &serde_json::to_string_pretty(catalog)?)?;
+/// hooks.json: a local user must not plant `prep`/`launch`. A host that reads the box's library
+/// never writes the box's file: on Windows that file is the box's live one.
+fn save_catalog(shelf: Shelf, catalog: &Catalog) -> Result<()> {
+    anyhow::ensure!(
+        shelf == Shelf::Own || pf_paths::seat::box_library_dir().is_none(),
+        "write the box's library from a host that reads it"
+    );
+    save_json(&shelf.path(), &serde_json::to_string_pretty(catalog)?)?;
     // Two saves inside one mtime tick can leave the same stamp on different bytes.
-    *catalog_cache().lock().unwrap_or_else(|e| e.into_inner()) = None;
+    *catalog_cache(shelf)
+        .lock()
+        .unwrap_or_else(|e| e.into_inner()) = None;
     Ok(())
+}
+
+/// A new row's id: `own:` and 12 random hex on a seat host's own shelf, else [`new_id`].
+fn new_id_on(shelf: Shelf, title: &str) -> String {
+    match shelf {
+        Shelf::Box => new_id(title),
+        Shelf::Own => format!("{OWN_PREFIX}{}", &crate::mgmt_token::random_token()[..12]),
+    }
 }
 
 /// 12 hex chars from title + wall-clock nanos.
@@ -371,11 +502,14 @@ pub enum MutateOutcome<T> {
     },
 }
 
+/// Add a manual row: to this seat host's own shelf on a seat host ([`keeps_own_titles`]), else to
+/// the box's.
 pub fn add_custom(input: CustomInput) -> Result<CustomEntry> {
+    let shelf = Shelf::here();
     let _serial = catalog_lock();
-    let mut catalog = load_catalog();
+    let mut catalog = load_catalog(shelf);
     let entry = CustomEntry {
-        id: new_id(&input.title),
+        id: new_id_on(shelf, &input.title),
         title: input.title,
         art: input.art,
         launch: input.launch,
@@ -393,15 +527,17 @@ pub fn add_custom(input: CustomInput) -> Result<CustomEntry> {
         meta: input.meta,
     };
     catalog.entries.push(entry.clone());
-    save_catalog(&catalog)?;
+    save_catalog(shelf, &catalog)?;
     emit_changed("manual");
     Ok(entry)
 }
 
-/// Replace a manual row (id kept). Provider-owned rows are refused — they belong to reconcile.
+/// Replace a manual row (id kept), on the shelf its id names ([`Shelf::of`]). Provider-owned rows
+/// are refused — they belong to reconcile.
 pub fn update_custom(id: &str, input: CustomInput) -> Result<MutateOutcome<CustomEntry>> {
+    let shelf = Shelf::of(id);
     let _serial = catalog_lock();
-    let mut catalog = load_catalog();
+    let mut catalog = load_catalog(shelf);
     let Some(slot) = catalog.entries.iter_mut().find(|e| e.id == id) else {
         return Ok(MutateOutcome::NotFound);
     };
@@ -428,15 +564,17 @@ pub fn update_custom(id: &str, input: CustomInput) -> Result<MutateOutcome<Custo
     }
     slot.meta = input.meta;
     let updated = slot.clone();
-    save_catalog(&catalog)?;
+    save_catalog(shelf, &catalog)?;
     emit_changed("manual");
     Ok(MutateOutcome::Done(updated))
 }
 
-/// Delete a manual row. Provider-owned rows are refused (see [`update_custom`]).
+/// Delete a manual row, on the shelf its id names. Provider-owned rows are refused (see
+/// [`update_custom`]).
 pub fn delete_custom(id: &str) -> Result<MutateOutcome<()>> {
+    let shelf = Shelf::of(id);
     let _serial = catalog_lock();
-    let mut catalog = load_catalog();
+    let mut catalog = load_catalog(shelf);
     let Some(entry) = catalog.entries.iter().find(|e| e.id == id) else {
         return Ok(MutateOutcome::NotFound);
     };
@@ -444,7 +582,7 @@ pub fn delete_custom(id: &str) -> Result<MutateOutcome<()>> {
         return Ok(MutateOutcome::ProviderOwned(provider.clone()));
     }
     catalog.entries.retain(|e| e.id != id);
-    save_catalog(&catalog)?;
+    save_catalog(shelf, &catalog)?;
     emit_changed("manual");
     Ok(MutateOutcome::Done(()))
 }
@@ -515,9 +653,9 @@ pub fn validate_provider_name(provider: &str) -> Result<(), String> {
 
 /// Prefix of every claimed library id, so tighter than a provider name: no dots (ids split on
 /// the first `:`; a dotted store reads as a hostname in logs). `custom` is the unclaimed
-/// namespace; `manual` is the `library.changed` sentinel.
+/// namespace, `own` a seat host's own; `manual` is the `library.changed` sentinel.
 pub fn validate_store_claim(store: &str) -> Result<(), String> {
-    if store == "custom" || store == "manual" {
+    if matches!(store, "custom" | "own" | "manual") {
         return Err(format!("store id `{store}` is reserved"));
     }
     let ok = !store.is_empty()
@@ -742,7 +880,7 @@ pub fn reconcile_provider(
     inputs: Vec<ProviderEntryInput>,
 ) -> Result<MutateOutcome<Vec<CustomEntry>>> {
     let _serial = catalog_lock();
-    let mut catalog = load_catalog();
+    let mut catalog = load_catalog(Shelf::Box);
     // The provider's rows in its own order: a reconcile moves them to the end of the list.
     let rows = |c: &Catalog| {
         serde_json::to_value(
@@ -783,7 +921,7 @@ pub fn reconcile_provider(
     }
     let result = reconcile_entries(&mut catalog.entries, provider, store, inputs);
     if (rows(&catalog), catalog.claims.clone()) != before {
-        save_catalog(&catalog)?;
+        save_catalog(Shelf::Box, &catalog)?;
         emit_changed(provider);
     }
     Ok(MutateOutcome::Done(result))
@@ -794,7 +932,7 @@ pub fn reconcile_provider(
 /// the built-in scanner without a restart.
 pub fn delete_provider(provider: &str) -> Result<usize> {
     let _serial = catalog_lock();
-    let mut catalog = load_catalog();
+    let mut catalog = load_catalog(Shelf::Box);
     let before = catalog.entries.len();
     catalog
         .entries
@@ -807,7 +945,7 @@ pub fn delete_provider(provider: &str) -> Result<usize> {
         if released > 0 {
             tracing::info!(provider, released, "library: store claim released");
         }
-        save_catalog(&catalog)?;
+        save_catalog(Shelf::Box, &catalog)?;
         emit_changed(provider);
     }
     Ok(removed)
@@ -1215,6 +1353,7 @@ mod tests {
         assert!(validate_store_claim("epic-games").is_ok());
         assert!(validate_store_claim("xbox_pc").is_ok());
         assert!(validate_store_claim("custom").is_err());
+        assert!(validate_store_claim("own").is_err());
         assert!(validate_store_claim("manual").is_err());
         assert!(validate_store_claim("").is_err());
         assert!(validate_store_claim("Steam").is_err());

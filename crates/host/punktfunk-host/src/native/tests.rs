@@ -164,6 +164,21 @@ fn an_umbriel_ipc_mismatch_reaches_the_client_in_words() {
     assert!(said.len() <= punktfunk_core::quic::REFUSED_REASON_MAX);
 }
 
+/// A joiner whose own stream beside the shared one got no frame is told what to change.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_shared_capture_in_another_format_reaches_the_client_in_words() {
+    let buried = anyhow::anyhow!("no PipeWire frame within 10s (node 66)")
+        .context(pf_capture::SharedCaptureTaken)
+        .context("first frame")
+        .context("build the session pipeline");
+    let said = setup_failed_sentence(&buried)
+        .expect("a taken shared capture has words for the user")
+        .text;
+    assert!(said.contains("same video codec"), "{said}");
+    assert!(said.len() <= punktfunk_core::quic::REFUSED_REASON_MAX);
+}
+
 /// A node-less output that direct capture refused reaches the client in words.
 #[cfg(target_os = "linux")]
 #[test]
@@ -1226,6 +1241,9 @@ fn access_request_pairs_without_a_session() {
     let store = crate::test_support::scratch().join("pf-access-test.json");
     let np = Arc::new(NativePairing::load_with(Some(store.clone()), None, false).unwrap());
     let np_host = np.clone();
+    // A request names the fingerprint the host must show, as an advert would give it.
+    let identity = crate::identity::ephemeral().unwrap();
+    let host_pin = endpoint::fingerprint_of_pem(&identity.cert_pem).unwrap();
     let host = std::thread::spawn(move || {
         let rt = tokio::runtime::Builder::new_multi_thread()
             .worker_threads(2)
@@ -1253,7 +1271,7 @@ fn access_request_pairs_without_a_session() {
             StatsRecorder::new(
                 std::env::temp_dir().join(format!("pf-access-stats-{}", std::process::id())),
             ),
-            crate::identity::ephemeral().unwrap(),
+            identity,
             None,
         ))
     });
@@ -1291,7 +1309,7 @@ fn access_request_pairs_without_a_session() {
             "127.0.0.1",
             19795,
             (&cert, &key),
-            None,
+            host_pin,
             "Access Deck",
             std::time::Duration::from_secs(15),
             None,
@@ -1299,7 +1317,7 @@ fn access_request_pairs_without_a_session() {
     };
     let host_fp = ask().expect("approval answers the parked request");
     approver.join().unwrap();
-    assert_ne!(host_fp, [0; 32]);
+    assert_eq!(host_fp, host_pin);
     assert!(np.is_paired(&expected_fp), "approval pairs the device");
 
     let started = std::time::Instant::now();
@@ -1601,6 +1619,7 @@ fn plain_hello(
         access_only: false,
         screens: Vec::new(),
         view: None,
+        screen_wish: None,
     }
 }
 
@@ -1979,6 +1998,55 @@ fn a_profile_is_resolved_in_the_handshake() {
     host.join().unwrap().unwrap();
 }
 
+/// A synthetic source has no monitors, so the `ServerHello` answers a wish with "no monitors
+/// here", or "not allowed" to a device without the screen choice. No wish, no role.
+#[test]
+fn the_server_hello_answers_a_screen_wish() {
+    let _registry = crate::session_status::tests::registry_lock();
+    let _serial = SESSION_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    use punktfunk_core::client::{ConnectParams, NativeClient};
+    use punktfunk_core::quic::endpoint;
+    use punktfunk_core::quic::v2::hello::{RoleEcho, RoleReason, ScreenWish};
+
+    let store = access_store_path("screen-wish");
+    let _ = std::fs::remove_file(&store);
+    let np = Arc::new(NativePairing::load_with(Some(store.clone()), None, false).unwrap());
+    let (cert, key) = endpoint::generate_identity().unwrap();
+    let fp_hex = hex::encode(endpoint::fingerprint_of_pem(&cert).unwrap());
+    np.add_with_access("Tablet", &fp_hex, None).unwrap();
+    let host = spawn_access_host(19799, 3, np.clone());
+    std::thread::sleep(std::time::Duration::from_millis(500));
+    let role = |screen_wish| {
+        let mode = punktfunk_core::Mode {
+            width: 1280,
+            height: 720,
+            refresh_hz: 60,
+        };
+        let timeout = std::time::Duration::from_secs(10);
+        let client = NativeClient::connect(ConnectParams {
+            name: Some("Tablet".into()),
+            identity: Some((cert.clone(), key.clone())),
+            screen_wish,
+            ..ConnectParams::new("127.0.0.1", 19799, mode, timeout)
+        })
+        .expect("admitted");
+        client.role()
+    };
+    let echo = |reason| Some(RoleEcho { role: None, reason });
+
+    assert_eq!(role(Some(ScreenWish::Second)), echo(RoleReason::NoMonitors));
+    assert_eq!(role(None), None);
+    let controller_only = crate::native_pairing::Access {
+        grants: punktfunk_core::quic::GRANT_PRESET_CONTROLLER_ONLY,
+        expires_unix: None,
+        until_disconnect: false,
+    };
+    assert!(np.set_access(&fp_hex, controller_only).unwrap());
+    assert_eq!(role(Some(ScreenWish::Only)), echo(RoleReason::NotAllowed));
+    let _ = std::fs::remove_file(&store);
+    host.join().unwrap().unwrap();
+}
+
 /// A launch the host cannot resolve streams on, and the client learns why from the
 /// control message.
 #[test]
@@ -2028,6 +2096,103 @@ fn unknown_launch_reaches_the_client_as_a_refusal() {
     drop(client);
     let _ = std::fs::remove_file(&store);
     host.join().unwrap().unwrap();
+}
+
+/// Set on the refused-prep test's child only.
+#[cfg(unix)]
+const PREP_CHILD: &str = "PF_REFUSED_PREP_TEST_CHILD";
+
+/// A title the session can't launch runs none of its prep: one the box hides, and one the
+/// session's profile hides, are refused before a step runs. The library is the config dir,
+/// process config, so the body runs in a child of this test binary with a config dir of its own.
+#[cfg(unix)]
+#[test]
+fn a_refused_launch_runs_none_of_its_prep() {
+    if std::env::var_os(PREP_CHILD).is_none() {
+        let dir = tempfile::tempdir().unwrap();
+        let module = module_path!().split_once("::").expect("crate::module").1;
+        let test = format!("{module}::a_refused_launch_runs_none_of_its_prep");
+        let mut child =
+            std::process::Command::new(std::env::current_exe().expect("this test binary"));
+        child.args(["--exact", &test, "--nocapture"]);
+        for (key, _) in std::env::vars_os() {
+            if key.to_string_lossy().starts_with("PUNKTFUNK_") {
+                child.env_remove(key);
+            }
+        }
+        let out = child
+            .env(PREP_CHILD, "1")
+            .env("PUNKTFUNK_CONFIG_DIR", dir.path())
+            .output()
+            .expect("run the child");
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(out.status.success(), "{stdout}{stderr}");
+        assert!(
+            stdout.contains("1 passed"),
+            "the child ran no test: {stdout}"
+        );
+        return;
+    }
+    use crate::library::{set_entry_hidden, Reach, View};
+    let dir = pf_paths::config_dir();
+    let marker = |title: &str| dir.join(format!("{title}.prep"));
+    let add = |title: &str| {
+        let touch = format!("touch {}", marker(title).display());
+        let input = serde_json::json!({"title": title, "prep": [{"do": touch}]});
+        let entry = crate::library::add_custom(serde_json::from_value(input).unwrap()).unwrap();
+        format!("custom:{}", entry.id)
+    };
+    let (boxed, own, shown) = (add("boxed"), add("own"), add("shown"));
+    const KID: &str = "a1b2c3d4e5f6";
+    set_entry_hidden(&View::here(), &boxed, true).unwrap();
+    set_entry_hidden(&View::of(KID, false, Reach::default()), &own, true).unwrap();
+    let resolved = |id: &str, owner: bool| crate::profiles::Resolved {
+        id: id.into(),
+        display_name: id.into(),
+        os_account: crate::profiles::OsAccount::Operator,
+        home: Default::default(),
+        via: crate::profiles::ResolveVia::Asked,
+        owner,
+    };
+    let owner = crate::session_launch::LaunchOwner {
+        client: "prep-test".into(),
+        fingerprint: None,
+        plane: crate::events::Plane::Native,
+        preset: None,
+        profile: None,
+        pad: punktfunk_core::config::GamepadPref::Xbox360,
+        pad_slots: None,
+    };
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    for (id, profile) in [
+        (&boxed, resolved("0f0f0f0f0f0f", true)),
+        (&own, resolved(KID, false)),
+    ] {
+        assert!(!crate::library::prep_for(id).is_empty(), "{id} has prep");
+        let mut hello = plain_hello(None, Default::default()).hello;
+        hello.launch = Some(id.clone());
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        let stop = std::sync::atomic::AtomicBool::new(false);
+        let (target, _, prepared) = rt
+            .block_on(super::launch::prepare_launch(
+                &hello, false, &profile, &owner, &tx, &stop,
+            ))
+            .unwrap();
+        assert!(target.is_none() && prepared.prep.is_none(), "{id}");
+        let refusal = rx.try_recv().expect("a refusal");
+        assert_eq!(
+            refusal.kind,
+            punktfunk_core::quic::LaunchOutcomeKind::Refused
+        );
+    }
+    assert!(!marker("boxed").exists() && !marker("own").exists());
+    // The same step runs for a title nobody hides.
+    let _prep = crate::hooks::run_prep(&crate::library::prep_for(&shown), &[]);
+    assert!(marker("shown").exists());
 }
 
 /// Expired record knocks into pending; re-approval is the re-grant on the held connection.

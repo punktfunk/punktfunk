@@ -12,8 +12,9 @@ use super::*;
 use crate::native::bitrate::{
     audio_reserved_kbps, resolve_bitrate_kbps_for, session_pyrowave_bpp, EncDerive,
 };
+use crate::vdisplay::policy::{DisplayTarget, Topology};
 use punktfunk_core::abr::budget::FEC_ADAPTIVE_START;
-use punktfunk_core::quic::v2::hello::ScreenEcho;
+use punktfunk_core::quic::v2::hello::{Role, RoleEcho, RoleReason, ScreenEcho, ScreenWish};
 
 /// Encode tier and `0xD2` redundancy, budgeted against this session's video kbps.
 ///
@@ -476,6 +477,13 @@ pub(super) struct Negotiated {
     pub(super) encoder: Arc<crate::encode::Resolved>,
     /// The session streams a host monitor: the device's screen as `ServerHello` stated it.
     pub(super) mirrored: bool,
+    /// The screen this session wants ([`session_screen`]); every open of it re-checks it is free.
+    pub(super) screen: Option<crate::vdisplay::policy::DisplayTarget>,
+    /// The topology its own screen opens under ([`session_screen`]); rebuilds reuse it.
+    pub(super) topology: Option<crate::vdisplay::policy::Topology>,
+    /// The session's display is lit in HDR. The Welcome's colour is the stream's, which is SDR
+    /// while the content on that display is.
+    pub(super) display_hdr: bool,
     /// The client asked for a game, and joining a shared screen dropped it.
     pub(super) launch_dropped: bool,
 }
@@ -586,6 +594,8 @@ struct Terms {
     audio_channels: u8,
     bit_depth: u8,
     hdr: bool,
+    /// [`Verdict::display_hdr`].
+    display_hdr: bool,
     chroma: crate::encode::ChromaFormat,
     /// The colours the client asked to get at studio range.
     studio_asked: crate::session_plan::StudioAsk,
@@ -600,11 +610,17 @@ struct Terms {
     screen: Option<ScreenEcho>,
     /// `screen` is a monitor this session mirrors.
     mirrored: bool,
+    /// The screen this session wants ([`session_screen`]), which every open re-checks.
+    wanted: Option<crate::vdisplay::policy::DisplayTarget>,
+    /// [`Negotiated::topology`].
+    topology: Option<crate::vdisplay::policy::Topology>,
+    /// The role the Welcome states ([`role_echo`]).
+    role: Option<RoleEcho>,
 }
 
 /// `ClientHello` → `ServerHello` → `Ready`. Borrows the control streams; the caller keeps them
-/// for mid-stream renegotiation. A joiner that can't stream the owner's HDR display is refused
-/// before `ServerHello`.
+/// for mid-stream renegotiation. A joiner that can't stream the owner's HDR display, or the
+/// format of a capture it shares, is refused before `ServerHello`.
 pub(super) async fn negotiate(
     n: Negotiation<'_>,
     send: &mut super::link::CtlSend,
@@ -633,7 +649,12 @@ pub(super) async fn negotiate(
         compositor = d.compositor;
         gamescope_route = d.route.clone();
     }
-    let screen = session_screen(&n, joined.is_some()).await?;
+    let SessionScreen {
+        wanted,
+        echo: screen,
+        topology,
+        role,
+    } = session_screen(&n, joined.is_some(), compositor).await?;
     let mirrored = matches!(screen, Some(ScreenEcho::Monitor(_)));
     // A joiner's view rides `joined`; a mirrored head keeps its own fit.
     let view = view.filter(|_| joined.is_none() && !mirrored);
@@ -653,22 +674,22 @@ pub(super) async fn negotiate(
         "audio channels"
     );
 
-    let studio_asked = crate::session_plan::StudioAsk::of(&n.first.features);
-    let owner_hdr = joined.as_ref().map(|(d, _)| d.hdr);
-    let (bit_depth, session_hdr, chroma) = negotiate_video_format(
-        FormatFacts::of(
-            &hello,
-            studio_asked,
-            compositor,
-            gamescope_route.as_ref(),
-            &n.knobs,
-            owner_hdr,
-        ),
-        codec,
-        encoder.clone(),
-        hello.mode,
-    )
-    .await?;
+    let facts = FormatFacts::of(
+        &hello,
+        crate::session_plan::StudioAsk::of(&n.first.features),
+        compositor,
+        gamescope_route.as_ref(),
+        &n.knobs,
+        joined.as_ref().map(|(d, _)| d),
+        follows_source(&n.first.features, mirrored),
+    );
+    let (studio_asked, owner_hdr) = (facts.studio_asked, facts.owner_hdr);
+    let Verdict {
+        bit_depth,
+        hdr: session_hdr,
+        chroma,
+        display_hdr,
+    } = negotiate_video_format(facts.clone(), codec, encoder.clone(), hello.mode).await?;
     if owner_hdr.is_some_and(|o| crate::vdisplay::admission::joined_hdr(o, session_hdr).is_none()) {
         // Out of the table first, as `admit_mode`'s refusal.
         drop(reservation);
@@ -678,6 +699,15 @@ pub(super) async fn negotiate(
         );
         n.conn.refuse_said(REJECT_BUSY_CODE, &said).await;
         anyhow::bail!("join refused: the shared display is HDR and this session can't be");
+    }
+    let resolved = (bit_depth, session_hdr, chroma);
+    if let Some(Err(gap)) = facts.joined_format(codec, &encoder, resolved) {
+        drop(reservation);
+        let (id, text) = gap.said();
+        n.conn
+            .refuse_said(REJECT_BUSY_CODE, &super::Said::new(id, text))
+            .await;
+        anyhow::bail!("join refused: this session can't take the shared capture's {gap:?}");
     }
 
     // After depth + chroma: PyroWave Automatic is a ~bpp pin that scales with both, at the
@@ -720,6 +750,7 @@ pub(super) async fn negotiate(
         audio_channels,
         bit_depth,
         hdr: session_hdr,
+        display_hdr,
         chroma,
         studio_asked,
         pyrowave_bpp,
@@ -730,6 +761,9 @@ pub(super) async fn negotiate(
         audio_plane,
         screen,
         mirrored,
+        wanted,
+        topology,
+        role,
     };
     let server_hello = server_hello(&n, &t, welcome(&n, &t));
     let host_link = crate::telemetry::net_health::host_link(
@@ -767,28 +801,159 @@ pub(super) async fn negotiate(
         resolved: n.resolved,
         encoder: t.encoder,
         mirrored: t.mirrored,
+        screen: t.wanted,
+        topology: t.topology,
+        display_hdr: t.display_hdr,
         launch_dropped,
     })
 }
 
-/// The screen this session streams, decided once: the Welcome says it and the plan captures it.
-/// A monitor the session cannot mirror now reads as its own screen. A joiner streams the owner's
-/// display and a synthetic source none, so neither picks one. Blocks on a compositor read.
-async fn session_screen(n: &Negotiation<'_>, joined: bool) -> Result<Option<ScreenEcho>> {
-    if joined || !matches!(n.source, Punktfunk1Source::Virtual) {
-        return Ok(None);
-    }
-    let client = n.conn.peer_fingerprint();
-    let echo = tokio::task::spawn_blocking(move || {
-        let target = crate::vdisplay::resolve_screen(client).target;
-        match target.clone().into_monitor() {
-            Some(c) if crate::vdisplay::mirrors(&target) => ScreenEcho::Monitor(c),
-            _ => ScreenEcho::Own,
+/// What [`session_screen`] settles.
+#[derive(Default)]
+struct SessionScreen {
+    /// The screen wanted, which every open re-checks.
+    wanted: Option<DisplayTarget>,
+    /// The screen the Welcome states.
+    echo: Option<ScreenEcho>,
+    /// The topology an own screen opens under.
+    topology: Option<Topology>,
+    /// The role the Welcome states ([`role_echo`]).
+    role: Option<RoleEcho>,
+}
+
+/// The screen this session wants, the one the Welcome states, the topology of its own screen
+/// ([`crate::vdisplay::session_topology`]) and its role, decided once and logged. A joiner
+/// streams the owner's display and states neither; a synthetic source has no screen, so a wish
+/// there reads as no monitors. Blocks on a compositor read.
+async fn session_screen(
+    n: &Negotiation<'_>,
+    joined: bool,
+    compositor: Option<crate::vdisplay::Compositor>,
+) -> Result<SessionScreen> {
+    let may_choose = n.grants & punktfunk_core::quic::GRANT_DISPLAY != 0;
+    let wish = n.first.screen_wish.clone();
+    let settled = if matches!(n.source, Punktfunk1Source::Virtual) {
+        let client = n.conn.peer_fingerprint();
+        let wish = wish.clone();
+        tokio::task::spawn_blocking(move || {
+            // Only a wish pays for the monitor read: every connect would wait on it otherwise.
+            let desk = !joined && crate::vdisplay::desk(compositor, wish.is_some());
+            settle_screen(client, may_choose, wish, joined, compositor, desk)
+        })
+        .await
+        .context("resolve screen task")?
+    } else {
+        let role = role_echo(wish.is_some(), may_choose, false, None, false, false);
+        SessionScreen {
+            role,
+            ..SessionScreen::default()
         }
-    })
-    .await
-    .context("resolve screen task")?;
-    Ok(Some(echo))
+    };
+    let role = settled.role;
+    tracing::info!(
+        wish = wish.as_ref().map_or_else(|| "none".into(), ToString::to_string),
+        role = ?role.and_then(|r| r.role),
+        reason = ?role.map(|r| r.reason),
+        "session screen role"
+    );
+    Ok(settled)
+}
+
+/// [`session_screen`] for a virtual display. The Hello's `wish` comes first while it counts
+/// ([`asked`]), then the device's pick with the grant (`may_choose`), then the operator's. A
+/// monitor that cannot be mirrored now is stated as the session's own screen.
+fn settle_screen(
+    client: Option<[u8; 32]>,
+    may_choose: bool,
+    wish: Option<ScreenWish>,
+    joined: bool,
+    compositor: Option<crate::vdisplay::Compositor>,
+    desk: bool,
+) -> SessionScreen {
+    let fp = crate::vdisplay::policy::fp_hex(client);
+    let (row, pinned) = crate::vdisplay::screen_target(fp.as_deref(), may_choose);
+    let primary = compositor.is_some_and(crate::vdisplay::Compositor::has_primary);
+    let asked = asked(wish.as_ref(), may_choose, desk, pinned, primary);
+    let wanted = asked.as_ref().map_or(row, |(screen, _)| screen.clone());
+    if joined {
+        return SessionScreen {
+            wanted: Some(wanted),
+            ..SessionScreen::default()
+        };
+    }
+    let pick = crate::vdisplay::resolve_screen(client, Some(wanted.clone()));
+    let mirrored = crate::vdisplay::mirrors(&pick.target);
+    let echo = match pick.target.into_monitor() {
+        Some(c) if mirrored => ScreenEcho::Monitor(c),
+        _ => ScreenEcho::Own,
+    };
+    // A wished monitor that fell back.
+    let unavailable = asked.is_some() && pick.reason.is_some();
+    let (mut topology, mut held, mut got) = (None, false, None);
+    if let (ScreenEcho::Own, Some(c)) = (&echo, compositor) {
+        let want = asked.and_then(|(_, t)| t);
+        let want = want.or_else(|| crate::vdisplay::wanted_topology(fp.as_deref(), may_choose));
+        (topology, held) = crate::vdisplay::session_topology(client, want, c);
+        let applied = topology.unwrap_or_else(|| crate::vdisplay::effective_topology(client));
+        // Monitors this session wants on stay off under an earlier `only` screen.
+        held |= applied != Topology::Exclusive
+            && crate::vdisplay::monitors_off_by()
+                .iter()
+                .flatten()
+                .any(|d| Some(d) != fp.as_ref());
+        got = Some(crate::vdisplay::role_of(applied, primary));
+    }
+    let allowed = may_choose && !pinned;
+    SessionScreen {
+        wanted: Some(wanted),
+        role: role_echo(wish.is_some(), allowed, desk, got, unavailable, held),
+        echo: Some(echo),
+        topology,
+    }
+}
+
+/// What the Hello's `wish` asks while it counts: the screen, and the topology its own screen
+/// opens under (`None` for a monitor). It counts with the grant (`may_choose`), on the `desk`,
+/// and without the env pin (`pinned`). `main` is `second` where the desktop has no main screen
+/// (`primary`). Nothing is stored.
+fn asked(
+    wish: Option<&ScreenWish>,
+    may_choose: bool,
+    desk: bool,
+    pinned: bool,
+    primary: bool,
+) -> Option<(DisplayTarget, Option<Topology>)> {
+    let own = |t| Some((DisplayTarget::Own, Some(t)));
+    match wish.filter(|_| may_choose && desk && !pinned)? {
+        ScreenWish::Only => own(Topology::Exclusive),
+        ScreenWish::Main if primary => own(Topology::Primary),
+        ScreenWish::Main | ScreenWish::Second => own(Topology::Extend),
+        ScreenWish::Monitor(c) => Some((DisplayTarget::Monitor(c.clone()), None)),
+    }
+}
+
+/// Tag 30: the role `got` (`None` for a copy of a monitor) and why it is not what a `wish`, or
+/// with none nothing, asked. Off the `desk` there is no role, and only a wish is answered.
+/// `allowed`: the device may choose and no env pin decides. `unavailable`: a wished monitor
+/// fell back. `held`: an earlier session decided the monitors. Precedence 1, 4, 3, 2.
+fn role_echo(
+    wish: bool,
+    allowed: bool,
+    desk: bool,
+    got: Option<Role>,
+    unavailable: bool,
+    held: bool,
+) -> Option<RoleEcho> {
+    let reason = match () {
+        _ if wish && !allowed => RoleReason::NotAllowed,
+        _ if wish && !desk => RoleReason::NoMonitors,
+        _ if !desk => return None,
+        _ if unavailable => RoleReason::Unavailable,
+        _ if held => RoleReason::MonitorsHeld,
+        _ => RoleReason::AsAsked,
+    };
+    let role = got.filter(|_| desk);
+    Some(RoleEcho { role, reason })
 }
 
 /// The Welcome's shard payload. Before Welcome: a path a previous session proved jumbo is given
@@ -897,7 +1062,8 @@ fn welcome(n: &Negotiation<'_>, t: &Terms) -> Welcome {
 }
 
 /// The `ServerHello` around `welcome`. Settles the session's media suite, which keys the media,
-/// offers the native features this session can run, and tells a joiner its screen is shared.
+/// offers the native features this session can run, states its screen and role, and tells a
+/// joiner its screen is shared.
 fn server_hello(n: &Negotiation<'_>, t: &Terms, welcome: Welcome) -> ServerHello {
     // A browser's media goes unsealed, inside WebTransport's own encryption.
     let suite = (!n.conn.is_web()).then_some(if t.chacha {
@@ -941,6 +1107,7 @@ fn server_hello(n: &Negotiation<'_>, t: &Terms, welcome: Welcome) -> ServerHello
             Some(_) => Some(ScreenEcho::Shared),
             None => t.screen.clone(),
         },
+        role: t.role,
     }
 }
 
@@ -989,6 +1156,8 @@ fn prepare_at_welcome(
         shard_payload: welcome.shard_payload,
         encoder: t.encoder.clone(),
         mirrored: t.mirrored,
+        screen: t.wanted.clone(),
+        topology: t.topology,
         // As `SessionContext::reframe_to` and `join_live` carry them.
         reframe_to: reframe_to(t.hello.video_fit, joined_view(&t.joined), t.view),
         join_live: t.joined.is_some(),
@@ -1077,9 +1246,9 @@ fn settle_bitrate(hello: &mut Hello, codec_bit: u8) {
     }
 }
 
-/// The operator's cap for this device, then the launched game's overrides, applied before
-/// mode-conflict and before Welcome: the client is told the mode it actually gets, not a yes
-/// to 4K120 and then something else.
+/// The operator's cap for this device, then the launched game's overrides in the session
+/// profile's view, applied before mode-conflict and before Welcome: the client is told the mode
+/// it actually gets, not a yes to 4K120 and then something else.
 fn cap_mode(n: &Negotiation<'_>, hello: &mut Hello, codec: crate::encode::Codec) {
     let fp = crate::vdisplay::policy::fp_hex(n.conn.peer_fingerprint());
     let want = (hello.mode.width, hello.mode.height, hello.mode.refresh_hz);
@@ -1097,7 +1266,8 @@ fn cap_mode(n: &Negotiation<'_>, hello: &mut Hello, codec: crate::encode::Codec)
     let Some(game) = hello.launch.clone() else {
         return;
     };
-    let Some(o) = crate::library::overrides_for(&game) else {
+    let view = crate::library::View::session(&n.resolved);
+    let Some(o) = crate::library::overrides_for(&view, &game) else {
         return;
     };
     let asked = (hello.mode, hello.video_caps, hello.gamepad);
@@ -1436,41 +1606,119 @@ pub(super) struct FormatFacts {
     pub(super) studio_asked: crate::session_plan::StudioAsk,
     /// A joiner's: whether the owner's display shows HDR.
     pub(super) owner_hdr: Option<bool>,
+    /// A joiner's: the format of the capture it shares, the ceiling of its own.
+    pub(super) owner_format: Option<crate::vdisplay::admission::SampleFormat>,
+    /// The rule runs again when the source moves: the session reaches another compositor, or
+    /// its content turns HDR or SDR. Only for a client that rebuilds its decoder at an epoch,
+    /// on a capture the session does not share.
+    pub(super) follows: bool,
+    /// Whether the source shows HDR content now, where it says ([`Self::follows_content`]).
+    /// `Some(false)` streams SDR off a display lit in HDR. `None` streams what it is lit in.
+    pub(super) content_hdr: Option<bool>,
+}
+
+/// What [`FormatFacts::resolve`] settles: the stream's depth, HDR verdict and chroma, and
+/// whether its display is lit in HDR, which holds while the content on it is SDR.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) struct Verdict {
+    pub(super) bit_depth: u8,
+    pub(super) hdr: bool,
+    pub(super) chroma: crate::encode::ChromaFormat,
+    pub(super) display_hdr: bool,
 }
 
 impl FormatFacts {
+    /// `owner` is the display a joiner was admitted onto. `follows` is the client's promise
+    /// to rebuild its decoder, for a session that mirrors no monitor.
     pub(super) fn of(
         hello: &Hello,
         studio_asked: crate::session_plan::StudioAsk,
         compositor: Option<crate::vdisplay::Compositor>,
         gamescope_route: Option<&crate::vdisplay::GamescopeRoute>,
         knobs: &SessionKnobs,
-        owner_hdr: Option<bool>,
+        owner: Option<&crate::vdisplay::admission::LiveDisplay>,
+        follows: bool,
     ) -> FormatFacts {
+        let owner_format = owner.and_then(|d| d.format);
         FormatFacts {
             video_caps: hello.video_caps,
             compositor,
             gamescope_route: gamescope_route.cloned(),
             sdr10_widen: knobs.sdr10_widen,
-            studio_asked,
-            owner_hdr,
+            studio_asked: asked_under(owner_format, studio_asked),
+            owner_hdr: owner.map(|d| d.hdr),
+            owner_format,
+            follows: follows && owner.is_none(),
+            content_hdr: None,
         }
+    }
+
+    /// gamescope names the HDR state of what it shows; every other source streams what its
+    /// display is lit in. So does a host that shares screens: a shared capture has one format
+    /// for every session on it.
+    pub(super) fn follows_content(&self) -> bool {
+        self.follows
+            && self.compositor == Some(crate::vdisplay::Compositor::Gamescope)
+            && !crate::vdisplay::policy::prefs().get().any_join()
+    }
+
+    /// The facts of a session that moved to `compositor` on `route`. `content_hdr` is what the
+    /// new source shows; a gamescope that just started shows SDR.
+    pub(super) fn moved_to(
+        &self,
+        compositor: crate::vdisplay::Compositor,
+        route: Option<&crate::vdisplay::GamescopeRoute>,
+    ) -> FormatFacts {
+        let mut moved = FormatFacts {
+            compositor: Some(compositor),
+            gamescope_route: route.cloned(),
+            ..self.clone()
+        };
+        moved.content_hdr = moved.follows_content().then_some(false);
+        moved
+    }
+
+    /// What this session streams a shared capture at, or what it misses of it. `resolved` is
+    /// [`Self::resolve`]'s answer for `codec`; `None` for a session that shares no capture.
+    pub(super) fn joined_format(
+        &self,
+        codec: crate::encode::Codec,
+        encoder: &crate::encode::Resolved,
+        (bit_depth, hdr, chroma): (u8, bool, crate::encode::ChromaFormat),
+    ) -> Option<Result<(), crate::vdisplay::admission::FormatGap>> {
+        let can = crate::vdisplay::admission::SampleFormat {
+            bit_depth,
+            chroma_444: chroma.is_444(),
+            full_range: crate::session_plan::full_range_for(
+                encoder,
+                self.studio_asked,
+                codec,
+                hdr,
+                bit_depth,
+            ),
+        };
+        let joined = crate::vdisplay::admission::joined_format(self.owner_format?, can);
+        Some(joined.map(|_| ()))
     }
 
     /// Bit depth, HDR verdict, and chroma for `codec` at `mode`, each gated by host, client,
     /// codec, source, and `encoder`, the session's resolution. A joiner asks HDR only of an HDR
-    /// display. `mode` is the one the pipeline opens at: the Hello's at the handshake, the live
-    /// one on a codec change. Blocks on its probes.
+    /// display. A source showing SDR content streams SDR and keeps its display lit in HDR.
+    /// `mode` is the one the pipeline opens at: the Hello's at the handshake, the live one
+    /// later. Blocks on its probes.
     pub(super) fn resolve(
         &self,
         codec: crate::encode::Codec,
         encoder: &crate::encode::Resolved,
         mode: punktfunk_core::Mode,
-    ) -> (u8, bool, crate::encode::ChromaFormat) {
+    ) -> Verdict {
         let (compositor, gamescope_route) = (self.compositor, self.gamescope_route.as_ref());
         // 10-bit only when host, client, codec, capture, and GPU all allow it. Resolved before
-        // Welcome so `color` matches the stream (a can't-10-bit GPU yields 8-bit SDR).
-        let host_wants_10bit = pf_host_config::config().ten_bit;
+        // Welcome so `color` matches the stream (a can't-10-bit GPU yields 8-bit SDR). A shared
+        // capture's depth and chroma are a joiner's ceiling: no session converts its samples.
+        let shared = self.owner_format;
+        let host_wants_10bit =
+            pf_host_config::config().ten_bit && shared.is_none_or(|f| f.bit_depth == 10);
         let client_supports_10bit = self.video_caps & punktfunk_core::quic::VIDEO_CAP_10BIT != 0;
         // `VIDEO_CAP_HDR` is BT.2020 PQ. `VIDEO_CAP_10BIT` alone is 10-bit SDR (Main10, display
         // untouched).
@@ -1492,24 +1740,23 @@ impl FormatFacts {
         let sdr10_chain_ok = (sdr10_widen || sdr10_source)
             && codec_carries_sdr10(codec, sdr10_source)
             && encoder.carries_sdr10(codec);
-        let depth_reachable = (client_wants_hdr && capture_supports_hdr) || sdr10_chain_ok;
+        // The display can be lit in HDR; the stream is HDR while its content is.
+        let lit_hdr = client_wants_hdr && capture_supports_hdr;
+        let source_hdr = lit_hdr && self.content_hdr != Some(false);
+        let depth_reachable = source_hdr || sdr10_chain_ok;
         // Probe may open a tiny encoder: short-circuited behind the cheap gates.
-        let gpu_can_10bit = if host_wants_10bit
-            && client_supports_10bit
-            && codec.supports_10bit()
-            && depth_reachable
-        {
-            encoder.can_encode_10bit(codec)
-        } else {
-            false
-        };
+        let ten_bit_asked = host_wants_10bit && client_supports_10bit && codec.supports_10bit();
+        let gpu_can_10bit = ten_bit_asked && depth_reachable && encoder.can_encode_10bit(codec);
         let bit_depth: u8 = if gpu_can_10bit { 10 } else { 8 };
-        // Colour label, capturer mandate, and vdisplay HDR all read this, never `bit_depth >= 10`
-        // (10-bit without it is SDR: BT.709 VUI, display untouched).
-        let session_hdr = gpu_can_10bit && client_wants_hdr && capture_supports_hdr;
+        // The colour label and the capturer mandate read this, never `bit_depth >= 10` (10-bit
+        // without it is SDR: BT.709 VUI).
+        let session_hdr = gpu_can_10bit && source_hdr;
+        let display_hdr = ten_bit_asked && lit_hdr && encoder.can_encode_10bit(codec);
         tracing::info!(
             bit_depth,
             session_hdr,
+            display_hdr,
+            content_hdr = ?self.content_hdr,
             host_wants_10bit,
             client_supports_10bit,
             client_wants_hdr,
@@ -1532,7 +1779,8 @@ impl FormatFacts {
 
         // 4:4:4 only when host, client, ingest chain, and GPU all allow it. Resolved before
         // Welcome so the client sizes its decoder from what we will actually emit.
-        let host_wants_444 = pf_host_config::config().four_four_four;
+        let host_wants_444 =
+            pf_host_config::config().four_four_four && shared.is_none_or(|f| f.chroma_444);
         let client_supports_444 = self.video_caps & punktfunk_core::quic::VIDEO_CAP_444 != 0;
         // Ingest chain, not capturer: Windows 4:4:4 needs direct-NVENC RGB ingest (AMF cannot;
         // QSV/ffmpeg has no RGB 4:4:4 wiring). PyroWave does its own RGB→YCbCr; its gate is
@@ -1600,8 +1848,37 @@ impl FormatFacts {
         // Follows the depth clamp: an 8-bit stream is never labelled HDR.
         let session_hdr = session_hdr && bit_depth == 10;
 
-        (bit_depth, session_hdr, chroma)
+        Verdict {
+            bit_depth,
+            hdr: session_hdr,
+            chroma,
+            display_hdr,
+        }
     }
+}
+
+/// The range ask of a session on a `shared` capture: limited where the capture is, whatever
+/// the client asked. A full-range capture leaves the client's ask, which then refuses it.
+fn asked_under(
+    shared: Option<crate::vdisplay::admission::SampleFormat>,
+    asked: crate::session_plan::StudioAsk,
+) -> crate::session_plan::StudioAsk {
+    match shared {
+        Some(f) if !f.full_range => crate::session_plan::StudioAsk {
+            sdr: true,
+            hdr: true,
+        },
+        _ => asked,
+    }
+}
+
+/// Whether a session's format may move with its source ([`FormatFacts::follows`]): the client
+/// rebuilds its decoder at an epoch, and the session mirrors no monitor, whose capture it shares.
+pub(super) fn follows_source(
+    features: &punktfunk_core::quic::v2::features::FeatureSet,
+    mirrored: bool,
+) -> bool {
+    features.has(punktfunk_core::quic::v2::registry::FEATURE_FORMAT_EPOCH) && !mirrored
 }
 
 /// HDR the client asks for: `VIDEO_CAP_HDR`, except a joiner of an SDR display (`owner_hdr`).
@@ -1609,16 +1886,22 @@ fn hdr_asked(video_caps: u8, owner_hdr: Option<bool>) -> bool {
     video_caps & punktfunk_core::quic::VIDEO_CAP_HDR != 0 && owner_hdr != Some(false)
 }
 
-/// [`FormatFacts::resolve`] off the runtime: its probes may open a tiny encoder.
+/// [`FormatFacts::resolve`] off the runtime: its probes may open a tiny encoder. A source that
+/// names its content is read first; a gamescope not up yet shows SDR.
 async fn negotiate_video_format(
-    facts: FormatFacts,
+    mut facts: FormatFacts,
     codec: crate::encode::Codec,
     encoder: Arc<crate::encode::Resolved>,
     mode: punktfunk_core::Mode,
-) -> Result<(u8, bool, crate::encode::ChromaFormat)> {
-    tokio::task::spawn_blocking(move || facts.resolve(codec, &encoder, mode))
-        .await
-        .context("video format probe task")
+) -> Result<Verdict> {
+    tokio::task::spawn_blocking(move || {
+        if facts.follows_content() {
+            facts.content_hdr = Some(crate::vdisplay::hdr_content_now(None));
+        }
+        facts.resolve(codec, &encoder, mode)
+    })
+    .await
+    .context("video format probe task")
 }
 
 /// Linux depth under 4:4:4. An 8-bit capture reaches NVENC 4:4:4 as planar 8-bit YUV444, so a
@@ -1853,6 +2136,32 @@ mod tests {
         );
         assert_eq!(join(VIDEO_CAP_10BIT, true), None, "HDR display, SDR client");
         assert!(hdr_asked(hdr_client, None), "not a joiner: its own ask");
+    }
+
+    /// A joiner of a limited-range capture streams limited range; a full-range one leaves its
+    /// ask alone, and a session with no shared capture keeps its own.
+    #[test]
+    fn a_joiner_asks_a_shared_captures_range() {
+        use crate::session_plan::StudioAsk;
+        use crate::vdisplay::admission::SampleFormat;
+        let shared = |full_range| {
+            Some(SampleFormat {
+                bit_depth: 8,
+                chroma_444: false,
+                full_range,
+            })
+        };
+        let (none, both) = (
+            StudioAsk::default(),
+            StudioAsk {
+                sdr: true,
+                hdr: true,
+            },
+        );
+        assert_eq!(asked_under(shared(false), none), both);
+        assert_eq!(asked_under(shared(true), both), both);
+        assert_eq!(asked_under(shared(true), none), none);
+        assert_eq!(asked_under(None, none), none);
     }
 
     /// The host lowers what a client asked for and never raises it: it knows no panel, so a
@@ -2584,5 +2893,79 @@ mod tests {
         assert_eq!(p.bits, pcm::BITS_16);
         assert_eq!(p.frame_us, 0);
         assert!(!p.is_pcm());
+    }
+
+    /// A wish counts only with the grant, on the desk and without the env pin; then it names the
+    /// screen and its topology. `main` is `second` where the desktop has no main screen.
+    #[test]
+    fn a_wish_counts_with_the_grant_on_the_desk_without_the_pin() {
+        use ScreenWish::{Main, Monitor, Only, Second};
+        let own = |t| Some((DisplayTarget::Own, Some(t)));
+        let granted = |w: &ScreenWish, primary| asked(Some(w), true, true, false, primary);
+        assert_eq!(granted(&Only, true), own(Topology::Exclusive));
+        assert_eq!(granted(&Main, true), own(Topology::Primary));
+        assert_eq!(
+            granted(&Main, false),
+            own(Topology::Extend),
+            "no main screen"
+        );
+        assert_eq!(granted(&Second, true), own(Topology::Extend));
+        let tv = Monitor("HDMI-A-1".into());
+        assert_eq!(
+            granted(&tv, true),
+            Some((DisplayTarget::Monitor("HDMI-A-1".into()), None))
+        );
+        assert_eq!(
+            asked(Some(&Only), false, true, false, true),
+            None,
+            "no grant"
+        );
+        assert_eq!(asked(Some(&Only), true, false, false, true), None, "a seat");
+        assert_eq!(
+            asked(Some(&tv), true, true, true, true),
+            None,
+            "the env pin"
+        );
+        assert_eq!(asked(None, true, true, false, true), None, "no wish");
+    }
+
+    /// Each reason, and the precedence 1, 4, 3, 2. Off the desk only a wish is answered, with
+    /// no role; with no wish only an earlier session changes what the session asked.
+    #[test]
+    fn the_role_echo_names_why_a_session_did_not_get_what_it_asked() {
+        use RoleReason::{AsAsked, MonitorsHeld, NoMonitors, NotAllowed, Unavailable};
+        let echo = |role, reason| Some(RoleEcho { role, reason });
+        let second = Some(Role::Second);
+        assert_eq!(
+            role_echo(true, false, false, second, true, true),
+            echo(None, NotAllowed)
+        );
+        assert_eq!(
+            role_echo(true, true, false, second, true, true),
+            echo(None, NoMonitors)
+        );
+        assert_eq!(
+            role_echo(true, true, true, second, true, true),
+            echo(second, Unavailable)
+        );
+        assert_eq!(
+            role_echo(true, true, true, second, false, true),
+            echo(second, MonitorsHeld)
+        );
+        assert_eq!(
+            role_echo(false, false, true, second, false, true),
+            echo(second, MonitorsHeld),
+            "the first-session rule without a wish"
+        );
+        assert_eq!(
+            role_echo(false, false, true, second, false, false),
+            echo(second, AsAsked)
+        );
+        assert_eq!(
+            role_echo(true, true, true, None, false, false),
+            echo(None, AsAsked),
+            "a copy of a monitor"
+        );
+        assert_eq!(role_echo(false, true, false, second, false, false), None);
     }
 }

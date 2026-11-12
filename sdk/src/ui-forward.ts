@@ -119,6 +119,12 @@ export const attachOverPipe = (
 	const live = new Set<net.Socket>();
 	let closed = false;
 	let parked = 0;
+	// One line per outage: every parked dial fails alike, and each retries every 2 s.
+	let down = false;
+	const fail = (m: string): void => {
+		if (!down) warn(m);
+		down = true;
+	};
 	// The handshake by hand on a raw socket: bun's HTTP client hands no upgraded socket back.
 	const dial = (): void => {
 		if (closed || parked >= PARKED) return;
@@ -139,17 +145,18 @@ export const attachOverPipe = (
 			socket.off("data", onHead);
 			const status = head.subarray(0, split).toString("latin1").split(" ")[1];
 			if (status !== "101") {
-				warn(`the host refused the UI channel: ${status}`);
+				fail(`the host refused the UI channel: ${status}`);
 				socket.destroy();
 				return;
 			}
 			attached = true;
+			down = false;
 			live.add(socket);
 			serveOne(socket, handle, head.subarray(split + 4));
 		};
 		socket.on("data", onHead);
 		socket.on("error", (e) => {
-			if (!attached) warn(`the UI channel did not attach: ${e.message}`);
+			if (!attached) fail(`the UI channel did not attach: ${e.message}`);
 		});
 		socket.on("close", () => {
 			live.delete(socket);

@@ -56,7 +56,7 @@ pub(crate) fn spawn_session(
     let label = format!("{}:{}", host.addr, host.port);
     let mut plan =
         ConnectPlan::for_target(host, launch.map(str::to_string), preset.map(str::to_string));
-    plan.profile = profile.map(str::to_string);
+    plan.play_as(profile.map(str::to_string));
     plan.connect_timeout_secs = Some(connect_timeout_secs);
     // This shell prompts for a locked profile's password and spawns again with it.
     plan.prompts_unlock = true;

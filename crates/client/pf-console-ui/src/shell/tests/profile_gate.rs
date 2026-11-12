@@ -536,3 +536,50 @@ fn a_picture_is_asked_for_once_until_the_host_lists_again() {
     s.sync();
     assert!(pictures_asked(&bus).is_empty());
 }
+
+fn library_fetches(bus: &ConsoleBus) -> usize {
+    let cmds = bus.drain().into_iter();
+    cmds.filter(|c| matches!(c, ConsoleCmd::FetchLibrary { .. }))
+        .count()
+}
+
+/// The games under a card are its remembered profile's: a new remembered pick asks again, and
+/// a pick never remembered is no pick the console plays as.
+#[test]
+fn a_new_remembered_pick_reloads_the_games_under_the_card() {
+    let (mut s, console, bus, mut row) = asking(None);
+    bus.drain();
+    let mut rows = hosts();
+    rows[0].profile = pick("kid", "Kid");
+    console.set_hosts(rows.clone());
+    s.sync();
+    assert_eq!(library_fetches(&bus), 1);
+    s.sync();
+    assert_eq!(library_fetches(&bus), 0, "asked once");
+    row.profile = old_pick("kid", "Kid");
+    rows[0] = row;
+    console.set_hosts(rows);
+    s.sync();
+    assert_eq!(library_fetches(&bus), 1, "back to the box's games");
+}
+
+/// A Games root follows its card's remembered pick, once the stream under it is over.
+#[test]
+fn a_games_root_follows_the_remembered_pick_after_the_stream() {
+    let row = hosts().remove(0);
+    let (mut s, console, _library) = shell(vec![Screen::Library(LibraryScreen::new(&row))]);
+    s.sync();
+    s.bus.drain();
+    let mut rows = hosts();
+    rows[0].profile = pick("kid", "Kid");
+    console.set_hosts(rows.clone());
+    s.in_stream = true;
+    s.sync();
+    assert_eq!(library_fetches(&s.bus), 0, "the stream's shelf stays");
+    s.in_stream = false;
+    s.sync();
+    assert_eq!(library_fetches(&s.bus), 1);
+    assert!(matches!(s.stack.as_slice(), [Screen::Library(l)] if l.shelf_of(&rows[0])));
+    s.sync();
+    assert_eq!(library_fetches(&s.bus), 0, "asked once");
+}

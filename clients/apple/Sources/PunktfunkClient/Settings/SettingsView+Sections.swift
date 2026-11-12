@@ -419,6 +419,9 @@ extension SettingsView {
                     selection: scoped(SettingsFields.screens))
             }
             #endif
+            if let preset = activePreset {
+                hostScreenRow(preset)
+            }
             #if os(visionOS)
             // How this headset bends the picture (tier G). An older stored name shows as its stop.
             if !inPresetScope {

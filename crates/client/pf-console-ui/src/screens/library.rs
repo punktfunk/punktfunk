@@ -155,7 +155,8 @@ pub(crate) struct LibraryScreen {
     filter: Option<crate::collate::GroupKey>,
     /// Held, not re-derived: `Store("Steam")` and `Platform("Steam")` both read "Steam".
     filter_label: Option<String>,
-    /// A title search as typed: only titles containing it, any case, stay.
+    /// A title search as typed: titles containing it stay, both folded by
+    /// [`punktfunk_core::search::fold`].
     query: Option<String>,
     /// A collection's or a search's shelf: the pills and the field, no rows.
     drilled: bool,
@@ -404,12 +405,11 @@ impl LibraryScreen {
     /// Rebuild display order. Clamp the cursor; identity follow is [`Self::sync`]'s job.
     fn recollate(&mut self) {
         let view = crate::collate::filtered(&self.games, self.sort, self.filter.as_ref());
-        let query = self.query.as_deref().map(str::to_lowercase);
+        let fold = punktfunk_core::search::fold;
+        let query = self.query.as_deref().map(fold);
         self.view = (view.into_iter())
             .filter(|&i| !self.banded(&self.games[i]))
-            .filter(|&i| {
-                (query.as_deref()).is_none_or(|q| self.games[i].title.to_lowercase().contains(q))
-            })
+            .filter(|&i| (query.as_deref()).is_none_or(|q| fold(&self.games[i].title).contains(q)))
             .collect();
         self.cursor = self.cursor.clamp(0, (self.view.len() as i32 - 1).max(0));
         self.seat_grid_col();
@@ -447,12 +447,22 @@ impl LibraryScreen {
         &self.host.fp_hex
     }
 
-    /// Whether this is `host`'s shelf: same row key and the same pin, if any.
+    pub(crate) fn host_key(&self) -> &str {
+        &self.host.key
+    }
+
+    /// Whether this is `host`'s shelf: same row key, the same pin, if any, and the same
+    /// remembered profile, whose library the shelf is.
     pub(crate) fn shelf_of(&self, host: &HostRow) -> bool {
         fn pin(h: &HostRow) -> Option<&str> {
             h.pin.as_ref().map(|p| p.id.as_str())
         }
-        self.host.key == host.key && pin(&self.host) == pin(host)
+        fn plays(h: &HostRow) -> Option<&str> {
+            h.remembered().map(|p| p.id.as_str())
+        }
+        self.host.key == host.key
+            && pin(&self.host) == pin(host)
+            && plays(&self.host) == plays(host)
     }
 
     /// A decoded poster, for the launch hold drawn over this shelf. The focused tile

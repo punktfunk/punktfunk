@@ -3,8 +3,8 @@
 //! Type **`_punktfunk._udp.local.`** (UDP: the protocol is QUIC). Port is the QUIC
 //! control/data port a client `--connect`s. TXT:
 //!
-//! - `proto` — service id ([`NATIVE_PROTO`]). Clients drop an advert with another value, so it
-//!   stays `punktfunk/1` while the protocol itself moves; `wire` names the protocol.
+//! - `proto` — service id ([`NATIVE_PROTO`], `punktfunk/2`). Clients drop an advert with another
+//!   value, and 0.43 and older accept only `punktfunk/1`. `wire` names the protocols answered.
 //! - `fp` — host cert SHA-256 (lowercase hex). mDNS is unauthenticated, so this is advisory;
 //!   TOFU still verifies on connect.
 //! - `pair` — `required` or `optional`.
@@ -34,7 +34,7 @@ pub(crate) fn mdns_enabled() -> bool {
     pf_host_config::row_bool("PUNKTFUNK_MDNS")
 }
 
-pub const NATIVE_PROTO: &str = "punktfunk/1";
+pub const NATIVE_PROTO: &str = "punktfunk/2";
 
 /// A-record target (`<label>.local.`), not the service instance name. Instance may be free
 /// text (`PUNKTFUNK_HOST_NAME`); a host name may not. `mdns-sd` rejects the whole `ServiceInfo`

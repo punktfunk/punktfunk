@@ -129,8 +129,8 @@ extension ConsoleModel {
                 label: a["label"] as? String ?? "")
         case .setScreen:
             setScreen(
-                fp: a["fp_hex"] as? String ?? "", mgmt: port(a["mgmt"]), screen: a["screen"],
-                label: a["label"] as? String ?? "")
+                fp: a["fp_hex"] as? String ?? "", mgmt: port(a["mgmt"]),
+                pick: ConsoleJSON.screenPick(a), label: a["label"] as? String ?? "")
         case .padAction:
             padAction(a["action"] as? String ?? "", key: a["pad_key"] as? String ?? "")
         case .padTest:
@@ -306,8 +306,10 @@ extension ConsoleModel {
         // The session binary's console wakes on the same switch.
         let autoWake = UserDefaults.standard.object(forKey: DefaultsKey.autoWake) as? Bool
             ?? SettingDefault.autoWake
+        // The console plays as a remembered pick only, so its shelf is that profile's.
         let events = LibraryLoad.run(
-            target: target, hostID: host.id.uuidString, wakeMacs: host.wakeMacs, autoWake: autoWake)
+            target: target, hostID: host.id.uuidString, wakeMacs: host.wakeMacs, autoWake: autoWake,
+            profile: host.pickedProfile.flatMap { $0.remember ? $0.id : nil })
         fetching = Task { [weak self] in
             for await event in events {
                 guard let self, openShelf.accepts(.answer(serial: serial), fp: fp) else { return }
@@ -520,6 +522,8 @@ extension ConsoleModel {
         Task { @MainActor [weak self] in
             let result = await Task.detached(priority: .userInitiated) {
                 Result {
+                    // The console offers a request only for a host that advertised one.
+                    guard let pin else { throw PunktfunkClientError.invalidPin }
                     let identity = try ClientIdentityStore.shared.loadForPairing()
                     return try PunktfunkKit.requestAccess(
                         host: addr, port: port, identity: identity, pinSHA256: pin, name: name)
@@ -600,13 +604,10 @@ extension ConsoleModel {
         }
     }
 
-    /// Write this device's screen on the host. Only a refusal says anything: the pick shows on
+    /// Write a Screen row's pick on the host. Only a refusal says anything: the pick shows on
     /// the card once the rows come back.
-    private func setScreen(fp: String, mgmt: UInt16, screen: Any?, label: String) {
-        guard let host = host(fp: fp, addr: "", port: 0), let screen,
-              let data = try? JSONSerialization.data(withJSONObject: screen, options: .fragmentsAllowed),
-              let pick = try? JSONDecoder().decode(DisplayTarget.self, from: data)
-        else { return }
+    private func setScreen(fp: String, mgmt: UInt16, pick: ScreenPick?, label: String) {
+        guard let host = host(fp: fp, addr: "", port: 0), let pick else { return }
         Task { [weak self] in
             if let why = await self?.screens.pick(pick, label: label, on: host, port: mgmt) {
                 self?.notice(why)

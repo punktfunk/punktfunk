@@ -18,8 +18,8 @@ may do; this page only gets them to the host. To share your screen with them onc
 | A browser, with nothing to install | [The browser client from outside your network](/docs/browser-client#from-outside-your-network) |
 
 The paths on this page open one port: UDP `9777` carries the stream, video and audio included. With
-[seats](/docs/profiles#what-a-seat-can-do) on, open UDP `9777`–`9782`: a host that places your
-friend on a seat sends them to that seat's port.
+[seats](/docs/profiles#what-a-seat-can-do) on, open UDP `9779`–`9782` too: a host that places
+your friend on a seat sends them to that seat's port.
 
 ## Porthole
 
@@ -75,12 +75,12 @@ reaches the host as a local one, so its row under **Waiting for approval** offer
 Prefer [Porthole](#porthole) or [Tailscale](#tailscale): both keep the host unreachable from the
 internet, and this doesn't.
 
-Forward UDP `9777` to the host. **Never forward `47990`, `47992` or `9778`**: the
-management API, the web console and browser streaming.
+Forward UDP `9777` to the host, and `9779`–`9782` with seats on. **Never forward `47990`, `47992`
+or `9778`**: the management API, the web console and browser streaming.
 
 Send your friend a [link](/docs/presets-and-links), not a bare address, so their first connect
-checks the host's identity. Copy the **Deep link** from **Host** → **Connect a device** and swap
-in your public address:
+checks the host's identity. A device that was only given the address can't ask for access. Copy
+the **Deep link** from **Host** and swap in your public address:
 
 ```
 punktfunk://connect/<id>?host=203.0.113.5&fp=<64 hex>
@@ -104,10 +104,8 @@ stream captures Discord's playback. In **Host** → **Audio**:
   Mumble then play on your speakers and stay out of the stream.
 - **Voice chat apps**: add your browser (`firefox`) if you use Discord in a browser tab.
 
-The same settings in `host.env` are `PUNKTFUNK_AUDIO_OUTPUT_MODE=host_and_client`,
-`PUNKTFUNK_AUDIO_VOICE_CHAT=host` and `PUNKTFUNK_AUDIO_VOICE_APPS=firefox`. On Windows this needs
-Steam installed: the host builds its silent audio output from Steam's streaming drivers. To keep
-one friend from hearing the game at all, mute their session on the **Home** page.
+On Windows this needs Steam installed. To keep one friend from hearing the game at all, mute their
+session on the **Home** page.
 
 ## What not to use
 

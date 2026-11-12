@@ -831,6 +831,10 @@ pub struct PunktfunkConnectOpts {
     /// Each asked screen's view, read for `screen_count` records beside `screens` during the
     /// call; null, which a shorter prefix defaults to, names none.
     pub screen_views: *const PunktfunkScreenView,
+    /// The screen this dial's preset asks for, as a preset spells it: `only`, `main`, `second`
+    /// or `monitor:<connector>`. Null, empty, which a shorter prefix defaults to, or any other
+    /// spelling asks for none. [`punktfunk_connection_screen_role`] reads what the session got.
+    pub host_screen: *const std::os::raw::c_char,
 }
 
 /// [`PunktfunkProfileUnlock::kind`]: the account password as typed.
@@ -969,7 +973,7 @@ const _: () = {
     use core::mem::{offset_of, size_of};
     #[cfg(target_pointer_width = "64")]
     assert!(
-        size_of::<PunktfunkConnectOpts>() == 208
+        size_of::<PunktfunkConnectOpts>() == 216
             && offset_of!(PunktfunkConnectOpts, video_fit) == 100
             && offset_of!(PunktfunkConnectOpts, delivery_flags) == 121
             && offset_of!(PunktfunkConnectOpts, profile_id) == 128
@@ -982,11 +986,12 @@ const _: () = {
             && offset_of!(PunktfunkConnectOpts, prompts_unlock) == 184
             && offset_of!(PunktfunkConnectOpts, view_width) == 192
             && offset_of!(PunktfunkConnectOpts, screen_views) == 200
+            && offset_of!(PunktfunkConnectOpts, host_screen) == 208
             && size_of::<PunktfunkProfileUnlock>() == 40
     );
     #[cfg(target_pointer_width = "32")]
     assert!(
-        size_of::<PunktfunkConnectOpts>() == 148
+        size_of::<PunktfunkConnectOpts>() == 152
             && offset_of!(PunktfunkConnectOpts, video_fit) == 72
             && offset_of!(PunktfunkConnectOpts, delivery_flags) == 85
             && offset_of!(PunktfunkConnectOpts, profile_id) == 92
@@ -999,6 +1004,7 @@ const _: () = {
             && offset_of!(PunktfunkConnectOpts, prompts_unlock) == 128
             && offset_of!(PunktfunkConnectOpts, view_width) == 136
             && offset_of!(PunktfunkConnectOpts, screen_views) == 144
+            && offset_of!(PunktfunkConnectOpts, host_screen) == 148
             && size_of::<PunktfunkProfileUnlock>() == 24
     );
 };
@@ -1054,6 +1060,7 @@ impl Default for PunktfunkConnectOpts {
             view_width: 0,
             view_height: 0,
             screen_views: ptr::null(),
+            host_screen: ptr::null(),
         }
     }
 }
@@ -1171,18 +1178,35 @@ pub unsafe extern "C" fn punktfunk_connect_opts(
         // SAFETY: the caller passes `status_out` null or writable for one value.
         unsafe { put(status_out, s as i32) };
     };
+    // SAFETY: the caller's `opts`, under this fn's contract.
+    let o = match unsafe { opts_prefix(opts) } {
+        Ok(o) => o,
+        Err(s) => {
+            set_status(s);
+            return std::ptr::null_mut();
+        }
+    };
+    // SAFETY: pointer fields forwarded unchanged; the copy did not deref what they point at.
+    unsafe { connect_ex_impl(&o, observed_sha256_out, status_out) }
+}
+
+/// `opts` as this build lays it out: the caller's `struct_size` bytes over zeros, so a field past
+/// them reads as zero. Null is `NullPointer`, a size under the frozen minimum `InvalidArg`.
+///
+/// # Safety
+/// `opts` is null or readable for its own `struct_size` bytes, as [`punktfunk_connect_opts`].
+#[cfg(feature = "quic")]
+unsafe fn opts_prefix(
+    opts: *const PunktfunkConnectOpts,
+) -> Result<PunktfunkConnectOpts, PunktfunkStatus> {
     if opts.is_null() {
-        set_status(punktfunk_core::error::PunktfunkStatus::NullPointer);
-        return std::ptr::null_mut();
+        return Err(PunktfunkStatus::NullPointer);
     }
-    // Size prefix first; a shorter caller gets a zeroed tail, not a misread.
     // SAFETY: `addr_of!` does not form a `&`; the caller may have a different size.
     let declared = unsafe { std::ptr::addr_of!((*opts).struct_size).read_unaligned() } as usize;
     if declared < CONNECT_OPTS_MIN_SIZE {
-        set_status(punktfunk_core::error::PunktfunkStatus::InvalidArg);
-        return std::ptr::null_mut();
+        return Err(PunktfunkStatus::InvalidArg);
     }
-    // Copy the known prefix over zeros so a shorter caller's missing tail stays unspecified.
     let mut o = PunktfunkConnectOpts::default();
     let take = declared.min(std::mem::size_of::<PunktfunkConnectOpts>());
     // SAFETY: `opts` is readable for `declared >= take`; `o` is a local and cannot overlap.
@@ -1194,8 +1218,7 @@ pub unsafe extern "C" fn punktfunk_connect_opts(
             take,
         );
     }
-    // SAFETY: pointer fields forwarded unchanged; the copy did not deref what they point at.
-    unsafe { connect_ex_impl(&o, observed_sha256_out, status_out) }
+    Ok(o)
 }
 
 /// Shared body of the connect family: [`connect_params`], then the dial. `status_out` is
@@ -1257,8 +1280,8 @@ unsafe fn connect_ex_impl(
 }
 
 /// The dial `o` asks for. A null or non-UTF-8 `host`, half an identity and an unlock outside the
-/// wire's bounds are `InvalidArg`; a bad launch id, device name or preset degrades to none (the
-/// OS name for the device).
+/// wire's bounds are `InvalidArg`; a bad launch id, device name, preset or screen wish degrades
+/// to none (the OS name for the device).
 ///
 /// # Safety
 /// Each pointer field of `o` is null or valid as [`punktfunk_connect_opts`] documents.
@@ -1322,6 +1345,11 @@ unsafe fn connect_params(
         }
         _ => None,
     };
+    // SAFETY: as above.
+    let screen_wish = unsafe { opt_cstr(o.host_screen) }
+        .ok()
+        .flatten()
+        .and_then(punktfunk_core::quic::v2::hello::ScreenWish::parse);
     let mode = punktfunk_core::config::Mode {
         width: o.width,
         height: o.height,
@@ -1361,6 +1389,7 @@ unsafe fn connect_params(
         identity,
         preset,
         profile,
+        screen_wish,
         probe_only: o.delivery_flags & punktfunk_core::quic::EXT_DELIVERY_PROBE_ONLY != 0,
         rebuilds_decoder: o.reformat & PUNKTFUNK_REFORMAT_VIDEO != 0,
         reopens_audio: o.reformat & PUNKTFUNK_REFORMAT_AUDIO != 0,
@@ -1631,8 +1660,8 @@ pub unsafe extern "C" fn punktfunk_pair(
 ///
 /// # Safety
 /// `host`/`client_cert_pem`/`client_key_pem`/`name` are NUL-terminated UTF-8; `pin_sha256`
-/// is NULL (trust on first use) or valid for 32 bytes; `host_sha256_out` is writable for
-/// 32 bytes.
+/// is valid for 32 bytes, the fingerprint the host must show (NULL is refused: a host with
+/// none pairs by PIN); `host_sha256_out` is writable for 32 bytes.
 #[cfg(feature = "quic")]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn punktfunk_request_access(
@@ -1658,15 +1687,12 @@ pub unsafe extern "C" fn punktfunk_request_access(
         ) else {
             return PunktfunkStatus::NullPointer;
         };
-        if host_sha256_out.is_null() {
+        if host_sha256_out.is_null() || pin_sha256.is_null() {
             return PunktfunkStatus::NullPointer;
         }
-        let pin = (!pin_sha256.is_null()).then(|| {
-            let mut p = [0u8; 32];
-            // SAFETY: a non-null pin is valid for 32 bytes (caller contract); copied out here.
-            p.copy_from_slice(unsafe { std::slice::from_raw_parts(pin_sha256, 32) });
-            p
-        });
+        let mut pin = [0u8; 32];
+        // SAFETY: a non-null pin is valid for 32 bytes (caller contract); copied out here.
+        pin.copy_from_slice(unsafe { std::slice::from_raw_parts(pin_sha256, 32) });
         match punktfunk_core::client::NativeClient::request_access(
             host,
             port,
@@ -1737,6 +1763,37 @@ mod tests {
         o.view_height = 0;
         // SAFETY: as above.
         assert_eq!(unsafe { connect_params(&o) }.unwrap().view, None);
+    }
+
+    /// `host_screen` reaches the dial as a wish; null, empty or another spelling is none, and
+    /// a caller whose `struct_size` ends before it asks for none.
+    #[test]
+    fn connect_opts_carry_the_screen_wish() {
+        use punktfunk_core::quic::v2::hello::ScreenWish;
+        let mut o = PunktfunkConnectOpts {
+            host: c"127.0.0.1".as_ptr(),
+            host_screen: c"monitor:DP-1".as_ptr(),
+            ..Default::default()
+        };
+        // SAFETY: every pointer field is null or a live C-string literal.
+        let wish = unsafe { connect_params(&o) }.unwrap().screen_wish;
+        assert_eq!(wish, Some(ScreenWish::Monitor("DP-1".into())));
+        for none in [c"".as_ptr(), c"Second".as_ptr(), std::ptr::null()] {
+            o.host_screen = none;
+            // SAFETY: as above.
+            assert_eq!(unsafe { connect_params(&o) }.unwrap().screen_wish, None);
+        }
+
+        o.host_screen = c"second".as_ptr();
+        // SAFETY: as above, and `o` is readable for its whole size.
+        let whole = unsafe { opts_prefix(&o) }.unwrap();
+        // SAFETY: as above.
+        let wish = unsafe { connect_params(&whole) }.unwrap().screen_wish;
+        assert_eq!(wish, Some(ScreenWish::Second));
+        o.struct_size = core::mem::offset_of!(PunktfunkConnectOpts, host_screen) as u32;
+        // SAFETY: `o` is readable for more than the size it declares.
+        let older = unsafe { opts_prefix(&o) }.unwrap();
+        assert!(older.host_screen.is_null());
     }
 
     /// `profile_id` reaches the dial; one longer than the wire carries is no ask.

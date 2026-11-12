@@ -263,6 +263,7 @@ mod tests {
                 name: "Work".into(),
                 accent: None,
                 bitrate_kbps: None,
+                host_screen: None,
             }),
             ..HostRow::fixture("aa", "Desk")
         }
