@@ -1,20 +1,27 @@
 //! Seat pad audio: the contract between a seat host and `pf-seat-audio.dll`, the audio endpoint
 //! enumerator a seat's Remote Desktop listener loads.
 //!
-//! For every DualSense the seat host serves, it creates two `Global\` objects named for its
-//! session and the pad's OS slot. The event says "this session owns this slot": while it
-//! exists, the enumerator lists the slot's render endpoint in that session alone. The section
-//! carries a [`RingHeader`] and a ring of 4-channel S16 frames; the endpoint object inside
-//! audiodg writes what the engine renders, and the seat host reads it for the `0xD1` plane.
-//! The seat host creates both before the pad's HID device, and closes them when the pad goes.
+//! For every DualSense the seat host serves, it creates two `Global\` sections named for its
+//! session and the pad's OS slot. The presence section holds [`PRESENT_MAGIC`] while the host
+//! serves the slot: then the enumerator lists the slot's render endpoint in that session alone.
+//! Only a privileged process can create a `Global\` section and only SYSTEM may write this one,
+//! so another session's user can neither fake it nor keep it present. The ring section carries a
+//! [`RingHeader`] and a ring of 4-channel S16 frames; the endpoint object inside audiodg writes
+//! what the engine renders, and the seat host reads it for the `0xD1` plane. The seat host
+//! creates both before the pad's HID device, and zeroes the magic when the pad goes.
 
 use bytemuck::{Pod, Zeroable};
 use core::mem::{offset_of, size_of};
 
 /// `"PFSA"` little-endian. The seat host writes it last, after the other header fields.
 pub const RING_MAGIC: u32 = 0x4153_4650;
-/// Bumped on any incompatible change to the names, the header or the ring.
+/// Bumped on any incompatible change to the header or the ring. A renamed object fails safe:
+/// the other side finds nothing.
 pub const RING_VERSION: u32 = 1;
+/// `"PFSP"` little-endian: the presence section's one `u32` while its slot is served.
+pub const PRESENT_MAGIC: u32 = 0x5053_4650;
+/// The presence section's size.
+pub const PRESENCE_BYTES: usize = size_of::<u32>();
 /// Pad OS slots a box hands out (`pf-inject`'s pad pool).
 pub const SLOTS: u8 = 16;
 pub const RATE: u32 = 48_000;
@@ -102,10 +109,10 @@ impl RingHeader {
     }
 }
 
-/// `Global\punktfunk-seat-pad-<session>-<slot>`: the ownership event.
+/// `Global\punktfunk-seat-pad-<session>-<slot>-present`: the presence section.
 #[must_use]
-pub fn owner_name(session: u32, slot: u8) -> alloc::string::String {
-    alloc::format!("Global\\punktfunk-seat-pad-{session}-{slot}")
+pub fn presence_name(session: u32, slot: u8) -> alloc::string::String {
+    alloc::format!("Global\\punktfunk-seat-pad-{session}-{slot}-present")
 }
 
 /// `Global\punktfunk-seat-pad-<session>-<slot>-pcm`: the ring section.
@@ -198,7 +205,10 @@ mod tests {
 
     #[test]
     fn names_carry_session_and_slot() {
-        assert_eq!(owner_name(5, 2), "Global\\punktfunk-seat-pad-5-2");
+        assert_eq!(
+            presence_name(5, 2),
+            "Global\\punktfunk-seat-pad-5-2-present"
+        );
         assert_eq!(ring_name(5, 2), "Global\\punktfunk-seat-pad-5-2-pcm");
     }
 
