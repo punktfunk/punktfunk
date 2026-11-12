@@ -225,6 +225,30 @@ final class ConsoleJSONTests: XCTestCase {
         XCTAssertEqual(merged.modifierLayout, "pc", "only this app edits it")
     }
 
+    /// The console's preset editor reads, sets and clears the host screen, and a card's preset
+    /// chip carries it for the card's Screen section.
+    func testTheHostScreenCrossesTheBridge() throws {
+        var pinned = SettingsOverlay()
+        pinned.hostScreen = "second"
+        let set = ConsoleJSON.overlay(["host_screen": "monitor:DP-1"], over: pinned)
+        XCTAssertEqual(set.hostScreen, "monitor:DP-1")
+        XCTAssertNil(ConsoleJSON.overlay([:], over: pinned).hostScreen, "the console cleared it")
+
+        var saved = host(name: "Desk")
+        saved.presetID = "p1"
+        let preset = StreamPreset(name: "Couch", id: "p1", overrides: pinned)
+        let row = try XCTUnwrap(
+            rows(ConsoleJSON.hostRows(
+                saved: [saved], discovered: [], online: [saved.id], presets: [preset])).first)
+        let chip = try XCTUnwrap(row["bound_preset"] as? [String: Any])
+        XCTAssertEqual(chip["host_screen"] as? String, "second")
+        let catalog = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: Data(ConsoleJSON.presets([preset]).utf8))
+                as? [[String: Any]])
+        let overrides = try XCTUnwrap(catalog.first?["overrides"] as? [String: Any])
+        XCTAssertEqual(overrides["host_screen"] as? String, "second")
+    }
+
     /// `clients/shared/console-bridge-vectors.json`: the models this client writes match its
     /// samples, each answer under its command sample's `req`, and the menu and phase codes
     /// match its table. `Phase` stops at reconnecting: this client never reports a profile the

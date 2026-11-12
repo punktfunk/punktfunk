@@ -101,6 +101,25 @@ class SettingsScopeTest {
         )
     }
 
+    /** Host screen is a preset's row alone: the defaults have none, a host's default is on its card. */
+    @Test
+    fun theHostScreenRowIsAPresetsAlone() {
+        val presets = PresetStore(context)
+        presets.save(newPreset("Couch", PRESET_ACCENTS.first()))
+        compose.setContent {
+            SettingsScreen(
+                initial = Settings(),
+                onChange = {},
+                onBack = {},
+                initialCategory = SettingsCategory.Display,
+            )
+        }
+        compose.onNodeWithText("Host screen").assertDoesNotExist()
+        selectScope("Couch")
+        compose.onNodeWithText("Host screen").assertExists()
+        compose.onNodeWithText("As on the host card").assertExists()
+    }
+
     /** A reset puts the row back to inheriting — and, like an edit, it must obey the live scope. */
     @Test
     fun resetClearsTheSelectedPresetsOverride() {

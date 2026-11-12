@@ -222,8 +222,8 @@ pub fn run(opts: Options) -> Result<()> {
                 ?compositor,
                 "spike source: platform virtual display"
             );
-            let mut vd =
-                crate::vdisplay::open_for(compositor, None).context("open virtual display")?;
+            let mut vd = crate::vdisplay::open_for(compositor, None, None)
+                .context("open virtual display")?;
             vd.set_hdr(hdr);
             let vout = vd
                 .create(punktfunk_core::Mode {

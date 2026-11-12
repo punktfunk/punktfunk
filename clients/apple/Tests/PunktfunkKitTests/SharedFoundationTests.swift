@@ -494,6 +494,19 @@ final class SharedFoundationTests: XCTestCase {
         XCTAssertEqual(moved.applying(pin).bitrateKbps, 20_000)
     }
 
+    /// A preset's host screen, as another client writes it, applies over a global that is always
+    /// empty: no defaults key holds it.
+    func testHostScreenIsAPresetFieldWithNoGlobal() throws {
+        let overlay = try JSONDecoder().decode(
+            SettingsOverlay.self, from: Data(#"{"host_screen":"monitor:HDMI-A-1"}"#.utf8))
+        XCTAssertTrue(overlay.extra.isEmpty)
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: "host-screen-tests"))
+        defaults.set("second", forKey: "host_screen")
+        XCTAssertEqual(EffectiveSettings(defaults: defaults).hostScreen, "")
+        XCTAssertEqual(EffectiveSettings().applying(overlay).hostScreen, "monitor:HDMI-A-1")
+        defaults.removePersistentDomain(forName: "host-screen-tests")
+    }
+
     /// `clear` is the explicit way back to inheriting, including the resolution tri-state one row
     /// drives.
     func testOverlayClearDropsOneOverride() {

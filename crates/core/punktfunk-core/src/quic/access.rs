@@ -7,8 +7,8 @@
 //! An omitted mask is [`GRANT_ALL`].
 //!
 //! [`classify`] is the input-plane table: exhaustive [`InputKind`] →
-//! [`GrantClass`], no wildcard. Clipboard, mic, launch, power, and manage-games
-//! are plane and route gates, not `0xC8` events.
+//! [`GrantClass`], no wildcard. Clipboard, mic, launch, power, manage-games and
+//! display are plane and route gates, not `0xC8` events.
 //!
 //! Tests in this file pin the bit layout, presets, legacy-full read, and
 //! the classifier table.
@@ -35,23 +35,41 @@ pub const GRANT_POWER: u32 = 0x40;
 /// Pause and remove a title's download on the mgmt cert lane (`design/plugin-downloads.md`).
 /// Starting one is [`GRANT_LAUNCH`]: launching a missing title installs it anyway.
 pub const GRANT_MANAGE_GAMES: u32 = 0x80;
+/// Choosing the screen this device streams and what the host's monitors do meanwhile: its
+/// own pick on the mgmt cert lane and a preset's wish in the Hello. Without it the operator's
+/// answer applies.
+pub const GRANT_DISPLAY: u32 = 0x100;
 
 /// An omitted Welcome or registry mask reads as this: every bit above.
-pub const GRANT_ALL: u32 = 0xFF;
+pub const GRANT_ALL: u32 = 0x1FF;
 
 /// Stored "Full control" before [`GRANT_POWER`]. [`normalize_legacy_full`] lifts it.
 pub const GRANT_ALL_PRE_POWER: u32 = 0x3F;
 /// Stored "Full control" before [`GRANT_MANAGE_GAMES`]. [`normalize_legacy_full`] lifts it.
 pub const GRANT_ALL_PRE_MANAGE: u32 = 0x7F;
+/// "Full control" before [`GRANT_DISPLAY`]. [`normalize_legacy_full`] lifts it; a store that
+/// can tell it from "all but the screen choice" uses [`lift_pre_manage`] instead.
+pub const GRANT_ALL_PRE_DISPLAY: u32 = 0xFF;
 
 /// Exact [`GRANT_ALL_PRE_POWER`] or [`GRANT_ALL_PRE_MANAGE`] → [`GRANT_ALL`]. Other masks
 /// pass through. Those stored Fulls already have `KEYBOARD`+`POINTER` (the desktop's power
 /// menu, the store's own uninstall), so "everything except the new bit" is not expressible.
-pub fn normalize_legacy_full(mask: u32) -> u32 {
+pub fn lift_pre_manage(mask: u32) -> u32 {
     if mask == GRANT_ALL_PRE_POWER || mask == GRANT_ALL_PRE_MANAGE {
         GRANT_ALL
     } else {
         mask
+    }
+}
+
+/// [`lift_pre_manage`], and [`GRANT_ALL_PRE_DISPLAY`] → [`GRANT_ALL`] too: the rule for a
+/// reader that cannot know which vocabulary wrote the mask. A client reads an older host's
+/// Full and a current host's "all but the screen choice" alike, as Full.
+pub fn normalize_legacy_full(mask: u32) -> u32 {
+    if mask == GRANT_ALL_PRE_DISPLAY {
+        GRANT_ALL
+    } else {
+        lift_pre_manage(mask)
     }
 }
 
@@ -66,7 +84,7 @@ pub const GRANT_PRESET_CONTROLLER_ONLY: u32 = GRANT_GAMEPAD;
 /// UI preset "View only" — the spectator sends nothing.
 pub const GRANT_PRESET_VIEW_ONLY: u32 = 0;
 
-/// [`classify`] covers `0xC8` events; Clipboard/Mic/Launch/Power/ManageGames name
+/// [`classify`] covers `0xC8` events; Clipboard/Mic/Launch/Power/ManageGames/Display name
 /// the plane and route gates so drop counters share this vocabulary.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum GrantClass {
@@ -80,13 +98,15 @@ pub enum GrantClass {
     Power,
     /// Download pause and removal on the mgmt cert lane — never an input event.
     ManageGames,
+    /// The screen choice on the mgmt cert lane and in the Hello — never an input event.
+    Display,
 }
 
 impl GrantClass {
     /// Every class, in bit order. Tables indexed by [`GrantClass::bit`] size from this.
     ///
     /// cbindgen:ignore
-    pub const ALL: [GrantClass; 8] = [
+    pub const ALL: [GrantClass; 9] = [
         Self::Gamepad,
         Self::Pointer,
         Self::Keyboard,
@@ -95,6 +115,7 @@ impl GrantClass {
         Self::Launch,
         Self::Power,
         Self::ManageGames,
+        Self::Display,
     ];
 
     pub fn bit(self) -> u32 {
@@ -107,6 +128,7 @@ impl GrantClass {
             Self::Launch => GRANT_LAUNCH,
             Self::Power => GRANT_POWER,
             Self::ManageGames => GRANT_MANAGE_GAMES,
+            Self::Display => GRANT_DISPLAY,
         }
     }
 }
@@ -151,6 +173,7 @@ mod tests {
             GRANT_LAUNCH,
             GRANT_POWER,
             GRANT_MANAGE_GAMES,
+            GRANT_DISPLAY,
         ];
         let mut acc = 0u32;
         for b in bits {
@@ -180,6 +203,8 @@ mod tests {
         assert_eq!(GRANT_PRESET_FULL, GRANT_ALL);
         assert_eq!(GRANT_PRESET_FULL & GRANT_POWER, GRANT_POWER);
         assert_eq!(GRANT_PRESET_FULL & GRANT_MANAGE_GAMES, GRANT_MANAGE_GAMES);
+        assert_eq!(GRANT_PRESET_FULL & GRANT_DISPLAY, GRANT_DISPLAY);
+        assert_eq!(GRANT_PRESET_CONTROLLER_ONLY & GRANT_DISPLAY, 0);
         assert_eq!(GRANT_PRESET_CONTROLLER_ONLY & GRANT_MANAGE_GAMES, 0);
         assert_eq!(GRANT_PRESET_CONTROLLER_ONLY, GRANT_GAMEPAD);
         assert_eq!(GRANT_PRESET_CONTROLLER_ONLY & GRANT_LAUNCH, 0);
@@ -190,11 +215,22 @@ mod tests {
     fn legacy_full_reads_as_the_current_full() {
         assert_eq!(
             GRANT_ALL_PRE_POWER,
-            GRANT_ALL & !GRANT_POWER & !GRANT_MANAGE_GAMES
+            GRANT_ALL & !GRANT_POWER & !GRANT_MANAGE_GAMES & !GRANT_DISPLAY
         );
-        assert_eq!(GRANT_ALL_PRE_MANAGE, GRANT_ALL & !GRANT_MANAGE_GAMES);
+        assert_eq!(
+            GRANT_ALL_PRE_MANAGE,
+            GRANT_ALL & !GRANT_MANAGE_GAMES & !GRANT_DISPLAY
+        );
+        assert_eq!(GRANT_ALL_PRE_DISPLAY, GRANT_ALL & !GRANT_DISPLAY);
         assert_eq!(normalize_legacy_full(GRANT_ALL_PRE_POWER), GRANT_ALL);
         assert_eq!(normalize_legacy_full(GRANT_ALL_PRE_MANAGE), GRANT_ALL);
+        assert_eq!(normalize_legacy_full(GRANT_ALL_PRE_DISPLAY), GRANT_ALL);
+        // A store that marks its records keeps "all but the screen choice" as written.
+        assert_eq!(
+            lift_pre_manage(GRANT_ALL_PRE_DISPLAY),
+            GRANT_ALL_PRE_DISPLAY
+        );
+        assert_eq!(lift_pre_manage(GRANT_ALL_PRE_MANAGE), GRANT_ALL);
         assert_eq!(normalize_legacy_full(GRANT_ALL), GRANT_ALL);
         assert_eq!(normalize_legacy_full(GRANT_GAMEPAD), GRANT_GAMEPAD);
         assert_eq!(normalize_legacy_full(0), 0);
@@ -241,6 +277,7 @@ mod tests {
             ("LAUNCH", GRANT_LAUNCH),
             ("POWER", GRANT_POWER),
             ("MANAGE_GAMES", GRANT_MANAGE_GAMES),
+            ("DISPLAY", GRANT_DISPLAY),
         ];
         let masks = [
             0,
@@ -254,21 +291,26 @@ mod tests {
             GRANT_ALL_PRE_MANAGE,
             GRANT_ALL_PRE_MANAGE & !GRANT_KEYBOARD,
             GRANT_MANAGE_GAMES | GRANT_GAMEPAD,
-            0x100,
-            0x100 | GRANT_GAMEPAD,
-            0x100 | GRANT_ALL,
-            0x100 | GRANT_ALL_PRE_POWER,
-            0x100 | GRANT_ALL_PRE_MANAGE,
+            GRANT_ALL_PRE_DISPLAY,
+            GRANT_ALL_PRE_DISPLAY & !GRANT_KEYBOARD,
+            GRANT_DISPLAY,
+            GRANT_DISPLAY | GRANT_GAMEPAD,
+            0x200,
+            0x200 | GRANT_GAMEPAD,
+            0x200 | GRANT_ALL,
+            0x200 | GRANT_ALL_PRE_POWER,
+            0x200 | GRANT_ALL_PRE_MANAGE,
         ];
-        let level = |mask: u32| match normalize_legacy_full(mask) & GRANT_ALL {
+        let level = |mask: u32| match mask & GRANT_ALL {
             GRANT_PRESET_FULL => "full",
             GRANT_PRESET_CONTROLLER_ONLY => "controller",
             GRANT_PRESET_VIEW_ONLY => "view",
             _ => "custom",
         };
         let about = "Generated from punktfunk_core::quic::access by grant_vectors_are_checked_in \
-            (UPDATE_VECTORS=1 rewrites it). pf-client-core, the web console, Kotlin and Swift \
-            replay it.";
+            (UPDATE_VECTORS=1 rewrites it). pf-client-core, Kotlin and Swift replay normalized \
+            and level, a wire reader's rule. The web console replays stored and stored_level: \
+            the management API's masks are in the current vocabulary, so 255 is not lifted.";
         let mut out = format!("{{\n  \"$comment\": \"{about}\",\n  \"bits\": {{\n");
         for (i, (name, bit)) in bits.iter().enumerate() {
             let comma = if i + 1 < bits.len() { "," } else { "" };
@@ -276,15 +318,17 @@ mod tests {
         }
         out += &format!(
             "  }},\n  \"all\": {GRANT_ALL},\n  \"all_pre_power\": {GRANT_ALL_PRE_POWER},\n  \
-             \"all_pre_manage\": {GRANT_ALL_PRE_MANAGE},\n  \"masks\": [\n"
+             \"all_pre_manage\": {GRANT_ALL_PRE_MANAGE},\n  \
+             \"all_pre_display\": {GRANT_ALL_PRE_DISPLAY},\n  \"masks\": [\n"
         );
         for (i, &mask) in masks.iter().enumerate() {
             let comma = if i + 1 < masks.len() { "," } else { "" };
             let normalized = normalize_legacy_full(mask);
-            let level = level(mask);
+            let stored = lift_pre_manage(mask);
+            let (level, stored_level) = (level(normalized), level(stored));
             out += &format!(
-                "    {{\"mask\": {mask}, \"normalized\": {normalized}, \"level\": \"{level}\"}}\
-                 {comma}\n"
+                "    {{\"mask\": {mask}, \"normalized\": {normalized}, \"level\": \"{level}\", \
+                 \"stored\": {stored}, \"stored_level\": \"{stored_level}\"}}{comma}\n"
             );
         }
         out + "  ]\n}\n"
@@ -314,5 +358,6 @@ mod tests {
         assert_eq!(GrantClass::Launch.bit(), GRANT_LAUNCH);
         assert_eq!(GrantClass::Power.bit(), GRANT_POWER);
         assert_eq!(GrantClass::ManageGames.bit(), GRANT_MANAGE_GAMES);
+        assert_eq!(GrantClass::Display.bit(), GRANT_DISPLAY);
     }
 }

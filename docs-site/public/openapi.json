@@ -793,7 +793,7 @@
           "display"
         ],
         "summary": "Save one device's overlay",
-        "description": "The operator writes the WHOLE overlay: a field absent from the body stops being pinned and\nthe device follows the host again. An overlay that pins nothing is dropped, which is the\nsame as `DELETE`. A paired device writes only `screen`, and only on its own row; its other\nfields stay, and it is answered 204. `set_by` records which of the two wrote the screen.",
+        "description": "The operator writes the WHOLE overlay: a field absent from the body stops being pinned and\nthe device follows the host again. An overlay that pins nothing is dropped, which is the\nsame as `DELETE`. A paired device writes its pick on its own row while its access holds\n`GRANT_DISPLAY` (`0x100`): `screen` alone, keeping the row's `topology`, or `screen` with\n`topology` (`extend`, `primary` or `exclusive`). A monitor drops the row's topology, and a\nnull screen clears the device's pick. Its other fields stay, and it is answered 204.\n`set_by` records who last wrote the pick; the operator's write keeps it while the row's\nscreen and topology are unchanged.",
         "operationId": "setDisplayClient",
         "parameters": [
           {
@@ -828,7 +828,7 @@
             }
           },
           "204": {
-            "description": "A device's screen stored"
+            "description": "A device's pick stored"
           },
           "400": {
             "description": "Empty fingerprint",
@@ -851,7 +851,7 @@
             }
           },
           "403": {
-            "description": "A device wrote another row, or more than its screen",
+            "description": "A device wrote another row or more than its screen and topology, or may not choose its screen (`screen_choice_not_granted`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -861,7 +861,7 @@
             }
           },
           "422": {
-            "description": "The body is not an overlay",
+            "description": "The body is not an overlay, or a device's topology is not `extend`, `primary` or `exclusive`",
             "content": {
               "application/json": {
                 "schema": {
@@ -1432,7 +1432,7 @@
           "display"
         ],
         "summary": "Screen picker",
-        "description": "The device's own screen, then each of the host's monitors with the device streaming it\nnow. A paired device also reads what it is set to. A host with no mirror backend lists its\nown screen alone.",
+        "description": "The device's own screen, then each of the host's monitors with the device streaming it\nnow. A paired device also reads what it is set to and whether it may choose. A host with no\nmirror backend lists its own screen alone. `role` names the roles its own screen takes on\nthe desk.",
         "operationId": "getDisplayTargets",
         "responses": {
           "200": {
@@ -11793,7 +11793,7 @@
               },
               {
                 "$ref": "#/components/schemas/DisplayTarget",
-                "description": "What this device streams. `own` opts it out of a host-wide monitor; absent follows\nthe host. The device may write this field on its own row."
+                "description": "What this device streams. `own` opts it out of a host-wide monitor; absent follows\nthe host. The device may write this field and `topology` on its own row."
               }
             ]
           },
@@ -11804,7 +11804,7 @@
               },
               {
                 "$ref": "#/components/schemas/SetBy",
-                "description": "Who wrote `screen`. Absent with it."
+                "description": "Who last wrote `screen` or `topology`. Absent when neither is set."
               }
             ]
           },
@@ -12553,6 +12553,7 @@
         "required": [
           "locked",
           "host_default",
+          "may_choose",
           "targets"
         ],
         "properties": {
@@ -12563,6 +12564,21 @@
           "locked": {
             "type": "boolean",
             "description": "`PUNKTFUNK_CAPTURE_MONITOR` fixes the screen for every device."
+          },
+          "may_choose": {
+            "type": "boolean",
+            "description": "Whether the caller may choose the screen: a paired device's `GRANT_DISPLAY`, always on\nthe operator and plugin lanes. A device's write without it is 403."
+          },
+          "role": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ScreenRoles",
+                "description": "The roles a device's own screen takes on this desk. Absent on a contract seat, a host\nwith no mirror backend, a gamescope session, and a desktop that lists no physical\nmonitor."
+              }
+            ]
           },
           "targets": {
             "type": "array",
@@ -12577,7 +12593,7 @@
               },
               {
                 "$ref": "#/components/schemas/DisplayTarget",
-                "description": "What the calling device is set to, before a taken or missing monitor falls back to its\nown screen. Null on the operator and plugin lanes."
+                "description": "What the calling device is set to, before a taken or missing monitor falls back to its\nown screen. A screen it set itself counts only while `may_choose`. Null on the operator\nand plugin lanes."
               }
             ]
           }
@@ -15884,7 +15900,7 @@
               "null"
             ],
             "format": "int32",
-            "description": "`GRANT_*` bits 0–5. `null` is a pre-grants record, which means full.",
+            "description": "`GRANT_*` bits 0–8 (`0x100` is choosing its screen), as this host reads the record: an\nolder host's Full reads `0x1FF`, and `0xFF` is everything but the screen choice. `null`\nis a pre-grants record, which means full.",
             "example": 1,
             "minimum": 0
           },
@@ -17844,6 +17860,47 @@
           }
         }
       },
+      "ScreenRole": {
+        "type": "string",
+        "description": "How a device's own screen sits among the host's monitors: its `topology`, from its side.",
+        "enum": [
+          "only",
+          "main",
+          "second"
+        ]
+      },
+      "ScreenRoles": {
+        "type": "object",
+        "description": "The roles a device's own screen takes on the desk.",
+        "required": [
+          "host_default",
+          "offered"
+        ],
+        "properties": {
+          "host_default": {
+            "$ref": "#/components/schemas/ScreenRole",
+            "description": "What a connect gets with no pick of the device's: the console's row for it, else the\nhost's topology."
+          },
+          "offered": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ScreenRole"
+            },
+            "description": "The roles this host gives. `main` only where the desktop has a main screen."
+          },
+          "yours": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ScreenRole",
+                "description": "The role of the calling device's own pick while it counts and its screen is its own.\nNull with no pick, a monitor pick, no `GRANT_DISPLAY`, and on the operator lane."
+              }
+            ]
+          }
+        }
+      },
       "ScreenRow": {
         "type": "object",
         "description": "One row of the screen picker. The first is always `own`; the rest are the host's heads.",
@@ -18650,7 +18707,7 @@
       },
       "SetBy": {
         "type": "string",
-        "description": "Who last wrote a device's `screen`.",
+        "description": "Who last wrote a device's pick: its `screen`, its `topology`, or both.",
         "enum": [
           "device",
           "console"

@@ -1007,6 +1007,8 @@ impl VdisplayDriver for PfVdisplayDriver {
 pub struct PfVdisplayDisplay {
     /// Connecting client's cert fingerprint (`None` = anonymous/GameStream → auto id).
     client_fp: Option<[u8; 32]>,
+    /// The session's topology ([`VirtualDisplay::set_topology`]), for a group's first monitor.
+    topology: Option<crate::policy::Topology>,
     /// Client HDR volume (`None` = unknown/SDR → driver EDID defaults). Advertised in the
     /// created monitor's EDID so host apps tone-map to the client's panel.
     client_hdr: Option<pf_frame::HdrMeta>,
@@ -1026,6 +1028,7 @@ impl PfVdisplayDisplay {
         super::manager::init(Box::new(PfVdisplayDriver)).open_backend()?;
         Ok(Self {
             client_fp: None,
+            topology: None,
             client_hdr: None,
             hdr: false,
             hw_cursor: false,
@@ -1042,6 +1045,10 @@ impl VirtualDisplay for PfVdisplayDisplay {
 
     fn set_client_identity(&mut self, fingerprint: Option<[u8; 32]>) {
         self.client_fp = fingerprint;
+    }
+
+    fn set_topology(&mut self, topology: Option<crate::policy::Topology>) {
+        self.topology = topology;
     }
 
     fn set_client_hdr(&mut self, hdr: Option<pf_frame::HdrMeta>) {
@@ -1083,6 +1090,7 @@ impl VirtualDisplay for PfVdisplayDisplay {
         super::manager::vdm().acquire(
             mode,
             self.client_fp,
+            self.topology,
             self.client_hdr,
             self.hdr,
             self.hw_cursor,

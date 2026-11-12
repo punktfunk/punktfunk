@@ -198,43 +198,51 @@ struct HostDetailView: View {
         }
     }
 
-    /// The host's screens for this device, the pick checked. A row the host can't open now
-    /// says why under it; a locked host shows its reason instead of rows.
+    /// The Screen section: the roles, then the host's monitors under their header, the pick
+    /// checked. A greyed row says why under it; when the host or the host's preset decides, its
+    /// pick greyed and the note. An older host's rows keep the hint on what a screen is.
     @ViewBuilder private func screenSection(_ a: HostActions) -> some View {
-        if let screens = a.screens {
+        if let screens = a.screens, screens.hasSection {
+            let rows = screens.rows(under: a.screenPreset)
+            let split = rows.firstIndex { $0.header != nil } ?? rows.endIndex
+            let footer = screens.note(under: a.screenPreset)
+                ?? (screens.role == nil ? String(localized: L10n.screenHint) : nil)
             Section {
-                if screens.locked {
-                    Text(L10n.screenLockedHint)
-                        .foregroundStyle(.secondary)
-                } else {
-                    ForEach(screens.targets) { row in
-                        screenRow(row, current: row.target == screens.current) { a.pickScreen(row) }
-                    }
-                }
+                ForEach(rows[..<split]) { screenRow($0, pick: a.pickScreen) }
             } header: {
                 Text(L10n.hostcardSectionScreen)
             } footer: {
-                Text(L10n.screenHint)
+                if split == rows.endIndex, let footer { Text(footer) }
+            }
+            if split < rows.endIndex {
+                Section {
+                    ForEach(rows[split...]) { screenRow($0, pick: a.pickScreen) }
+                } header: {
+                    Text(rows[split].header ?? "")
+                } footer: {
+                    if let footer { Text(footer) }
+                }
             }
         }
     }
 
-    private func screenRow(
-        _ row: ScreenTarget, current: Bool, pick: @escaping () -> Void
-    ) -> some View {
-        Button(action: pick) {
+    /// One Screen row: the checked one does nothing, a greyed one can't be picked.
+    private func screenRow(_ row: ScreenRow, pick: @escaping (ScreenRow) -> Void) -> some View {
+        Button {
+            pick(row)
+        } label: {
             HStack {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(row.name)
-                        .foregroundStyle(.primary)
-                    if let line = row.reason ?? (row.detail.isEmpty ? nil : row.detail) {
+                    Text(row.label)
+                        .foregroundStyle(row.pickable ? HierarchicalShapeStyle.primary : .secondary)
+                    if let line = row.line {
                         Text(line)
                             .font(.footnote)
                             .foregroundStyle(.secondary)
                     }
                 }
                 Spacer(minLength: 8)
-                if current {
+                if row.checked {
                     Image(systemName: "checkmark")
                         .foregroundStyle(.tint)
                 }
@@ -245,8 +253,8 @@ struct HostDetailView: View {
         // A grouped Mac form draws a default button as a push button; this is a row.
         .buttonStyle(.plain)
         #endif
-        .disabled(row.reason != nil)
-        .accessibilityAddTraits(current ? .isSelected : [])
+        .disabled(!row.pickable)
+        .accessibilityAddTraits(row.checked ? .isSelected : [])
     }
 
     /// How to reach the host, edited in place. The speed test's button is the iPhone's: a page of

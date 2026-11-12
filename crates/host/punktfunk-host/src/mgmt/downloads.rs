@@ -201,7 +201,7 @@ pub(crate) async fn uninstall_library_entry(
 }
 
 /// A paired device whose live mask carries `bit`.
-fn granted(st: &MgmtState, fp: Option<&str>, bit: u32) -> bool {
+pub(super) fn granted(st: &MgmtState, fp: Option<&str>, bit: u32) -> bool {
     fp.is_some_and(|fp| {
         st.native
             .as_ref()

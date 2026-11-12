@@ -553,7 +553,7 @@ pub fn mirror_test(args: &[String]) -> Result<()> {
 
     let mut vd = match &explicit {
         Some(connector) => crate::vdisplay::open_mirror(compositor, connector)?,
-        None => crate::vdisplay::open_for(compositor, None)?,
+        None => crate::vdisplay::open_for(compositor, None, None)?,
     };
     // Mirror ignores mode (the panel runs at its owner's). Pass the head's own if the pin drops.
     let mode = crate::vdisplay::Mode {

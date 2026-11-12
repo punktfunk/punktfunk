@@ -8,11 +8,16 @@ pub(crate) use pf_vdisplay::*;
 
 use pf_vdisplay::monitors::PhysicalMonitor;
 use pf_vdisplay::policy::{DisplayTarget, ScreenPick, ScreenReason};
+use punktfunk_core::quic::v2::hello::Role;
 
-/// The screen `client` gets now: what it is set to ([`screen_target`]), else its own screen
-/// when that monitor is off, missing, or streamed by another device.
-pub(crate) fn resolve_screen(client: Option<[u8; 32]>) -> ScreenPick {
-    pick(None, policy::fp_hex(client).as_deref())
+/// The screen `client` gets now: `wanted`, else what the operator set it to ([`screen_target`]
+/// without its own pick), or its own screen when that monitor is off, missing, or streamed by
+/// another device.
+pub(crate) fn resolve_screen(
+    client: Option<[u8; 32]>,
+    wanted: Option<DisplayTarget>,
+) -> ScreenPick {
+    pick(None, policy::fp_hex(client).as_deref(), wanted)
 }
 
 /// Open the display `client` gets on `compositor` ([`resolve_screen`]), and anchor absolute
@@ -20,12 +25,74 @@ pub(crate) fn resolve_screen(client: Option<[u8; 32]>) -> ScreenPick {
 pub(crate) fn open_for(
     compositor: Compositor,
     client: Option<[u8; 32]>,
+    wanted: Option<DisplayTarget>,
 ) -> anyhow::Result<Box<dyn VirtualDisplay>> {
-    let pick = pick(Some(compositor), policy::fp_hex(client).as_deref());
+    let pick = pick(Some(compositor), policy::fp_hex(client).as_deref(), wanted);
     let vd = pf_vdisplay::open_for(compositor, pick.target.clone())?;
     #[cfg(target_os = "linux")]
     crate::aim_capture_anchor(pick.target.into_monitor(), "session open");
     Ok(vd)
+}
+
+/// The topology the own screen of a session of `client` opens under on `compositor`: `wanted`,
+/// then the first-session rule against every other device's screen here, and whether that rule
+/// changed it. `None` leaves the backend its own read. Logs when an earlier device decided it.
+pub(crate) fn session_topology(
+    client: Option<[u8; 32]>,
+    wanted: Option<policy::Topology>,
+    compositor: Compositor,
+) -> (Option<policy::Topology>, bool) {
+    let Some(wanted) = wanted else {
+        return (None, false);
+    };
+    let me = policy::fp_hex(client);
+    let holders = screen_holders();
+    let rule =
+        policy::first_session_rule(wanted, me.as_deref(), &holders, compositor.has_primary());
+    let Some((kept, first)) = rule else {
+        return (Some(wanted), false);
+    };
+    let first = first
+        .as_deref()
+        .map_or_else(|| "unknown".into(), device_label);
+    tracing::info!(%first, ?wanted, topology = ?kept,
+        "monitors stay as the first session left them");
+    (Some(kept), true)
+}
+
+/// Whether a session on `compositor` plays on the desk, the desktop that holds the box's
+/// monitors, where a device's own screen takes a role: not a contract `seat`, not gamescope,
+/// and heads that read (`physical`) list a physical monitor. Heads that cannot be read keep it.
+pub(crate) fn on_the_desk(
+    seat: bool,
+    compositor: Option<Compositor>,
+    physical: Option<bool>,
+) -> bool {
+    !seat && compositor != Some(Compositor::Gamescope) && physical != Some(false)
+}
+
+/// [`on_the_desk`] for a session on `compositor` now. Never on a host with no mirror backend.
+/// With `read_heads` it asks the compositor for its monitors: blocking, one read. Without, a
+/// desktop that may have none still counts, as one whose heads cannot be read does.
+pub(crate) fn desk(compositor: Option<Compositor>, read_heads: bool) -> bool {
+    let physical = read_heads
+        .then(|| heads(compositor).ok())
+        .flatten()
+        .map(|h| h.iter().any(|m| !m.managed));
+    cfg!(any(target_os = "linux", target_os = "windows"))
+        && on_the_desk(policy::prefs().follows_contract(), compositor, physical)
+}
+
+/// The role an own screen takes under `topology`. Without a main screen (`primary` false)
+/// `primary` extends, so it is the second screen.
+pub(crate) fn role_of(topology: policy::Topology, primary: bool) -> Role {
+    match topology {
+        policy::Topology::Exclusive => Role::Only,
+        policy::Topology::Primary if primary => Role::Main,
+        policy::Topology::Primary | policy::Topology::Extend | policy::Topology::Auto => {
+            Role::Second
+        }
+    }
 }
 
 /// Whether `seat`'s gamescope shows HDR content now. One that is not up shows none.
@@ -65,8 +132,15 @@ pub(crate) fn device_label(fp: &str) -> String {
 }
 
 /// [`resolve_screen`] for the device `fp`, against the heads of `compositor`.
-fn pick(compositor: Option<Compositor>, fp: Option<&str>) -> ScreenPick {
-    let (target, locked) = screen_target(fp);
+fn pick(
+    compositor: Option<Compositor>,
+    fp: Option<&str>,
+    wanted: Option<DisplayTarget>,
+) -> ScreenPick {
+    let (target, locked) = match wanted {
+        Some(t) => (t, pf_host_config::config().capture_monitor.is_some()),
+        None => screen_target(fp, false),
+    };
     let DisplayTarget::Monitor(want) = &target else {
         return ScreenPick {
             target,

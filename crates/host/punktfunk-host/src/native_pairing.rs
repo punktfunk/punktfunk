@@ -31,7 +31,7 @@ mod store;
 
 pub use approval::{classify_source, KnockSource, PairingDecision, PendingRequest, Relay, Via};
 pub use arming::PinAttempt;
-pub use store::{Access, PairedClient};
+pub use store::{stored_grants, Access, PairedClient, GRANTS_REV};
 
 /// Counts one live session while held. Last-out for a "this session" record
 /// starts [`RECONNECT_GRACE`]; a later last-out invalidates that waiter so the
@@ -337,10 +337,7 @@ impl NativePairing {
                 if c.expires_unix.is_some_and(|t| now_unix >= t) {
                     None
                 } else {
-                    Some(
-                        punktfunk_core::quic::normalize_legacy_full(c.grants.unwrap_or(GRANT_ALL))
-                            & GRANT_ALL,
-                    )
+                    Some(stored_grants(&c))
                 }
             }
         }
@@ -379,7 +376,7 @@ impl NativePairing {
             if let Some(stored) = self.store.get(fp_hex) {
                 crate::events::emit(crate::events::EventKind::AccessGranted {
                     device,
-                    grants: stored.grants.unwrap_or(GRANT_ALL) & GRANT_ALL,
+                    grants: stored_grants(&stored),
                     expires_unix: stored.expires_unix,
                 });
             }
@@ -398,12 +395,12 @@ impl NativePairing {
         // Read the stored record so hooks see masked bits actually in force.
         if let Some(stored) = self.store.get(fp_hex) {
             crate::events::emit(crate::events::EventKind::AccessChanged {
+                grants: stored_grants(&stored),
                 device: crate::events::DeviceRef {
                     name: stored.name,
                     fingerprint: fp_hex.to_ascii_lowercase(),
                     plane: crate::events::Plane::Native,
                 },
-                grants: stored.grants.unwrap_or(GRANT_ALL) & GRANT_ALL,
                 expires_unix: stored.expires_unix,
             });
         }
@@ -423,7 +420,7 @@ impl NativePairing {
     fn current_state(&self, fp_hex: &str) -> AccessState {
         match self.store.get(fp_hex) {
             Some(c) => AccessState {
-                grants: c.grants.unwrap_or(GRANT_ALL) & GRANT_ALL,
+                grants: stored_grants(&c),
                 deadline_unix: c.expires_unix,
                 revoked: false,
             },

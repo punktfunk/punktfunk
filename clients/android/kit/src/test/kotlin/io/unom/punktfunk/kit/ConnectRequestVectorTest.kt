@@ -57,6 +57,7 @@ class ConnectRequestVectorTest {
         studioRange = getBoolean("studioRange"),
         viewWidth = getInt("viewWidth"),
         viewHeight = getInt("viewHeight"),
+        hostScreen = getString("hostScreen"),
     )
 
     /** One JSON value, whatever the key order or number spelling. */

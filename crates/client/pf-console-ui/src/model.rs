@@ -45,6 +45,10 @@ pub struct PresetChip {
     /// "inherits" — the safe half, since that is where the console writes.
     #[serde(default)]
     pub bitrate_kbps: Option<u32>,
+    /// The host screen this preset pins (`SettingsOverlay::host_screen`); `None` leaves it to
+    /// the host card. The card's Screen section and line show it ([`HostRow::screen_preset`]).
+    #[serde(default)]
+    pub host_screen: Option<String>,
 }
 
 /// Home carousel row, fully resolved by the service thread. The shell renders it
@@ -144,6 +148,16 @@ impl HostRow {
     /// the one a connect plays as without asking.
     pub fn remembered(&self) -> Option<&pf_client_core::profiles::ProfilePick> {
         self.profile.as_ref().filter(|p| p.remember)
+    }
+
+    /// The preset OK on this card connects with, a pinned card's own or the host's default,
+    /// when it pins the host screen.
+    pub(crate) fn screen_preset(&self) -> Option<pf_client_core::display_targets::BoundPreset<'_>> {
+        let chip = self.pin.as_ref().or(self.bound_preset.as_ref())?;
+        Some(pf_client_core::display_targets::BoundPreset {
+            name: &chip.name,
+            host_screen: chip.host_screen.as_deref()?,
+        })
     }
 }
 
@@ -726,13 +740,15 @@ pub enum ConsoleCmd {
         /// the screen already settled.
         label: String,
     },
-    /// Write this device's screen on the host (`PUT /display/clients/{fp}`). Same lane as
+    /// Write a Screen row's pick on the host (`PUT /display/clients/{fp}`). Same lane as
     /// [`Self::HostAction`]; a refusal is a notice, and the new pick arrives on the host row.
     SetScreen {
         addr: String,
         mgmt: u16,
         fp_hex: String,
         screen: pf_client_core::display_targets::DisplayTarget,
+        /// A role's topology. A bridge that ignores it still sends a valid screen-only write.
+        topology: Option<String>,
         /// The row's word, for the notice.
         label: String,
     },

@@ -1193,12 +1193,13 @@ object SkiaConsole {
     }
 
     /**
-     * Write this device's screen on the host, then ask again: the row the card shows is the
-     * host's answer, refused or not. The console already toasted the pick; a refusal is a notice.
+     * Write a Screen row's pick on the host, a role's topology with it, then ask again: the row
+     * the card shows is the host's answer, refused or not. The console already toasted the pick;
+     * a refusal is a notice.
      */
     private fun setScreen(c: JSONObject) {
         val addr = c.optString("addr"); val mgmt = c.optInt("mgmt"); val fp = c.optString("fp_hex")
-        val target = DisplayTargets.DisplayTarget.of(c.opt("screen")) ?: return
+        val pick = DisplayTargets.Pick.of(c) ?: return
         val label = c.optString("label")
         val id = identity
         if (id == null) {
@@ -1207,7 +1208,7 @@ object SkiaConsole {
         }
         val res = appContext?.resources ?: return
         ioPool.execute {
-            val refused = DisplayTargets.setScreen(id, addr, mgmt, fp, target, label, streamPort(fp))
+            val refused = DisplayTargets.setPick(id, addr, mgmt, fp, pick, label, streamPort(fp))
             val found = DisplayTargets.fetch(id, addr, mgmt, fp, streamPort(fp))
             state.launch {
                 services.screensAt[fp] = android.os.SystemClock.elapsedRealtime()

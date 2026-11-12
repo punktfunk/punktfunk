@@ -2042,6 +2042,8 @@ fn display_half(
         view,
         features,
         mirrored,
+        screen,
+        topology,
         display_hdr,
         ..
     } = n;
@@ -2091,6 +2093,8 @@ fn display_half(
         client_hdr: hello.display_hdr.map(crate::encode::hdr_meta_from_wire),
         join_live: joined.is_some(),
         mirrored,
+        screen,
+        topology,
         reframe_to,
         frame_map: lanes.frame_map,
         #[cfg(target_os = "linux")]

@@ -1,6 +1,6 @@
 // `crates/core/punktfunk-core/testdata/grant-vectors.json`, which core writes, against the Swift
-// grant rule: the legacy-full read and the level a mask labels as. The web console and Kotlin
-// replay the same file.
+// grant rule: the wire reader's legacy-full read (`normalized`) and the level a mask labels as.
+// Kotlin replays the same columns; the web console replays the stored ones.
 
 import XCTest
 
@@ -20,6 +20,10 @@ final class GrantVectorsTests: XCTestCase {
         XCTAssertEqual(root["all"] as? Int, Int(PunktfunkConnection.grantAll))
         XCTAssertEqual(root["all_pre_power"] as? Int, Int(PunktfunkConnection.grantAllPrePower))
         XCTAssertEqual(root["all_pre_manage"] as? Int, Int(PunktfunkConnection.grantAllPreManage))
+        XCTAssertEqual(
+            root["all_pre_display"] as? Int, Int(PunktfunkConnection.grantAllPreDisplay))
+        let bits = try XCTUnwrap(root["bits"] as? [String: Int])
+        XCTAssertEqual(bits["DISPLAY"], Int(PunktfunkConnection.grantDisplay))
         let levels: [String: PunktfunkConnection.AccessLevel] = [
             "full": .fullControl, "controller": .controllerOnly, "view": .viewOnly,
             "custom": .custom,
