@@ -181,6 +181,7 @@ export const GATES: readonly Route[] = [
 	open("DELETE", "session", STEERS),
 	open("POST", "session/idr", STEERS),
 	open("PUT", "session/settings", SETTING),
+	open("DELETE", "session/settings", SETTING),
 	open("DELETE", "session/{id}", STEERS),
 	open("PUT", "session/{id}/access", WITHIN),
 	open("PUT", "session/{id}/audio", STEERS),

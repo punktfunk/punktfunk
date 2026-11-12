@@ -167,6 +167,9 @@ fn every_route_is_classified_for_the_plugin_and_cert_lanes() {
         ("GET", "/api/v1/session/{id}/pads", false, false),
         ("GET", "/api/v1/session/settings", true, false),
         ("PUT", "/api/v1/session/settings", true, false),
+        // Drops a profile's own settings. The plugin gate admits it as `session/{id}`; the
+        // handler refuses a plugin's `as` (`only_the_operator_writes_a_profile_s_layer`).
+        ("DELETE", "/api/v1/session/settings", true, false),
         // A device ends only games it launched; the handler scopes it.
         ("POST", "/api/v1/game/end", true, true),
         // A seat's held launch: only the host with the plugins lets it go.
@@ -485,9 +488,9 @@ async fn only_the_operator_writes_a_profile_s_layer() {
             }
         }
     }
-    // Hidden, scanner, pick, three on shared overrides, game, source, session settings.
+    // Hidden, scanner, pick, three on shared overrides, game, source, session settings' two.
     assert_eq!(
-        writes, 9,
+        writes, 10,
         "a new write that takes `as` belongs in this list"
     );
     // The operator passes the lane check and meets the profile check.
@@ -700,6 +703,7 @@ fn every_route_has_a_side_on_the_door() {
         ("GET", "/api/v1/session/last", false),
         ("GET", "/api/v1/session/settings", false),
         ("PUT", "/api/v1/session/settings", false),
+        ("DELETE", "/api/v1/session/settings", false),
         ("POST", "/api/v1/game/end", false),
         ("POST", "/api/v1/game/holds/{token}/release", false),
         // Moonlight is the owner's row's: the door never serves it.

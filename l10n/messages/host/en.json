@@ -212,6 +212,7 @@
 	"apierr_seats_stay_on_with_door": "Seats stay on while Reachable without logging in is on.",
 	"apierr_session_gamestream_cannot": "This session is a GameStream one, which can't do that. Stop it or ask its client.",
 	"apierr_session_not_streaming": "No session with that id is streaming.",
+	"apierr_session_settings_need_profile": "Couldn't remove the host's own session settings. Change them instead, or pick a profile.",
 	"apierr_session_settings_not_saved": "Couldn't save the session settings",
 	"apierr_take_turns_windows_only": "Take-turns profiles are only on Windows.",
 	"apierr_title_already_installed": "That game is already on this host.",

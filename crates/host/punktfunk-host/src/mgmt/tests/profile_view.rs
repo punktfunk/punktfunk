@@ -449,6 +449,50 @@ async fn writes_with_as_land_in_the_profile_s_own_files() {
     assert_eq!(stored["session_on_game_exit"], true);
 }
 
+/// Dropping a profile's own session settings answers what `GET` then answers, `configured`
+/// false, and again when there is nothing left to drop. Only a profile with a seat of its own
+/// has settings to drop.
+#[tokio::test]
+async fn a_profile_s_own_session_settings_drop() {
+    let tmp = ConfigDirOverride::new();
+    write_fixture(tmp.path());
+    let app = test_app(profiles_state(tmp.path(), profiles()), None);
+    let drop = |query: &str| {
+        axum::http::Request::delete(format!("/api/v1/session/settings{query}"))
+            .body(Body::empty())
+            .unwrap()
+    };
+    let file = tmp
+        .path()
+        .join(format!("library-profiles/{SEAT_P}/session-settings.json"));
+    assert!(file.exists());
+    let get = format!("/api/v1/session/settings?as={SEAT_P}");
+    for _ in 0..2 {
+        let (s, dropped) = send(&app, drop(&format!("?as={SEAT_P}"))).await;
+        assert_eq!(s, StatusCode::OK, "{dropped}");
+        assert_eq!(dropped["configured"], false);
+        assert_eq!(dropped, send(&app, get_req(&get)).await.1);
+        assert!(!file.exists());
+    }
+    let need = (StatusCode::BAD_REQUEST, "session_settings_need_profile");
+    for (query, (status, code)) in [
+        (String::new(), need),
+        ("?as=".into(), need),
+        (format!("?as={OWNER}"), need),
+        (
+            format!("?as={SHARER}"),
+            (StatusCode::CONFLICT, "profile_session_settings_host"),
+        ),
+        (
+            "?as=0123456789ab".into(),
+            (StatusCode::NOT_FOUND, "profile_unknown"),
+        ),
+    ] {
+        let (s, j) = send(&app, drop(&query)).await;
+        assert_eq!((s, j["code"].as_str()), (status, Some(code)), "{query}");
+    }
+}
+
 /// A profile's entry naming a shared override the box then deletes sets nothing: the box's
 /// entry applies, and the row does not call it the profile's. Its `none` still wins.
 #[tokio::test]
@@ -625,6 +669,11 @@ async fn a_seat_host_lists_what_the_box_lists_as_its_profile() {
         serde_json::json!({}),
     );
     assert_eq!(send(&app, put).await.0, StatusCode::CONFLICT);
+    let drop = axum::http::Request::delete(format!("/api/v1/session/settings?as={SEAT_P}"))
+        .body(Body::empty())
+        .unwrap();
+    assert_eq!(send(&app, drop).await.0, StatusCode::CONFLICT);
+    assert!(crate::session_settings::of_profile(&here).is_some());
 }
 
 /// The box's answers for [`SEAT_P`], then the seat's half of the test in a child.

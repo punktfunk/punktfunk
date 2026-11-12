@@ -1660,6 +1660,22 @@ export type SetSessionSettings409 = ApiError
 export const SetSessionSettings409 = ApiError
 export type SetSessionSettings500 = ApiError
 export const SetSessionSettings500 = ApiError
+export type ClearSessionSettingsParams = { readonly "as": string }
+export const ClearSessionSettingsParams = Schema.Struct({ "as": Schema.String })
+export type ClearSessionSettings200 = SessionSettingsState
+export const ClearSessionSettings200 = SessionSettingsState
+export type ClearSessionSettings400 = ApiError
+export const ClearSessionSettings400 = ApiError
+export type ClearSessionSettings401 = ApiError
+export const ClearSessionSettings401 = ApiError
+export type ClearSessionSettings403 = ApiError
+export const ClearSessionSettings403 = ApiError
+export type ClearSessionSettings404 = ApiError
+export const ClearSessionSettings404 = ApiError
+export type ClearSessionSettings409 = ApiError
+export const ClearSessionSettings409 = ApiError
+export type ClearSessionSettings500 = ApiError
+export const ClearSessionSettings500 = ApiError
 export type StopOneSession401 = ApiError
 export const StopOneSession401 = ApiError
 export type StopOneSession404 = ApiError
@@ -3423,6 +3439,19 @@ export const make = (
       orElse: unexpectedStatus
     }))
     ),
+    "clearSessionSettings": (options: Parameters<Punktfunk["clearSessionSettings"]>[0]) => HttpClientRequest.delete("/api/v1/session/settings").pipe(
+      HttpClientRequest.setUrlParams({ "as": options.params["as"] as any }),
+      withResponse(options.config)(HttpClientResponse.matchStatus({
+      "2xx": decodeSuccess(ClearSessionSettings200),
+      "400": decodeError("ClearSessionSettings400", ClearSessionSettings400),
+      "401": decodeError("ClearSessionSettings401", ClearSessionSettings401),
+      "403": decodeError("ClearSessionSettings403", ClearSessionSettings403),
+      "404": decodeError("ClearSessionSettings404", ClearSessionSettings404),
+      "409": decodeError("ClearSessionSettings409", ClearSessionSettings409),
+      "500": decodeError("ClearSessionSettings500", ClearSessionSettings500),
+      orElse: unexpectedStatus
+    }))
+    ),
     "stopOneSession": (id, options: Parameters<Punktfunk["stopOneSession"]>[1]) => __makePathRequest(HttpClientRequest.delete, [id], () => "/api/v1/session/" + __encodePathParam(id) + "").pipe(
     Effect.flatMap((request) => request.pipe(
       withResponse(options?.config)(HttpClientResponse.matchStatus({
@@ -4897,6 +4926,15 @@ readonly "getRecentSessions": {
 readonly "setSessionSettings": {
     <Config extends OperationConfig | undefined = undefined>(options: { readonly params?: typeof SetSessionSettingsParams.Encoded | undefined; readonly payload: typeof SetSessionSettingsRequestJson.Encoded; readonly config: Config }): Effect.Effect<WithOptionalResponse<typeof SetSessionSettings200.Type, Config>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"SetSessionSettings400", typeof SetSessionSettings400.Type> | PunktfunkError<"SetSessionSettings401", typeof SetSessionSettings401.Type> | PunktfunkError<"SetSessionSettings403", typeof SetSessionSettings403.Type> | PunktfunkError<"SetSessionSettings404", typeof SetSessionSettings404.Type> | PunktfunkError<"SetSessionSettings409", typeof SetSessionSettings409.Type> | PunktfunkError<"SetSessionSettings500", typeof SetSessionSettings500.Type>>;
     <Config extends OperationConfig | undefined = undefined>(options: { readonly params?: typeof SetSessionSettingsParams.Encoded | undefined; readonly payload: typeof SetSessionSettingsRequestJson.Encoded; readonly config?: Config | undefined }): Effect.Effect<WithOptionalResponse<typeof SetSessionSettings200.Type, Config | undefined>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"SetSessionSettings400", typeof SetSessionSettings400.Type> | PunktfunkError<"SetSessionSettings401", typeof SetSessionSettings401.Type> | PunktfunkError<"SetSessionSettings403", typeof SetSessionSettings403.Type> | PunktfunkError<"SetSessionSettings404", typeof SetSessionSettings404.Type> | PunktfunkError<"SetSessionSettings409", typeof SetSessionSettings409.Type> | PunktfunkError<"SetSessionSettings500", typeof SetSessionSettings500.Type>>;
+  }
+  /**
+* Its seat plays with the box's Seat defaults again; the answer is what `GET` with the same
+* `as` answers, `configured: false`. Dropping settings a profile never had is the same answer.
+* `as` is required: the host's own settings are changed with `PUT`, never dropped.
+*/
+readonly "clearSessionSettings": {
+    <Config extends OperationConfig | undefined = undefined>(options: { readonly params: typeof ClearSessionSettingsParams.Encoded; readonly config: Config }): Effect.Effect<WithOptionalResponse<typeof ClearSessionSettings200.Type, Config>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"ClearSessionSettings400", typeof ClearSessionSettings400.Type> | PunktfunkError<"ClearSessionSettings401", typeof ClearSessionSettings401.Type> | PunktfunkError<"ClearSessionSettings403", typeof ClearSessionSettings403.Type> | PunktfunkError<"ClearSessionSettings404", typeof ClearSessionSettings404.Type> | PunktfunkError<"ClearSessionSettings409", typeof ClearSessionSettings409.Type> | PunktfunkError<"ClearSessionSettings500", typeof ClearSessionSettings500.Type>>;
+    <Config extends OperationConfig | undefined = undefined>(options: { readonly params: typeof ClearSessionSettingsParams.Encoded; readonly config?: Config | undefined }): Effect.Effect<WithOptionalResponse<typeof ClearSessionSettings200.Type, Config | undefined>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"ClearSessionSettings400", typeof ClearSessionSettings400.Type> | PunktfunkError<"ClearSessionSettings401", typeof ClearSessionSettings401.Type> | PunktfunkError<"ClearSessionSettings403", typeof ClearSessionSettings403.Type> | PunktfunkError<"ClearSessionSettings404", typeof ClearSessionSettings404.Type> | PunktfunkError<"ClearSessionSettings409", typeof ClearSessionSettings409.Type> | PunktfunkError<"ClearSessionSettings500", typeof ClearSessionSettings500.Type>>;
   }
   /**
 * Same deliberate stop as `DELETE /session`, for the one id. Every other live

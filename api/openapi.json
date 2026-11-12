@@ -8538,6 +8538,98 @@
           }
         },
         "x-scope": "profile-data"
+      },
+      "delete": {
+        "tags": [
+          "session"
+        ],
+        "summary": "Drop a profile's own session settings",
+        "description": "Its seat plays with the box's Seat defaults again; the answer is what `GET` with the same\n`as` answers, `configured: false`. Dropping settings a profile never had is the same answer.\n`as` is required: the host's own settings are changed with `PUT`, never dropped.",
+        "operationId": "clearSessionSettings",
+        "parameters": [
+          {
+            "name": "as",
+            "in": "query",
+            "description": "Profile id: the profile whose own settings to drop",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Dropped; the profile's state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionSettingsState"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "No `as`, or `as` names the owner",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`as` on a lane other than the operator's",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`as` names no profile on this host",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "A seat's own host, or `as` names a profile that plays on the host's own desktop",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Couldn't remove the settings file",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "x-scope": "profile-data"
       }
     },
     "/api/v1/session/{id}": {

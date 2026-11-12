@@ -515,7 +515,8 @@ fn api_router_parts() -> (Router<Arc<MgmtState>>, utoipa::openapi::OpenApi) {
         .routes(routes!(session::stream_session_pads))
         .routes(routes!(
             session::get_session_settings,
-            session::set_session_settings
+            session::set_session_settings,
+            session::clear_session_settings
         ))
         .routes(routes!(session::end_game))
         .routes(routes!(session::release_game_hold))
