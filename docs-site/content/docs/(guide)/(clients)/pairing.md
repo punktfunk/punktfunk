@@ -36,7 +36,7 @@ See [Connect with Moonlight → Pair](/docs/moonlight#3-pair).
 
 ## Choosing access when you admit a device
 
-![Approve this device: name, access level, expiry, and the one-click Approve as guest](/img/console-approve-device.png)
+![Approve this device: device code, name, access level, expiry, console password, and the one-click Approve as guest](/img/console-approve-device.png)
 
 - **Access level**: **Full control**, **Controller only** or **View only**. **Advanced** opens the
   individual permissions ([Access levels](/docs/access-levels)).

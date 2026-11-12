@@ -32,6 +32,9 @@ class Plugin:
     ) -> dict:
         return await client.request_access(addr, port, name, fp)
 
+    async def device_code(self) -> dict:
+        return await client.device_code()
+
     async def trust_host(self, addr: str, port: int, fp: str, name: str = "") -> dict:
         return await client.trust_host(addr, port, fp, name)
 

@@ -13,7 +13,7 @@
 // this sheet trust-on-first-use its way past a missing fingerprint.
 import { DialogButton, Focusable, ModalRoot, Spinner, showModal } from "@decky/ui";
 import { FC, useRef, useState } from "react";
-import { type PairResult, requestAccess, trustHost } from "../backend";
+import { deviceCode, type PairResult, requestAccess, trustHost } from "../backend";
 import { diag } from "../lib/diag";
 import { toast } from "../lib/toast";
 import type { HostView } from "../hosts/model";
@@ -60,6 +60,7 @@ export const TrustSheet: FC<{
 }> = ({ host, closeModal, onStream, onChanged }) => {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [code, setCode] = useState<string | null>(null);
 
   // ⚠ This sheet is a `showModal` PORTAL: it captures its callbacks ONCE and never re-renders
   // from panel state. Anything it needs to act on later must be read through a ref, not out of
@@ -104,6 +105,10 @@ export const TrustSheet: FC<{
         closeModal?.();
         return;
       }
+      // The host's console shows this code beside the request. Asked first, not alongside: on
+      // a first run this call makes the identity the request then presents.
+      const mine = await deviceCode().catch(() => null);
+      setCode(mine?.ok ? mine.code : null);
       // Step 2: the request, pinned to that fingerprint. It parks until somebody answers.
       toast(t("decky_trust_approve_toast", { host: h.name }), { duration: 10_000 });
       const res = await requestAccess(h.addr, h.port, "Steam Deck", h.advertisedFp);
@@ -145,6 +150,9 @@ export const TrustSheet: FC<{
       </div>
       {error && (
         <div style={{ color: "#ff6b6b", marginBottom: "0.6em" }}>{error}</div>
+      )}
+      {busy && code && (
+        <div style={{ marginBottom: "0.6em" }}>{t("pair_device_code", { code })}</div>
       )}
 
       <Focusable style={{ display: "flex", flexDirection: "column", gap: "0.5em" }}>

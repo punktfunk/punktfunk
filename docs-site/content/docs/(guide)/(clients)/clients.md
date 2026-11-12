@@ -117,8 +117,8 @@ punktfunk network-check <host-ref>            # the speed test plus what the lin
 ```
 
 A `<host-ref>` is a saved host's id, its name or its address. Also: `hosts add`, `hosts forget`,
-`default-host`, [`wake`](/docs/wake-on-lan#from-the-command-line), `reachable`, `presets list` and
-`reset`. `punktfunk help <command>` lists a command's flags.
+`default-host`, [`wake`](/docs/wake-on-lan#from-the-command-line), `reachable`, `presets list`,
+`device-code` and `reset`. `punktfunk help <command>` lists a command's flags.
 
 - `pair` reads the PIN from stdin with `--pin -`, or asks for it on a terminal. A PIN on the command
   line is refused.

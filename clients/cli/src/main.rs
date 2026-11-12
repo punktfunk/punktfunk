@@ -69,6 +69,7 @@ punktfunk — the Punktfunk client, headless
   punktfunk speed-test <host-ref>
   punktfunk network-check <host-ref> [--json]
   punktfunk presets list [--json]
+  punktfunk device-code [--json]
   punktfunk reset
 
 A <host-ref> is a saved host's id, its name, or an address — the same reference a
@@ -304,6 +305,18 @@ Presets are created and edited in the desktop client; a connect uses one via
 `punktfunk profiles` with no host is the old spelling; its --json keeps the
 `profiles` key."
             }
+            "device-code" => {
+                "\
+punktfunk device-code [--json] — the code that names this device to a host
+
+Prints sixteen hex digits in four groups, the start of this device's
+fingerprint. While `pair --request-access` waits, the host's console shows
+the same code beside the request: approve only when the two match.
+
+  --json   stdout is one object: {\"code\":\"4F2A 91C3 07BE D512\"}
+
+A first run makes this device's identity, as a request would."
+            }
             "reset" => {
                 "\
 punktfunk reset — forget every saved host and reset stream settings
@@ -509,6 +522,7 @@ from the config directory for a true factory reset."
                 None | Some("list") if !has(&rest, "--pick") => presets(&rest, true),
                 _ => profiles_cmd(&rest),
             },
+            "device-code" => device_code(&rest),
             "reset" => reset(),
             "-h" | "--help" | "help" => match positional(&rest, 0) {
                 None => {
@@ -1789,6 +1803,28 @@ from the config directory for a true factory reset."
 
     /// `reset` — forget this device's saved hosts and stream settings. The identity (and so the
     /// hosts' record of this device) is deliberately NOT touched: re-pairing is the user's call.
+    /// `device-code`: the code a waiting request shows, which the host's console shows beside
+    /// it. A first run makes the identity, so the code is the one the request will carry.
+    fn device_code(args: &[String]) -> u8 {
+        let identity = match trust::load_or_create_identity() {
+            Ok(i) => i,
+            Err(e) => {
+                eprintln!("client identity: {e:#}");
+                return CONNECT_FAILED;
+            }
+        };
+        let Some(code) = trust::device_code(&identity) else {
+            eprintln!("client identity: the certificate does not parse");
+            return CONNECT_FAILED;
+        };
+        if has(args, "--json") {
+            println!("{}", serde_json::json!({ "code": code }));
+        } else {
+            println!("{code}");
+        }
+        OK
+    }
+
     fn reset() -> u8 {
         if !is_tty() {
             eprintln!("refusing to reset without a terminal to confirm on");

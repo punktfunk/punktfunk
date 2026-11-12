@@ -202,6 +202,14 @@ export const requestAccess = callable<
   PairResult
 >("request_access");
 /**
+ * This Deck's device code, which the host's console shows beside a request for access. A client
+ * too old for it answers `client-outdated`.
+ */
+export const deviceCode = callable<
+  [],
+  { ok: true; code: string } | { ok: false; error: string }
+>("device_code");
+/**
  * Step 1 of request access: save the host with its ADVERTISED fingerprint, pinned but unpaired.
  * The launch that follows pins the same fingerprint, which is the only thing standing between a
  * 185 s wait for approval and an impostor answering for the host. Idempotent; a host already
