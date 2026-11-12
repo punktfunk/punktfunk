@@ -706,8 +706,9 @@ jobs:
           corepack prepare pnpm@9 --activate
           pnpm install --frozen-lockfile
           pnpm run test
-      # main.py's pure helpers against a stubbed `decky` module: argv shapes, exit codes, the
-      # Steam VDF editor. Stdlib only, Python 3.10 or newer; this image carries 3.11.
+      # The backend (main.py + py_modules/pf_decky) against a stubbed `decky` module: argv shapes,
+      # exit codes, the Steam VDF editor, the loader's import shape. Stdlib only, Python 3.10 or
+      # newer; this image carries 3.11.
       - name: Backend helpers
         run: python3 scripts/test-backend.py
 
