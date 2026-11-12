@@ -39,14 +39,6 @@ export interface HostView {
   fp: string;
   /** What the host is advertising right now, if anything — what request access would pin. */
   advertisedFp: string;
-  /**
-   * The host is answering at an address its record does not carry — it changed DHCP lease.
-   *
-   * This matters because a launch names the host by [`ref`], and the CLI dials whatever address
-   * the RECORD holds. So the row would show the live address and dial the dead one. The record
-   * has to be re-pointed before such a host can stream; `startStream` does it.
-   */
-  moved: boolean;
   paired: boolean;
   online: boolean;
   /**
@@ -144,7 +136,6 @@ export function mergeHosts(saved: SavedHost[], discovered: DiscoveredHost[]): Ho
       port: advert?.port ?? s.port,
       fp: s.fp_hex,
       advertisedFp: advert?.fp ?? "",
-      moved: !!advert && (advert.addr !== s.addr || advert.port !== s.port),
       paired: s.paired,
       // The probe decides, not the advert: a suspending host sends no mDNS goodbye, so its
       // record lingers for up to 75 minutes — green pip, hidden Wake row, asleep machine.
@@ -171,7 +162,6 @@ export function mergeHosts(saved: SavedHost[], discovered: DiscoveredHost[]): Ho
       // No record, so nothing is pinned — whatever it advertises is an OFFER, not a pin.
       fp: "",
       advertisedFp: a.fp,
-      moved: false, // no record, so nothing to be stale
       paired: false, // no record, so no pairing: an older CLI may still say otherwise
       online: true,
       wakeable: false, // no record, so no MAC
