@@ -57,7 +57,7 @@ fn plan_for(req: &ConnectRequest, fp_hex: &str, tofu: bool, opts: &SpawnOpts) ->
     // This shell prompts for a locked profile's password and spawns again with it.
     plan.prompts_unlock = true;
     if let Some(profile) = &opts.profile {
-        plan.profile = profile.clone();
+        plan.play_as(profile.clone());
     }
     plan
 }

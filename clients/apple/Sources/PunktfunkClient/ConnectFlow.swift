@@ -364,7 +364,7 @@ struct ConnectFlow {
     ) {
         let profileID = profile.id
         learnAdvert(of: host)
-        launchOverrides(host, launchID) { overrides in
+        launchOverrides(host, launchID, as: profileID) { overrides in
             guard life.isOpen else { return }
             // THE resolution point (design §4.4): the globals plus this connect's preset, once,
             // here, then the host's overrides for the game. The model latches the result for the
@@ -443,17 +443,18 @@ struct ConnectFlow {
     }
 
     /// Runs `go` with the launched game's overrides: a tile's entry at once (the hold mounts in
-    /// this turn), else the cached catalog's once read. A title never fetched here gets nil and
-    /// dials as before; the host still lowers the mode and swaps the pad.
+    /// this turn), else the catalog cached for `profile`, the one this connect plays as, once
+    /// read. A title never fetched here gets nil and dials as before; the host still lowers the
+    /// mode and swaps the pad.
     private func launchOverrides(
-        _ host: StoredHost, _ launchID: String?,
+        _ host: StoredHost, _ launchID: String?, as profile: String?,
         go: @escaping @MainActor (GameOverrides?) -> Void
     ) {
         guard let launchID else { return go(nil) }
         if let entry = LaunchedEntry.peek(launchID) { return go(entry.overrides) }
         guard let cache = LibraryCache.shared else { return go(nil) }
         Task { @MainActor in
-            let cached = await cache.load(hostID: host.id.uuidString)
+            let cached = await cache.load(hostID: host.id.uuidString, profile: profile)
             go(cached?.games.first { $0.id == launchID }?.overrides)
         }
     }

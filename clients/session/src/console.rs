@@ -200,7 +200,7 @@ impl Launcher {
                     port,
                     pin,
                     self.identity.clone(),
-                    launch,
+                    (launch, profile.as_deref()),
                     gamepad,
                     native,
                     hdr,
@@ -846,17 +846,22 @@ impl ServiceState {
         // of the placeholder at `addr:port`. Empty with auto-wake off or no MAC on record: the
         // fetch then asks once instead of retrying across a boot.
         let known = trust::KnownHosts::load();
-        let macs = known
-            .resolve(Some(&fp_hex), &addr, port)
+        let host = known.resolve(Some(&fp_hex), &addr, port);
+        let macs = host
             .filter(|_| trust::Settings::load().auto_wake)
             .map(|h| h.mac.clone())
             .unwrap_or_default();
+        // The console plays as a remembered pick only, so its shelf is that profile's.
+        let profile = host
+            .and_then(|h| h.profile.as_ref())
+            .filter(|p| p.remember)
+            .map(|p| p.id.clone());
         spawn_fetch(
             self.library.clone(),
             addr,
             (port, mgmt),
             self.identity.clone(),
-            fp_hex,
+            (fp_hex, profile),
             macs,
             req,
         );
@@ -1713,7 +1718,8 @@ fn stream_port(fp_hex: &str) -> u16 {
 
 /// Fetch the library off the service thread, then stream poster art into the shared
 /// model as results land (the renderer drains `push_art` per frame). `(port, mgmt)`: the
-/// stream port the management tunnel tries first, then the HTTPS port.
+/// stream port the management tunnel tries first, then the HTTPS port. `profile`: the
+/// library as that profile plays it.
 ///
 /// Three things happen before the host is ever asked, and the order is the point:
 /// 1. the CACHED catalog goes up immediately, marked stale — a library is the screen a player
@@ -1730,7 +1736,7 @@ fn spawn_fetch(
     addr: String,
     (port, mgmt): (u16, u16),
     identity: (String, String),
-    fp_hex: String,
+    (fp_hex, profile): (String, Option<String>),
     macs: Vec<String>,
     req: RequestKey,
 ) -> Worker {
@@ -1750,9 +1756,9 @@ fn spawn_fetch(
             }
             // Whatever we already know about this host, on screen before a single packet goes
             // out. Keyed on the pinned fingerprint, so a box that came back on a new DHCP lease
-            // is still recognised as the same host with the same library.
+            // is still recognised as the same host, and on the profile the shelf is for.
             let mut cached_games = None;
-            if let Some(cached) = pf_client_core::library_cache::load(&fp_hex) {
+            if let Some(cached) = pf_client_core::library_cache::load(&fp_hex, profile.as_deref()) {
                 if !cached.games.is_empty() && mine() {
                     shared.set_games_cached(&req, to_model(&cached.games));
                     cached_games = Some(cached.games);
@@ -1772,11 +1778,11 @@ fn spawn_fetch(
             let started = Instant::now();
             let mut last_packet = started;
             let mut last_err = None;
-            let mut fetched = None;
+            let (mut fetched, mut served) = (None, None);
             loop {
-                match library::fetch_games(&addr, mgmt, port, &identity, pin) {
-                    Ok(games) => {
-                        fetched = Some(games);
+                match library::fetch_games(&addr, mgmt, port, &identity, pin, profile.as_deref()) {
+                    Ok((games, fetched_as)) => {
+                        (fetched, served) = (Some(games), fetched_as);
                         break;
                     }
                     Err(e) => {
@@ -1841,7 +1847,7 @@ fn spawn_fetch(
             if live {
                 shared.set_games(&req, to_model(&games));
                 // Remembered AFTER it is on screen: the disk write is not on the path to a shelf.
-                pf_client_core::library_cache::store(&fp_hex, &games);
+                pf_client_core::library_cache::store(&fp_hex, served, &games);
                 // What the host has up right now, so a title the player can return to says so.
                 // Deliberately after the catalog — a slow `/status` must not hold the titles
                 // back — and never fatal: an older host answers nothing and every badge stays off.

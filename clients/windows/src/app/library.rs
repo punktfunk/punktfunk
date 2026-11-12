@@ -153,14 +153,23 @@ pub(crate) fn start_fetch(ctx: &Arc<AppCtx>, set_library: &AsyncSetState<Library
                 }
             };
             let mut state = LibraryState::default();
-            let games = match library::fetch_games(
+            let known = pf_client_core::trust::KnownHosts::load();
+            let saved = known.resolve(
+                target.host.fp_hex.as_deref(),
+                &target.host.addr,
+                target.host.port,
+            );
+            let (games, served) = match library::fetch_games(
                 &target.host.addr,
                 target.host.mgmt_port.unwrap_or(library::DEFAULT_MGMT_PORT),
                 target.host.port,
                 &identity,
                 pin,
+                saved
+                    .and_then(|h| h.profile.as_ref())
+                    .map(|p| p.id.as_str()),
             ) {
-                Ok(games) => games,
+                Ok(fetched) => fetched,
                 Err(e) => {
                     state.phase = LibraryPhase::Failed(e.to_string());
                     return publish(&state);
@@ -170,9 +179,10 @@ pub(crate) fn start_fetch(ctx: &Arc<AppCtx>, set_library: &AsyncSetState<Library
                 state.phase = LibraryPhase::Empty;
                 return publish(&state);
             }
-            // The connect that launches a title reads its game overrides from here.
+            // The connect that launches a title reads its game overrides from here, under the
+            // profile the catalog was fetched as.
             if let Some(fp) = target.host.fp_hex.as_deref() {
-                pf_client_core::library_cache::store(fp, &games);
+                pf_client_core::library_cache::store(fp, served, &games);
             }
 
             // Seed cached posters; queue the art pipeline for the rest.

@@ -972,14 +972,14 @@ fn route_link(
         Ok(PlanOutcome::Connect(mut p)) => {
             // The plan's profile is the link's `as=`, else the saved pick: only the
             // link's own wins over the picker.
-            p.profile = link.as_profile.clone();
+            p.play_as(link.as_profile.clone());
             dial_link(ctx, &p, set_screen, set_status)
         }
         // A pinned host named by its label or address, which any web page could guess: arm
         // the confirmation, whose OK runs `dial_link` on this same plan. Not the PIN
         // ceremony: re-pairing would throw the pin away.
         Ok(PlanOutcome::ConfirmConnect(mut p)) => {
-            p.profile = link.as_profile.clone();
+            p.play_as(link.as_profile.clone());
             set_link_confirm.call(Some(p))
         }
         // Known but never pinned, or unknown: a link may not pair or trust on its own,
