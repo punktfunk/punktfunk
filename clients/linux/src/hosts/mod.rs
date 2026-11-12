@@ -20,7 +20,7 @@ pub(crate) use card::os_icon_name;
 use gtk::{gio, glib};
 pub use model::Phase;
 use model::{Band, CardModel, Live, Preset, Status};
-use pf_client_core::display_targets::{self, DisplayTarget};
+use pf_client_core::display_targets::{self, Pick};
 use pf_client_core::host_order;
 use pf_client_core::orchestrate::HostTarget;
 use pf_l10n::{client, desktop};
@@ -101,11 +101,10 @@ pub enum Act {
         label: String,
         danger: bool,
     },
-    /// Write the screen this device streams from the host (`design/screen-pick.md` D3);
-    /// `label` is the row's name, for a refusal's toast.
+    /// Write a Screen row's pick on the host; `label` is the row's name, for a refusal's toast.
     Screen {
         req: ConnectRequest,
-        screen: DisplayTarget,
+        pick: Pick,
         label: String,
     },
     Wake {
@@ -191,6 +190,8 @@ pub enum HostsMsg {
     ShowAddHost,
     /// A host page was popped off the navigation.
     DetailClosed,
+    /// A screen pick came back: redraw the host page's Screen rows from the cache.
+    ScreenWritten,
     Act(Act),
 }
 
@@ -473,6 +474,12 @@ impl SimpleComponent for HostsPage {
             HostsMsg::ClearError => self.widgets.banner.set_revealed(false),
             HostsMsg::ShowAddHost => self.add_host_dialog(&sender),
             HostsMsg::DetailClosed => self.detail = None,
+            HostsMsg::ScreenWritten => {
+                if let Some(page) = &self.detail {
+                    page.forget_screens();
+                }
+                self.rebuild();
+            }
             HostsMsg::Act(act) => self.act(act, &sender),
         }
     }
@@ -607,7 +614,7 @@ impl HostsPage {
         let settings = self.store.settings().clone();
         let presets = self.presets();
         let playing = |fp: &str| pf_client_core::library::now_playing(fp);
-        let screen = |fp: &str| model::screen_line(display_targets::cached(fp).as_ref());
+        let screen = |fp: &str| display_targets::cached(fp).and_then(|t| t.card_line());
         let live = Live {
             probed: &self.probed,
             sessions: &self.sessions,
@@ -744,7 +751,7 @@ impl HostsPage {
                     danger,
                 });
             }
-            Act::Screen { req, screen, label } => self.set_screen(req, screen, label),
+            Act::Screen { req, pick, label } => self.set_screen(req, pick, label),
             Act::Wake { mac, addr } => crate::wol::wake(&mac, addr.parse().ok()),
             Act::CopyLink { host, preset } => {
                 if let Some((url, _)) = self.link(&host, preset.as_deref()) {
@@ -776,9 +783,9 @@ impl HostsPage {
         }
     }
 
-    /// Write this device's screen on a worker, then redraw from the rows `set_target` read
-    /// back: the check moves when the host says so. Only a refusal says anything.
-    fn set_screen(&self, req: ConnectRequest, screen: DisplayTarget, label: String) {
+    /// Write a Screen row's pick on a worker, then redraw from the rows `set_pick` read back:
+    /// the radio stays where the host says. Only a refusal says anything.
+    fn set_screen(&self, req: ConnectRequest, pick: Pick, label: String) {
         let mgmt = self
             .mgmt_port_for(&req)
             .unwrap_or(pf_client_core::library::DEFAULT_MGMT_PORT);
@@ -788,15 +795,12 @@ impl HostsPage {
             .spawn(move || {
                 let (addr, port) = (&req.host.addr, req.host.port);
                 let fp = req.host.fp_hex.as_deref().unwrap_or_default();
-                match display_targets::set_target(addr, mgmt, port, &identity, fp, &screen) {
-                    Ok(()) => {}
-                    Err(e) => {
-                        tracing::warn!(?screen, error = %e, "screen pick refused");
-                        let said = client::hostcard_action_failed(&label, e);
-                        sender.emit(HostsMsg::Act(Act::Toast(said)));
-                    }
+                if let Err(e) = display_targets::set_pick(addr, mgmt, port, &identity, fp, &pick) {
+                    tracing::warn!(?pick, error = %e, "screen pick refused");
+                    let said = client::hostcard_action_failed(&label, e);
+                    sender.emit(HostsMsg::Act(Act::Toast(said)));
                 }
-                sender.emit(HostsMsg::Refresh);
+                sender.emit(HostsMsg::ScreenWritten);
             })
             .ok();
     }

@@ -10,7 +10,7 @@ use super::style::*;
 use super::{saved, AsyncSetState, Screen, Svc, Target};
 use crate::trust::{HostEdit, KnownHosts, Settings};
 use pf_client_core::discovery::DiscoveredHost;
-use pf_client_core::display_targets::{self, DisplayTarget, Targets};
+use pf_client_core::display_targets::{self, DisplayTarget, Pick, Targets};
 use pf_client_core::host_order::{self, Arrangeable};
 use pf_client_core::orchestrate::HostTarget;
 use pf_client_core::profiles::ProfilePick;
@@ -300,12 +300,12 @@ fn status_row(pal: &Palette, online: Option<bool>, badge: Option<(&str, Pill)>) 
     status_row_with(pal, online, badge, None, None)
 }
 
-/// A saved tile's status `row`, then "Streams LG TV" when a connect mirrors one of the host's
-/// monitors. Its own screen is the ordinary case and adds nothing.
+/// A saved tile's status `row`, then core's screen line: "Streams LG TV", "Second screen".
+/// The only screen is the ordinary case and adds nothing.
 fn with_screen(pal: &Palette, row: View, k: &pf_client_core::trust::KnownHost) -> View {
     let line = display_targets::cached(&k.fp_hex)
-        .filter(|t| k.paired && matches!(t.current(), DisplayTarget::Monitor(_)))
-        .map(|t| t.summary());
+        .filter(|_| k.paired)
+        .and_then(|t| t.card_line());
     let Some(line) = line else {
         return row;
     };
@@ -983,8 +983,8 @@ enum MenuAction {
     Connect,
     /// A one-off connect with this preset id; `""` forces Default settings on a bound host.
     ConnectWith(String),
-    /// Write the screen this device streams from the host, with the row's name.
-    Screen(DisplayTarget, String),
+    /// Write a Screen row's pick on the host, with the row's name.
+    Screen(Pick, String),
     Library,
     Speed,
     SendLogs,
@@ -1000,35 +1000,49 @@ enum MenuAction {
     Forget,
 }
 
-/// The Screen submenu: one leaf per screen the host offers this device, the current one
-/// checked, an off or taken head disabled with why. A locked host gets one disabled leaf
-/// saying its settings file decides. `None` when the host offers nothing to show.
+/// The Screen submenu from core's rows: the roles, then the rows from the first header on in a
+/// submenu under it. A leaf reads name · detail · why it is greyed, else its hint; the checked
+/// one carries ✓ and writes nothing. Under a note, the row the host leaves, greyed, then the
+/// note. `None` when there is nothing to show.
 fn screen_submenu(rows: &mut MenuRows<MenuAction>, t: &Targets) -> Option<MenuItem> {
-    let leaves: Vec<MenuItem> = if t.locked {
-        vec![MenuItem::disabled(
-            "screen:locked",
-            client::screen_locked_hint(),
-        )]
-    } else {
-        t.targets
-            .iter()
-            .enumerate()
-            .map(|(i, row)| {
-                let mut label = std::iter::once(row.name().to_string())
-                    .chain(Some(row.detail()).filter(|d| !d.is_empty()))
-                    .chain(row.reason())
-                    .collect::<Vec<_>>()
-                    .join(" \u{b7} ");
-                if row.target() == *t.current() {
-                    label.push_str(" \u{2713}");
-                }
-                match row.reason() {
-                    Some(_) => MenuItem::disabled(format!("screen:{i}"), label),
-                    None => rows.row(label, MenuAction::Screen(row.target(), row.name().into())),
-                }
-            })
-            .collect()
-    };
+    let (mut leaves, mut group, mut monitor_checked) = (Vec::new(), None, false);
+    for r in t.rows() {
+        let mut label = [Some(r.label.as_str()), Some(r.detail.as_str())]
+            .into_iter()
+            .chain([r.reason.as_deref().or(r.hint)])
+            .flatten()
+            .filter(|s| !s.is_empty())
+            .collect::<Vec<_>>()
+            .join(" \u{b7} ");
+        if r.checked {
+            label.push_str(" \u{2713}");
+        }
+        // A key that is not an index runs nothing.
+        let key = format!("screen:{}", r.id);
+        let leaf = match r.pick {
+            Some(pick) => rows.row(label, MenuAction::Screen(pick, r.label)),
+            None if r.pickable => MenuItem::item(key, label),
+            None => MenuItem::disabled(key, label),
+        };
+        if let Some(header) = r.header {
+            group = Some((header, Vec::new()));
+        }
+        monitor_checked |= group.is_some() && r.checked;
+        match &mut group {
+            Some((_, monitors)) => monitors.push(leaf),
+            None => leaves.push(leaf),
+        }
+    }
+    if let Some((header, monitors)) = group {
+        // The pick shows one level up too, or a streamed monitor would hide inside the submenu.
+        let header = match monitor_checked {
+            true => format!("{header} \u{2713}"),
+            false => header.to_string(),
+        };
+        leaves.push(MenuItem::separator("sep:screen"));
+        leaves.push(MenuItem::submenu("sub:screen:monitors", header, monitors));
+    }
+    leaves.extend(t.note().map(|n| MenuItem::disabled("screen:note", n)));
     (!leaves.is_empty())
         .then(|| MenuItem::submenu("sub:screen", client::hostcard_section_screen(), leaves))
 }
@@ -1163,8 +1177,8 @@ fn saved_menu(
             target.preset = Some(id.clone());
             initiate(&svc.ctx, target, &svc.set_screen, &svc.set_status)
         }
-        MenuAction::Screen(screen, name) => {
-            set_host_screen(&svc, &target, screen, name, (hosts_rev, &set_hosts_rev))
+        MenuAction::Screen(pick, name) => {
+            set_host_screen(&svc, &target, pick, name, (hosts_rev, &set_hosts_rev))
         }
         MenuAction::Library => open_library(&svc, target.clone()),
         MenuAction::Speed => {
@@ -1264,19 +1278,18 @@ fn run_host_action(svc: &Svc, target: &Target, a: &pf_client_core::host_actions:
         });
 }
 
-/// Writes this device's screen on a worker thread. `set_target` reads the host's rows back,
-/// so the status line says the pick and the tiles redraw from them; a refusal says why.
+/// Writes a Screen row's pick on a worker thread. `set_pick` reads the host's rows back, so
+/// the status line says the pick and the tiles redraw from them; a refusal says why.
 fn set_host_screen(
     svc: &Svc,
     target: &Target,
-    screen: &DisplayTarget,
+    pick: &Pick,
     name: &str,
     (rev, set_rev): (u64, &AsyncSetState<u64>),
 ) {
     let identity = svc.ctx.identity.clone();
-    let (svc, target, screen, set_rev) =
-        (svc.clone(), target.clone(), screen.clone(), set_rev.clone());
-    let picked = match &screen {
+    let (svc, target, pick, set_rev) = (svc.clone(), target.clone(), pick.clone(), set_rev.clone());
+    let picked = match &pick.screen {
         DisplayTarget::Own => name.to_string(),
         DisplayTarget::Monitor(_) => client::screen_streams(name),
     };
@@ -1289,10 +1302,10 @@ fn set_host_screen(
             let mgmt = h
                 .mgmt_port
                 .unwrap_or(pf_client_core::library::DEFAULT_MGMT_PORT);
-            match display_targets::set_target(&h.addr, mgmt, h.port, &identity, fp, &screen) {
+            match display_targets::set_pick(&h.addr, mgmt, h.port, &identity, fp, &pick) {
                 Ok(()) => svc.report(Ok(picked)),
                 Err(e) => {
-                    tracing::warn!(?screen, error = %e, "screen pick refused");
+                    tracing::warn!(?pick, error = %e, "screen pick refused");
                     svc.report(Err(client::hostcard_action_failed(&name, e)));
                 }
             }

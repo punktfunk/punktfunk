@@ -10,7 +10,7 @@ use crate::store::{Changed, Store};
 use crate::trust::{HostEdit, KnownHost};
 use adw::prelude::*;
 use gtk::glib;
-use pf_client_core::display_targets::{DisplayTarget, Target, Targets};
+use pf_client_core::display_targets::{ScreenRow, Targets};
 use pf_client_core::host_actions::ActionInfo;
 use pf_client_core::orchestrate::HostTarget;
 use pf_client_core::start::StartIn;
@@ -25,7 +25,7 @@ pub struct Live {
     pub presets: Vec<Preset>,
     /// The host's own actions this device may run (sleep, restart, shut down).
     pub actions: Vec<ActionInfo>,
-    /// The screens the host offers this device; `None` hides the section.
+    /// The host's Screen answer for this device; `None` hides the section.
     pub screens: Option<Targets>,
     pub is_default: bool,
     pub start_in: StartIn,
@@ -109,8 +109,12 @@ pub struct DetailPage {
     binding: RefCell<Option<(adw::ComboRow, Vec<String>)>>,
     pins: RefCell<Vec<(String, adw::SwitchRow)>>,
     screen_group: adw::PreferencesGroup,
+    /// The rows from the first one with a header on, under that header.
+    monitor_group: adw::PreferencesGroup,
     screens_shown: RefCell<Option<ScreensShown>>,
-    screen_rows: RefCell<Vec<adw::ActionRow>>,
+    screen_rows: RefCell<Vec<(adw::PreferencesGroup, adw::ActionRow)>>,
+    /// Never drawn: every Screen radio joins it, so a lone row is still a radio.
+    screen_radios: gtk::CheckButton,
     name_row: adw::EntryRow,
     addr_row: adw::EntryRow,
     port_row: adw::EntryRow,
@@ -204,6 +208,8 @@ impl DetailPage {
             .visible(false)
             .build();
         prefs.add(&screen_group);
+        let monitor_group = adw::PreferencesGroup::builder().visible(false).build();
+        prefs.add(&monitor_group);
 
         // ---- Connection ----
         let connection = adw::PreferencesGroup::builder()
@@ -400,8 +406,10 @@ impl DetailPage {
             binding: RefCell::new(None),
             pins: RefCell::default(),
             screen_group,
+            monitor_group,
             screens_shown: RefCell::new(None),
             screen_rows: RefCell::default(),
+            screen_radios: gtk::CheckButton::new(),
             name_row,
             addr_row,
             port_row,
@@ -599,54 +607,73 @@ impl DetailPage {
         }
     }
 
-    /// One row per screen the host offers this device, the current one checked; an off or
-    /// taken head stays, insensitive, with why. A locked host gets one insensitive row: what
-    /// it streams, and that its settings file decides. Offline, nothing can be written.
+    /// Core's Screen rows as one radio set: the roles in the Screen group, the rows from the
+    /// first header on in a group under it. Under a note only the current row is left, greyed;
+    /// with no row at all the note is the group's description. Offline, nothing is pickable.
     fn refresh_screens(&self, targets: Option<&Targets>, online: bool) {
         let shown = (targets.cloned(), online);
         if self.screens_shown.borrow().as_ref() == Some(&shown) {
             return;
         }
-        for row in self.screen_rows.borrow_mut().drain(..) {
-            self.screen_group.remove(&row);
+        for (group, row) in self.screen_rows.borrow_mut().drain(..) {
+            group.remove(&row);
         }
-        let rows: Vec<adw::ActionRow> = match targets {
-            None => Vec::new(),
-            Some(t) if t.locked => {
-                let row = data_row(&t.summary(), client::screen_locked_hint());
-                row.set_sensitive(false);
-                vec![row]
+        let rows = targets.map(Targets::rows).unwrap_or_default();
+        let note = targets.and_then(Targets::note);
+        let mut group = &self.screen_group;
+        for r in &rows {
+            if let Some(header) = r.header {
+                self.monitor_group
+                    .set_title(&glib::markup_escape_text(header));
+                group = &self.monitor_group;
             }
-            Some(t) => t
-                .targets
-                .iter()
-                .map(|row| self.screen_row(row, t.current(), online))
-                .collect(),
-        };
-        self.screen_group.set_visible(!rows.is_empty());
-        for row in rows {
-            self.screen_group.add(&row);
-            self.screen_rows.borrow_mut().push(row);
+            let row = self.screen_row(r, note, online);
+            group.add(&row);
+            self.screen_rows.borrow_mut().push((group.clone(), row));
         }
+        let description = match note {
+            Some(note) if rows.is_empty() => note,
+            _ => client::screen_hint(),
+        };
+        self.screen_group
+            .set_description(Some(&glib::markup_escape_text(description)));
+        self.screen_group
+            .set_visible(!rows.is_empty() || note.is_some());
+        self.monitor_group
+            .set_visible(rows.iter().any(|r| r.header.is_some()));
         *self.screens_shown.borrow_mut() = Some(shown);
     }
 
-    fn screen_row(&self, t: &Target, current: &DisplayTarget, online: bool) -> adw::ActionRow {
-        let reason = t.reason();
-        let row = data_row(t.name(), &reason.clone().unwrap_or_else(|| t.detail()));
-        row.set_activatable(true);
-        if t.target() == *current {
-            row.add_suffix(&crate::widgets::lucide::row_icon("check"));
+    /// Drop the drawn rows, so the next refresh draws them from the cache even when it did not
+    /// change: a refused pick leaves the radio the user moved.
+    pub fn forget_screens(&self) {
+        *self.screens_shown.borrow_mut() = None;
+    }
+
+    /// A Screen row, its radio checked as core says. Toggling it on writes the row's pick; the
+    /// checked row and a greyed one have none.
+    fn screen_row(&self, r: &ScreenRow, note: Option<&str>, online: bool) -> adw::ActionRow {
+        let row = data_row(&r.label, &under(r, note));
+        let radio = gtk::CheckButton::builder()
+            .valign(gtk::Align::Center)
+            .build();
+        radio.set_group(Some(&self.screen_radios));
+        radio.set_active(r.checked);
+        row.add_prefix(&radio);
+        row.set_activatable_widget(Some(&radio));
+        row.set_sensitive(online && r.pickable);
+        if let Some(pick) = r.pick.clone() {
+            let (ctx, label) = (self.ctx.clone(), r.label.clone());
+            radio.connect_toggled(move |radio| {
+                if radio.is_active() && !ctx.quiet.get() {
+                    ctx.act(Act::Screen {
+                        req: ctx.request(),
+                        pick: pick.clone(),
+                        label: label.clone(),
+                    })
+                }
+            });
         }
-        row.set_sensitive(online && reason.is_none());
-        let (ctx, screen, label) = (self.ctx.clone(), t.target(), t.name().to_string());
-        row.connect_activated(move |_| {
-            ctx.act(Act::Screen {
-                req: ctx.request(),
-                screen: screen.clone(),
-                label: label.clone(),
-            })
-        });
         row
     }
 
@@ -723,6 +750,15 @@ fn data_row(title: &str, subtitle: &str) -> adw::ActionRow {
         row.set_subtitle(subtitle);
     }
     row
+}
+
+/// What a Screen row says under its name: the note on the row the host leaves, else why it is
+/// greyed, else the role's hint, else a monitor's connector and mode.
+fn under(r: &ScreenRow, note: Option<&str>) -> String {
+    note.map(str::to_string)
+        .or_else(|| r.reason.clone())
+        .or_else(|| r.hint.map(str::to_string))
+        .unwrap_or_else(|| r.detail.clone())
 }
 
 /// A row the host must be paired for: enabled with its purpose, or disabled with the reason.
@@ -870,4 +906,35 @@ fn remove_host(ctx: &Ctx, nav: &adw::NavigationView, anchor: &adw::ButtonRow) {
             }
         },
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A role row says its hint, a monitor its mode or why it is greyed; the row a deciding
+    /// host leaves says the note instead.
+    #[test]
+    fn a_screen_row_says_note_reason_hint_or_mode() {
+        let mut t: Targets = serde_json::from_str(
+            r#"{"targets": [{"id": "own"},
+                {"id": "HDMI-A-1", "label": "LG TV", "connector": "HDMI-A-1", "mode": "3840x2160@60"},
+                {"id": "DP-1", "label": "Dell", "in_use_by": "Deck"}],
+               "role": {"yours": "second", "host_default": "only", "offered": ["only", "second"]}}"#,
+        )
+        .unwrap();
+        let said: Vec<String> = t.rows().iter().map(|r| under(r, t.note())).collect();
+        assert_eq!(
+            said,
+            [
+                client::screen_role_only_hint().to_string(),
+                client::screen_role_second_hint().into(),
+                "HDMI-A-1 \u{b7} 3840x2160@60".into(),
+                client::screen_in_use("Deck"),
+            ]
+        );
+        t.may_choose = false;
+        let said: Vec<String> = t.rows().iter().map(|r| under(r, t.note())).collect();
+        assert_eq!(said, [client::screen_host_decides()]);
+    }
 }

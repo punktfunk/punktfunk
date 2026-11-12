@@ -726,13 +726,15 @@ pub enum ConsoleCmd {
         /// the screen already settled.
         label: String,
     },
-    /// Write this device's screen on the host (`PUT /display/clients/{fp}`). Same lane as
+    /// Write a Screen row's pick on the host (`PUT /display/clients/{fp}`). Same lane as
     /// [`Self::HostAction`]; a refusal is a notice, and the new pick arrives on the host row.
     SetScreen {
         addr: String,
         mgmt: u16,
         fp_hex: String,
         screen: pf_client_core::display_targets::DisplayTarget,
+        /// A role's topology. A bridge that ignores it still sends a valid screen-only write.
+        topology: Option<String>,
         /// The row's word, for the notice.
         label: String,
     },
