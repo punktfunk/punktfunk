@@ -8,11 +8,11 @@ settings are on [Configuration](/docs/configuration).
 
 ## Where the settings live
 
-The apps group settings as **General**, **Display**, **Input**, **Audio** and **Controllers**, under
-**Preferences** on Linux and **Settings** elsewhere. Apple TV has no **Input** and gives **Quick
-Actions** its own category. The controller interface (the console) has its own **Settings**, with
-the same five plus **Presets** and **About**. On a Steam Deck the console is the only settings
-screen: **Open Punktfunk** in the [Decky panel](/docs/steam-deck).
+The apps group settings under **Settings** as **General**, **Display**, **Input**, **Audio** and
+**Controllers**. Apple TV has no **Input** and gives **Quick actions** its own category. The
+controller interface (the console) has its own **Settings**, with the same five plus **Presets**
+and **About**. On a Steam Deck the console is the only settings screen: **Open Punktfunk** in the
+[Decky panel](/docs/steam-deck).
 
 ## Advanced settings
 
@@ -66,7 +66,7 @@ Android. Most settings can differ per [preset](/docs/presets-and-links); the exc
 | **Picture fit** | Fit | When the stream's shape differs from the screen: **Fit** adds black bars, **Crop to fill** cuts the edges, **Stretch to fill** distorts. | All. On Android 9, **Crop to fill** squeezes instead. |
 | **Second screen** | On | A dual-screen handheld's lower panel, or a foldable half open, shows the companion panel — or the picture, with **Screens** ([dual-screen handhelds](/docs/input#dual-screen-handhelds)). Off keeps the stream on this screen and leaves the other to the system: for a phone on a TV. A preset can carry it. | Android |
 | **Screens** | This monitor | **All monitors** opens a fullscreen window on each of this computer's monitors, one host screen each, laid out as your monitors sit. A monitor plugged in mid-stream joins; close a window to give its monitor back. Needs a host that builds its own displays (not gamescope). A preset can carry it. | Linux, Windows, Mac |
-| **Video codec** | Automatic | Your pick when the host can encode it, otherwise HEVC, then AV1, then H.264. [PyroWave](/docs/pyrowave) is never picked automatically. | All. Apple and Android hide AV1 and PyroWave when the device can't decode them; the console marks them **(unsupported)**. |
+| **Video codec** | Automatic | Your pick when the host can encode it, otherwise HEVC, then AV1, then H.264. [PyroWave](/docs/pyrowave) is never picked automatically. | All. Apple and Android hide AV1 and PyroWave when the device can't decode them; a row still set to one says HEVC is used instead. |
 | **PyroWave quality** | 1.6 bits per pixel | Sets the rate while the codec is PyroWave. The slider reads as the rate it needs at your stream's size and refresh, such as `3840×2160 at 120 Hz: 1.6 Gbit/s`; higher is sharper. A warning says when this device is on Wi-Fi or its port can't carry that rate. With **Bitrate** on **Automatic**, a weak network lowers it; on **Fixed** the stream holds it. See [Bits per pixel](/docs/pyrowave#bits-per-pixel). | Linux, Windows, Mac, iPhone, iPad, Apple TV, Android, console. Apple TV picks from a list of rates. |
 | **10-bit HDR** | On | Off never sends HDR. On sends 10-bit HDR when the host has HDR content and can encode it. See [HDR](/docs/hdr). | All. Android greys it on a screen without HDR10. |
 | **Full chroma (4:4:4)** | Off | Sharper text and thin lines, at more bandwidth. Needs HEVC or PyroWave and a host that can encode it. | Linux, Windows, Mac, iPhone, iPad, Apple TV |
@@ -96,7 +96,7 @@ the rate instead of **Bitrate**.
 | **Audio channels** | Stereo | Stereo, 5.1 or 7.1. A Linux host sends real surround; a Windows host converts its current output. | All |
 | **Audio quality** | Standard (Opus) | **Lossless** sends uncompressed PCM, 2.3 Mbps and up, outside the video budget. The host can refuse it: see [Configuration](/docs/configuration#audio--microphone). | All. Linux and Windows offer 48 and 96 kHz in stereo; Apple and Android add 44.1, 88.2 and 176.4 kHz. |
 | **Keep host audio playing** | Off | Off, the host goes quiet while you stream. On, its own speakers keep playing too. With several clients, one asking is enough. | All |
-| **Stream microphone** | Off | Sends this device's microphone to the host. **Ctrl+Alt+Shift+V** [mutes it](/docs/shortcuts#muting-your-microphone). | All but Apple TV |
+| **Stream microphone** | Off | Sends this device's microphone to the host. A shortcut [mutes it](/docs/shortcuts#muting-your-microphone). | All but Apple TV |
 | **Echo cancellation** | On | Keeps the host's audio, playing from your speakers, out of the microphone. Turn it off if your microphone does its own processing. See [Why do I hear myself](/docs/echo). | All but Apple TV |
 | **Spatial audio** | On | On, the sound comes from the window. Off plays the game's own mix straight to your ears. | Apple Vision Pro |
 | **Speaker**, **Microphone** | System default | Which output plays the stream and which input feeds the microphone. | Linux, Windows, Mac (plus **Microphone channel**) |
@@ -117,9 +117,10 @@ Touch and mouse modes are explained on [Mouse, touch and pen](/docs/input), the 
 | **Guide button** | Automatic | Where the guide and quick-access buttons go: **Send to host** or **This device**. Automatic keeps them on the device only in Steam Deck Gaming Mode. See [the guide button](/docs/shortcuts#the-guide-button-xbox--ps--steam-and-quick-access). | All |
 | **Controller haptics** | On | Plays a DualSense's voice-coil haptics, over USB or Bluetooth (Android: USB). See [Controller audio](/docs/controller-audio). | Linux, Windows, Android |
 | **Controller speaker** | On (Android: off) | Plays the game's pad audio on a DualSense's speaker. | Linux, Windows, Android |
+| **Speaker volume** | 100 % | How loud one controller's speaker plays, set on that controller's card under **Controllers**. 100 % is what the game sends. | Console on Linux, Windows, Android |
 | **Steam Controller 2 passthrough** | Off | Passes a Steam Controller 2 or a 2015 Steam Controller to a Linux or Windows host as itself, so its trackpads, gyro and haptics work as they do locally. Mac: USB, a dongle or Bluetooth. iPhone, iPad, Apple TV: Bluetooth. Android and the desktop clients always pass one through. | Apple |
 | **DualSense over USB** | On | Drives a USB DualSense or DualShock 4 directly, for adaptive triggers, lightbar and gyro. | Android |
-| **Rumble on this phone**, **Gyro from this phone** | Off | The phone's own motor and gyro stand in for a clip-on pad's. | Android, iPhone |
+| **Rumble on this device**, **Gyro from this device** | Off | The phone's own motor and gyro stand in for a clip-on pad's. | Android, iPhone |
 
 ### Keyboard, mouse and touch
 
@@ -171,7 +172,10 @@ device's touch and remote controls. See [Changing a shortcut](/docs/shortcuts#ch
 | **Background** | Violet | The console's backdrop colour: 20 dark fields, then 16 pale ones. **Eclipse** is true black for OLED screens. | Console; Apple TV **Settings** |
 | **Reduce motion** | Off | Stops the console's moving backdrop. Apple follows the system setting instead, and so do Windows and Linux desktops that report one (GNOME, KDE); the row then hides. | Console on Linux, Windows, Android |
 | **Reduce interface resolution** | On for Android TV, off on phones | Draws the console at 1080p and lets the screen scale it up, for slow 4K TV boxes. The stream isn't affected. | Android console |
-| **Library view** | Shelf | How a host's library opens. | Console, Apple |
+| **Library view** | Grid (Apple: Shelf) | How a host's library opens. | Console, Apple |
+| **Library sections** | All shown | Which sections a host's library shows, and in what order. | Console |
+| **Host order** | Date added | The host row's order: **Date added**, **Name** or **Last connected**. | Console |
+| **Group hosts by** | None | Splits the host row into bands by **Preset** or by **Status**, online before offline. | Console |
 | **Follow system theme** | On | The app and console follow `omarchy-theme-set`. **Hosts in the Omarchy menu** adds your hosts to the Omarchy menu. See [Omarchy](/docs/omarchy#this-box-as-a-client). | Linux on Omarchy, console |
 
 ## Overlay
@@ -187,9 +191,12 @@ device's touch and remote controls. See [Changing a shortcut](/docs/shortcuts#ch
 ## Settings that are facts about your device
 
 These describe the device you hold, so a preset can't change them and they don't show while you edit
-one: **Video decoder**, **GPU**, the **Speaker** and **Microphone** devices, **Use
-controller**, **Auto-wake on connect**, **Start in**, **Show advanced**, the [Overlay](#overlay)
-rows but **Statistics overlay**, and the [Interface](#interface) rows.
+one: **Video decoder**, **GPU**, **Keep screen awake**, **Screen**, **Spatial audio**, the
+**Speaker** and **Microphone** devices, **Controller rumble**, **Use controller**, **Controller
+haptics**, **Controller speaker**, **Steam Controller 2 passthrough**, **DualSense over USB**,
+**Rumble on this device**, **Gyro from this device**, **Auto-wake on connect**, **Start in**,
+**Stream in background**, **Show advanced**, the [Overlay](#overlay) rows but **Statistics
+overlay**, and the [Interface](#interface) rows.
 
 **Share clipboard** isn't in Settings: it's per host, on the host's page or in its edit sheet. See
 [Shared clipboard](/docs/clipboard).

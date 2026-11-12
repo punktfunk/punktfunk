@@ -1,6 +1,6 @@
 ---
 title: Install a Client
-description: Install, update and remove the Punktfunk app on the device you stream to — Linux, Steam Deck, Windows, macOS, iPhone, iPad, Apple TV or Android.
+description: Install, update and remove the Punktfunk app on the device you stream to — Linux, Steam Deck, Windows, macOS, iPhone, iPad, Apple TV, Vision Pro, Android or an LG TV.
 ---
 
 Install the Punktfunk app on the device you stream *to*, then [pair](/docs/pairing) it with your
@@ -13,13 +13,14 @@ These links are the **stable** channel. For builds of `main`, see [Release Chann
 | Device | Install |
 |--------|---------|
 | Linux desktop or laptop | [Flatpak](#linux-desktop-flatpak), or the apt, dnf or pacman package |
-| Steam Deck | [Decky plugin](/docs/steam-deck) for Gaming Mode, [Flatpak](#steam-deck) for Desktop Mode |
+| Steam Deck | [Decky plugin and Flatpak](/docs/steam-deck) |
 | Windows 10 or 11 (x64, Arm64) | [Installer](#windows) |
 | Mac (macOS 14+) | [`.dmg`](#macos) |
-| iPhone, iPad, Apple TV (17+) | [App Store](#ios-ipados-apple-tv) |
+| iPhone, iPad, Apple TV (17+), Apple Vision Pro | [App Store](#ios-ipados-apple-tv) |
 | Android 9+ phone or TV | [Google Play or APK](#android) |
-| LG webOS TV | [Community client](#lg-webos-tv-community) |
-| Samsung TV | [Samsung TV](/docs/samsung-tv) |
+| LG webOS TV (webOS 5+) | [Homebrew Channel](#lg-webos-tv-community) |
+| Samsung TV (2024+) | [Samsung TV](/docs/samsung-tv) (preview) |
+| A browser | [Browser client](/docs/browser-client) (preview) |
 | Anything else | [Moonlight](/docs/moonlight) |
 
 ## Linux desktop (Flatpak)
@@ -30,9 +31,6 @@ Works on any distro with Flatpak:
 flatpak install --user https://flatpak.unom.io/io.unom.punktfunk.flatpakref
 flatpak run io.unom.punktfunk
 ```
-
-Update with `flatpak update`, **without `sudo`**: `sudo` only updates system installs and skips this
-one.
 
 To use your package manager instead, add the Punktfunk repo from your distro's guide, then:
 
@@ -48,15 +46,6 @@ On Ubuntu 24.04, Debian and older distros the client package can't install: use 
 Open **Punktfunk** from your app menu, or **Punktfunk Console** for the controller interface. Every
 package, the Flatpak included, also installs the [`punktfunk` command](/docs/clients#scripting-the-punktfunk-cli)
 for scripts.
-
-## Steam Deck
-
-For Gaming Mode, install the [Decky plugin](/docs/steam-deck). It uses the Flatpak client, so
-install that too, in Desktop Mode:
-
-```sh
-flatpak install --user https://flatpak.unom.io/io.unom.punktfunk.flatpakref
-```
 
 ## Windows
 
@@ -94,10 +83,14 @@ The Mac app is also in the [TestFlight beta](https://testflight.apple.com/join/Q
 ## iOS, iPadOS, Apple TV
 
 **[Get Punktfunk on the App Store](https://apps.apple.com/app/id6779991756)**. One app covers
-iPhone, iPad and Apple TV.
+iPhone, iPad, Apple TV and Apple Vision Pro.
 
 For beta builds, install Apple's [TestFlight](https://apps.apple.com/app/testflight/id899247664)
 app, then [join the Punktfunk beta](https://testflight.apple.com/join/Qr7uSemk).
+
+Each [release](https://git.unom.io/unom/punktfunk/releases) also carries `Punktfunk-<version>.ipa`
+for sideloading with AltStore, SideStore or Sideloadly. Wake-on-LAN and the widget's host list need
+the App Store build.
 
 ## Android
 
@@ -113,18 +106,14 @@ https://git.unom.io/api/packages/unom/generic/punktfunk-android/latest/punktfunk
 For canary builds, join the beta from the app's Play listing (open testing, anyone can join), or
 use `canary` in place of `latest` in the APK link.
 
-## LG webOS TV (community)
-
-[`pf-webos`](https://github.com/dyptan-io/pf-webos) is built by
-[dyptan-io](https://github.com/dyptan-io), not the Punktfunk team. Report its bugs on
-[its repo](https://github.com/dyptan-io/pf-webos/issues).
+## LG webOS TV [#lg-webos-tv-community]
 
 1. Turn on Developer Mode on the TV and install the [Homebrew Channel](https://www.webosbrew.org/)
    ([guide](https://www.webosbrew.org/guide/getting-started.html)).
-2. Download the latest `.ipk` from the
-   [pf-webos releases](https://github.com/dyptan-io/pf-webos/releases/latest).
-3. Install it with `ares-install`, or copy it to the TV and install it from the Homebrew Channel.
-4. Open **Punktfunk** from the TV's launcher.
+2. In the Homebrew Channel, pick **Punktfunk** and install it. Or download the latest `.ipk` from
+   the [client-webos releases](https://github.com/punktfunk/client-webos/releases/latest) and
+   install it with `ares-install`.
+3. Open **Punktfunk** from the TV's launcher.
 
 ## Keeping a client up to date
 
@@ -132,7 +121,7 @@ A client and a host don't need the same version. To update the host, see [Updati
 
 | Client | Update |
 |---|---|
-| Flatpak | `flatpak update`, without `sudo` |
+| Flatpak | `flatpak update`, without `sudo`: `sudo` skips this install |
 | apt, dnf, pacman | Your normal system upgrade, or [`punktfunk-client --apply-update`](#the-linux-client-can-update-itself) |
 | Fedora Atomic, layered | See below |
 | Windows installer | Run the newer installer. Hosts and pairing are kept. |
@@ -141,7 +130,7 @@ A client and a host don't need the same version. To update the host, see [Updati
 | iPhone, iPad, Apple TV | App Store, or TestFlight for the beta |
 | Android | Google Play. For the APK, install the newer one over it. |
 | Steam Deck (Decky) | The panel's update button: [Steam Deck → Updating](/docs/steam-deck#updating) |
-| LG webOS | Install the newer `.ipk` |
+| LG webOS | The Homebrew Channel, or install the newer `.ipk` |
 
 **Fedora Atomic with a layered client.** `rpm-ostree upgrade` doesn't pick up a newer client while
 the base image is unchanged. Run this, then reboot:
@@ -172,8 +161,6 @@ couldn't tell. Add `--json` for machine-readable output. `--apply-update` needs 
 ```sh
 sudo usermod -aG punktfunk-update $USER
 ```
-
-A Flatpak client updates with `flatpak update` instead.
 
 ## Removing a client
 

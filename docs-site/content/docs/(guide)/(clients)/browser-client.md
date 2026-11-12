@@ -73,7 +73,7 @@ every time.
 
 ## 4. Stream
 
-- Pick a title from the library, or **Stream the desktop**. **Resume** continues the title the host
+- Pick a title from the library, or **Stream desktop**. **Resume** continues the title the host
   is running.
 - **Menu** in the bar at the top, Ctrl+Alt+Shift+O, or Back+A on a controller opens the quick menu.
   **End stream** closes the title; **Disconnect, keep the game running** leaves it up. The other

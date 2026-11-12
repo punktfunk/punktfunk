@@ -6,8 +6,8 @@ description: Install the Punktfunk Decky plugin to discover, pair, and stream fr
 The Decky plugin adds a **Punktfunk** panel to the Quick Access Menu (the `…` button), so you can
 find a host, pair and stream without leaving Gaming Mode.
 
-The plugin launches the [Linux app](/docs/clients#linux-desktop-client-gtk4); it has no settings of
-its own. In Desktop Mode, run the app directly. Both share one identity and one list of hosts.
+The plugin launches the [Linux app](/docs/clients#linux-desktop-client-gtk4) and uses its settings.
+In Desktop Mode, run the app directly. Both share one identity and one list of hosts.
 
 ## Before you start
 
@@ -55,9 +55,9 @@ The plugin also puts a **Punktfunk** entry in your Steam library. It opens the s
 
 ### Request access
 
-Tap the host → **Request access**. The stream opens and waits; it starts once someone approves the
-Deck in the host's [web console](/docs/web-console). With no approval in about three minutes it
-gives up.
+Tap the host → **Request access**, then approve the Deck in the host's
+[web console](/docs/web-console). Once someone does, the panel says the Deck is paired: tap the
+host to stream. With no approval in about three minutes it gives up.
 
 The host must be advertising on your network. A host you added by address offers the PIN only.
 
@@ -96,8 +96,6 @@ build) shows the update command instead.
 
 The plugin follows the [channel](/docs/channels) you installed it from. If the button never
 appears, install the plugin from the same URL again; Decky replaces it in place.
-
-To update the Flatpak client from a terminal: `flatpak update`, without `sudo`.
 
 ## Troubleshooting
 
