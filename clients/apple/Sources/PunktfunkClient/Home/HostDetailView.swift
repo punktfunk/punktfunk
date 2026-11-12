@@ -199,13 +199,13 @@ struct HostDetailView: View {
     }
 
     /// The Screen section: the roles, then the host's monitors under their header, the pick
-    /// checked. A greyed row says why under it; when the host decides, its pick greyed and the
-    /// note. An older host's rows keep the hint on what a screen is.
+    /// checked. A greyed row says why under it; when the host or the host's preset decides, its
+    /// pick greyed and the note. An older host's rows keep the hint on what a screen is.
     @ViewBuilder private func screenSection(_ a: HostActions) -> some View {
         if let screens = a.screens, screens.hasSection {
-            let rows = screens.rows
+            let rows = screens.rows(under: a.screenPreset)
             let split = rows.firstIndex { $0.header != nil } ?? rows.endIndex
-            let footer = screens.note
+            let footer = screens.note(under: a.screenPreset)
                 ?? (screens.role == nil ? String(localized: L10n.screenHint) : nil)
             Section {
                 ForEach(rows[..<split]) { screenRow($0, pick: a.pickScreen) }

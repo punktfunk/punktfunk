@@ -142,26 +142,102 @@ final class DisplayTargetsTests: XCTestCase {
         XCTAssertFalse(cases.isEmpty)
         for c in cases {
             let name = try XCTUnwrap(c["name"] as? String)
-            let body = try JSONSerialization.data(withJSONObject: try XCTUnwrap(c["targets"]))
-            let t = try JSONDecoder().decode(DisplayTargets.self, from: body)
-            let want = try XCTUnwrap(c["rows"] as? [[String: Any]], name)
-            let rows = t.rows
-            XCTAssertEqual(rows.count, want.count, name)
-            for (row, w) in zip(rows, want) {
-                let at = "\(name): \(row.id)"
-                XCTAssertEqual(kind(row.kind), w["kind"] as? String, at)
-                XCTAssertEqual(row.id, w["id"] as? String, at)
-                XCTAssertEqual(row.label, try text(w["label"]), at)
-                XCTAssertEqual(row.hint, try text(w["hint"]), at)
-                XCTAssertEqual(row.detail, w["detail"] as? String, at)
-                XCTAssertEqual(row.header, try text(w["header"]), at)
-                XCTAssertEqual(row.checked, w["checked"] as? Bool, at)
-                XCTAssertEqual(row.pickable, w["pickable"] as? Bool, at)
-                XCTAssertEqual(row.reason, try text(w["reason"]), at)
-                XCTAssertEqual(try put(row.pick), w["put"] as? NSObject, at)
-            }
+            let t = try targets(c["targets"])
+            try assertRows(t.rows, c["rows"], name)
             XCTAssertEqual(t.note, try text(c["note"]), name)
             XCTAssertEqual(t.cardLine, try text(c["card"]), name)
+        }
+    }
+
+    /// The same file's `preset_cases`: a card whose preset pins the host screen.
+    func testPresetVectors() throws {
+        let file = try SharedVector.load("screen-rows-vectors.json")
+        let cases = try XCTUnwrap(file["preset_cases"] as? [[String: Any]])
+        XCTAssertGreaterThanOrEqual(cases.count, 5)
+        for c in cases {
+            let name = try XCTUnwrap(c["name"] as? String)
+            let t = try targets(c["targets"])
+            let p = try XCTUnwrap(c["preset"] as? [String: String], name)
+            let preset = BoundPreset(
+                name: try XCTUnwrap(p["name"]), hostScreen: try XCTUnwrap(p["host_screen"]))
+            try assertRows(t.rows(under: preset), c["rows"], name)
+            XCTAssertEqual(t.note(under: preset), try text(c["note"]), name)
+            XCTAssertEqual(t.cardLine(under: preset), try text(c["card"]), name)
+            XCTAssertEqual(t.rows(under: nil), t.rows, "\(name): no preset")
+        }
+    }
+
+    /// The same file's `host_screen_cases`: a preset editor's Host screen row.
+    func testHostScreenVectors() throws {
+        let file = try SharedVector.load("screen-rows-vectors.json")
+        let cases = try XCTUnwrap(file["host_screen_cases"] as? [[String: Any]])
+        XCTAssertGreaterThanOrEqual(cases.count, 3)
+        for c in cases {
+            let name = try XCTUnwrap(c["name"] as? String)
+            let hosts = try XCTUnwrap(c["hosts"] as? [[String: Any]], name).map { h in
+                (name: h["name"] as? String ?? "", targets: try targets(h["targets"]))
+            }
+            let got = HostScreenChoice.all(hosts: hosts, pinned: c["pinned"] as? String)
+            let want = try XCTUnwrap(c["choices"] as? [[String: Any]], name)
+            XCTAssertEqual(got.count, want.count, name)
+            for (g, w) in zip(got, want) {
+                let at = "\(name): \(g.label)"
+                XCTAssertEqual(g.value, w["value"] as? String, at)
+                XCTAssertEqual(g.label, try text(w["label"]), at)
+                XCTAssertEqual(g.hint, try text(w["hint"]), at)
+                XCTAssertEqual(g.header, try text(w["header"]), at)
+                XCTAssertEqual(g.checked, w["checked"] as? Bool, at)
+            }
+        }
+    }
+
+    /// The same file's `starter_cases`: the Second screen starter, named past the catalog's
+    /// names in any case.
+    func testStarterVectors() throws {
+        let file = try SharedVector.load("screen-rows-vectors.json")
+        for c in try XCTUnwrap(file["starter_cases"] as? [[String: Any]]) {
+            let taken = try XCTUnwrap(c["taken"] as? [String])
+            let catalog = PresetCatalog(presets: taken.map { StreamPreset(name: $0) })
+            let starter = StreamPreset.secondScreen { catalog.nameTaken($0) }
+            XCTAssertEqual(starter.name, c["name"] as? String)
+            let overrides = try JSONSerialization.jsonObject(
+                with: JSONEncoder().encode(starter.overrides)) as? NSDictionary
+            XCTAssertEqual(overrides, c["overrides"] as? NSDictionary)
+        }
+    }
+
+    /// The preset spellings: a role, or a monitor by a connector of 1 to 64 bytes.
+    func testAWishIsOneOfTheFourSpellings() {
+        let long = String(repeating: "A", count: 64)
+        for spelling in ["only", "main", "second", "monitor:HDMI-A-1", "monitor:\(long)"] {
+            XCTAssertEqual(ScreenWish(spelling)?.spelling, spelling)
+        }
+        for spelling in ["", "tablet", "Second", "monitor:", "monitor:\(long)A", "HDMI-A-1"] {
+            XCTAssertNil(ScreenWish(spelling), spelling)
+        }
+    }
+
+    private func targets(_ json: Any?) throws -> DisplayTargets {
+        let body = try JSONSerialization.data(withJSONObject: try XCTUnwrap(json))
+        return try JSONDecoder().decode(DisplayTargets.self, from: body)
+    }
+
+    /// `rows` against a vector's list, slot by slot.
+    private func assertRows(_ rows: [ScreenRow], _ list: Any?, _ name: String) throws {
+        let want = try XCTUnwrap(list as? [[String: Any]], name)
+        XCTAssertEqual(rows.count, want.count, name)
+        for (row, w) in zip(rows, want) {
+            let at = "\(name): \(row.id)"
+            XCTAssertEqual(kind(row.kind), w["kind"] as? String, at)
+            XCTAssertEqual(row.id, w["id"] as? String, at)
+            XCTAssertEqual(row.label, try text(w["label"]), at)
+            XCTAssertEqual(row.hint, try text(w["hint"]), at)
+            XCTAssertEqual(row.detail, w["detail"] as? String, at)
+            XCTAssertEqual(row.header, try text(w["header"]), at)
+            XCTAssertEqual(row.checked, w["checked"] as? Bool, at)
+            XCTAssertEqual(row.pickable, w["pickable"] as? Bool, at)
+            XCTAssertEqual(row.reason, try text(w["reason"]), at)
+            XCTAssertEqual(try put(row.pick), w["put"] as? NSObject, at)
         }
     }
 
@@ -200,6 +276,9 @@ final class DisplayTargetsTests: XCTestCase {
         case "screen_off": return String(localized: L10n.screenOff)
         case "screen_in_use": return L10n.screenInUse(device: try XCTUnwrap(args["device"]))
         case "screen_streams": return L10n.screenStreams(screen: try XCTUnwrap(args["screen"]))
+        case "screen_preset_decides":
+            return L10n.screenPresetDecides(preset: try XCTUnwrap(args["preset"]))
+        case "preset_host_screen_inherit": return String(localized: L10n.presetHostScreenInherit)
         default:
             XCTFail("no message \(key) in this test's table")
             return nil

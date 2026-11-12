@@ -28,6 +28,9 @@ public struct EffectiveSettings: Equatable, Sendable {
     public var videoFit = SettingDefault.videoFit
     /// `"all"`: a host screen on each display; anything else is this one.
     public var screens = SettingDefault.screens
+    /// A preset's `host_screen`, the Hello's screen wish. Empty, as no global writes it, is the
+    /// pick on the host's card.
+    public var hostScreen = ""
     public var codec = SettingDefault.codec
     public var hdrEnabled = SettingDefault.hdrEnabled
     public var compositor = SettingDefault.compositor
@@ -196,6 +199,7 @@ public struct EffectiveSettings: Equatable, Sendable {
         if let v = overlay.renderScale { s.renderScale = v }
         if let v = overlay.videoFit { s.videoFit = v }
         if let v = overlay.screens { s.screens = v }
+        if let v = overlay.hostScreen { s.hostScreen = v }
         if let v = overlay.codec { s.codec = v }
         if let v = overlay.hdrEnabled { s.hdrEnabled = v }
         if let v = overlay.compositor { s.compositor = v }

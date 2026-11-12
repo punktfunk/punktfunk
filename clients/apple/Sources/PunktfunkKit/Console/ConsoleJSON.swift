@@ -69,6 +69,8 @@ public enum ConsoleJSON {
             // Read by the speed test alone: a preset that PINS bitrate is the layer its host
             // streams at, so the console must not offer to write the global instead.
             "bitrate_kbps": preset.overrides.bitrateKbps ?? NSNull(),
+            // The card's Screen section and line under a preset that pins the host screen.
+            "host_screen": preset.overrides.hostScreen ?? NSNull(),
         ]
     }
 
@@ -325,6 +327,7 @@ public enum ConsoleJSON {
         j["render_scale"] = o.renderScale
         j["video_fit"] = o.videoFit
         j["screens"] = o.screens
+        j["host_screen"] = o.hostScreen
         j["codec"] = o.codec
         j["hdr_enabled"] = o.hdrEnabled
         j["enable_444"] = o.enable444
@@ -355,8 +358,8 @@ public enum ConsoleJSON {
     /// The keys `overrides(_:)` sends: exactly the ones a console save sets or clears.
     private static let consoleKeys: Set<String> = [
         "width", "height", "match_window", "compositor", "gamepad", "refresh_hz", "bitrate_kbps",
-        "pyrowave_bpp", "render_scale", "video_fit", "screens", "codec", "hdr_enabled", "enable_444",
-        "ten_bit_sdr",
+        "pyrowave_bpp", "render_scale", "video_fit", "screens", "host_screen", "codec", "hdr_enabled",
+        "enable_444", "ten_bit_sdr",
         "audio_channels", "audio_format", "mic_enabled", "echo_cancel", "keep_host_audio",
         "touch_mode", "mouse_mode", "invert_scroll", "overlay_actions", "shortcuts",
         "inhibit_shortcuts", "gamepad_forwarding", "system_buttons", "guide_gesture", "stats_verbosity",

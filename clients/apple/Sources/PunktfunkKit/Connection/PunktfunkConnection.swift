@@ -899,6 +899,16 @@ public final class PunktfunkConnection: @unchecked Sendable {
     /// (`punktfunk_connection_shares_screen`). As it started: that device may leave later.
     public private(set) var sharesScreen = false
 
+    /// Why the session's screen is not the one its preset asked for
+    /// (`punktfunk_connection_screen_role_reason`). As it started; as asked from a host that does
+    /// not say.
+    public private(set) var screenRoleReason = ScreenRoleReason.asAsked
+
+    /// The stream-start line for a preset's screen the host did not give; nil when it did.
+    public var screenWishLine: String? {
+        ScreenWish.line(wish: settings.hostScreen, reason: screenRoleReason)
+    }
+
     // MARK: - Per-client access (design/per-client-access.md §7)
 
     /// The `PUNKTFUNK_GRANT_*` access bits — what a paired device may DO on the host, per the
@@ -1270,45 +1280,49 @@ public final class PunktfunkConnection: @unchecked Sendable {
                         withOptionalCString(profileID) { profile in
                             withOptionalCString(settings.presetID) { presetID in
                                 withOptionalCString(settings.presetName) { presetName in
-                                    label.withCString { name in
-                                        opts.profile_id = profile
-                                        opts.host = cs
-                                        opts.client_cert_pem = cert
-                                        opts.client_key_pem = key
-                                        opts.launch_id = launch
-                                        opts.device_name = name
-                                        // This dial's preset; nil names none.
-                                        opts.preset_id = presetID
-                                        opts.preset_name = presetName
-                                        func dial(_ pin: UnsafePointer<UInt8>?) -> OpaquePointer? {
-                                            opts.pin_sha256 = pin
-                                            // Read during the call only.
-                                            let views = screens.views
-                                            return screens.records.withUnsafeBufferPointer { list in
-                                                views.withUnsafeBufferPointer { views in
-                                                    opts.screens = list.baseAddress
-                                                    opts.screen_count = UInt8(clamping: list.count)
-                                                    opts.screen_views =
-                                                        views.count == list.count ? views.baseAddress : nil
-                                                    func call() -> OpaquePointer? {
-                                                        punktfunk_connect_opts(
-                                                            &opts, &observed, &connectStatus)
-                                                    }
-                                                    guard let unlock else { return call() }
-                                                    return unlock.withC { c in
-                                                        opts.unlock = c
-                                                        defer { opts.unlock = nil }
-                                                        return call()
+                                    settings.hostScreen.withCString { hostScreen in
+                                        label.withCString { name in
+                                            opts.profile_id = profile
+                                            opts.host = cs
+                                            opts.client_cert_pem = cert
+                                            opts.client_key_pem = key
+                                            opts.launch_id = launch
+                                            opts.device_name = name
+                                            // This dial's preset; nil names none.
+                                            opts.preset_id = presetID
+                                            opts.preset_name = presetName
+                                            // The preset's screen wish; empty asks for none.
+                                            opts.host_screen = hostScreen
+                                            func dial(_ pin: UnsafePointer<UInt8>?) -> OpaquePointer? {
+                                                opts.pin_sha256 = pin
+                                                // Read during the call only.
+                                                let views = screens.views
+                                                return screens.records.withUnsafeBufferPointer { list in
+                                                    views.withUnsafeBufferPointer { views in
+                                                        opts.screens = list.baseAddress
+                                                        opts.screen_count = UInt8(clamping: list.count)
+                                                        opts.screen_views =
+                                                            views.count == list.count ? views.baseAddress : nil
+                                                        func call() -> OpaquePointer? {
+                                                            punktfunk_connect_opts(
+                                                                &opts, &observed, &connectStatus)
+                                                        }
+                                                        guard let unlock else { return call() }
+                                                        return unlock.withC { c in
+                                                            opts.unlock = c
+                                                            defer { opts.unlock = nil }
+                                                            return call()
+                                                        }
                                                     }
                                                 }
                                             }
-                                        }
-                                        if let pin = pinSHA256 {
-                                            return pin.withUnsafeBytes { p in
-                                                dial(p.bindMemory(to: UInt8.self).baseAddress)
+                                            if let pin = pinSHA256 {
+                                                return pin.withUnsafeBytes { p in
+                                                    dial(p.bindMemory(to: UInt8.self).baseAddress)
+                                                }
                                             }
+                                            return dial(nil)
                                         }
-                                        return dial(nil)
                                     }
                                 }
                             }
@@ -1385,6 +1399,9 @@ public final class PunktfunkConnection: @unchecked Sendable {
         var shared = false
         _ = punktfunk_connection_shares_screen(opened, &shared)
         sharesScreen = shared
+        var reason: UInt8 = 0
+        _ = punktfunk_connection_screen_role_reason(opened, &reason)
+        screenRoleReason = ScreenRoleReason(rawValue: reason) ?? .asAsked
         // Where this host serves its game library, straight from the session's Welcome. 0 = the
         // host advertised none (older host / no management API), and the caller keeps whatever it
         // already had. This is the answer that does NOT require an mDNS advert to have been seen.

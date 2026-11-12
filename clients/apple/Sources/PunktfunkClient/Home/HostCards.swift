@@ -151,6 +151,9 @@ struct HostActions {
     var presets: HostPresetMenu?
     /// What this device streams from the host (`GET /display/targets`); nil: no Screen section.
     var screens: DisplayTargets?
+    /// The preset this card connects with, when it pins the host screen: where it decides, the
+    /// Screen section shows its row alone (`DisplayTargets.rows(under:)`).
+    var screenPreset: BoundPreset?
     /// Writes the row's pick on the host; a row without one does nothing.
     var pickScreen: (ScreenRow) -> Void = { _ in }
 }
@@ -174,13 +177,14 @@ struct HostActionSurface {
 extension HostActions {
     /// What `host` offers (`HostOffers.resolve`), run on `surface`. A pinned card connects and
     /// browses with ITS preset. `screens` is the host's answer for this device, the pick it
-    /// streams.
+    /// streams; the pinned or bound preset's `host_screen` may decide it.
     @MainActor init(
         host: StoredHost, pinned: StreamPreset?, online: Bool, store: HostStore,
         presets: [StreamPreset], power: [HostAction], screens: DisplayTargets?,
         surface: HostActionSurface
     ) {
         let selection: PresetSelection = pinned.map { .preset($0.id) } ?? .inherit
+        let preset = pinned ?? host.presetID.flatMap { id in presets.first { $0.id == id } }
         let offers = HostOffers.resolve(
             host: host, pinned: pinned != nil, online: online, isDemo: DemoMode.isDemo(host),
             canWake: WakePolicy.canWake(host.wakeMacs))
@@ -211,6 +215,9 @@ extension HostActions {
                     store.setPinned(host.id, presetID: id, pinned: !pinned)
                 }),
             screens: screens,
+            screenPreset: preset.flatMap { p in
+                p.overrides.hostScreen.map { BoundPreset(name: p.name, hostScreen: $0) }
+            },
             pickScreen: { row in
                 guard let pick = row.pick else { return }
                 Task {
@@ -375,7 +382,7 @@ struct HostCardView: View {
                                     .fixedSize()
                             }
                             // "Streams LG TV", "Second screen"; the only screen says nothing.
-                            if let screen = actions.screens?.cardLine {
+                            if let screen = actions.screens?.cardLine(under: actions.screenPreset) {
                                 Text(screen)
                                     .font(.geist(m.meta, .medium, relativeTo: .footnote))
                                     .foregroundStyle(.secondary)
@@ -519,9 +526,10 @@ struct HostCardView: View {
     }
 
     /// "Screen ▸": the roles, then the host's monitors under their header, the pick checked. A
-    /// greyed row says why under it; when the host decides, its pick greyed and the note.
+    /// greyed row says why under it; when the host or the card's preset decides, its pick greyed
+    /// and the note.
     @ViewBuilder private func screenMenu(_ screens: DisplayTargets) -> some View {
-        let rows = screens.rows
+        let rows = screens.rows(under: actions.screenPreset)
         let split = rows.firstIndex { $0.header != nil } ?? rows.endIndex
         if screens.hasSection {
             Menu {
@@ -533,7 +541,7 @@ struct HostCardView: View {
                         ForEach(rows[split...]) { screenItem($0) }
                     }
                 }
-                if let note = screens.note {
+                if let note = screens.note(under: actions.screenPreset) {
                     Text(note)
                 }
             } label: {
