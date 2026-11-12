@@ -47,6 +47,7 @@ pub(crate) fn register_all(reg: &Diagnostics, door: bool) {
     device(ids::PAD_AUDIO, pad_audio);
     device(ids::PAD_DRIVER, pad_driver);
     device(ids::ENCODER_SHARING, encoder_sharing);
+    device(ids::GPU_FIRMWARE, gpu_firmware);
     let no_plugins = (
         "diag_plugin_sandbox_door_summary",
         "The door runs no plugins. The owner's host runs them.",
@@ -494,6 +495,64 @@ fn encoder_sharing() -> HostCheck {
         "diag_encoder_sharing_summary",
         Some("diag_encoder_sharing_impact"),
         Some("diag_encoder_sharing_remedy"),
+    )
+}
+
+/// How to update the firmware a graphics card loads.
+const GPU_FIRMWARE_DOCS: &str = "https://docs.punktfunk.unom.io/docs/gpu-firmware";
+
+/// The firmware of the video chip Vulkan Video encodes on. Only AMD's is read.
+fn gpu_firmware() -> HostCheck {
+    gpu_firmware_verdict(crate::encode::resolve().vcn_firmware())
+}
+
+/// `firmware` is the video chip's, `None` where none is read. A firmware that converts two
+/// colour pairs still streams: SDR goes out at limited range, so this only warns.
+fn gpu_firmware_verdict(firmware: Option<crate::encode::VcnFirmware>) -> HostCheck {
+    let id = ids::GPU_FIRMWARE;
+    let Some(firmware) = firmware else {
+        return HostCheck::inapplicable(
+            id,
+            "Only AMD graphics cards on Linux report their video firmware here.",
+        )
+        .worded("diag_gpu_firmware_na", None, None);
+    };
+    let version = firmware.to_string();
+    if !firmware.efc_two_pairs() {
+        return HostCheck::ok(
+            id,
+            format!("The graphics card's video firmware ({version}) converts color correctly."),
+        )
+        .with_param("version", version)
+        .worded("diag_gpu_firmware_ok_summary", None, None);
+    }
+    let (dec, enc, rev) = crate::encode::VcnFirmware::EFC_FIXED;
+    let fixed = format!("{dec}.{enc}.{rev}");
+    HostCheck::problem(
+        id,
+        CheckStatus::Warn,
+        Severity::Info,
+        "The graphics card's video firmware has a color bug",
+        format!(
+            "Video firmware {version} converts SDR correctly at limited range only, so Punktfunk \
+             streams SDR at limited range on this card. HDR isn't affected."
+        ),
+    )
+    .with_remedy(Remedy {
+        text: format!(
+            "Update the system's firmware package once it carries video firmware {fixed} or \
+             newer, then restart the computer. See {GPU_FIRMWARE_DOCS}"
+        ),
+        command: None,
+        relogin_required: false,
+    })
+    .with_param("version", version)
+    .with_param("fixed", fixed)
+    .with_param("url", GPU_FIRMWARE_DOCS)
+    .worded(
+        "diag_gpu_firmware_summary",
+        Some("diag_gpu_firmware_impact"),
+        Some("diag_gpu_firmware_remedy"),
     )
 }
 
@@ -1430,6 +1489,32 @@ mod tests {
             assert!(remedy.text.contains("biri-git") && remedy.text.contains(BIRI_DOCS));
             assert!(!check.impact.is_empty());
         }
+    }
+
+    /// VCN 5 firmware 9.13.33 warns and names the fixed version and the guide; a fixed one and
+    /// an older chip are fine; no reading is no verdict.
+    #[test]
+    fn old_vcn_5_firmware_warns_with_the_fixed_version() {
+        let fw = |ip_major, revision| crate::encode::VcnFirmware {
+            ip_major,
+            dec: 9,
+            enc_minor: 13,
+            revision,
+        };
+        let old = gpu_firmware_verdict(Some(fw(5, 33)));
+        assert_eq!(
+            (old.status, old.severity),
+            (CheckStatus::Warn, Severity::Info)
+        );
+        assert!(old.impact.contains("9.13.33"));
+        let remedy = old.remedy.expect("an old firmware row carries a remedy");
+        assert!(remedy.text.contains("9.13.38") && remedy.text.contains(GPU_FIRMWARE_DOCS));
+        assert_eq!(old.params["fixed"], "9.13.38");
+
+        for fine in [fw(5, 38), fw(4, 33)] {
+            assert_eq!(gpu_firmware_verdict(Some(fine)).status, CheckStatus::Ok);
+        }
+        assert_eq!(gpu_firmware_verdict(None).status, CheckStatus::Inapplicable);
     }
 
     #[test]

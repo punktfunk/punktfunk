@@ -637,6 +637,7 @@
 	"diag_pad_audio_title": "Health check name, bold in its row. Windows: the audio output that plays a game controller's built-in speaker sound.",
 	"diag_pad_driver_title": "Health check name, bold in its row. Windows: the driver behind virtual game controllers.",
 	"diag_encoder_sharing_title": "Health check name, bold in its row. NVIDIA GPUs: whether another app is using the GPU's video encoder at the same time.",
+	"diag_gpu_firmware_title": "Health check name, bold in its row. AMD GPUs on Linux: whether the firmware of the GPU's video chip is current.",
 	"diag_niri_virtual_outputs_title": "Health check name, bold in its row. Whether niri, a Linux window compositor, can create virtual displays. niri is never translated.",
 	"logs_title": "Card title of the log viewer on the Troubleshooting page.",
 	"logs_sources_label": "Caption before the row of toggle chips (Host, Plugins, seats, devices) that choose whose logs are shown.",

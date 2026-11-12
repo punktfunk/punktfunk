@@ -902,7 +902,7 @@ mod tests {
             slices,
             reframe_to: None,
             mirrored: false,
-            rgb_full_range: true,
+            rgb_full_range: crate::encode::RgbFullRange::BOTH,
             studio_asked: crate::session_plan::StudioAsk::default(),
         }
     }
