@@ -106,8 +106,7 @@ class KeystoreUnlockKeys(context: Context) : UnlockKeys {
 /**
  * The system's biometric sheet over [activity] for [signature], strong biometrics only and no
  * device-credential fallback: the signature once a biometric matched, else `null` (the player
- * chose the password, cancelled, or the sheet failed). A [pin] profile's sheet offers Cancel in
- * place of the password, and its prompt follows.
+ * chose the password or the [pin], cancelled, or the sheet failed).
  */
 suspend fun authenticateSigner(
     activity: FragmentActivity,
@@ -128,7 +127,7 @@ suspend fun authenticateSigner(
         val prompt = BiometricPrompt(activity, ContextCompat.getMainExecutor(activity), callback)
         val info = BiometricPrompt.PromptInfo.Builder()
             .setTitle(activity.getString(R.string.unlock_title, profileName))
-            .setNegativeButtonText(activity.getString(if (pin) R.string.common_cancel else R.string.android_unlock_use_password))
+            .setNegativeButtonText(activity.getString(if (pin) R.string.unlock_use_pin else R.string.android_unlock_use_password))
             .setAllowedAuthenticators(BiometricManager.Authenticators.BIOMETRIC_STRONG)
             .build()
         cont.invokeOnCancellation { activity.runOnUiThread { prompt.cancelAuthentication() } }
