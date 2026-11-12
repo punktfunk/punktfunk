@@ -4,8 +4,8 @@ The flatpak is the usual client; a sysext, a distro package, a nix profile or a 
 installs a native ``punktfunk-client`` instead. Every call goes through the one client found,
 which owns its identity, known hosts and settings, so no other module cares which one answered.
 
-The CLI verbs (``discover``, ``hosts``, ``pair``, ``request_access``, ``trust_host``,
-``library``, ``profiles``) build argv, run ``punktfunk``, and map its exit code to a stable error
+The CLI verbs (``discover``, ``hosts``, ``pair``, ``request_access``, ``device_code``,
+``trust_host``, ``library``, ``profiles``) build argv, run ``punktfunk``, and map its exit code to a stable error
 string. Nothing here parses the client's data files or re-implements a trust rule; the backend
 exists because Decky's frontend cannot spawn processes.
 """
@@ -416,6 +416,13 @@ async def request_access(addr: str, port: int, name: str, fp: str) -> dict:
     if rc == 6:
         failure["error"] = "client-outdated"
     return failure
+
+
+async def device_code() -> dict:
+    """This Deck's device code (``punktfunk device-code --json``): ``{ok, code}``. The host's
+    console shows the same code beside a request for access. A client without the verb answers
+    ``client-outdated``, and the panel shows no code."""
+    return await _cli_json(["device-code", "--json"])
 
 
 async def trust_host(addr: str, port: int, fp: str, name: str) -> dict:
