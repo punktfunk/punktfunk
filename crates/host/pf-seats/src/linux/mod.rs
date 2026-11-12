@@ -241,6 +241,7 @@ impl Own {
 /// What the keep-level thread and the pad broker need of a running seat.
 #[derive(Clone, Debug)]
 struct Tracked {
+    kind: Own,
     /// Who reads its trust copy.
     reader: shared::Reader,
     /// The row and account, for a row on a person's own account: its physical login ends the
@@ -253,7 +254,8 @@ struct Tracked {
 
 impl Tracked {
     fn of(seat: &Seat, passwd: &accounts::Passwd) -> Self {
-        let (reader, guest) = if Own::of(seat).ours() {
+        let kind = Own::of(seat);
+        let (reader, guest) = if kind.ours() {
             (shared::Reader::group(passwd.gid), None)
         } else {
             (
@@ -262,6 +264,7 @@ impl Tracked {
             )
         };
         Self {
+            kind,
             reader,
             guest,
             uid: passwd.uid,
@@ -651,7 +654,7 @@ impl LinuxBackend {
         if let Err(error) = refresh_box_library(&self.inner) {
             tracing::warn!(account = %seat.account, %error, "box library not copied");
         }
-        if let Some(changed) = rewrite_env(&self.inner, seat, passwd)? {
+        if let Some(changed) = rewrite_env(&self.inner, seat, Own::Owner, passwd)? {
             return Ok(changed);
         }
         self.write_owner_files(seat, passwd, &session::mint_token())?;
@@ -672,9 +675,8 @@ impl LinuxBackend {
             &session::token_line(token),
             shared::token_owner(door.as_ref()),
         )?;
-        let owner = Some((passwd.uid, passwd.gid));
         let browser = session::browser(&self.inner.box_dir);
-        session::write_unit_files(seat, &passwd.home, state, token, owner, None, &browser)
+        session::write_unit_files(seat, Own::Owner, passwd, state, token, None, &browser)
     }
 
     /// Writes the owner's files again at supervisor start: `/run` is empty after a boot, and the
@@ -1049,10 +1051,10 @@ impl PlatformBackend for LinuxBackend {
             let browser = session::browser(box_dir);
             session::write_unit_files(
                 seat,
-                &passwd.home,
+                Own::Seat,
+                &passwd,
                 state,
                 &token,
-                Some((passwd.uid, passwd.gid)),
                 shares.as_ref(),
                 &browser,
             )?;
@@ -1419,7 +1421,7 @@ impl LinuxBackend {
                 shared::token_owner(door.as_ref()),
             )?;
             let browser = session::browser(box_dir);
-            session::write_unit_files(seat, &passwd.home, state, &token, None, None, &browser)?;
+            session::write_unit_files(seat, Own::Person, &passwd, state, &token, None, &browser)?;
             let label =
                 (self.inner.login_label.get().cloned()).unwrap_or_else(handover::Label::unbound);
             if label == handover::Label::Missing && password.is_some() {
@@ -1563,17 +1565,19 @@ fn keep_level(inner: Weak<Inner>) {
                 continue;
             }
             drop(tracked_now);
-            let trust = match &tracked.guest {
-                Some((seat, _)) if !seat.owner => person_trust(&inner, id, tracked.reader),
+            let trust = match tracked.kind {
+                Own::Person => person_trust(&inner, id, tracked.reader),
                 _ => shared::refresh_trust(&inner.box_dir, &inner.state, id, tracked.reader),
             };
             let refreshed = trust
                 .and_then(|_| match &tracked.guest {
-                    Some((seat, passwd)) => rewrite_env(&inner, seat, passwd).map(|_| ()),
+                    Some((seat, passwd)) => {
+                        rewrite_env(&inner, seat, tracked.kind, passwd).map(|_| ())
+                    }
                     None => Ok(()),
                 })
-                .and_then(|()| match &tracked.guest {
-                    Some((seat, _)) if seat.owner => Ok(false),
+                .and_then(|()| match tracked.kind {
+                    Own::Owner => Ok(false),
                     _ => shared::refresh_seat_library(&inner.state, id, tracked.reader),
                 });
             drop(level);
@@ -1690,21 +1694,21 @@ fn unit_ended(seat: &Seat, state: &session::UnitState, login: bool) -> BackendEr
     }
 }
 
-/// Writes the environment file of a row on a person's own account again with the token it holds,
-/// as the box's Seat defaults stand now: Browser streaming reaches its host at the next start.
-/// Every row's stays root's; the owner may read theirs, which their own host reads too.
+/// Writes the environment file of a row of `kind` on a person's own account again with the token
+/// it holds, as the box's Seat defaults stand now: Browser streaming reaches its host at the next
+/// start. Every row's stays root's; the owner may read theirs, which their own host reads too.
 /// `None` when the file holds no token, `Some(true)` when it changed.
 fn rewrite_env(
     inner: &Inner,
     seat: &Seat,
+    kind: Own,
     passwd: &accounts::Passwd,
 ) -> Result<Option<bool>, BackendError> {
     let Some(token) = session::env_token(&seat.account) else {
         return Ok(None);
     };
     let browser = session::browser(&inner.box_dir);
-    let reader = seat.owner.then_some((passwd.uid, passwd.gid));
-    let changed = session::write_env(seat, &passwd.home, &inner.state, &token, reader, &browser)?;
+    let changed = session::write_env(seat, kind, passwd, &inner.state, &token, &browser)?;
     if changed {
         tracing::info!(account = %seat.account, browser = browser.on,
             "environment file rewritten for its host's next start");

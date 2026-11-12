@@ -10,7 +10,8 @@
 //! `user@<uid>.service` gets the same binds ([`render_manager`]). All are rewritten from the
 //! ledger on a start, so a reboot that empties `/run` loses nothing.
 
-use super::{err, libraries, run, shared};
+use super::accounts::Passwd;
+use super::{err, libraries, run, shared, Own};
 use crate::backend::BackendError;
 use crate::model::{RuntimeState, RuntimeStatus, Seat, SeatId};
 use std::io::Write as _;
@@ -100,8 +101,9 @@ pub(super) fn mint_token() -> String {
     hex::encode(bytes)
 }
 
-/// The seat contract the host reads (`multi-seat-contract.md`), one `KEY="value"` per line, then
-/// the management token the box's client presents. Only the door advertises, so no seat does.
+/// The seat contract the host reads (`multi-seat-contract.md`) for a row of `kind`, one
+/// `KEY="value"` per line, then the management token the box's client presents. Only the door
+/// advertises, so no seat does.
 ///
 /// The owner's row keeps the owner's own config directory, library, host name and GameStream
 /// setting: it is the owner's host, behind the door. `PUNKTFUNK_SEAT_OWNER` tells the runner and
@@ -110,6 +112,7 @@ pub(super) fn mint_token() -> String {
 /// alone, and its host keeps its identity in the row's directory, not in their home.
 pub(super) fn render_env(
     seat: &Seat,
+    kind: Own,
     home: &Path,
     state: &Path,
     token: &str,
@@ -122,15 +125,19 @@ pub(super) fn render_env(
         ("PUNKTFUNK_SEAT_SESSION", "1".to_owned()),
         ("PUNKTFUNK_SEAT_ID", seat.id.to_string()),
     ];
-    if seat.owner {
-        rows.push(("PUNKTFUNK_SEAT_OWNER", "1".to_owned()));
-    } else {
-        let config = if seat.adopted_uid.is_some() {
+    let owner = kind == Own::Owner;
+    let config = match kind {
+        Own::Owner => {
+            rows.push(("PUNKTFUNK_SEAT_OWNER", "1".to_owned()));
+            None
+        }
+        Own::Person => {
             rows.push(("PUNKTFUNK_SEAT_OWN_ACCOUNT", "1".to_owned()));
-            shared::person_config_dir(state, &seat.id)
-        } else {
-            home.join(".config/punktfunk")
-        };
+            Some(shared::person_config_dir(state, &seat.id))
+        }
+        Own::Seat => Some(home.join(".config/punktfunk")),
+    };
+    if let Some(config) = config {
         rows.push((
             "PUNKTFUNK_CONFIG_DIR",
             config.to_string_lossy().into_owned(),
@@ -140,7 +147,7 @@ pub(super) fn render_env(
         ("PUNKTFUNK_TRUST_DIR", trust.clone()),
         ("PUNKTFUNK_PAIRING", "refused".to_owned()),
     ]);
-    if !seat.owner {
+    if !owner {
         rows.push(("PUNKTFUNK_LIBRARY_DIR", trust));
     }
     rows.extend([
@@ -150,7 +157,7 @@ pub(super) fn render_env(
             format!("127.0.0.1:{}", seat.mgmt_port),
         ),
     ]);
-    if !seat.owner {
+    if !owner {
         rows.push(("PUNKTFUNK_HOST_NAME", seat.name.clone()));
         rows.push(("PUNKTFUNK_GAMESTREAM", "0".to_owned()));
     }
@@ -355,23 +362,25 @@ pub(super) fn browser(box_dir: &Path) -> Browser {
     read().ok().flatten().unwrap_or_default()
 }
 
-/// Writes the environment file for `seat`, root's `0600`: it holds a secret, and the unit's root
-/// commands take their environment from it. The owner's own user unit reads it too, through
-/// [`reader_acl`] for `owner`'s uid. `true` when the file changed.
+/// Writes the environment file for `seat`, a row of `kind` on `passwd`'s account, root's `0600`:
+/// it holds a secret, and the unit's root commands take their environment from it. The owner's
+/// own user unit reads theirs too, through [`reader_acl`] for their uid. `true` when the file
+/// changed.
 pub(super) fn write_env(
     seat: &Seat,
-    home: &Path,
+    kind: Own,
+    passwd: &Passwd,
     state: &Path,
     token: &str,
-    owner: Option<(u32, u32)>,
     browser: &Browser,
 ) -> Result<bool, BackendError> {
     let io = |what: &str, error: std::io::Error| err("session_files", format!("{what}: {error}"));
     let path = env_path(&seat.account);
-    let written = write_if_changed(&path, &render_env(seat, home, state, token, browser), 0o600)
+    let text = render_env(seat, kind, &passwd.home, state, token, browser);
+    let written = write_if_changed(&path, &text, 0o600)
         .map_err(|e| io("write the seat environment file", e))?;
-    if let Some((uid, _)) = owner {
-        let (acl, flags) = (reader_acl(uid), rustix::fs::XattrFlags::empty());
+    if kind == Own::Owner {
+        let (acl, flags) = (reader_acl(passwd.uid), rustix::fs::XattrFlags::empty());
         rustix::fs::lsetxattr(&path, shared::ACL_ACCESS, &acl, flags)
             .map_err(|e| io("let the owner read the environment file", e.into()))?;
     }
@@ -390,27 +399,25 @@ fn reader_acl(uid: u32) -> Vec<u8> {
     ])
 }
 
-/// Writes the environment file and the drop-ins for `seat`, then reloads systemd when a drop-in
-/// changed. Every seat gets the update helpers' binds. The owner's row gets the `background`
-/// class, a made seat its private directories and `shares`, and another person's row neither. A
-/// drop-in the row doesn't get is removed: its account may have been another kind of row before.
-/// `user` is the seat user's uid and gid: the owner's row lets them read its environment file,
-/// and a made seat's user gets the seat's binds in its own systemd manager too. A person's
-/// manager is theirs and gets nothing.
+/// Writes the environment file and the drop-ins for `seat`, a row of `kind` on `passwd`'s
+/// account, then reloads systemd when a drop-in changed. Every seat gets the update helpers'
+/// binds. The owner's row gets the `background` class, a made seat its private directories and
+/// `shares`, and another person's row neither. A drop-in the row doesn't get is removed: its
+/// account may have been another kind of row before. A made seat's user gets the seat's binds in
+/// its own systemd manager too; a person's manager, the owner's included, is theirs.
 pub(super) fn write_unit_files(
     seat: &Seat,
-    home: &Path,
+    kind: Own,
+    passwd: &Passwd,
     state: &Path,
     token: &str,
-    user: Option<(u32, u32)>,
     shares: Option<&libraries::Shares>,
     browser: &Browser,
 ) -> Result<(), BackendError> {
     let io = |what: &str, error: std::io::Error| err("session_files", format!("{what}: {error}"));
-    let owner = user.filter(|_| seat.owner);
-    write_env(seat, home, state, token, owner, browser)?;
+    write_env(seat, kind, passwd, state, token, browser)?;
     let mut changed = false;
-    let dropins = kind_dropins(seat, state, shares);
+    let dropins = kind_dropins(kind, seat, state, shares);
     for (name, contents) in &dropins {
         let dropin = dropin_dir(&seat.account).join(name);
         changed |= match contents {
@@ -430,8 +437,9 @@ pub(super) fn write_unit_files(
         }
         None => changed |= std::fs::remove_file(&updates).is_ok(),
     }
-    if let Some((uid, parts)) = manager_parts(user, &dropins, update_binds.as_deref()) {
-        changed |= write_if_changed(&manager_dropin(uid), &render_manager(&parts), 0o644)
+    if let Some(parts) = manager_parts(&dropins, update_binds.as_deref()) {
+        let manager = manager_dropin(passwd.uid);
+        changed |= write_if_changed(&manager, &render_manager(&parts), 0o644)
             .map_err(|e| io("write the seat user's manager drop-in", e))?;
     }
     if changed {
@@ -440,16 +448,16 @@ pub(super) fn write_unit_files(
     Ok(())
 }
 
-/// The class and binds drop-ins by file name, each with what `seat` gets in it or `None` for one
-/// it must not have.
+/// The class and binds drop-ins by file name, each with what a row of `kind` gets in it or `None`
+/// for one it must not have.
 fn kind_dropins(
+    kind: Own,
     seat: &Seat,
     state: &Path,
     shares: Option<&libraries::Shares>,
 ) -> [(&'static str, Option<String>); 2] {
-    let made = !seat.owner && seat.adopted_uid.is_none();
-    let class = seat.owner.then(|| render_class().to_owned());
-    let binds = made.then(|| render_binds(state, &seat.id, &seat.account, shares));
+    let class = (kind == Own::Owner).then(|| render_class().to_owned());
+    let binds = (kind.ours()).then(|| render_binds(state, &seat.id, &seat.account, shares));
     [("class.conf", class), ("binds.conf", binds)]
 }
 
@@ -457,18 +465,16 @@ fn kind_dropins(
 /// of a made seat. `None` for a row with no binds, the owner's or a person's: their manager is
 /// theirs.
 fn manager_parts<'a>(
-    user: Option<(u32, u32)>,
     dropins: &'a [(&'static str, Option<String>); 2],
     update_binds: Option<&'a str>,
-) -> Option<(u32, Vec<&'a str>)> {
-    let (uid, _) = user?;
+) -> Option<Vec<&'a str>> {
     let binds = dropins
         .iter()
         .find(|(name, _)| *name == "binds.conf")
         .and_then(|(_, contents)| contents.as_deref())?;
     let mut parts = vec![binds];
     parts.extend(update_binds);
-    Some((uid, parts))
+    Some(parts)
 }
 
 /// Removes `path`. `true` when there was one.
@@ -675,6 +681,7 @@ mod tests {
     fn the_owner_s_env_file_leaves_its_config_and_settings_alone() {
         let text = render_env(
             &owner(),
+            Own::Owner,
             Path::new("/home/enrico"),
             Path::new("/var/lib/punktfunk-seats"),
             "ab12",
@@ -710,13 +717,14 @@ mod tests {
             ..seat("Jane")
         };
         let kinds = |seat: &Seat| {
-            kind_dropins(seat, state, None).map(|(name, contents)| (name, contents.is_some()))
+            kind_dropins(Own::of(seat), seat, state, None)
+                .map(|(name, contents)| (name, contents.is_some()))
         };
         let gets = |class, binds| [("class.conf", class), ("binds.conf", binds)];
         assert_eq!(kinds(&owner()), gets(true, false));
         assert_eq!(kinds(&seat("Desk")), gets(false, true));
         assert_eq!(kinds(&person), gets(false, false));
-        let [(_, class), _] = kind_dropins(&owner(), state, None);
+        let [(_, class), _] = kind_dropins(Own::Owner, &owner(), state, None);
         assert_eq!(class.as_deref(), Some(render_class()));
         let dir = tempfile::tempdir().unwrap();
         let stale = dir.path().join("class.conf");
@@ -729,7 +737,7 @@ mod tests {
     }
 
     /// Only a made seat's user gets the seat's binds in its own systemd manager. The owner's and
-    /// a person's manager get nothing, even when their uid is known.
+    /// a person's manager get nothing.
     #[test]
     fn only_a_made_seat_s_user_manager_gets_the_seat_s_binds() {
         let state = Path::new("/var/lib/punktfunk-seats");
@@ -738,16 +746,13 @@ mod tests {
             adopted_uid: Some(1500),
             ..seat("Jane")
         };
-        let user = Some((1500, 1500));
         let updates = Some("[Service]\nBindReadOnlyPaths=/a:/b\n");
         for row in [owner(), person] {
-            let dropins = kind_dropins(&row, state, None);
-            assert!(manager_parts(user, &dropins, updates).is_none());
+            let dropins = kind_dropins(Own::of(&row), &row, state, None);
+            assert!(manager_parts(&dropins, updates).is_none());
         }
-        let dropins = kind_dropins(&seat("Desk"), state, None);
-        let (uid, parts) = manager_parts(user, &dropins, updates).unwrap();
-        assert_eq!((uid, parts.len()), (1500, 2));
-        assert!(manager_parts(None, &dropins, updates).is_none());
+        let dropins = kind_dropins(Own::Seat, &seat("Desk"), state, None);
+        assert_eq!(manager_parts(&dropins, updates).unwrap().len(), 2);
     }
 
     /// A person's row is a contract seat on their own account: the box's library and the row's
@@ -763,6 +768,7 @@ mod tests {
         let id = "0123456789abcdef0123456789abcdef";
         let text = render_env(
             &person,
+            Own::Person,
             Path::new("/home/jdoe"),
             Path::new("/var/lib/punktfunk-seats"),
             "ab12",
@@ -795,6 +801,7 @@ mod tests {
     fn the_env_file_carries_the_seat_contract() {
         let text = render_env(
             &seat("Mara"),
+            Own::Seat,
             Path::new("/var/lib/punktfunk-seats/seats/0123456789abcdef0123456789abcdef/home"),
             Path::new("/var/lib/punktfunk-seats"),
             "ab12",
@@ -828,6 +835,7 @@ mod tests {
         };
         let text = render_env(
             &seat("Mara"),
+            Own::Seat,
             Path::new("/h"),
             Path::new("/b"),
             "ab12",
@@ -840,6 +848,7 @@ mod tests {
         ));
         let off = render_env(
             &seat("Mara"),
+            Own::Seat,
             Path::new("/h"),
             Path::new("/b"),
             "ab12",
@@ -855,6 +864,7 @@ mod tests {
         let token = mint_token();
         let text = render_env(
             &seat("Mara"),
+            Own::Seat,
             Path::new("/h"),
             Path::new("/b"),
             &token,
@@ -901,6 +911,7 @@ mod tests {
     fn a_seat_name_cannot_break_out_of_its_value() {
         let text = render_env(
             &seat(r#"A "B" \ $HOME 100%"#),
+            Own::Seat,
             Path::new("/h"),
             Path::new("/b"),
             "ab12",
