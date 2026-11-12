@@ -105,14 +105,7 @@ fn fresh_root() -> Result<PathBuf, String> {
         // own what it puts there and keep FILE_DELETE_CHILD over the extract root. The host
         // trusts a file Administrators own, so the parent is locked and cleared, not re-owned.
         let parent = base.parent().unwrap_or(&base);
-        let refused = |e: String| {
-            format!(
-                "Couldn't make {} writable by administrators only. If another account put \
-                 things there before Punktfunk was installed, delete it, then run setup again \
-                 — {e}",
-                parent.display()
-            )
-        };
+        let refused = |e: String| pf_l10n::tools::setup_win_data_dir_failed(parent.display(), e);
         if parent.symlink_metadata().is_ok() {
             pf_paths_win::set_aside_if_planted(parent).map_err(|e| refused(e.to_string()))?;
         }
@@ -216,7 +209,7 @@ pub(crate) fn lock_dir(dir: &Path, sddl: &str, grants: &[&str]) -> Result<bool, 
         }
         Err(e) => return Err(format!("read {}: {e}", dir.display())),
         Ok(md) if md.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 => {
-            return Err(format!("{} is a link", dir.display()));
+            return Err(format!("a link is in place of {}", dir.display()));
         }
         Ok(_) if pf_paths_win::is_admin_owned(dir) != Some(true) => {
             return Err(format!("another account owns {}", dir.display()));
