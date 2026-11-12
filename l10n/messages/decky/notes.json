@@ -77,6 +77,7 @@
 	"decky_catalog_title": "Toast title the first time a host's games arrive. {host}: its name.",
 	"decky_catalog_ready": "Toast body under 'Stream from {host}'. {count}: how many of the host's games Steam knows. A Decky toast clips past about forty characters.",
 	"decky_host_asleep": "After a host's name in Steam's 'Play from' menu: the host is asleep. Lower case: it follows ' · '.",
+	"decky_host_awake": "Toast after 'Wake host' in a host's menu, once the host answers. {host}: its name.",
 	"decky_play_stream": "Steam's Play button on a game page, relabelled while a Punktfunk host is picked.",
 	"decky_play_stop": "Steam's Play button on a game page while its Punktfunk stream runs, and the panel's button that ends the running stream.",
 	"decky_update_server_unreachable": "Toast after 'Check for updates'.",

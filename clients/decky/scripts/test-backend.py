@@ -382,6 +382,53 @@ client._exec = _real_exec
 check("end game: a flag-shaped ref is unresolved, with no English notice",
       asyncio.run(main.Plugin().end_game("--exec", "steam:570")) == {"ok": False, "error": "unresolved"})
 
+# ---- wake / actions / run_action: argv shapes, and nothing flag-shaped reaches the CLI ------
+seen: list = []
+
+
+def _cli_answers(rc: int, out: str = ""):
+    async def run(args, timeout=20.0, stdin_text=None):
+        seen.append((args, timeout))
+        return rc, out, ""
+
+    return run
+
+
+client._run_cli = _cli_answers(0)
+check("wake: up", asyncio.run(main.Plugin().wake("2f1c-desk")) == {"ok": True})
+check("wake: argv waits, and the call outlasts the CLI's 90 s",
+      seen[-1][0] == ["wake", "2f1c-desk", "--wait"] and seen[-1][1] > 90)
+client._run_cli = _cli_answers(2)
+check("wake: a host that never came up is unreachable",
+      asyncio.run(main.Plugin().wake("2f1c-desk")) == {"ok": False, "error": "unreachable"})
+
+client._run_cli = _cli_answers(0, '{"actions": [{"id": "power.sleep", "available": true}]}')
+got = asyncio.run(main.Plugin().actions("2f1c-desk"))
+check("actions: argv is `actions <ref> --json`", seen[-1][0] == ["actions", "2f1c-desk", "--json"])
+check("actions: rows merged under ok", got["ok"] is True and got["actions"][0]["id"] == "power.sleep")
+
+client._run_cli = _cli_answers(0, "desk: Sleep host — on its way\n")
+got = asyncio.run(main.Plugin().run_action("2f1c-desk", "power.sleep"))
+check("run action: argv is `actions <ref> --run <id>`",
+      seen[-1][0] == ["actions", "2f1c-desk", "--run", "power.sleep"])
+check("run action: the CLI's sentence comes back", got == {"ok": True, "notice": "desk: Sleep host — on its way"})
+client._run_cli = _cli_answers(2, "Sleep host failed — the host refused it (409)\n")
+got = asyncio.run(main.Plugin().run_action("2f1c-desk", "power.sleep"))
+check("run action: a refusal keeps its sentence", got["ok"] is False and "409" in got["notice"])
+
+seen.clear()
+for name, call in [
+    ("wake", lambda: main.Plugin().wake("--exec")),
+    ("actions", lambda: main.Plugin().actions("-x")),
+    ("run action ref", lambda: main.Plugin().run_action("--exec", "power.sleep")),
+    ("run action id", lambda: main.Plugin().run_action("desk", "--json")),
+    ("run action path", lambda: main.Plugin().run_action("desk", "../library")),
+    ("run action empty", lambda: main.Plugin().run_action("desk", "")),
+]:
+    got = asyncio.run(call())
+    check(f"{name}: refused before the CLI", got["ok"] is False and got["error"] == "unresolved")
+check("refusals: nothing ran", seen == [])
+
 # ---- _looks_outdated (the GTK-init signature of a client predating a headless flag) ------
 check("outdated: gtk init noise", update._looks_outdated("cannot open display: \nGtk-WARNING") is True)
 check("outdated: an ordinary error is not", update._looks_outdated("connection refused") is False)
