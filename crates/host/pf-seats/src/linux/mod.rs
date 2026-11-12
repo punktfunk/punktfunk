@@ -1899,6 +1899,114 @@ mod tests {
         );
     }
 
+    /// A made seat as the keep-level thread holds it, its copies for this process's group.
+    fn made_tracked() -> (SeatId, Tracked) {
+        let seat = Seat {
+            id: SeatId::parse("0123456789abcdef0123456789abcd0a").unwrap(),
+            name: "Desk".into(),
+            account: "pf-seat-9".into(),
+            display_slot: 12,
+            native_port: 9779,
+            mgmt_port: 48_124,
+            autostart: false,
+            runtime: RuntimeStatus::stopped(),
+            owner: false,
+            fingerprint: None,
+            adopted_sid: None,
+            adopted_uid: None,
+            rdp_granted: false,
+        };
+        let passwd = accounts::Passwd {
+            name: "pf-seat-9".into(),
+            uid: 3_999_999_990,
+            gid: rustix::process::getegid().as_raw(),
+            gecos: String::new(),
+            home: "/nonexistent".into(),
+        };
+        (seat.id.clone(), Tracked::of(&seat, &passwd))
+    }
+
+    /// What `f` logs on this thread.
+    fn logged(f: impl FnOnce()) -> String {
+        struct Sink(Arc<Mutex<Vec<u8>>>);
+        impl std::io::Write for Sink {
+            fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+                self.0.lock().unwrap().extend_from_slice(bytes);
+                Ok(bytes.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        let lines = Arc::new(Mutex::new(Vec::new()));
+        let sink = Arc::clone(&lines);
+        let subscriber = tracing_subscriber::fmt()
+            .with_writer(move || Sink(Arc::clone(&sink)))
+            .finish();
+        tracing::subscriber::with_default(subscriber, f);
+        String::from_utf8_lossy(&lines.lock().unwrap()).into_owned()
+    }
+
+    /// A seat removed since the keep-level thread listed the running ones gets none of its copies
+    /// written back; one still running gets them.
+    #[test]
+    fn a_removed_seat_s_copies_are_not_written_back() {
+        let (box_dir, state) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        let backend = backend(box_dir.path(), state.path());
+        let (id, tracked) = made_tracked();
+        let trust = shared::trust_dir(state.path(), &id);
+        let mut failing = HashSet::new();
+        assert!(!level_seat(&backend.inner, &id, &tracked, &mut failing));
+        assert!(!trust.exists(), "a removed seat's copy stays gone");
+        backend.track(&id, tracked.clone());
+        assert!(level_seat(&backend.inner, &id, &tracked, &mut failing));
+        assert!(trust.is_dir());
+        assert!(failing.is_empty());
+    }
+
+    /// A trust copy that keeps failing is logged when it starts to, not at every tick, and again
+    /// when it fails after a refresh that worked.
+    #[test]
+    fn a_failing_trust_copy_is_logged_once_per_outage() {
+        let (box_dir, state) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        let backend = backend(box_dir.path(), state.path());
+        let (id, tracked) = made_tracked();
+        backend.track(&id, tracked.clone());
+        let trust = shared::trust_dir(state.path(), &id);
+        std::fs::create_dir_all(trust.parent().unwrap()).unwrap();
+        let mut failing = HashSet::new();
+        let mut tick = |broken: bool| {
+            let _ = std::fs::remove_dir_all(&trust);
+            let _ = std::fs::remove_file(&trust);
+            if broken {
+                std::fs::write(&trust, "").unwrap();
+            }
+            let kept = || assert!(level_seat(&backend.inner, &id, &tracked, &mut failing));
+            let lines = logged(kept);
+            (
+                lines.matches("trust copy not refreshed").count(),
+                failing.contains(&id),
+            )
+        };
+        let ticks = [tick(true), tick(true), tick(true), tick(false), tick(true)];
+        assert_eq!(
+            ticks,
+            [(1, true), (0, true), (0, true), (0, false), (1, true)]
+        );
+    }
+
+    /// The games folder's ACL mask is repaired once a unit stopped, and while a made seat runs
+    /// once `ACL_EVERY` has passed; with no stop and no made seat up, never.
+    #[test]
+    fn the_acl_repair_is_due_after_a_stop_or_every_acl_every() {
+        let (soon, late) = (ACL_EVERY - Duration::from_secs(1), ACL_EVERY);
+        assert!(acl_due(true, false, Duration::ZERO));
+        assert!(acl_due(true, true, soon));
+        assert!(!acl_due(false, true, soon));
+        assert!(acl_due(false, true, late));
+        assert!(!acl_due(false, false, late * 10));
+    }
+
     #[test]
     fn a_tool_is_found_on_the_path_and_a_missing_one_is_not() {
         assert!(which("sh").is_some());
