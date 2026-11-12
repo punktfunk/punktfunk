@@ -4,7 +4,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import type { DiscoveredHost, SavedHost } from "../src/backend.ts";
-import { mergeHosts } from "../src/hosts.ts";
+import { mergeHosts } from "../src/hosts/model.ts";
 
 interface Vectors {
   cases: {

@@ -15,13 +15,14 @@ import {
   Navigation,
 } from "@decky/ui";
 import { ReactElement } from "react";
-import { hostsForApp } from "./catalog";
-import { diag, verbose } from "./diag";
+import { hostsForApp } from "../hosts/catalog";
+import { getHostStore, refreshHostsIfStale } from "../hosts/store";
+import { diag, verbose } from "../lib/diag";
+import { read, write } from "../lib/storage";
+import { steamAppIdForShortcut } from "../steam/keys";
 import { Game } from "./game";
-import { getHostStore, refreshHostsIfStale } from "./hooks";
 import { collectElements, createRenderPatcher, describe } from "./patch";
 import { patchPlayGroup, resetPlayFrom } from "./play-from";
-import { steamAppIdForShortcut } from "./steam";
 
 const ROUTE = "/library/app/:appid";
 const STYLE_KEY = "punktfunk-style";
@@ -31,19 +32,11 @@ const STYLE_KEY = "punktfunk-style";
 const PREF_KEY = "punktfunk:gamePageStream";
 
 export function gamePageStreamEnabled(): boolean {
-  try {
-    return localStorage.getItem(PREF_KEY) !== "0";
-  } catch {
-    return true;
-  }
+  return read(PREF_KEY) !== "0";
 }
 
 export function setGamePageStreamEnabled(on: boolean): void {
-  try {
-    localStorage.setItem(PREF_KEY, on ? "1" : "0");
-  } catch {
-    /* ignore */
-  }
+  write(PREF_KEY, on ? "1" : "0");
 }
 
 /** Steam's `app_type` for a non-Steam shortcut — never a host's `steam:<appid>`. */

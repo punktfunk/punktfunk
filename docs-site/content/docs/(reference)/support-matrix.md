@@ -45,7 +45,7 @@ Each session gets its own display at the client's resolution and refresh rate �
    brightness, so Windows keeps per-client display settings and apps tone-map to your screen.
 2. Through Windows Graphics Capture: the pointer is part of the picture, and permission prompts
    and the lock screen aren't. See
-   [Stream a real monitor](/docs/virtual-displays#stream-a-real-monitor-instead).
+   [Stream a real monitor](/docs/stream-a-monitor).
 3. The host starts a gamescope at the client's mode, relaunches the box's Game Mode session at it
    (SteamOS, Bazzite), or attaches to one already running. An attached session on a box with a
    screen connected keeps its own mode, so the client gets a mirror. See [gamescope](/docs/gamescope).
@@ -73,7 +73,7 @@ Each session gets its own display at the client's resolution and refresh rate �
 | KDE Plasma (KWin) | KWin fake input | none ⁴ | ✅ | ❌ ⁵ |
 | GNOME (Mutter) | libei, direct to Mutter | none | ✅ ⁶ | ⚠️ ⁷ |
 | gamescope | libei (gamescope's own) | none | ⚠️ ⁸ | ⚠️ ⁹ |
-| sway · scroll | wlroots virtual pointer + keyboard | none | ❌ ¹⁰ | ❌ ⁵ |
+| sway · scroll | wlroots virtual pointer + keyboard | none | ❌ ¹⁰ | ⚠️ ¹⁴ |
 | Hyprland | wlroots virtual pointer + keyboard | none | ❌ ¹⁰ | ✅ ¹³ |
 | niri (biri) | wlroots virtual pointer + keyboard | none | ❌ ¹² | ❌ ⁵ |
 | Umbriel | wlroots virtual pointer + keyboard | none | ❌ ¹² | ❌ ⁵ |
@@ -104,11 +104,12 @@ Each session gets its own display at the client's resolution and refresh rate �
 13. A virtual display runs in 10-bit HDR when the client asks, and a monitor in HDR mode streams
     HDR. Needs Hyprland's colour management, on by default — see
     [HDR](/docs/hdr#linux--hyprland).
+14. Virtual displays are 8-bit. A real monitor in HDR mode streams HDR where the compositor
+    reports the output's colour.
 
 ### Version floors worth knowing
 
-- **Windows 11 22H2 (build 22621)** — the display driver; the installer refuses anything older. Pen
-  and touch injection need Windows 10 1809.
+- **Windows 11 22H2 (build 22621)** — the display driver; the installer refuses anything older.
 - **KWin** — a normal Plasma session (DRM backend) creates virtual outputs at any version; KWin's
   headless virtual backend needs **6.5.6**. Refresh rates above 60 Hz on a virtual output need
   **6.6**.
@@ -149,7 +150,8 @@ Each session gets its own display at the client's resolution and refresh rate �
 6. HEVC and AV1 where the device opens that profile, 10-bit SDR included; anything else goes to
    VAAPI. **Vulkan encoding** in
    [Host](/docs/configuration#settings-in-the-web-console) turns this backend off.
-7. [PyroWave](/docs/pyrowave) runs only when the client picks it. Full chroma on any vendor; modes
+7. [PyroWave](/docs/pyrowave) runs when the client picks it, or when a Linux host's **Encoder** is
+   PyroWave and the client leaves its codec on automatic. Full chroma on any vendor; modes
    around 8K fall back to 4:2:0. 10-bit SDR on Linux, and on Windows 11 24H2 and later. Not in
    Windows ARM64 builds.
 8. Only with `PUNKTFUNK_ENCODER=software`; `auto` never picks it on Linux.
@@ -169,8 +171,9 @@ default, on the Linux, Windows and Apple clients; Android has none, and GameStre
   unrecognised GPU falls through to the first one in the box with a known vendor, then to Media
   Foundation; with neither, the session fails. An encoder pin that contradicts the selected GPU is
   ignored, and the console flags it.
-- **Codec** — the client's preferred codec wins if the host can encode it; otherwise
-  **HEVC → AV1 → H.264**. PyroWave only when the client asks for it.
+- **Codec** — the client's preferred codec wins if the host can encode it; a client with no
+  preference that decodes PyroWave takes it when a Linux host's **Encoder** pins it. Otherwise
+  **HEVC → AV1 → H.264**.
 
 ### Zero-copy capture to encode
 
@@ -236,7 +239,8 @@ decoders, with openh264 and rav1d as the software floor on the desktop.
    host.
 9. A ranked list that prefers hardware, low-latency decoders and blocks known-bad ones; there is no
    software rung. PyroWave needs a 64-bit device with Vulkan 1.3, and you pick it.
-10. H.264 and HEVC are assumed; AV1 is probed.
+10. H.264 is always offered. HEVC and AV1 need a hardware decoder that takes the session's size
+    and rate, and Main10 when 10-bit or HDR is asked.
 11. The host offers HDR to Moonlight only when it can deliver it. See [Moonlight](/docs/moonlight).
 12. Separate repositories; ask those projects.
 13. PyroWave only, from a Moonlight fork that asks for it. See
@@ -357,8 +361,8 @@ Either side can be the reason one of these didn't happen:
 
 - **Shared clipboard** — off on the host until an operator turns it on, and a per-host switch on
   the client. Only the Apple app greys **Share Clipboard** out when the host hasn't offered it.
-- **Pen input** — the host offers it only with a usable `/dev/uinput` (Linux) or Windows 10 1809+.
-  Without it, clients turn pen into touch.
+- **Pen input** — a Linux host offers it only with a usable `/dev/uinput`. Without it, clients turn
+  pen into touch.
 - **Committed text (IME)** — the Windows host, the wlroots backend (sway, scroll, Hyprland, niri,
   Umbriel) and KDE Plasma 6.6+ type any text; Plasma 6.5 types what the host's layout has. GNOME, gamescope
   and older KDE fall back to US key positions, so a symbol can come out as another one there.
@@ -381,7 +385,7 @@ Either side can be the reason one of these didn't happen:
 | **Decky plugin** (Steam Deck) | Installed from a URL, not the Decky store; updates itself and the client it launches. It starts the Linux client rather than streaming itself. |
 | **Web console** | Manages the host: dashboard, sessions, pairing, library, displays, plugins, logs, stats, settings and updates. No speed test or bitrate setting — the client apps have those. |
 | **Plugins** | First-party launcher, ROM and USB plugins plus an SDK, installed from the console. See [Plugins](/docs/plugins). |
-| **`pf-webos`** (LG TV) · browser client | Separate repositories; ask those projects. |
+| **`client-webos`** (LG TV) · browser client | Separate repositories; ask those projects. |
 
 ## Mixing versions
 
@@ -392,8 +396,8 @@ know is not offered, and the session goes ahead without it — see
 | Contract | Current | Rule |
 |---|---|---|
 | Native protocol | **`punktfunk/2`** | Hosts and apps from 0.44 on mix in either order; from a 0.45 host, a PyroWave app older than 0.45 drops more frames under loss. An app from 0.44 on needs a 0.44 host or newer: an older one shows as offline, and connecting says "update both". |
-| C ABI version | **63** | Between an app and the core library it ships with. |
-| Windows display-driver protocol | **9** | Host and driver must match; the installer updates both. |
+| C ABI version | **68** | Between an app and the core library it ships with. |
+| Windows display-driver protocol | **10** | The host drives a driver from protocol 9 up; the installer updates both. |
 | Windows virtual-gamepad channel | **3** | Host and pad driver must match; same installer. |
 
 ## Where it has been run
@@ -411,8 +415,8 @@ SteamOS.
   and no probe would catch it failing.
 - **Touch input from a Windows client** — the same code as Linux, not run on a Windows touchscreen.
 - **Re-applying your resolution after an Omarchy theme switch** — unit-tested, not tried during a
-  live stream. If a theme switch costs you your resolution, report it.
-- **`pf-webos` and the browser client** — separate repositories.
+  live stream. If a theme switch costs you your resolution, [report it](/docs/report-an-issue).
+- **`client-webos` and the browser client** — separate repositories.
 - **Moonlight's client-side features** — Wake-on-LAN, overlays and updates differ per Moonlight app.
 
 For what is planned rather than shipped, see the [Roadmap](/docs/roadmap).

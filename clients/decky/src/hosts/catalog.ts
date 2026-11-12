@@ -3,12 +3,14 @@
 // The source is `punktfunk library <host> --json`, asked of every paired host that is
 // answering. Each answer is reduced to the set of Steam appids (the `steam:<appid>` ids; the
 // other stores have no Steam page to appear on) and cached per host record in
-// localStorage, so a host that is asleep right now still offers the titles it had — the launch
+// storage, so a host that is asleep right now still offers the titles it had — the launch
 // wakes it. A host the Deck can no longer see, or that no longer trusts it, loses its entry.
-import { toaster } from "@decky/api";
-import { library } from "./backend";
-import type { HostView } from "./hosts";
-import { t } from "./i18n";
+import { library } from "../backend";
+import { t } from "../i18n";
+import { signal } from "../lib/signal";
+import { keys, readJson, write } from "../lib/storage";
+import { toast } from "../lib/toast";
+import type { HostView } from "./model";
 
 export interface LibrarySnapshot {
   /** When it was fetched (ms since epoch). */
@@ -19,61 +21,31 @@ export interface LibrarySnapshot {
 const KEY_PREFIX = "punktfunk:library:";
 const snapshots = new Map<string, LibrarySnapshot>();
 let hydrated = false;
-const listeners = new Set<() => void>();
+const changed = signal<void>(undefined);
 
-/** Load what an earlier session cached. Once; storage that throws leaves a memory-only map. */
+/** Load what an earlier session cached. Once; storage that throws leaves a memory-only map, and
+ *  a corrupt entry is skipped until the next refresh rewrites it. */
 function hydrate(): void {
   if (hydrated) {
     return;
   }
   hydrated = true;
-  try {
-    for (let i = 0; i < localStorage.length; i++) {
-      const key = localStorage.key(i);
-      if (!key?.startsWith(KEY_PREFIX)) {
-        continue;
-      }
-      const raw = localStorage.getItem(key);
-      if (!raw) {
-        continue;
-      }
-      const parsed = JSON.parse(raw) as Partial<LibrarySnapshot>;
-      if (typeof parsed.at === "number" && Array.isArray(parsed.steamAppIds)) {
-        snapshots.set(key.slice(KEY_PREFIX.length), {
-          at: parsed.at,
-          steamAppIds: parsed.steamAppIds.filter((n): n is number => typeof n === "number"),
-        });
-      }
+  for (const key of keys(KEY_PREFIX) ?? []) {
+    const parsed = readJson<Partial<LibrarySnapshot>>(key);
+    if (typeof parsed?.at === "number" && Array.isArray(parsed.steamAppIds)) {
+      snapshots.set(key.slice(KEY_PREFIX.length), {
+        at: parsed.at,
+        steamAppIds: parsed.steamAppIds.filter((n): n is number => typeof n === "number"),
+      });
     }
-  } catch {
-    /* storage unavailable or a corrupt entry — the next refresh rebuilds it */
   }
 }
 
 function persist(ref: string, snap: LibrarySnapshot | null): void {
-  try {
-    if (snap) {
-      localStorage.setItem(KEY_PREFIX + ref, JSON.stringify(snap));
-    } else {
-      localStorage.removeItem(KEY_PREFIX + ref);
-    }
-  } catch {
-    /* ignore */
-  }
+  write(KEY_PREFIX + ref, snap ? JSON.stringify(snap) : null);
 }
 
-function notify(): void {
-  for (const listener of listeners) {
-    listener();
-  }
-}
-
-export function subscribeCatalog(listener: () => void): () => void {
-  listeners.add(listener);
-  return () => {
-    listeners.delete(listener);
-  };
-}
+export const subscribeCatalog = changed.subscribe;
 
 /** `steam:570` → 570. Anything else — another store, a malformed id — is null. */
 export function steamAppId(id: string): number | null {
@@ -111,9 +83,8 @@ export async function refreshLibraries(views: HostView[]): Promise<void> {
           // titles arrive, say so — once per host record. A Decky toast body clips past roughly
           // forty characters, so this is a count and a name, nothing more.
           if (!snapshots.has(v.ref) && steamAppIds.length > 0) {
-            toaster.toast({
+            toast(t("decky_catalog_ready", { count: steamAppIds.length }), {
               title: t("decky_catalog_title", { host: v.name }),
-              body: t("decky_catalog_ready", { count: steamAppIds.length }),
               duration: 8_000,
             });
           }
@@ -127,7 +98,7 @@ export async function refreshLibraries(views: HostView[]): Promise<void> {
         // Anything else (unreachable, a client hiccup) keeps the last good snapshot.
       }),
   );
-  notify();
+  changed.notify();
 }
 
 /**

@@ -19,9 +19,10 @@ Linux and `%ProgramData%\punktfunk` on Windows.
   definition.
 - A crash restarts the plugin with backoff, from 1 s up to 60 s. A clean return ends it.
 - On stop, the plugin's Effect fiber is interrupted, so scoped finalizers run.
-- The plugin calls the [management API](/docs/developers/management-api) with a token of its own.
-  It reaches the plugin allowlist only: it can write its own library titles and registration,
-  but not hooks, pairing, the plugin store, or a `command` launch.
+- The plugin calls the [management API](/docs/developers/management-api) with a credential of its
+  own: its own token, or in a Windows AppContainer its own named pipe. It reaches the plugin
+  allowlist only: it can write its own library titles and registration, but not hooks, pairing,
+  the plugin store, or a `command` launch.
 - Lines it logs with `Effect.log` show on the console's **Troubleshooting** page as
   `plugin:<id>`.
 
@@ -73,8 +74,9 @@ No other value may start with `-`. The host drops a title whose values don't fit
 publishes it.
 
 A ROM needs no template. `launch: { kind: "emulator", value: "pcsx2", args: [...] }` names a
-catalog emulator, and the arguments `platform`, `file`, and optionally `core` and `extra`. The host
-starts `file` in its best copy of that emulator, after first-run setup and the platform's firmware.
+catalog emulator, and the arguments `platform`, `file`, and optionally `core` and `extra`; `file`
+must lie inside the plugin's roots. The host starts `file` in its best copy of that emulator,
+after first-run setup and the platform's firmware.
 `GET /api/v1/emulators/catalog` lists the platforms and emulators. A plugin that moves saves asks
 once with `saves: true` on `POST /api/v1/plugin-access/requests`.
 
@@ -96,8 +98,8 @@ the console settings form and the CLI. Four files:
     "test": "bun test"
   },
   "dependencies": {
-    "@punktfunk/host": "^0.4.0",
-    "@punktfunk/plugin-kit": "^0.13.0",
+    "@punktfunk/host": "^0.6.0",
+    "@punktfunk/plugin-kit": "^0.15.0",
     "effect": "4.0.1"
   },
   "punktfunk": {
@@ -269,8 +271,8 @@ yield* serveUi({
 });
 ```
 
-- `game` is the event's `GameRef`: app id, title, client, fingerprint, plane and the preset the
-  device dialled with.
+- `game` is the event's `GameRef`: app id, store, title, client, fingerprint, plane, profile and
+  the preset the device dialled with.
 - The stage fires only when the host starts the game, not when it picks up one still running.
 - `holdTimeoutMs` is 1–120 000, default 30 000. Past it the host starts the game anyway and logs
   the plugin; the handler's Effect is interrupted.

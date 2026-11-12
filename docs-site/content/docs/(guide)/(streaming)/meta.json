@@ -8,6 +8,7 @@
     "hdr",
     "pyrowave",
     "game-library",
+    "when-a-game-ends",
     "stats"
   ]
 }

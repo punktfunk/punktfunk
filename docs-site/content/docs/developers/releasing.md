@@ -27,15 +27,19 @@ reports; the Windows packer stamps it into the finished binary.
 
 1. **Prepare the cut on a branch** (`release/vX.Y.Z`). One commit, `chore(release): cut X.Y.Z`,
    carries:
-   - the `version` in the root `Cargo.toml`, with both lockfiles refreshed;
+   - the `version` in the root `Cargo.toml`, with all four lockfiles refreshed: the root,
+     `packaging/windows/drivers`, `crates/host/pf-seat-keeper` and `fuzz`;
    - both OpenAPI copies, whose `info.version` follows the crate version;
-   - `docs/releases/vX.Y.Z.md`, `docs/releases/whatsnew/vX.Y.Z.txt` and the `CHANGELOG.md` card
+   - `docs/releases/vX.Y.Z.md`, `docs/releases/whatsnew/vX.Y.Z.txt`, the `CHANGELOG.md` card and a
+     `<release>` entry in `packaging/flatpak/io.unom.punktfunk.metainfo.xml`
      ([Release notes](#release-notes)).
 
    ```sh
    cargo metadata --offline --format-version 1 >/dev/null
-   cargo metadata --offline --format-version 1 \
-     --manifest-path packaging/windows/drivers/Cargo.toml >/dev/null
+   for d in packaging/windows/drivers fuzz; do
+     cargo metadata --offline --format-version 1 --manifest-path "$d/Cargo.toml" >/dev/null
+   done
+   cargo update --manifest-path crates/host/pf-seat-keeper/Cargo.toml -p pf-seats -p pf-paths
    cargo run -p punktfunk-host --locked -- openapi > api/openapi.json
    cp api/openapi.json docs-site/public/openapi.json
    ```
@@ -60,8 +64,8 @@ reports; the Windows packer stamps it into the finished binary.
    the one it posts, with `tag` and `authenticode_sha256`. Copy the hash from the Windows host tag
    run, step **Report stable Authenticode identity** (`AUTHENTICODE LEAF SHA-256 FOR ANNOUNCE`).
    `announce` publishes the signed stable update manifest, which is when hosts learn about the
-   release. It then moves the `stable` branch that Steam Deck builds follow to the tag, and posts
-   the notes to Discord.
+   release. It then moves the `stable` branch that SteamOS installs build from to the tag, and
+   posts the notes to Discord.
 6. **Promote the stores.** Android reaches Play production by itself. To ramp, halt or roll back,
    use the Play Console or `android-promote.yml` (a dry run unless you turn `dry_run` off). Apple:
    submit the TestFlight build for review in App Store Connect.

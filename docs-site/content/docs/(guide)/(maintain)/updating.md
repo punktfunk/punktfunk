@@ -12,7 +12,7 @@ it is current; **Check for update** checks right away. Once a newer release exis
 card unfolds below it with the channel you follow, how the host was installed, and either an
 **Update now** button or the command that updates this install. The host checks a signed feed on
 `git.unom.io` while the console is open. The host also fires `update.available`
-and `update.applied` on the [event stream](/docs/automation).
+and `update.applied` on the [event stream](/docs/host-events#the-event-stream).
 
 The channel comes from the repository you installed from (on a Steam Deck, the branch
 `~/punktfunk` follows), and the card never switches it — see [Release Channels](/docs/channels).
@@ -61,8 +61,7 @@ apt, dnf, a NixOS switch, **Update now**, the Windows installer, `punktfunk-syse
 Steam Deck script. A service you stopped stays stopped. A live stream drops when the host restarts.
 A layered rpm-ostree install moves at the reboot instead.
 
-The apt and dnf commands above update only the host; name `punktfunk-web` and `punktfunk-scripting`
-too to move all three. A source build restarts by hand, console first:
+A source build restarts by hand, console first:
 
 ```bash
 systemctl --user restart punktfunk-web

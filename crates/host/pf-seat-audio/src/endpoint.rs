@@ -353,8 +353,8 @@ struct Ring {
     mapping: HANDLE,
 }
 
-// SAFETY: the view is shared memory; only this endpoint writes `write_pos` and the frames,
-// and every access goes through raw pointers or atomics.
+// SAFETY: the view is shared memory; endpoints move `write_pos` only through
+// `proto::publish`, and every access goes through raw pointers or atomics.
 unsafe impl Send for Ring {}
 // SAFETY: as above.
 unsafe impl Sync for Ring {}
@@ -411,10 +411,13 @@ impl Ring {
         unsafe { AtomicU64::from_ptr(self.view.as_ptr().add(proto::WRITE_POS_OFFSET).cast()) }
     }
 
-    /// Append `frames` from `source`, or that many silent frames, and publish them.
+    /// Append `frames` from `source`, or that many silent frames, and publish them. Each
+    /// activation of a slot is an endpoint of its own on this ring, and [`proto::publish`] keeps
+    /// two of them from moving the cursor back.
     fn write(&self, source: NonNull<u8>, frames: u32, silent: bool) {
         let cursor = self.write_pos();
-        let mut pos = cursor.load(Ordering::Relaxed);
+        let from = cursor.load(Ordering::Relaxed);
+        let mut pos = from;
         let mut left = u64::from(frames);
         let mut done = 0_usize;
         while left > 0 {
@@ -437,7 +440,7 @@ impl Ring {
             left -= run as u64;
             done += run;
         }
-        cursor.store(pos, Ordering::Release);
+        proto::publish(cursor, from, u64::from(frames));
     }
 }
 

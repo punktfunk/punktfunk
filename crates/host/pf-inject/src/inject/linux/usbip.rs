@@ -720,16 +720,28 @@ fn used_row(line: &str) -> Option<(u16, RawFd, String)> {
     Some((port, t.get(at)?.parse().ok()?, (*t.get(at + 1)?).to_owned()))
 }
 
+/// Free ports in `status` of the speed class a device at `usbip_speed` takes (`>= 5` is
+/// SuperSpeed), in order. A legacy single-hub `status` reads as all high speed.
+fn free_ports(status: &str, usbip_speed: u32) -> Vec<u16> {
+    let want_ss = usbip_speed >= 5;
+    status
+        .lines()
+        .filter_map(parse_status_row)
+        .filter(|&(_, is_ss, sta)| sta == VDEV_ST_NULL && is_ss == want_ss)
+        .map(|(port, _, _)| port)
+        .collect()
+}
+
+/// How many free ports a device at `usbip_speed` could take now.
+pub fn vhci_free_ports(usbip_speed: u32) -> Result<usize> {
+    Ok(free_ports(&read_status()?, usbip_speed).len())
+}
+
 /// Free port matching speed (`usbip_speed >= 5` is SuperSpeed).
 pub fn vhci_find_free_port(usbip_speed: u32) -> Result<u16> {
-    let want_ss = usbip_speed >= 5;
     let status = read_status()?;
-    for line in status.lines() {
-        if let Some((port, is_ss, sta)) = parse_status_row(line) {
-            if sta == VDEV_ST_NULL && is_ss == want_ss {
-                return Ok(port);
-            }
-        }
+    if let Some(&port) = free_ports(&status, usbip_speed).first() {
+        return Ok(port);
     }
     // Legacy single-hub status has no speed class: take any free port.
     for line in status.lines() {
@@ -818,25 +830,17 @@ mod tests {
         assert_eq!(used_row("hs  0001 004 000 00000000 000000 0-0"), None);
     }
 
+    /// A full- or high-speed pad counts and takes only the high-speed hub's ports.
     #[test]
     fn free_port_selection_matches_speed() {
         let status = "hub port sta spd dev      sockfd local_busid\n\
                       hs  0000 006 000 00000000 000000 0-0\n\
                       hs  0001 004 000 00000000 000000 0-0\n\
+                      hs  0002 004 000 00000000 000000 0-0\n\
                       ss  0008 004 000 00000000 000000 0-0\n";
-        // `vhci_find_free_port` reads sysfs; test the selection against a fixture.
-        let hs = status
-            .lines()
-            .filter_map(parse_status_row)
-            .find(|&(_, is_ss, sta)| sta == VDEV_ST_NULL && !is_ss)
-            .map(|(p, _, _)| p);
-        let ss = status
-            .lines()
-            .filter_map(parse_status_row)
-            .find(|&(_, is_ss, sta)| sta == VDEV_ST_NULL && is_ss)
-            .map(|(p, _, _)| p);
-        assert_eq!(hs, Some(1));
-        assert_eq!(ss, Some(8));
+        assert_eq!(free_ports(status, 2), [1, 2], "high speed");
+        assert_eq!(free_ports(status, 1), [1, 2], "full speed");
+        assert_eq!(free_ports(status, 5), [8], "SuperSpeed");
     }
 
     /// The pad's reader turns a server's S16 into `f32`, and drops rather than blocks when

@@ -35,12 +35,12 @@ Add the repo and install the host, the console and the plugin runner. On **Fedor
 
 <Install platform="fedora" />
 
-`sudo dnf upgrade` updates it from then on. Restart the host afterwards with
-`systemctl --user restart punktfunk-host`, or let the [console update it](/docs/updating).
+`sudo dnf upgrade` updates it from then on and restarts the running services, or let the
+[console update it](/docs/updating).
 
 ## 3. Let it use your controllers
 
-Join the groups, then **log out and back in**:
+Join the groups, then **restart the computer**:
 
 ```sh
 sudo usermod -aG input "$USER"       # virtual gamepads

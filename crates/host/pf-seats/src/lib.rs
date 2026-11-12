@@ -30,6 +30,9 @@ pub mod pin;
 /// The Windows supervisor's pure half, declared here so its tests run on every target.
 #[path = "windows/step.rs"]
 mod seat_step;
+/// Seats on and off on Windows as a pure plan, declared here so its tests run on every target.
+#[path = "windows/switch.rs"]
+mod seat_switch;
 mod secret;
 pub mod service;
 pub mod steam;

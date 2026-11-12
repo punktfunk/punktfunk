@@ -187,6 +187,21 @@ fn ps_seat_for(role: pf_paths::seat::HostRole, seat_id: Option<&str>) -> u16 {
     }
 }
 
+/// PlayStation `kind`'s pairing report (feature 0x09 / 0x12) at `index` on `seat`, the bytes its
+/// own host answers. The supervisor's relay answers it, so a seat never picks the MAC
+/// `hid-playstation` holds box-wide. `None` for a pad without one.
+fn ps_pairing(kind: PadKind, index: u8, seat: u16) -> Option<Vec<u8>> {
+    use crate::dualsense_proto::{ds_pairing_reply, DEVTYPE_DUALSENSE, DEVTYPE_DUALSENSE_EDGE};
+    let mut reply = match kind {
+        PadKind::DualSense => ds_pairing_reply(DEVTYPE_DUALSENSE, index).to_vec(),
+        PadKind::DualSenseEdge => ds_pairing_reply(DEVTYPE_DUALSENSE_EDGE, index).to_vec(),
+        PadKind::DualShock4 => crate::dualshock4_proto::ds4_pairing_reply(index).to_vec(),
+        _ => return None,
+    };
+    pf_driver_proto::gamepad::mark_ps_seat(&mut reply, seat);
+    Some(reply)
+}
+
 const MAGIC: [u8; 4] = *b"PFPD";
 const VERSION: u8 = 2;
 const OP_CREATE: u8 = 1;
@@ -475,6 +490,8 @@ pub fn reply(
 pub struct BrokeredPad {
     kind: PadKind,
     dev: Brokered,
+    /// The feature report the relay answers itself ([`ps_pairing`]).
+    pairing: Option<Vec<u8>>,
 }
 
 enum Brokered {
@@ -482,8 +499,9 @@ enum Brokered {
     Uhid(UhidDevice),
 }
 
-/// Build `kind` as the supervisor, pad `index` stamped with `mark` ([`seat_phys`]).
-pub fn build(kind: PadKind, index: u8, mark: &str) -> Result<BrokeredPad> {
+/// Build `kind` as the supervisor, pad `index` stamped with `mark` ([`seat_phys`]). A
+/// PlayStation pad's MAC carries `seat` ([`ps_seat`]), which the supervisor took from its ledger.
+pub fn build(kind: PadKind, index: u8, mark: &str, seat: u16) -> Result<BrokeredPad> {
     let dev = if let Some(identity) = kind.uinput() {
         Brokered::Uinput(build_pad(
             identity,
@@ -498,7 +516,11 @@ pub fn build(kind: PadKind, index: u8, mark: &str) -> Result<BrokeredPad> {
         id.phys = seat_phys(mark, &own);
         Brokered::Uhid(UhidDevice::open(&id.as_create2())?)
     };
-    Ok(BrokeredPad { kind, dev })
+    Ok(BrokeredPad {
+        kind,
+        dev,
+        pairing: ps_pairing(kind, index, seat),
+    })
 }
 
 /// `(supervisor end, seat end)` of a fresh relay.
@@ -721,7 +743,12 @@ pub fn kept() -> Kept {
             name,
             kind,
             index,
-            pad: BrokeredPad { kind, dev },
+            // Its driver bound, and read the MAC, before the restart.
+            pad: BrokeredPad {
+                kind,
+                dev,
+                pairing: None,
+            },
             relay: UnixDatagram::from(relay),
         });
     }
@@ -739,7 +766,7 @@ pub fn relay(pad: BrokeredPad, seat: UnixDatagram) {
     let kind = pad.kind;
     match pad.dev {
         Brokered::Uinput(dev) => relay_uinput(dev, seat),
-        Brokered::Uhid(dev) => dev.relay(seat, |report| kind.takes(report)),
+        Brokered::Uhid(dev) => dev.relay(seat, |report| kind.takes(report), pad.pairing.as_deref()),
     }
 }
 
@@ -899,6 +926,44 @@ mod tests {
         }
         assert_eq!(ps_seat("0000ffff"), 1, "never the box's own");
         assert_ne!(ps_seat(id), ps_seat("1234abcd"));
+    }
+
+    /// The relay answers a PlayStation pad's pairing report with the bytes an honest seat host
+    /// would: its index's MAC, marked with its seat. Other kinds have none.
+    #[test]
+    fn the_relay_answers_what_the_seats_own_host_would() {
+        use crate::dualsense_proto::{ds_pairing_reply, DEVTYPE_DUALSENSE, DEVTYPE_DUALSENSE_EDGE};
+        use pf_driver_proto::gamepad::mark_ps_seat;
+        let marked = |mut reply: Vec<u8>| {
+            mark_ps_seat(&mut reply, 0xBEEF);
+            Some(reply)
+        };
+        let cases = [
+            (
+                PadKind::DualSense,
+                ds_pairing_reply(DEVTYPE_DUALSENSE, 3).to_vec(),
+            ),
+            (
+                PadKind::DualSenseEdge,
+                ds_pairing_reply(DEVTYPE_DUALSENSE_EDGE, 3).to_vec(),
+            ),
+            (
+                PadKind::DualShock4,
+                crate::dualshock4_proto::ds4_pairing_reply(3).to_vec(),
+            ),
+        ];
+        for (kind, reply) in cases {
+            assert_eq!(
+                ps_pairing(kind, 3, 0xBEEF),
+                marked(reply),
+                "{}",
+                kind.label()
+            );
+        }
+        assert_eq!(ps_pairing(PadKind::DualSense, 0, 0).unwrap()[0], 0x09);
+        assert_eq!(ps_pairing(PadKind::DualShock4, 0, 0).unwrap()[0], 0x12);
+        assert_eq!(ps_pairing(PadKind::SteamDeck, 0, 0xBEEF), None);
+        assert_eq!(ps_pairing(PadKind::XboxOne, 0, 0xBEEF), None);
     }
 
     /// A stored pad's name carries what a restarted supervisor needs to relay it again.

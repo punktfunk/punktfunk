@@ -14,13 +14,13 @@ Linux packages install firewalld services and ufw profiles but never enable them
   its second port — see [Two ports, not one](/docs/web-console#two-ports-not-one).
 - **`punktfunk-gamestream`** only with [Moonlight](/docs/moonlight) compat on.
 - **Video needs no port of its own.** It rides the native QUIC port with control and audio.
-- **The browser client** (preview, off by default) uses UDP 9778, in `punktfunk-native` — see
-  [Browser Client](/docs/browser-client). A rule from before
-  0.41 lacks it: `sudo ufw app update punktfunk-native && sudo ufw reload`, or `sudo firewall-cmd
-  --reload`.
+- **The browser client** (preview, off by default) uses the browser streaming port, in
+  `punktfunk-native` — see [Browser Client](/docs/browser-client).
 - **Seats** use UDP 9779–9782, in `punktfunk-native` too: a host that places a profile on a seat
   redirects the client to that seat's port. With browser streaming on, a browser goes to the
   seat's own browser port, UDP 9783–9786.
+- **After an update that adds ports to a profile**, refresh the rules:
+  `sudo ufw app update punktfunk-native && sudo ufw reload`, or `sudo firewall-cmd --reload`.
 
 ## Enable the profiles
 
@@ -58,15 +58,15 @@ sudo ufw allow punktfunk-gamestream   # only with Moonlight compat on
 On Windows each rule names the Punktfunk executable as well as the port. The rules cover
 Private and Domain networks; `service install --allow-public-network` adds Public — see
 [Host CLI](/docs/host-cli#service-windows). Another program that answered discovery through
-Punktfunk's 5353 rule needs a rule of its own. The browser client's rule, **Punktfunk Browser**
-(UDP 9778, and each seat's 9783–9786), exists only while **Browser streaming** is on: the
-service adds or removes it each time it starts the host, so it follows the setting at **Restart
-Punktfunk**.
+Punktfunk's discovery rule needs a rule of its own. The browser client's rule, **Punktfunk
+Browser** (the browser streaming port, and each seat's UDP 9783–9786), exists only while **Browser
+streaming** is on: the service adds or removes it each time it starts the host, so it follows the
+setting at **Restart Punktfunk**.
 
 ## Who can reach the console
 
-The web console (47992) and its plugin port (47993) answer this machine, private and link-local
-addresses, and a Tailscale or NetBird network. A peer from the internet is refused even with the
+The web console and its plugin port answer this machine, private and link-local addresses, and a
+Tailscale or NetBird network. A peer from the internet is refused even with the
 port forwarded. `PUNKTFUNK_UI_BIND=127.0.0.1` in `host.env` keeps both to this machine; one address
 limits them to one interface.
 

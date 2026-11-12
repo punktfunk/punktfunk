@@ -205,6 +205,10 @@ pub struct Seat {
     /// The box owner's row (Linux). Its account is never created or deleted by the ledger.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub owner: bool,
+    /// The owner's row: the uid their account resolved to when the row was last prepared, which
+    /// no person's row may hold. `None`: a row not prepared since the field existed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner_uid: Option<u32>,
     /// SHA-256 of the seat host's certificate DER, lowercase hex: the pin a client dials it
     /// with, carried by the box's `Redirect`. Learned while the seat runs; `None` before its
     /// host has minted an identity.
@@ -222,6 +226,9 @@ pub struct Seat {
     /// Adopt put the account in Remote Desktop Users; release takes it out again.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub rdp_granted: bool,
+    /// The account held `SeDenyInteractiveLogonRight` before adopt; release leaves it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub console_deny_kept: bool,
 }
 
 impl Seat {
@@ -229,6 +236,12 @@ impl Seat {
     /// owner's row is not one: it is the owner's by role.
     pub fn adopted(&self) -> bool {
         self.adopted_sid.is_some() || self.adopted_uid.is_some()
+    }
+
+    /// Whether releasing this adopted Windows row takes the console deny off its account: only
+    /// when adopt added it. A row saved before [`Self::console_deny_kept`] existed takes it off.
+    pub fn releases_console_deny(&self) -> bool {
+        !self.console_deny_kept
     }
 
     /// The UDP port this seat's browser plane listens on ([`browser_port_for`]).
@@ -329,7 +342,7 @@ impl Ledger {
                 unique(&mut sids, sid.clone(), "account SID")?;
             }
             // Two names can resolve to one user: `jdoe` and `jdoe@corp.example.com`.
-            if let Some(uid) = seat.adopted_uid {
+            for uid in [seat.adopted_uid, seat.owner_uid].into_iter().flatten() {
                 unique(&mut uids, uid, "account uid")?;
             }
             unique(&mut slots, seat.display_slot, "display slot")?;
@@ -419,10 +432,12 @@ impl Ledger {
             autostart: request.autostart,
             runtime: RuntimeStatus::stopped(),
             owner,
+            owner_uid: None,
             fingerprint: None,
             adopted_sid,
             adopted_uid,
             rdp_granted: false,
+            console_deny_kept: false,
         };
         self.insert(seat.clone())?;
         Ok(seat)
@@ -959,6 +974,31 @@ mod tests {
         assert_eq!(serde_json::from_value::<Seat>(wire).unwrap(), granted);
     }
 
+    /// Release takes the console deny off only when adopt added it. A row without the field, as
+    /// an older build saved it, takes it off; the field is written only when set.
+    #[test]
+    fn release_keeps_a_console_deny_the_account_held_before() {
+        let request = CreateSeat {
+            name: "Bärbel".into(),
+            account: "Bärbel Ott".into(),
+            autostart: false,
+        };
+        let row = Ledger::new()
+            .allocate_adopted(request, "S-1-5-21-1-2-3-1001".into())
+            .unwrap();
+        let wire = serde_json::to_value(&row).unwrap();
+        for (kept, releases) in [(None, true), (Some(false), true), (Some(true), false)] {
+            let mut saved = wire.clone();
+            if let Some(kept) = kept {
+                saved["console_deny_kept"] = kept.into();
+            }
+            let seat: Seat = serde_json::from_value(saved).unwrap();
+            assert_eq!(seat.releases_console_deny(), releases, "{kept:?}");
+            let written = serde_json::to_value(&seat).unwrap();
+            assert_eq!(written.get("console_deny_kept").is_some(), !releases);
+        }
+    }
+
     /// A Linux person's row records the uid the daemon resolved, names its account by the owner
     /// rule, and never shares that uid with another row. A ledger written before the field reads
     /// as before, and a made row's wire form is unchanged.
@@ -1065,10 +1105,12 @@ mod tests {
                 autostart: false,
                 runtime: RuntimeStatus::default(),
                 owner: false,
+                owner_uid: None,
                 fingerprint: None,
                 adopted_sid: None,
                 adopted_uid: None,
                 rdp_granted: false,
+                console_deny_kept: false,
             })
             .collect();
         assert!(matches!(

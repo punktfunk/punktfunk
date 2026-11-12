@@ -46,9 +46,10 @@ lost 0.0% · skipped 0.0% · rtt 0.6 ms
 ```
 
 **Compact** is one line: `120 fps · 24.3 Mb/s · decode 2.1 ms`, plus `lost` when frames are lost.
-**Normal** is the four lines above. **Detailed** adds `host min/max`, the two halves of `display`
-(`display queue` + `render`) where your device measures them, the encoder's `target` bitrate, the
-`mic` rate while your microphone is on, and the `audio buffer`.
+**Normal** is the four lines above. **Detailed** adds `host min/max`, the parts of `display`
+(`display queue` + `render`, and `compositor` on Linux and Windows) where your device measures
+them, the encoder's `target` bitrate, the `mic` rate while your microphone is on, and the
+`audio buffer`.
 
 Every time is an average over the last second. A figure your device can't measure is left out,
 not shown as zero.
@@ -86,7 +87,12 @@ delay and rendering time. It stays approximate: those are averages, the Advanced
 - The first line names the codec, bit depth and decoder (in Advanced, at Detailed only), then
   `HDR`, or `HDR→SDR` when an HDR stream is tone-mapped for a screen that can't show it, and
   `4:4:4`, or `4:4:4→4:2:0` when you asked for full chroma and the host declined. At every level it
-  ends with the name of the stream's [preset](/docs/presets-and-links).
+  ends with the name of the stream's [preset](/docs/presets-and-links), then
+  `set by the host for this game` when the game's
+  [stream settings](/docs/game-library#stream-settings-for-a-game) on the host apply.
+- **`host renders 3840×2160`** after the mode means the host draws at that size and scales it
+  down to the picture you receive ([**Render scale**](/docs/client-settings#video)).
+- **`Screen HDMI-A-1`** names the host monitor the session mirrors.
 - **`native-d3d11va-bind`** and **`native-d3d11va-copy`** name D3D11VA on a Windows client that
   draws through Direct3D 11: `bind` shows the decoder's own pictures, `copy` copies each one once
   first.
@@ -128,6 +134,8 @@ everything.
   - `decode`: received to decoded.
   - `display`: decoded to on screen, split into `pace` (getting the frame to the screen) and
     `latch` (the screen taking it) where on-glass timing exists. A large `latch` is the refresh.
+    On Linux and Windows, `latch` is the client's own GPU work and a third term, `os floor`, is
+    the compositor and the refresh after it.
   - `presented N`: frames that reached the screen this second. Far below `fps` means your device
     drops frames; an `fps` shortfall with `presented` keeping up is upstream.
 
@@ -150,6 +158,9 @@ everything.
   repairs`, `slow decoding`, `slow host encoding` or `network delay`), until it climbs again.
   `N loss repairs/min` counts how often, in the last minute, your device asked the host to repair
   the picture. A count that keeps climbing means the link isn't recovering.
+- **`Link`** (Detailed) is the rate the client paces frames at and where it came from: both ends'
+  Ethernet ports, a measurement (`Wi-Fi` when this device is on Wi-Fi), or `not measured yet`.
+  `receive buffer N KB — raise net.core.rmem_max` appears while this device drops packets.
 - **`audio buffer`** is decoded audio queued ahead of your speakers; **`a/v`** places it against the
   picture, positive meaning audio plays behind. The client steers towards zero.
 - **Device lines** only one platform measures: `present:` (Linux, Windows) names how frames reach

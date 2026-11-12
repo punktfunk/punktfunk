@@ -63,8 +63,8 @@ punktfunk-host service restart
 
 ### Windows: the status icon is missing after an update
 
-An update closes the tray, and Windows starts it again only at sign-in. From a normal PowerShell,
-not an elevated one:
+The host starts the tray again within a minute of restarting, unless **Tray autostart** is off
+under **Host → System**. To start it now, from a normal PowerShell, not an elevated one:
 
 ```powershell
 punktfunk-host tray start

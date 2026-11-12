@@ -1,6 +1,6 @@
 ---
 title: Clients
-description: The Punktfunk apps for Apple devices, Linux, Windows and Android, the browser client, the Samsung TV app, the community webOS app, Moonlight, and the punktfunk command — what each does and which to pick.
+description: The Punktfunk apps for Apple devices, Linux, Windows, Android and LG TVs, the browser client, the Samsung TV app, Moonlight, and the punktfunk command — what each does and which to pick.
 ---
 
 Pick the app for the device you stream *to*. Install steps for each are on
@@ -10,27 +10,28 @@ Pick the app for the device you stream *to*. Install steps for each are on
 
 | You're streaming to… | Use |
 |---|---|
-| A Mac, iPhone, iPad or Apple TV | The [Apple app](#apple-app-mac-iphone-ipad-apple-tv) |
+| A Mac, iPhone, iPad, Apple TV or Apple Vision Pro | The [Apple app](#apple-app-mac-iphone-ipad-apple-tv-vision-pro) |
 | A Linux desktop or laptop | The [Linux app](#linux-desktop-client-gtk4) |
 | A Steam Deck | The [Decky plugin](/docs/steam-deck) in Gaming Mode, the Linux app in Desktop Mode |
 | A Windows PC | The [Windows app](#windows-desktop-client) |
 | An Android phone, tablet or TV | The [Android app](#android-app-phone--android-tv) |
-| An LG webOS TV | The community [webOS app](#webos-lg-tv--community) |
+| An LG webOS TV | The [webOS app](#webos-app-lg-tv) |
 | A Samsung TV | The [Samsung TV app](/docs/samsung-tv) (preview) |
 | A browser tab, with nothing to install | The [browser client](/docs/browser-client) (preview) |
 | Any other device | [Moonlight](#moonlight-anything-else) |
 | Scripts and home automation | The [`punktfunk` command](#scripting-the-punktfunk-cli) |
 
-Every Punktfunk app finds hosts on your network, [pairs](/docs/pairing) once and reconnects on its
-own, browses the host's [game library](/docs/game-library), and has a controller interface for the
-couch. They share [presets and `punktfunk://` links](/docs/presets-and-links), the
+Every Punktfunk app [pairs](/docs/pairing) once and reconnects on its own, browses the host's
+[game library](/docs/game-library), and has a controller interface for the couch. All but the
+Samsung TV app find hosts on your network by themselves. They share
+[presets and `punktfunk://` links](/docs/presets-and-links), the
 [in-stream keys](/docs/shortcuts#getting-your-input-back) and the settings on
 [Client settings](/docs/client-settings). The Apple, Android, Linux and Windows apps also ask which
 [profile](/docs/profiles#how-players-pick) plays.
 
-## Apple app (Mac, iPhone, iPad, Apple TV)
+## Apple app (Mac, iPhone, iPad, Apple TV, Vision Pro)
 
-One app for macOS, iOS, iPadOS and tvOS. It adds:
+One app for macOS, iOS, iPadOS, tvOS and visionOS. It adds:
 
 - A **Library** tab (a sidebar row on the Mac) with a chip for each host.
 - A host page behind each card's ⓘ, with presets, pairing, power and a network speed test. On
@@ -44,8 +45,8 @@ One app for macOS, iOS, iPadOS and tvOS. It adds:
 
 ## Linux desktop client (GTK4)
 
-`punktfunk-client` is a GTK4 app with hardware decode (Vulkan Video or VAAPI), PipeWire audio and
-SDL3 controllers. It adds:
+`punktfunk-client` is a GTK4 app with hardware decode (Vulkan Video or VAAPI, or V4L2
+[on ARM](/docs/linux-arm)), PipeWire audio and SDL3 controllers. It adds:
 
 - **Hosts** and **Library** tabs, at the bottom of a narrow window. The Library has a chip for each
   paired host and pinned preset, and sections you arrange with **Customize**.
@@ -54,8 +55,8 @@ SDL3 controllers. It adds:
 - Streams from several hosts at once, each in its own window: connect to the next host from the
   same app. A controller follows the window you're in.
 - A banner while you stream, with **Disconnect**. With several streams it offers **Disconnect
-  All**, and a card's menu ends that host's stream.
-- Keys for the window: **Keyboard Shortcuts** in the menu lists them.
+  all**, and a card's menu ends that host's stream.
+- Keys for the window: **Keyboard shortcuts** in the menu lists them.
 
 For the couch, open **Punktfunk Console**, the gamepad button in the header bar, or run
 `punktfunk-client --browse --fullscreen`. **Controller interface** opens it when a controller
@@ -75,23 +76,20 @@ microphone uplink and D-pad navigation.
 
 Plug a **DualSense**, **DualSense Edge** or **DualShock 4** in by **USB** and allow the USB prompt:
 the host then gets rumble, adaptive triggers, the lightbar and gyro. Over Bluetooth the pad works as
-an ordinary gamepad. **Settings → Controllers → DualSense / DualShock passthrough (USB)** turns
-this off.
+an ordinary gamepad. **Settings → Controllers → DualSense over USB** turns this off.
 
 On a handheld with a second, smaller screen below the first (an Ayn Thor, a Retroid Pocket with the
-Dual Screen add-on) or a foldable half-opened like a laptop, the stream takes the top screen. The
-lower one shows **Stats**, **Actions** (the buttons of the
-[quick-action dial](/docs/shortcuts#the-quick-action-dial)), a **Keyboard**, a **Trackpad** and the
-**Controller** (the [virtual controller](/docs/input#virtual-controller)) — or, with **Screens**,
-the picture itself, below or across both screens
-([dual-screen handhelds](/docs/input#dual-screen-handhelds)). **Settings → Display → Second screen** turns it off — for a phone on a TV — and a preset can carry that. If the lower screen stays dark while you stream, end the stream and
-[send your logs](/docs/report-an-issue): they record the screens your device reported.
+Dual Screen add-on) or a foldable half-opened like a laptop, the stream takes the top screen and
+the lower one shows a panel of controls
+([dual-screen handhelds](/docs/input#dual-screen-handhelds)). **Settings → Display → Second
+screen** turns it off. If the lower screen stays dark while you stream, end the stream and
+[send your logs](/docs/report-an-issue).
 
-## webOS (LG TV) — community
+## webOS app (LG TV)
 
-[`pf-webos`](https://github.com/dyptan-io/pf-webos) is a native Punktfunk app for LG TVs, built by
-the community. It uses the TV's hardware decoder and works with the Magic Remote. It isn't in the LG
-Content Store: [sideload it](/docs/install-client#lg-webos-tv-community).
+[client-webos](https://github.com/punktfunk/client-webos) is the Punktfunk app for LG TVs on webOS 5
+or newer. It uses the TV's hardware decoder and works with the Magic Remote. It isn't in the LG
+Content Store: [install it from the Homebrew Channel](/docs/install-client#lg-webos-tv-community).
 
 ## Moonlight (anything else)
 
