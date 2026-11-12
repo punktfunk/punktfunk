@@ -195,10 +195,9 @@ impl Lock {
             return false;
         }
         let entry = self.list.get_mut(fp).expect("granted");
-        if !entry.keys.contains_key(id) && entry.keys.len() < MAX_KEYS {
-            if let Some(old) = entry.key.take() {
-                entry.keys.insert(id.to_string(), old);
-            }
+        let room = !entry.keys.contains_key(id) && entry.keys.len() < MAX_KEYS;
+        if let Some(old) = entry.key.take_if(|_| room) {
+            entry.keys.insert(id.to_string(), old);
         }
         true
     }
