@@ -458,6 +458,7 @@ pub(super) mod tests {
                     sdr10_widen: false,
                     studio_asked: crate::session_plan::StudioAsk::default(),
                     owner_hdr: None,
+                    owner_format: None,
                 },
             },
             next: now,

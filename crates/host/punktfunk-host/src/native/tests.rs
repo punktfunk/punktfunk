@@ -164,6 +164,21 @@ fn an_umbriel_ipc_mismatch_reaches_the_client_in_words() {
     assert!(said.len() <= punktfunk_core::quic::REFUSED_REASON_MAX);
 }
 
+/// A joiner whose own stream beside the shared one got no frame is told what to change.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_shared_capture_in_another_format_reaches_the_client_in_words() {
+    let buried = anyhow::anyhow!("no PipeWire frame within 10s (node 66)")
+        .context(pf_capture::SharedCaptureTaken)
+        .context("first frame")
+        .context("build the session pipeline");
+    let said = setup_failed_sentence(&buried)
+        .expect("a taken shared capture has words for the user")
+        .text;
+    assert!(said.contains("same video codec"), "{said}");
+    assert!(said.len() <= punktfunk_core::quic::REFUSED_REASON_MAX);
+}
+
 /// A node-less output that direct capture refused reaches the client in words.
 #[cfg(target_os = "linux")]
 #[test]

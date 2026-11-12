@@ -214,6 +214,19 @@ impl std::fmt::Display for NoPipeWireNode {
     }
 }
 
+/// The node's one stream is held in a format this open's encoder does not take, and its own
+/// stream got no frame: a reliable producer feeds one link. Retrying cannot help.
+#[cfg(target_os = "linux")]
+#[derive(Debug)]
+pub struct SharedCaptureTaken;
+
+#[cfg(target_os = "linux")]
+impl std::fmt::Display for SharedCaptureTaken {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("shared capture is taken in another format")
+    }
+}
+
 /// Linux capturer for an existing virtual output, which `keepalive` owns. Direct capture goes
 /// first where it may run: the portal's re-request timer halves the rate above ~140 Hz. It
 /// fails for every reason to use the PipeWire node instead (no protocol, no output, nothing the

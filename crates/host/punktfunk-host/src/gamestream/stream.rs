@@ -407,6 +407,8 @@ fn run(
                     isolation: None,
                     audio_sink: Default::default(),
                     hdr: cfg.hdr,
+                    format: crate::vdisplay::admission::shares_capture(Some(compositor))
+                        .then(|| sample_format(&cfg)),
                 },
             ),
         };
@@ -931,6 +933,23 @@ fn gs_capture_output(
 /// cursor-forward (GameStream has no client cursor channel), exactly the slices the client asked
 /// for (a TV decoder wedges on more), and the device's screen ([`StreamConfig::mirrored`]). A
 /// joined display is fitted into the client's size: Moonlight cannot be told another mode.
+/// The samples `cfg` streams: what a capture it shares must deliver, and what its own hands
+/// a joiner.
+pub(super) fn sample_format(cfg: &StreamConfig) -> crate::vdisplay::admission::SampleFormat {
+    let bit_depth = if cfg.hdr { 10 } else { 8 };
+    crate::vdisplay::admission::SampleFormat {
+        bit_depth,
+        chroma_444: cfg.chroma.is_444(),
+        full_range: crate::session_plan::full_range_for(
+            &cfg.encoder,
+            cfg.studio_asked,
+            cfg.codec,
+            cfg.hdr,
+            bit_depth,
+        ),
+    }
+}
+
 fn gs_session_plan(cfg: &StreamConfig, cursor_blend: bool) -> crate::session_plan::SessionPlan {
     let mut plan = crate::session_plan::SessionPlan::resolve(
         &cfg.encoder,

@@ -452,6 +452,8 @@ pub(super) fn is_permanent_build_error(chain: &str) -> bool {
         "predates virtual outputs",
         // Every request to this Umbriel fails the same way until the host is updated.
         "parses neither request shape",
+        // The screen's one stream stays in the other session's format while that one lives.
+        "shared capture is taken",
     ];
     let lower = chain.to_ascii_lowercase();
     PERMANENT.iter().any(|p| lower.contains(p))
@@ -1167,6 +1169,9 @@ mod tests {
             "spawn gamescope (is it installed? `apt install gamescope`)"
         ));
         assert!(is_permanent_build_error("virtual displays require Linux"));
+        assert!(is_permanent_build_error(
+            "first frame: shared capture is taken in another format: no PipeWire frame within 10s"
+        ));
         assert!(is_permanent_build_error(
             "open capture: direct capture refused and the backend has no PipeWire node: no \
              ext_image_copy_capture_manager_v1"

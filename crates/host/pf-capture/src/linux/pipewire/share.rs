@@ -282,24 +282,37 @@ pub(super) fn register(node_id: u32, core: &Arc<StreamCore>) {
     live.push((node_id, Arc::downgrade(core)));
 }
 
-/// The stream on `node_id` whose frames an open with `key` can take. One still negotiating
-/// counts; one that broke or errored never does: its capturers are about to rebuild it.
-pub(super) fn find(node_id: u32, key: &ShareKey) -> Option<Arc<StreamCore>> {
+/// What an open with some [`ShareKey`] finds on a shareable node.
+pub(super) enum Live {
+    /// No healthy stream: the open spawns one.
+    Free,
+    /// A stream whose frames the open takes.
+    Fits(Arc<StreamCore>),
+    /// A stream in another format. The open spawns its own, which a reliable producer
+    /// leaves without frames.
+    Other,
+}
+
+/// The stream on `node_id` for an open with `key`. One still negotiating counts; one that
+/// broke or errored never does: its capturers are about to rebuild it.
+pub(super) fn find(node_id: u32, key: &ShareKey) -> Live {
     let live = LIVE.lock().unwrap_or_else(|e| e.into_inner());
     let on_node = live.iter().filter(|(n, _)| *n == node_id);
     let dead = |s| matches!(s, StreamStatus::Broken | StreamStatus::Errored);
     let mut healthy = (on_node.filter_map(|(_, c)| c.upgrade()))
         .filter(|c| c.running() && !dead(c.shared.status()));
-    let core = healthy.next()?;
+    let Some(core) = healthy.next() else {
+        return Live::Free;
+    };
     if core.key.as_ref() != Some(key) {
         tracing::warn!(
             node_id,
             "this screen is already captured in a format this session's encoder does not take \
              — opening a second stream, which a reliable producer leaves without frames"
         );
-        return None;
+        return Live::Other;
     }
-    Some(core)
+    Live::Fits(core)
 }
 
 #[cfg(test)]
