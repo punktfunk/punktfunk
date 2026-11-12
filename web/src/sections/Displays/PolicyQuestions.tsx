@@ -77,7 +77,7 @@ const QUESTION = { from: { opacity: 0, y: 8 }, enter: { opacity: 1, y: 0 } };
 
 export const Question: FC<{
 	label: string;
-	help?: string;
+	help?: ReactNode;
 	children: ReactNode;
 }> = ({ label, help, children }) => (
 	<motion.fieldset variants={QUESTION} className="space-y-2">
@@ -193,7 +193,10 @@ export const PolicyQuestions: FC<{
 				</Question>
 			)}
 			{axes.includes("topology") && (
-				<Question label={m.display_q_monitors()}>
+				<Question
+					label={m.display_q_monitors()}
+					help={inherited ? undefined : m.display_q_monitors_help()}
+				>
 					{ask(
 						"topology",
 						["extend", "primary", "exclusive", "auto"],

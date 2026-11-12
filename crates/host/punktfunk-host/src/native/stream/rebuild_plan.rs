@@ -30,6 +30,9 @@ pub(super) enum RebuildAsk {
     SourceMode(Mode),
     /// A rate the encoder could not take in place, kbps.
     Bitrate(u32),
+    /// Whether the source shows HDR content now, where it says: only gamescope does.
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    Content(bool),
 }
 
 /// What the loop runs when it plans.
@@ -78,6 +81,9 @@ pub(super) enum DisplayChange {
     /// The plan re-resolved for this codec at the plan's mode; the live display takes its HDR
     /// verdict and cursor plan.
     Format(Codec),
+    /// The plan re-resolved for content that turned HDR or SDR. The display stays lit as it
+    /// is: only the capture reopens in the other range.
+    Content(bool),
 }
 
 /// Who hears what became of the ask.
@@ -313,6 +319,25 @@ pub(super) fn plan(ask: &RebuildAsk, f: &RebuildFacts) -> Option<RebuildPlan> {
                 tell: Some(Tell::Codec),
                 ..KEPT
             },
+            ..at_live
+        },
+        // A shared capture has one format for every session on it.
+        RebuildAsk::Content(_) if f.shared || f.joined => return None,
+        // gamescope's capture node feeds one link, so the running capture stops before the
+        // next one attaches: from there it is a capture loss on a display that is still up.
+        RebuildAsk::Content(hdr) => RebuildPlan {
+            reason: SwapReason::Format,
+            build: Build::CaptureLoss,
+            display: Some(DisplayChange::Content(hdr)),
+            trace: Some("format"),
+            epilogue: Epilogue {
+                input: f.follows_session,
+                portal_cursor: true,
+                screens: Screens::Rebase,
+                keyframe: true,
+                ..rebuilt
+            },
+            rollback: ENDS,
             ..at_live
         },
         RebuildAsk::TopologyReassert(generation)
@@ -720,6 +745,36 @@ mod tests {
                     ..at_live(SwapReason::Format, Build::Once)?
                 })
             },
+        },
+        Row {
+            name: "content turned HDR: the capture re-attaches as after a loss, in the new \
+                   format, and the further screens restart",
+            ask: || RebuildAsk::Content(true),
+            facts: |_| {},
+            want: || {
+                Some(RebuildPlan {
+                    display: Some(DisplayChange::Content(true)),
+                    trace: Some("format"),
+                    epilogue: Epilogue {
+                        input: true,
+                        portal_cursor: true,
+                        screens: Screens::Rebase,
+                        keyframe: true,
+                        ..REBUILT
+                    },
+                    rollback: Rollback {
+                        ends: true,
+                        ..SURVIVES
+                    },
+                    ..at_live(SwapReason::Format, Build::CaptureLoss)?
+                })
+            },
+        },
+        Row {
+            name: "content turned SDR on a display another session holds: nothing",
+            ask: || RebuildAsk::Content(false),
+            facts: |f| f.shared = true,
+            want: || None,
         },
         Row {
             name: "topology re-assert: in place, then bring-up's attempts (S5-5); the \

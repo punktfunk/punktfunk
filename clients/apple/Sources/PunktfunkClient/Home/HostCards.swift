@@ -151,8 +151,11 @@ struct HostActions {
     var presets: HostPresetMenu?
     /// What this device streams from the host (`GET /display/targets`); nil: no Screen section.
     var screens: DisplayTargets?
-    /// Writes the row on the host. Only a pickable row is offered.
-    var pickScreen: (ScreenTarget) -> Void = { _ in }
+    /// The preset this card connects with, when it pins the host screen: where it decides, the
+    /// Screen section shows its row alone (`DisplayTargets.rows(under:)`).
+    var screenPreset: BoundPreset?
+    /// Writes the row's pick on the host; a row without one does nothing.
+    var pickScreen: (ScreenRow) -> Void = { _ in }
 }
 
 /// Where one surface runs the acts that need more than the store: a sheet, a dial, a window.
@@ -174,13 +177,14 @@ struct HostActionSurface {
 extension HostActions {
     /// What `host` offers (`HostOffers.resolve`), run on `surface`. A pinned card connects and
     /// browses with ITS preset. `screens` is the host's answer for this device, the pick it
-    /// streams.
+    /// streams; the pinned or bound preset's `host_screen` may decide it.
     @MainActor init(
         host: StoredHost, pinned: StreamPreset?, online: Bool, store: HostStore,
         presets: [StreamPreset], power: [HostAction], screens: DisplayTargets?,
         surface: HostActionSurface
     ) {
         let selection: PresetSelection = pinned.map { .preset($0.id) } ?? .inherit
+        let preset = pinned ?? host.presetID.flatMap { id in presets.first { $0.id == id } }
         let offers = HostOffers.resolve(
             host: host, pinned: pinned != nil, online: online, isDemo: DemoMode.isDemo(host),
             canWake: WakePolicy.canWake(host.wakeMacs))
@@ -211,10 +215,13 @@ extension HostActions {
                     store.setPinned(host.id, presetID: id, pinned: !pinned)
                 }),
             screens: screens,
+            screenPreset: preset.flatMap { p in
+                p.overrides.hostScreen.map { BoundPreset(name: p.name, hostScreen: $0) }
+            },
             pickScreen: { row in
+                guard let pick = row.pick else { return }
                 Task {
-                    let said = await HostScreenStore.shared.pick(
-                        row.target, label: row.name, on: host)
+                    let said = await HostScreenStore.shared.pick(pick, label: row.label, on: host)
                     if let said { surface.screenRefused(said) }
                 }
             })
@@ -325,12 +332,6 @@ struct HostCardView: View {
     var nowPlaying: String? = nil
     @AutoWake private var autoWake
 
-    /// "Streams LG TV" while this device's pick is a host monitor; its own screen says nothing.
-    private var streams: String? {
-        guard let screens = actions.screens, case .monitor = screens.current else { return nil }
-        return screens.summary
-    }
-
     /// The preset this card announces: a pinned card's own, else the host's binding.
     private var shownPreset: StreamPreset? {
         pinnedPreset ?? actions.presets.flatMap { menu in
@@ -380,8 +381,9 @@ struct HostCardView: View {
                                     prominent: pinnedPreset != nil)
                                     .fixedSize()
                             }
-                            if let streams {
-                                Text(streams)
+                            // "Streams LG TV", "Second screen"; the only screen says nothing.
+                            if let screen = actions.screens?.cardLine(under: actions.screenPreset) {
+                                Text(screen)
                                     .font(.geist(m.meta, .medium, relativeTo: .footnote))
                                     .foregroundStyle(.secondary)
                                     .lineLimit(1)
@@ -523,28 +525,42 @@ struct HostCardView: View {
         }
     }
 
-    /// "Screen ▸": the host's screens for this device, the pick checked. A row the host can't
-    /// open now is greyed with its reason; a locked host offers its reason instead of rows.
+    /// "Screen ▸": the roles, then the host's monitors under their header, the pick checked. A
+    /// greyed row says why under it; when the host or the card's preset decides, its pick greyed
+    /// and the note.
     @ViewBuilder private func screenMenu(_ screens: DisplayTargets) -> some View {
-        Menu {
-            if screens.locked {
-                Text(L10n.screenLockedHint)
-            } else {
-                ForEach(screens.targets) { row in
-                    Button {
-                        actions.pickScreen(row)
-                    } label: {
-                        checkable(row.name, on: row.target == screens.current)
-                        if let line = row.reason ?? (row.detail.isEmpty ? nil : row.detail) {
-                            Text(line)
-                        }
-                    }
-                    .disabled(row.reason != nil)
+        let rows = screens.rows(under: actions.screenPreset)
+        let split = rows.firstIndex { $0.header != nil } ?? rows.endIndex
+        if screens.hasSection {
+            Menu {
+                Section {
+                    ForEach(rows[..<split]) { screenItem($0) }
                 }
+                if split < rows.endIndex {
+                    Section(rows[split].header ?? "") {
+                        ForEach(rows[split...]) { screenItem($0) }
+                    }
+                }
+                if let note = screens.note(under: actions.screenPreset) {
+                    Text(note)
+                }
+            } label: {
+                Label(L10n.hostcardSectionScreen, systemImage: "display")
             }
-        } label: {
-            Label(L10n.hostcardSectionScreen, systemImage: "display")
         }
+    }
+
+    /// One Screen row as a menu item: the checked one does nothing, a greyed one can't be picked.
+    private func screenItem(_ row: ScreenRow) -> some View {
+        Button {
+            actions.pickScreen(row)
+        } label: {
+            checkable(row.label, on: row.checked)
+            if let line = row.line {
+                Text(line)
+            }
+        }
+        .disabled(!row.pickable)
     }
 
     /// A menu row that carries a checkmark when it is the current choice. Built as two shapes

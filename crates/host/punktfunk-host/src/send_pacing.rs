@@ -579,6 +579,11 @@ pub(crate) fn frame_driven_enabled() -> bool {
 /// banked credit, so per-gap jitter still passes while the average cannot
 /// exceed the pacing rate. At or below that rate, credit banks faster than
 /// it spends and the source is never delayed.
+///
+/// The bucket's clock is the grab, never the call after the encode. A slow
+/// encode would read there as one long gap and then a short one, the short one
+/// overdrawing credit the cap just clipped. A source exactly at the rate never
+/// earns that back: every later frame would wait at the gate.
 pub(crate) struct CaptureCredit {
     /// Banked frames, in `[-1.0, CAP]`. Dips below 0 when a grab spent credit
     /// it had only partly banked; the owed fraction is repaid before the next grab.
@@ -601,18 +606,29 @@ impl CaptureCredit {
         }
     }
 
-    /// `now` once a full frame is banked, else the missing fraction of an interval.
-    pub(crate) fn earliest(&mut self, now: Instant, interval: Duration) -> Instant {
-        let secs = interval.as_secs_f32();
-        if secs > 0.0 {
-            let accrued = now.duration_since(self.last).as_secs_f32() / secs;
-            self.credit = (self.credit + accrued).min(Self::CAP);
-        }
-        self.last = now;
-        now + interval.mul_f32((1.0 - self.credit).max(0.0))
+    /// Spend one frame for the grab at `t_cap` and return the earliest next grab: the 0.9×
+    /// floor or the credit gate, whichever is later. A sync encoder folds its encode into
+    /// both.
+    pub(crate) fn next_grab(&mut self, t_cap: Instant, interval: Duration) -> Instant {
+        self.charge();
+        std::cmp::max(
+            t_cap + interval.mul_f32(0.9),
+            self.earliest(t_cap, interval),
+        )
     }
 
-    pub(crate) fn charge(&mut self) {
+    /// `grab` once a full frame is banked, else later by the missing fraction of an interval.
+    fn earliest(&mut self, grab: Instant, interval: Duration) -> Instant {
+        let secs = interval.as_secs_f32();
+        if secs > 0.0 {
+            let accrued = grab.duration_since(self.last).as_secs_f32() / secs;
+            self.credit = (self.credit + accrued).min(Self::CAP);
+        }
+        self.last = grab;
+        grab + interval.mul_f32((1.0 - self.credit).max(0.0))
+    }
+
+    fn charge(&mut self) {
         self.credit -= 1.0;
         self.idle = 0;
     }
@@ -681,13 +697,8 @@ pub(crate) fn wait_next_tick(
         return sleep_to_grid(next);
     }
     if let Some(feed) = capturer.feed() {
-        // Anchor the 0.9× floor to the capture, not `next`: a sync encoder folds encode into cadence.
         if let Some(t_cap) = fresh {
-            credit.charge();
-            let earliest = std::cmp::max(
-                t_cap + interval.mul_f32(0.9),
-                credit.earliest(Instant::now(), interval),
-            );
+            let earliest = credit.next_grab(t_cap, interval);
             if let Some(d) = earliest.checked_duration_since(Instant::now()) {
                 std::thread::sleep(d);
             }
@@ -1266,6 +1277,70 @@ mod tests {
         assert!(
             after[2].duration_since(after[1]) >= interval.mul_f32(0.999),
             "third post-stall grab must be back on the interval grid"
+        );
+    }
+
+    /// `wait_next_tick` over a mailbox that hands out its newest frame: `(grab, arrival)` of
+    /// each frame taken. `encode(n)` is how long the loop is busy after its `n`th grab.
+    fn run_mailbox(
+        interval: Duration,
+        arrivals: &[Instant],
+        encode: impl Fn(usize) -> Duration,
+    ) -> Vec<(Instant, Instant)> {
+        let mut b = CaptureCredit::new(arrivals[0]);
+        let mut taken = Vec::new();
+        let (mut i, mut free) = (0, arrivals[0]);
+        while i < arrivals.len() {
+            while i + 1 < arrivals.len() && arrivals[i + 1] <= free {
+                i += 1;
+            }
+            let grab = arrivals[i].max(free);
+            taken.push((grab, arrivals[i]));
+            i += 1;
+            free = b.next_grab(grab, interval).max(grab + encode(taken.len()));
+        }
+        taken
+    }
+
+    /// One slow encode, the session's first or a later one, leaves no frame of a source
+    /// exactly at the rate waiting in the mailbox.
+    #[test]
+    fn capture_credit_leaves_no_wait_after_a_slow_encode() {
+        let interval = Duration::from_millis(10);
+        let t0 = Instant::now();
+        let arrivals: Vec<Instant> = (1..300).map(|k| t0 + interval * k).collect();
+        for (slow_at, slow) in [(1, 2.4), (1, 1.6), (100, 1.7), (100, 3.3)] {
+            let taken = run_mailbox(interval, &arrivals, |n| {
+                if n == slow_at {
+                    interval.mul_f32(slow)
+                } else {
+                    Duration::from_millis(2)
+                }
+            });
+            for (grab, arrival) in &taken[taken.len() - 50..] {
+                assert_eq!(
+                    grab, arrival,
+                    "a {slow}-interval encode at grab {slow_at} left frames waiting"
+                );
+            }
+        }
+    }
+
+    /// A source at twice the rate stays inside the burst cap through slow encodes.
+    #[test]
+    fn capture_credit_holds_the_rate_through_slow_encodes() {
+        let interval = Duration::from_millis(10);
+        let t0 = Instant::now();
+        let arrivals: Vec<Instant> = (1..2000).map(|k| t0 + interval * k / 2).collect();
+        let taken = run_mailbox(interval, &arrivals, |n| {
+            interval.mul_f32(if n % 40 == 0 { 2.6 } else { 0.2 })
+        });
+        let span = taken[taken.len() - 1].0.duration_since(taken[0].0);
+        let banked = span.as_secs_f32() / interval.as_secs_f32();
+        assert!(
+            taken.len() as f32 <= banked + 1.0 + CaptureCredit::CAP,
+            "{} frames in {banked} intervals",
+            taken.len()
         );
     }
 

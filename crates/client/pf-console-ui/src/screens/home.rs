@@ -1052,7 +1052,9 @@ fn no_games(slot: &Slot<'_>) -> Option<String> {
 }
 
 /// A card's one status line and its ink: what the host is doing, whether OK will reach
-/// it, the preset a pinned or bound card connects with, and the screen it streams.
+/// it, the preset a pinned or bound card connects with, and the screen it streams unless that
+/// is the default, the bound preset's when it decides
+/// ([`pf_client_core::display_targets::Targets::card_line_under`]).
 fn status(ui: &Frame, h: &HostRow) -> (String, Color4f) {
     if let Some(p) = &h.pin {
         return (p.name.clone(), accent_color(ui, p.accent.as_deref()));
@@ -1073,16 +1075,10 @@ fn status(ui: &Frame, h: &HostRow) -> (String, Color4f) {
     } else {
         (pf_l10n::client::hostcard_status_offline(), ui.fg(0.7))
     };
-    // Its own screen is the default and says nothing; a monitor is worth a word.
-    let monitor = h.screens.as_ref().filter(|s| {
-        matches!(
-            s.current(),
-            pf_client_core::display_targets::DisplayTarget::Monitor(_)
-        )
-    });
+    let screen = (h.screens.as_ref()).and_then(|s| s.card_line_under(h.screen_preset()));
     let parts: Vec<String> = std::iter::once(base.to_string())
         .chain(h.bound_preset.as_ref().map(|b| b.name.clone()))
-        .chain(monitor.map(|s| s.summary()))
+        .chain(screen)
         .collect();
     (parts.join(" \u{b7} "), ink)
 }
@@ -1333,11 +1329,11 @@ mod tests {
         pf_client_core::trust::Settings::default()
     }
 
-    /// The card names a monitor this device streams; its own screen is the default and
-    /// adds nothing, as a host without the route adds nothing.
+    /// The card names a monitor this device streams, or its role when that is not the only
+    /// screen; the default adds nothing, as a host without the route adds nothing.
     #[test]
     fn a_card_says_which_screen_it_streams() {
-        use pf_client_core::display_targets::{DisplayTarget, Target, Targets};
+        use pf_client_core::display_targets::{DisplayTarget, Role, RoleInfo, Target, Targets};
         let ui = Frame::default();
         let plain = host("a", true, true, false);
         assert_eq!(status(&ui, &plain).0, "Online");
@@ -1356,6 +1352,15 @@ mod tests {
         };
         assert_eq!(status(&ui, &screened).0, "Online \u{b7} Streams LG TV");
         screened.screens.as_mut().unwrap().yours = None;
+        assert_eq!(status(&ui, &screened).0, "Online");
+        let role = |yours| RoleInfo {
+            yours,
+            host_default: Role::Only,
+            offered: Role::ALL.to_vec(),
+        };
+        screened.screens.as_mut().unwrap().role = Some(role(Some(Role::Second)));
+        assert_eq!(status(&ui, &screened).0, "Online \u{b7} Second screen");
+        screened.screens.as_mut().unwrap().role = Some(role(None));
         assert_eq!(status(&ui, &screened).0, "Online");
     }
 
@@ -1508,6 +1513,7 @@ mod tests {
             name: "Work".into(),
             accent: None,
             bitrate_kbps: None,
+            host_screen: None,
         });
         let hosts = [pinned];
         let library = crate::library::LibraryShared::default();
@@ -1710,6 +1716,7 @@ mod tests {
             name: name.into(),
             accent: None,
             bitrate_kbps: None,
+            host_screen: None,
         };
         let row = || {
             let mut c = host("charlie", true, false, false);

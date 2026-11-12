@@ -168,8 +168,9 @@ internal fun rememberStatsLines(
 
 /**
  * The 1 Hz session watch: the access level and its countdown, the operator's mute, and the end
- * of the session; a session that starts on another device's screen says so once, and so does a
- * device decoder that stops answering. A host that
+ * of the session. At start it says once that the screen is another device's, else why the
+ * preset's [hostScreen] was not applied ([DisplayTargets.startLine]); a device decoder that stops
+ * answering is said once too. A host that
  * sleeps, crashes or drops off the network stops answering the QUIC keep-alive, and the
  * connection idle-times out (~8 s). The moment the session is dead this drops
  * back to the menu, so the user can wake the host instead of being stranded on a frozen picture.
@@ -179,6 +180,7 @@ internal fun rememberStatsLines(
 @Composable
 internal fun SessionWatchEffect(
     handle: Long,
+    hostScreen: String,
     initialAccess: IntArray?,
     ui: StreamUi,
     peripherals: StreamPeripherals,
@@ -189,9 +191,12 @@ internal fun SessionWatchEffect(
     LaunchedEffect(handle) {
         var lastAccessSeq = initialAccess?.getOrNull(2) ?: 0
         var decoderStuckShown = false
-        if (NativeBridge.nativeSharesScreen(handle)) {
-            Toast.makeText(context, context.getString(R.string.notice_shared_screen), Toast.LENGTH_LONG).show()
-        }
+        DisplayTargets.startLine(
+            NativeBridge.nativeSharesScreen(handle),
+            hostScreen,
+            NativeBridge.nativeScreenRoleReason(handle),
+            context.resources,
+        )?.let { Toast.makeText(context, it, Toast.LENGTH_LONG).show() }
         while (true) {
             delay(1000)
             // Access first, ended second: a session about to close on its expiry gets its final

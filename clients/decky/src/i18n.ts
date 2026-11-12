@@ -1,5 +1,5 @@
 // The panel's words. `virtual:l10n` is built by rollup.config.js from l10n/messages: the
-// common, client and decky parts, and the host's `reject_` messages, for the shipped languages.
+// messages the code names, and the host's `reject_` messages, for the shipped languages.
 import bundle from "virtual:l10n";
 import { type Params, pick, say } from "./l10n";
 

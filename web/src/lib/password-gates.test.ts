@@ -12,6 +12,7 @@ const full = { grants: null, expires_unix: null, until_disconnect: false };
 describe("widensAccess", () => {
 	test.each([
 		["a grant it lacks", guest, { grants: 0x21 }],
+		["the screen choice", { ...full, grants: 0xff }, { grants: 0x1ff }],
 		["a later deadline", guest, { expires_in_secs: 7200 }],
 		["no deadline", guest, { clear_expiry: true }],
 		[
@@ -34,6 +35,7 @@ describe("widensAccess", () => {
 
 	test.each([
 		["fewer grants", full, { grants: 0x01 }],
+		["every grant on a full device", full, { grants: 0x1ff }],
 		["the same grants", guest, { grants: 0x01 }],
 		["an earlier deadline", guest, { expires_in_secs: 60 }],
 		["expire now", guest, { expires_in_secs: 0 }],

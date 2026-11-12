@@ -57,6 +57,8 @@ internal object ConsoleJson {
         // Read by the speed test alone: a preset that PINS bitrate is the layer its host
         // streams at, so the console must not offer to write the global default instead.
         .put("bitrate_kbps", p.overrides.bitrateKbps ?: JSONObject.NULL)
+        // The card's Screen section and line show a preset that pins the host screen.
+        .put("host_screen", p.overrides.hostScreen ?: JSONObject.NULL)
 
     /**
      * A host's advertised actions in the console model's shape (`HostRow.actions`), worded in

@@ -119,6 +119,7 @@
 		}
 	],
 	"decky_host_asleep": "schläft",
+	"decky_host_awake": "{host} ist wach",
 	"decky_play_stream": "Streamen",
 	"decky_play_stop": "Beenden",
 	"decky_update_server_unreachable": "Der Update-Server war nicht erreichbar – bist du online?",

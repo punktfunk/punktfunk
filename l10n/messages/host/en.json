@@ -197,6 +197,7 @@
 	"apierr_recording_not_deleted": "Couldn't delete the recording",
 	"apierr_recording_not_read": "Couldn't read the recording",
 	"apierr_recording_not_saved": "Couldn't save the recording",
+	"apierr_screen_choice_not_granted": "This host decides the screen for this device.",
 	"apierr_seat_display_driver": "The seat display driver isn't on this machine. Reinstall Punktfunk, then try again.",
 	"apierr_seat_display_read_only": "A seat's display can't be changed here. Change display settings on the host.",
 	"apierr_seat_gone": "This profile's seat is gone.",

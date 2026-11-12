@@ -103,6 +103,9 @@ impl Encoder for TrackedEncoder {
     fn set_reference_floor(&mut self, acked: Option<Acked>) {
         self.inner.set_reference_floor(acked)
     }
+    fn note_confirmed(&mut self, acked: Option<Acked>) {
+        self.inner.note_confirmed(acked)
+    }
     fn set_pipelined(&mut self, on: bool) -> bool {
         self.inner.set_pipelined(on)
     }

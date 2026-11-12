@@ -66,7 +66,7 @@ extension SettingsView {
     }
 
     /// `described` for a row that writes several overrides: its marker shows while any of
-    /// `fields` is overridden, and its Reset clears them all.
+    /// `fields` is overridden, and its Reset clears them all. An empty caption draws no line.
     func described<Content: View>(
         _ caption: String, fields: [String], @ViewBuilder content: () -> Content
     ) -> some View {
@@ -86,12 +86,14 @@ extension SettingsView {
         #else
         return VStack(alignment: .leading, spacing: 5) {
             content()
-            Text(caption)
-                .font(.geist(13, relativeTo: .footnote))
-                .foregroundStyle(.secondary)
-                // Wrap, never truncate, in Form cells.
-                .fixedSize(horizontal: false, vertical: true)
-                .modifier(CaptionWidth())
+            if !caption.isEmpty {
+                Text(caption)
+                    .font(.geist(13, relativeTo: .footnote))
+                    .foregroundStyle(.secondary)
+                    // Wrap, never truncate, in Form cells.
+                    .fixedSize(horizontal: false, vertical: true)
+                    .modifier(CaptionWidth())
+            }
             // Full cell width, deliberately: the marker's Reset is a CONTROL, and it belongs on
             // the same trailing edge as the row's own control above it.
             overrideMarker(fields)

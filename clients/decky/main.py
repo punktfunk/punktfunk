@@ -44,6 +44,21 @@ class Plugin:
     async def profiles(self, ref: str) -> dict:
         return await client.profiles(ref)
 
+    async def wake(self, ref: str) -> dict:
+        return await client.wake(ref)
+
+    async def actions(self, ref: str) -> dict:
+        return await client.actions(ref)
+
+    async def run_action(self, ref: str, action_id: str) -> dict:
+        return await client.run_action(ref, action_id)
+
+    async def screens(self, ref: str) -> dict:
+        return await client.screens(ref)
+
+    async def pick_screen(self, ref: str, row_id: str) -> dict:
+        return await client.pick_screen(ref, row_id)
+
     # Steam's side, which only a Decky plugin can reach.
 
     async def shortcut_art(self) -> dict:

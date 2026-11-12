@@ -1,5 +1,5 @@
 {
-  "$comment": "Generated from punktfunk_core::quic::access by grant_vectors_are_checked_in (UPDATE_VECTORS=1 rewrites it). pf-client-core, the web console, Kotlin and Swift replay it.",
+  "$comment": "Generated from punktfunk_core::quic::access by grant_vectors_are_checked_in (UPDATE_VECTORS=1 rewrites it). pf-client-core, Kotlin and Swift replay normalized and level, a wire reader's rule. The web console replays stored and stored_level: the management API's masks are in the current vocabulary, so 255 is not lifted.",
   "bits": {
     "GAMEPAD": 1,
     "POINTER": 2,
@@ -8,27 +8,33 @@
     "MIC": 16,
     "LAUNCH": 32,
     "POWER": 64,
-    "MANAGE_GAMES": 128
+    "MANAGE_GAMES": 128,
+    "DISPLAY": 256
   },
-  "all": 255,
+  "all": 511,
   "all_pre_power": 63,
   "all_pre_manage": 127,
+  "all_pre_display": 255,
   "masks": [
-    {"mask": 0, "normalized": 0, "level": "view"},
-    {"mask": 1, "normalized": 1, "level": "controller"},
-    {"mask": 255, "normalized": 255, "level": "full"},
-    {"mask": 63, "normalized": 255, "level": "full"},
-    {"mask": 59, "normalized": 59, "level": "custom"},
-    {"mask": 223, "normalized": 223, "level": "custom"},
-    {"mask": 9, "normalized": 9, "level": "custom"},
-    {"mask": 64, "normalized": 64, "level": "custom"},
-    {"mask": 127, "normalized": 255, "level": "full"},
-    {"mask": 123, "normalized": 123, "level": "custom"},
-    {"mask": 129, "normalized": 129, "level": "custom"},
-    {"mask": 256, "normalized": 256, "level": "view"},
-    {"mask": 257, "normalized": 257, "level": "controller"},
-    {"mask": 511, "normalized": 511, "level": "full"},
-    {"mask": 319, "normalized": 319, "level": "custom"},
-    {"mask": 383, "normalized": 383, "level": "custom"}
+    {"mask": 0, "normalized": 0, "level": "view", "stored": 0, "stored_level": "view"},
+    {"mask": 1, "normalized": 1, "level": "controller", "stored": 1, "stored_level": "controller"},
+    {"mask": 511, "normalized": 511, "level": "full", "stored": 511, "stored_level": "full"},
+    {"mask": 63, "normalized": 511, "level": "full", "stored": 511, "stored_level": "full"},
+    {"mask": 59, "normalized": 59, "level": "custom", "stored": 59, "stored_level": "custom"},
+    {"mask": 479, "normalized": 479, "level": "custom", "stored": 479, "stored_level": "custom"},
+    {"mask": 9, "normalized": 9, "level": "custom", "stored": 9, "stored_level": "custom"},
+    {"mask": 64, "normalized": 64, "level": "custom", "stored": 64, "stored_level": "custom"},
+    {"mask": 127, "normalized": 511, "level": "full", "stored": 511, "stored_level": "full"},
+    {"mask": 123, "normalized": 123, "level": "custom", "stored": 123, "stored_level": "custom"},
+    {"mask": 129, "normalized": 129, "level": "custom", "stored": 129, "stored_level": "custom"},
+    {"mask": 255, "normalized": 511, "level": "full", "stored": 255, "stored_level": "custom"},
+    {"mask": 251, "normalized": 251, "level": "custom", "stored": 251, "stored_level": "custom"},
+    {"mask": 256, "normalized": 256, "level": "custom", "stored": 256, "stored_level": "custom"},
+    {"mask": 257, "normalized": 257, "level": "custom", "stored": 257, "stored_level": "custom"},
+    {"mask": 512, "normalized": 512, "level": "view", "stored": 512, "stored_level": "view"},
+    {"mask": 513, "normalized": 513, "level": "controller", "stored": 513, "stored_level": "controller"},
+    {"mask": 1023, "normalized": 1023, "level": "full", "stored": 1023, "stored_level": "full"},
+    {"mask": 575, "normalized": 575, "level": "custom", "stored": 575, "stored_level": "custom"},
+    {"mask": 639, "normalized": 639, "level": "custom", "stored": 639, "stored_level": "custom"}
   ]
 }
