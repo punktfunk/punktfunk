@@ -140,13 +140,36 @@ Every seat shares one set of **Seats** settings on **Host**, shown while seats a
 - **Stop an idle seat after**: 240 minutes by default; 0 never stops one. Your own seat never
   stops for this. A seat on [someone's own account](/docs/own-account) neither stops for this nor
   starts warm.
-- **End a seat's stream when its game exits**: off keeps streaming the seat's desktop.
+- **End a seat's stream when its game exits**: off keeps streaming the seat's desktop. A profile
+  can [pick its own](#change-or-remove-a-profile).
 - **Highest mode per seat**, such as `2560x1440@120`: a device's own cap outranks it.
 - **Seats update your games** (Linux): off, seats play the games you installed but can't update
   them or install into your libraries. A seat picks up a change when it next starts.
 
-**Library**, **Game sources** and **Plugins** are per seat: once a seat exists, the page's title
-(**Anna's library ▾**) switches it to another seat's own.
+## Each profile's own library
+
+Every profile plays the same games, and each can see them its own way. Once the host has a second
+profile, the title of **Library** is a pick (**Anna's library ▾**) that lists every profile. The
+pick stays as you move between pages. In a profile's library you can:
+
+- **Hide for Anna**: the game leaves Anna's shelf and can't be started as Anna. **Show for Anna
+  again** brings it back.
+- Set a game's **Stream** settings for Anna alone. They show **Only for Anna**, and **Use Enrico's
+  setting** drops them.
+- Pick Anna's own cover or artwork for a game; **Use Enrico's picture** drops it.
+- Under **Sources**, turn a source off to hide all its games from Anna.
+
+A profile only ever narrows your library. A game you hide, or a source you turn off, in your own
+library stays hidden for everyone, and shows there as **Turned off in Enrico's library**. Games
+are added, edited, installed and removed in your library, which the link under the title opens.
+Nothing in a profile's library needs its seat to be running.
+
+The Apple, Android, Linux and Windows apps show a player the library of the profile they play as.
+Hiding a game is for tidiness, not a lock: a player who picks another profile sees that
+profile's games, and a person on [their own account](/docs/own-account) can change their own
+copy.
+
+**Plugins** and **Automation** follow the same pick for a profile with a desktop of its own.
 
 ## How players pick
 
@@ -186,7 +209,10 @@ device may do stays its [access level](/docs/access-levels).
 ## Change or remove a profile
 
 On the profile's card: **Rename**, **Choose picture** or **Remove picture** (PNG or JPEG under
-1 MB), and **Remove**. Removing asks for the console password and ends every session playing as
+1 MB), and **Remove**. For a profile with a desktop of its own, **Rename** also offers **When the
+game exits**: **As the host does** follows **End a seat's stream when its game exits**, and **End
+the session** or **Keep streaming** set it for that profile alone. On
+[someone's own account](/docs/own-account) a game's exit always goes back to their desktop. Removing asks for the console password and ends every session playing as
 that profile with "Your profile was removed by the host's owner." For a profile named Kid whose
 own Steam the host still keeps, **Also delete Kid's Steam and saved games on this host** erases
 that Steam too; without it, the files stay on the host. The owner can't be removed.
