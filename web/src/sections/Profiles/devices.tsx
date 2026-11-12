@@ -1,8 +1,8 @@
-// The devices signed in to a profile on a person's own Linux account, and signing them out. The
-// list is the seat supervisor's; the console only reads it and takes devices off it.
+// The devices signed in to a profile, and signing them out: on a person's own Linux account the
+// seat supervisor's list, on a locked profile the lock's. The same routes answer both.
 import { type QueryClient, useQueryClient } from "@tanstack/react-query";
 import { toast } from "@unom/ui/toast";
-import type { FC } from "react";
+import type { FC, ReactNode } from "react";
 import type { ProfileAdmin } from "@/api/gen/model/profileAdmin";
 import type { SignedInDevice } from "@/api/gen/model/signedInDevice";
 import type { SignedInKind } from "@/api/gen/model/signedInKind";
@@ -16,6 +16,7 @@ import { useDialogs } from "@/components/dialogs";
 import { Button } from "@/components/ui/button";
 import { apiErrorMessage } from "@/lib/errors";
 import { fmtDateTimeSecs } from "@/lib/format";
+import { cn } from "@/lib/utils";
 import { m } from "@/paraglide/messages";
 import { deviceName } from "@/sections/Devices/pairedRows";
 
@@ -101,34 +102,56 @@ export const SignedInDevices: FC<{ profile: ProfileAdmin }> = ({
 	);
 };
 
-/** The list itself: who may open the desktop, then each device, or one line when there is none. */
+/**
+ * The list itself: who may open the profile, then each device, or one line when there is none.
+ * A locked profile's dialog passes no `account`, its own `empty` line and `action`, and `flush`.
+ */
 export const DevicesList: FC<{
-	account: string;
+	/** A person's own account: the line that only its password or its devices open it. */
+	account?: string;
 	/** `undefined` while the first answer is on its way. */
 	devices: SignedInDevice[] | undefined;
 	/** The host's sentence when the list couldn't be read. */
 	error: string | null;
 	onSignOut: (d: SignedInDevice) => void;
 	onSignOutAll: () => void;
-}> = ({ account, devices, error, onSignOut, onSignOutAll }) => (
-	<div className="space-y-2 sm:pl-14">
-		<div className="flex items-center justify-between gap-4">
+	/** The line when no device is on it. */
+	empty?: string;
+	/** Beside **Sign out everywhere**. */
+	action?: ReactNode;
+	/** In a dialog: not indented under the card's picture. */
+	flush?: boolean;
+}> = ({
+	account,
+	devices,
+	error,
+	onSignOut,
+	onSignOutAll,
+	empty = m.profiles_devices_none(),
+	action,
+	flush,
+}) => (
+	<div className={cn("space-y-2", !flush && "sm:pl-14")}>
+		<div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
 			<h3 className="text-sm font-medium">{m.profiles_devices_title()}</h3>
-			{!error && devices && devices.length > 0 && (
-				<Button variant="outline" size="sm" onClick={onSignOutAll}>
-					{m.profiles_devices_sign_out_all()}
-				</Button>
-			)}
+			<div className="flex flex-wrap gap-2">
+				{action}
+				{!error && devices && devices.length > 0 && (
+					<Button variant="outline" size="sm" onClick={onSignOutAll}>
+						{m.profiles_devices_sign_out_all()}
+					</Button>
+				)}
+			</div>
 		</div>
-		<p className="text-sm text-muted-foreground">
-			{m.profiles_devices_trust({ account })}
-		</p>
+		{account && (
+			<p className="text-sm text-muted-foreground">
+				{m.profiles_devices_trust({ account })}
+			</p>
+		)}
 		{error ? (
 			<p className="text-sm text-destructive">{error}</p>
 		) : devices?.length === 0 ? (
-			<p className="text-sm text-muted-foreground">
-				{m.profiles_devices_none()}
-			</p>
+			<p className="text-sm text-muted-foreground">{empty}</p>
 		) : (
 			<ul className="divide-y">
 				{devices?.map((d) => (
