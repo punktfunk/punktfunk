@@ -290,7 +290,7 @@ pub(crate) async fn require_auth(
         Some(token) if token_eq(token, expected) => match vouched(&req) {
             // The door, holding this host's token, calls for a device it placed here: the
             // device's own lane, under the device's own pairing as this host holds it. A person
-            // the door vouches for needs none here: the owner's copy lists only its own devices.
+            // the door vouches for needs none: a locked owner's copy lists the owner's alone.
             Some(fp) => {
                 let paired = st
                     .native
