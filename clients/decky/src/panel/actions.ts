@@ -1,7 +1,9 @@
 // The QAM panel's one-tap actions. Each ends in a toast, or in closing the menus, so the tap has
 // feedback even when the panel is gone.
 import { Navigation } from "@decky/ui";
-import { endGame, hostAction, killStream } from "../backend";
+import { endGame, type HostAction, hostAction, killStream, runAction, wake } from "../backend";
+import type { HostView } from "../hosts/model";
+import { refreshHosts } from "../hosts/store";
 import { t } from "../i18n";
 import { toast } from "../lib/toast";
 import { removeGameShortcuts } from "../steam/game-shortcuts";
@@ -55,6 +57,52 @@ export async function pressHost(action: "guide" | "qam"): Promise<void> {
   } else {
     toast(r.error === "no-stream" ? t("decky_no_stream") : t("decky_stream_unreachable"));
   }
+}
+
+/** Wake a host and wait for it (up to 90 s), then rescan so its row reads online. */
+export async function wakeHost(host: HostView): Promise<void> {
+  toast(t("dial_waking", { host: host.name }));
+  const r = await wake(host.ref).catch(() => null);
+  if (r?.ok) {
+    toast(t("decky_host_awake", { host: host.name }));
+    void refreshHosts();
+  } else {
+    toast(t("dial_wake_parked", { host: host.name }));
+  }
+}
+
+/** This plugin's words for a host action it knows; the CLI's for any other. */
+export function actionLabel(a: HostAction): string {
+  switch (a.id) {
+    case "power.sleep":
+      return t("host_power_sleep");
+    case "power.reboot":
+      return t("host_power_reboot");
+    case "power.shutdown":
+      return t("host_power_shutdown");
+    case "host.restart":
+      return t("host_power_restart_service");
+    case "display.next":
+      return t("hostaction_display_next");
+    default:
+      return a.label;
+  }
+}
+
+/** Run one of the host's actions; the outcome is a toast. The caller confirms a danger one. */
+export async function runHostAction(host: HostView, a: HostAction): Promise<void> {
+  const action = actionLabel(a);
+  if (!a.available) {
+    toast(a.unavailable_reason || t("hostcard_action_unavailable_body", { action }));
+    return;
+  }
+  const r = await runAction(host.ref, a.id).catch(() => null);
+  // The CLI's sentence says why it failed; its words follow the Deck's locale, not Steam's.
+  toast(
+    r?.ok
+      ? t("hostcard_action_sent_body", { host: host.name, action })
+      : r?.notice || t("hostcard_action_unavailable_body", { action }),
+  );
 }
 
 /** End the title the last game-page stream launched, then the stream — only once the host says
