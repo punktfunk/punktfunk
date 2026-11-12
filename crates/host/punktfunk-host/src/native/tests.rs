@@ -2872,3 +2872,96 @@ fn an_open_profile_opens_on_every_session_path() {
     let (heard, _) = dial_box(19801, |_| serde_json::Value::Null, dials);
     assert_eq!(heard, [Heard::Played, kid_seat(19801)]);
 }
+
+/// `fp` on a profile's list, signed in until signed out.
+fn listed(fp: &str) -> serde_json::Value {
+    serde_json::json!({"fingerprint": fp, "name": "Kid's tablet", "stay": true,
+        "added_unix": 1, "last_unix": 1})
+}
+
+/// The refusal a device hears for a locked profile it is not on the list of.
+fn not_allowed() -> Heard {
+    Heard::Closed(
+        punktfunk_core::reject::RejectReason::SeatUnavailable,
+        "This device can't open this profile. Ask the host's owner to add it.".into(),
+    )
+}
+
+/// A locked profile opens for the devices on its list alone, on both session paths: the box's
+/// own session, played here, and a seat's profile, refused before its redirect. A lock entry
+/// that isn't locked is an open profile.
+#[test]
+fn a_locked_profile_opens_only_for_its_devices() {
+    let _registry = crate::session_status::tests::registry_lock();
+    let _serial = SESSION_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    let dials = || {
+        vec![
+            (OWNER_PROFILE, offers(true), Sends::Nothing),
+            (KID_PROFILE, offers(false), Sends::Nothing),
+        ]
+    };
+    let other = |_: &str| {
+        let lock = serde_json::json!({"locked": true, "devices": [listed(&"ab".repeat(32))]});
+        serde_json::json!({"version": 1, "profiles": {OWNER_PROFILE: lock, KID_PROFILE: lock}})
+    };
+    let (heard, _) = dial_box(19802, other, dials());
+    assert_eq!(heard, [not_allowed(), not_allowed()]);
+
+    let mine = |fp: &str| {
+        let lock = serde_json::json!({"locked": true, "devices": [listed(fp)]});
+        let open = serde_json::json!({"locked": false});
+        serde_json::json!({"version": 1, "profiles": {OWNER_PROFILE: lock, KID_PROFILE: open}})
+    };
+    let (heard, _) = dial_box(19803, mine, dials());
+    assert_eq!(heard, [Heard::Played, kid_seat(19803)]);
+}
+
+/// A session on a locked profile ends once its device is signed out, with the sentence that says
+/// so.
+#[test]
+fn signing_a_device_out_ends_its_session() {
+    let _registry = crate::session_status::tests::registry_lock();
+    let _serial = SESSION_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    let dir = crate::test_support::scratch();
+    let owner = serde_json::json!({"id": OWNER_PROFILE, "display_name": "Enrico",
+        "os_account": {"kind": "operator"}});
+    let file = serde_json::json!({"version": 1, "profiles": [owner]});
+    std::fs::write(dir.join("profiles.json"), file.to_string()).unwrap();
+    let (cert, key) = endpoint::generate_identity().unwrap();
+    let fp = hex::encode(endpoint::fingerprint_of_pem(&cert).unwrap());
+    let lock = serde_json::json!({"locked": true, "devices": [listed(&fp)]});
+    let locks = serde_json::json!({"version": 1, "profiles": {OWNER_PROFILE: lock}});
+    std::fs::write(dir.join(pf_seats::locks::FILE), locks.to_string()).unwrap();
+    let profiles = Arc::new(crate::profiles::Profiles::load_with(
+        Some(dir.join("profiles.json")),
+        None,
+    ));
+    let np = NativePairing::load_with(Some(dir.join("punktfunk1-paired.json")), None, false);
+    let np = Arc::new(np.unwrap());
+    np.add_with_access("Kid's tablet", &fp, None).unwrap();
+    let host = spawn_profile_host(19804, 1, np, profiles.clone());
+    std::thread::sleep(std::time::Duration::from_millis(500));
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let (code, reason) = rt.block_on(async {
+        let (conn, _send, _recv, _welcome, _media) = raw_session(19804, (&cert, &key)).await;
+        let signed_out = profiles.locks().edit(OWNER_PROFILE, |lock, _| {
+            lock.list.sign_out(None);
+        });
+        signed_out.unwrap();
+        let closed = tokio::time::timeout(std::time::Duration::from_secs(10), conn.closed());
+        match closed.await.expect("the host ends the session") {
+            quinn::ConnectionError::ApplicationClosed(ac) => (
+                u64::from(ac.error_code),
+                String::from_utf8(ac.reason.to_vec()).unwrap(),
+            ),
+            other => panic!("expected the host's close, got {other:?}"),
+        }
+    });
+    host.join().unwrap().unwrap();
+    let unavailable = punktfunk_core::reject::RejectReason::SeatUnavailable.close_code();
+    assert_eq!(code, u64::from(unavailable));
+    assert_eq!(reason, "This device was signed out of this profile.");
+}

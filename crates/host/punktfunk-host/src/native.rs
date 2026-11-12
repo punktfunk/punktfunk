@@ -94,6 +94,8 @@ mod planes;
 use planes::PlaneEnds;
 mod launch;
 use launch::Launch;
+/// A locked profile: its list, or its PIN, before anything places or plays it.
+mod lock;
 /// A person's own Linux account: the supervisor's unlock before placement, `Left` after.
 pub(crate) mod unlock;
 
@@ -672,30 +674,43 @@ fn spawn_box_watch(np: Arc<NativePairing>, profiles: Arc<crate::profiles::Profil
     });
 }
 
-/// Ends the session as an operator stop when the console removes the profile it plays as.
-/// The end is written before the refuse, or the connection watcher would read the host's
-/// own close back as `lost`.
-fn spawn_profile_watch(scope: &SessionScope, profile: String) {
+/// Ends the session as an operator stop when the console removes the profile it plays as, or
+/// once device `fp` no longer opens it: signed out, the profile locked, a PIN's day over. The
+/// lock is read once a second. The end is written before the refuse, or the connection watcher
+/// would read the host's own close back as `lost`.
+fn spawn_profile_watch(
+    scope: &SessionScope,
+    profiles: &Arc<crate::profiles::Profiles>,
+    profile: String,
+    fp: Option<String>,
+) {
     let (conn, life) = (scope.conn().clone(), scope.life().clone());
+    let profiles = Arc::clone(profiles);
     let mut removed = crate::profiles::removed();
     scope.task(async move {
-        loop {
+        let mut tick = tokio::time::interval(std::time::Duration::from_secs(1));
+        let said = loop {
             tokio::select! {
                 _ = conn.closed() => return,
                 id = removed.recv() => match id {
-                    Ok(id) if id == profile => break,
+                    Ok(id) if id == profile => break Said::new(
+                        "close_profile_removed",
+                        "Your profile was removed by the host's owner.",
+                    ),
                     Ok(_) | Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
                     Err(_) => return,
                 },
+                _ = tick.tick() => {
+                    if !lock::still_opens(&profiles, &profile, fp.as_deref()) {
+                        let (id, text) = lock::SIGNED_OUT;
+                        break Said::new(id, text);
+                    }
+                }
             }
-        }
-        tracing::info!(%profile, "profile removed — closing its session");
+        };
+        tracing::info!(%profile, why = %said.id, "profile closed to this device — ending its session");
         life.end(crate::events::SessionEndReason::StoppedByOperator);
         let reason = punktfunk_core::reject::RejectReason::SeatUnavailable;
-        let said = Said::new(
-            "close_profile_removed",
-            "Your profile was removed by the host's owner.",
-        );
         conn.refuse_said(reason.close_code(), &said).await;
     });
 }
@@ -1257,8 +1272,14 @@ pub(crate) async fn run_admitted(
     // Held first, so the slot comes back last.
     scope.hold(permit);
     scope.hold(who.count.take());
+    scope.hold(who.presence.take());
     spawn_end_watch(&scope);
-    spawn_profile_watch(&scope, resolved.id.clone());
+    spawn_profile_watch(
+        &scope,
+        &host.profiles,
+        resolved.id.clone(),
+        who.fp_hex.clone(),
+    );
     scope.life().enter(crate::lifecycle::Phase::Negotiating);
     // Every phase's error returns here, so every exit reaches the one teardown.
     let result: Result<()> = async {
@@ -1303,6 +1324,8 @@ struct Admitted {
     profile_ref: crate::events::ProfileRef,
     /// This device's session count, until the scope holds it.
     count: Option<crate::native_pairing::SessionCountGuard>,
+    /// Its place on a locked profile's list, until the scope holds it.
+    presence: Option<crate::profiles::locks::Presence>,
     knobs: SessionKnobs,
     /// Hello in hand; send thread finishes this when the first video packet leaves.
     bringup: Arc<crate::bringup::Trace>,
@@ -1346,6 +1369,8 @@ async fn admit_here(
         }
     };
     tracing::info!(profile = %resolved.id, name = %resolved.display_name, via = ?resolved.via, "profile");
+    // Before placement, so a profile that plays here and one sent to its seat pass one check.
+    let presence = lock::admit(&host.profiles, conn, first, &resolved, fp_hex.as_deref()).await?;
     // A refusal ends the connect here and leaves the profile's last-used time alone.
     let placed = place_profile(
         conn,
@@ -1358,9 +1383,10 @@ async fn admit_here(
     .await?;
     host.profiles.touch(&resolved.id);
     if placed.is_some() {
-        if let (Some(guard), Some(fp)) = (session, fp_hex) {
-            if host.np.is_session_only(&fp) {
-                hold_while_on_seat(guard, fp, false);
+        if let Some(fp) = fp_hex {
+            let count = session.filter(|_| host.np.is_session_only(&fp));
+            if count.is_some() || presence.is_some() {
+                hold_while_on_seat((count, presence), fp, false);
             }
         }
         return Ok(None);
@@ -1377,6 +1403,7 @@ async fn admit_here(
         expires_in_secs: remaining_secs_wire(deadline_unix, at_unix),
         profile_ref,
         count: session,
+        presence,
         knobs: SessionKnobs::read(),
         bringup: crate::bringup::Trace::start("bringup", Arc::new(AtomicU32::new(0))),
         counters: Arc::new(crate::session_status::SessionCounters::default()),
@@ -2206,15 +2233,11 @@ pub(crate) fn hold_guests_kept_at_start(np: &Arc<NativePairing>) {
     }
 }
 
-/// A guest on a "this session" record plays on a seat after the redirect ended the door's own
-/// session. Holds the count until it has played there and left, so the record outlasts the
-/// play and not the redirect. The grace after the last count is the usual one. `landed` is true
-/// for a guest already seen on a seat.
-fn hold_while_on_seat(
-    session: crate::native_pairing::SessionCountGuard,
-    fp: String,
-    mut landed: bool,
-) {
+/// A redirected device plays on a seat after the redirect ended the door's own session. Holds
+/// `session` until it has played there and left: a "this session" record's count, or its place
+/// on a locked profile's list, so either outlasts the play and not the redirect. The grace after
+/// is the usual one. `landed` is true for a device already seen on a seat.
+fn hold_while_on_seat(session: impl Send + 'static, fp: String, mut landed: bool) {
     tokio::spawn(async move {
         let started = std::time::Instant::now();
         let mut heard = started;
