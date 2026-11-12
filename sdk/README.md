@@ -44,7 +44,7 @@ pf.events.on("stream.started", (e) => {
   how `connect()` resolves them, the entry points, and the OpenAPI reference.
 - [Writing plugins](https://docs.punktfunk.unom.io/docs/developers/writing-plugins): run your code
   under the host's plugin runner.
-- [Events & hooks](https://docs.punktfunk.unom.io/docs/automation): every event kind and its fields.
+- [Host events](https://docs.punktfunk.unom.io/docs/host-events): every event kind and its fields.
 - [`examples/`](./examples): runnable scripts, from tailing events to USB passthrough.
 
 ## Development

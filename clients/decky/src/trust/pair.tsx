@@ -1,12 +1,12 @@
 // PIN pairing modal — a gamepad-navigable digit grid (the OSK is unreliable in Gaming Mode).
 // The host displays the PIN after the operator arms pairing; the user enters it here.
 import { DialogButton, Focusable, ModalRoot, Spinner } from "@decky/ui";
-import { toaster } from "@decky/api";
 import { FC, useState } from "react";
-import { pair } from "./backend";
-import { diag } from "./diag";
-import type { HostView } from "./hosts";
-import { rejectText, t } from "./i18n";
+import { pair } from "../backend";
+import { diag } from "../lib/diag";
+import { toast } from "../lib/toast";
+import type { HostView } from "../hosts/model";
+import { rejectText, t } from "../i18n";
 
 /**
  * User-facing copy for a failed ceremony. The CLI's stable exit codes say WHICH failure it was,
@@ -48,7 +48,7 @@ export const PairModal: FC<{
     try {
       const res = await pair(host.addr, host.port, pin, "Steam Deck");
       if (res.ok) {
-        toaster.toast({ title: "Punktfunk", body: t("pair_paired", { host: host.name }) });
+        toast(t("pair_paired", { host: host.name }));
         onPaired();
         closeModal?.();
       } else {
@@ -91,12 +91,15 @@ export const PairModal: FC<{
         </div>
       )}
 
+      {/* X erases a digit from anywhere on the keypad, as ⌫ does. */}
       <Focusable
         style={{
           display: "grid",
           gridTemplateColumns: "repeat(3, 1fr)",
           gap: "0.5em",
         }}
+        onSecondaryButton={() => !busy && back()}
+        onSecondaryActionDescription={t("common_delete")}
       >
         {["1", "2", "3", "4", "5", "6", "7", "8", "9"].map((d) => (
           <DialogButton key={d} disabled={busy} onClick={() => press(d)}>

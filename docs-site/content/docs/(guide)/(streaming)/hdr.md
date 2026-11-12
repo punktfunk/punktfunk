@@ -14,8 +14,7 @@ anything on this page.
 2. **The source delivers 10-bit PQ.** This is the link that fails most — see [Per host](#per-host).
 3. **The codec has a 10-bit path:** HEVC, AV1 or [PyroWave](/docs/pyrowave). H.264 has none, so
    pinning H.264 on the client pins SDR.
-4. **The host GPU encodes 10-bit** for that codec. The host test-opens an encoder once per GPU and
-   codec and believes the answer.
+4. **The host GPU encodes 10-bit** for that codec.
 5. **The client asks for HDR** with its HDR setting — see [Per client](#per-client).
 
 ## Per host
@@ -71,11 +70,9 @@ monitor is in HDR mode, the session streams SDR and says so in the host log.
 
 ### Linux + Hyprland
 
-A virtual display is lit in 10-bit HDR when the client asks for HDR: the host adds
-`bitdepth 10`, `cm hdr`, `supports_hdr` and `supports_wide_color` to the streamed head's
-monitor rule. SDR content inside it starts at **SDR brightness** (the Game Mode setting,
-203 nits). The client panel's volume, when the app sends it, becomes the head's mastering
-target. An older Hyprland that refuses those keys streams SDR until the host restarts.
+A virtual display is lit in 10-bit HDR when the client asks for HDR. SDR content inside it
+starts at **SDR brightness** (the Game Mode setting, 203 nits). A Hyprland too old to light it
+in HDR streams SDR until the host restarts.
 
 HDR needs Hyprland's colour management, which is on by default. With `render:cm_enabled = false`
 the session streams SDR.
@@ -88,27 +85,32 @@ to set on the host.
 SDR. KDE and GNOME's virtual displays capture 8-bit, and so does streaming a physical monitor
 on KDE to a Punktfunk app. No setting changes this.
 
+On Sway and scroll, streaming a physical monitor is HDR when that monitor is in HDR mode, as on
+Hyprland. Their virtual displays are SDR.
+
 ## Per client
 
-HDR is **on by default** in every client and can differ per [preset](/docs/presets-and-links).
-The toggle sits with the other [video settings](/docs/client-settings#video).
+The setting is **10-bit HDR**, **on by default** in every client, and can differ per
+[preset](/docs/presets-and-links). It sits with the other
+[video settings](/docs/client-settings#video).
 
-| Client | Setting | Asks for HDR when |
-|---|---|---|
-| Linux, Steam Deck | **10-bit HDR** | the setting is on. Shows HDR10 where the display offers it, otherwise tone-maps to SDR |
-| Windows | **HDR (10-bit, BT.2020 PQ)** | the setting is on **and** Windows HDR is on for the monitor the stream window is on |
-| macOS, iPhone, iPad | **10-bit HDR** | the setting is on **and** the display is HDR-capable |
-| Apple TV | **10-bit HDR** | the setting is on **and** the TV is HDR-capable. The TV switches to HDR10 only with tvOS **Match Content** on; otherwise the stream is tone-mapped to SDR |
-| Android, Android TV | **HDR** | the setting is on. It is greyed out on a panel without HDR10 |
-| Moonlight | its own HDR toggle | the toggle appears when the host offers a 10-bit codec |
+| Client | Asks for HDR when |
+|---|---|
+| Linux, Steam Deck | the setting is on. Shows HDR10 where the display offers it, otherwise tone-maps to SDR |
+| Windows | the setting is on **and** Windows HDR is on for the monitor the stream window is on |
+| macOS, iPhone, iPad | the setting is on **and** the display is HDR-capable |
+| Apple TV | the setting is on **and** the TV is HDR-capable. The TV switches to HDR10 only with tvOS **Match Content** on; otherwise the stream is tone-mapped to SDR |
+| Android, Android TV | the setting is on. It is greyed out on a panel without HDR10 |
+| Moonlight | its own HDR toggle is on. The toggle appears when the host offers a 10-bit codec |
 
 ## 10-bit SDR
 
 The client's **10-bit SDR** setting asks for a 10-bit stream without HDR.
 
 A Windows 11 24H2 (or later) host composes the virtual display in wide colour for that session,
-and Windows shows it as a 10-bit display. The stream then carries the desktop's own bits past 8,
-wherever a game or app renders them. Composing in wide colour costs some GPU time.
+at some GPU cost, and Windows shows it as a 10-bit display. A gamescope session on
+`punktfunk-gamescope` `+pfhdr26` or newer captures 10-bit SDR too. The stream then carries the
+desktop's own bits past 8, wherever a game or app renders them.
 
 Other desktops hand the host only 8 bits of SDR, so the host could only widen each frame:
 smoother gradients after the encoder, one more colour pass on the GPU, no detail the desktop
@@ -178,4 +180,4 @@ list executables in `PF_VKHDR_EXCLUDE=foo.exe,bar.exe`. D3D11 and D3D12 games do
 ### An HDR stream is green on a Windows client with an AMD GPU
 
 AMD drivers older than AMD Software 25.9.1 draw HDR wrong on the Vulkan decoder; the client warns
-about it. Update the driver, or set **Video decoder** to **Hardware (Direct3D 11 / DXVA)**.
+about it. Update the driver, or set **Video decoder** to **Direct3D 11**.

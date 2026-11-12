@@ -45,15 +45,13 @@ An empty plugin panel: see
 ## Login password
 
 The guided installer asks whether to generate a password or take yours, and the Windows wizard shows
-its password on the last page. A silent or winget install shows nothing.
-
-The password file is readable only until your first sign-in; the console then keeps a salted hash.
-To read it before that, or reset it after, see [Forgot your Password?](/docs/forgot-password).
+its password on the last page. A silent or winget install shows nothing. To read or reset it, see
+[Forgot your Password?](/docs/forgot-password).
 
 ## Arm pairing
 
-The host requires PIN pairing. Open **Devices** → **Pair a device**, and enter the 4-digit PIN it
-shows on your [client](/docs/clients). A device that already tried to connect waits under
+Open **Devices** → **Pair a device**, enter your console password and click **Show PIN**. Type the
+4-digit PIN on your [client](/docs/clients). A device that already tried to connect waits under
 **Waiting for approval**; **Approve** pairs it without a PIN. [Pairing & Trust](/docs/pairing)
 covers access levels and removing devices.
 
@@ -68,7 +66,7 @@ address is its place in the sidebar:
 
 | Page | What you do there |
 |---|---|
-| **Home** | Three sections. **Attention**: health warnings, devices waiting for approval, an audio endpoint that isn't ready. **Now**: one row per session on every desktop, a seat that is starting, and a game left running without a stream; **Stop** ends a session; beside it, request a keyframe, mute it, or change its [access level](/docs/access-levels) or player number, and **Details** holds the stream's numbers. With nothing live, the last session in one line. **Recent**: what the host did lately; **Show all** expands it. With more than one profile, a row starts with the player's picture and name. |
+| **Home** | **This host needs attention**, when something does: health warnings, devices waiting for approval, an audio endpoint that isn't ready. **Now**: one row per session on every desktop, a seat that is starting, and a game left running without a stream; **Stop session** ends a session; beside it, request a keyframe, mute it, or change its [access level](/docs/access-levels) or player number, and **Details** holds the stream's numbers. **Recent sessions**: the last five. **Recent activity**: what the host did lately; **Show all** expands it. |
 | **Profiles** | Who plays on this host: one card per profile with where it plays and when it last did. Add a profile that shares your desktop or has a desktop of its own. Rename, change the picture, or remove one; removing asks for the console password. |
 | **Devices** | One list: devices waiting for approval first, then every paired device with its access, display settings and whether it is streaming. **Pair a device** shows a PIN; with GameStream on, its second step takes a [Moonlight](/docs/moonlight) client's PIN. A row edits access or display settings, renames a Moonlight device, or unpairs. Approving shows the profile a device asks to play as. |
 | **Displays** | What happens to your screens when a device connects: the map with a ghost of the next device's screen, **Screens** (every monitor and streamed screen, with **Release** on a kept one), the presets, and **Advanced**. With seats on, **Other desktops** lists each seat's desktop. See [Virtual displays](/docs/virtual-displays). |

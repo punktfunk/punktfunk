@@ -30,15 +30,21 @@ Send a bearer token as `Authorization: Bearer <token>`. Which token decides what
 | Plugin token | `<config>/plugin-token`, minted while the plugin runner is installed | loopback | the plugin allowlist: status, library, sessions, displays, events, plugin registration. Not hooks, pairing admin, host logs, the plugin store or updates |
 | Per-plugin token | handed to each plugin by the runner | loopback | the plugin allowlist, and only its own registration and library provider |
 | Tray token | `<config>/tray-token`, minted fresh at every start; every local account but a seat's may read it | loopback | `GET /local/summary` and nothing else |
-| Paired device | a paired client certificate over mTLS, or a browser's device-key token | anywhere | `GET` host, status, compositors, actions and library; the profile list and pictures, and waking a profile's seat; log upload; invoking an action it holds the grant for |
+| Paired device | a paired client certificate over mTLS, or a browser's device-key token | anywhere | `GET` host, status, compositors, actions, display targets and library; the profile list and pictures, waking a profile's seat and a profile's unlock challenge; picking its own screen; installing, pausing and removing a library title; ending its own game; log upload; invoking an action it holds the grant for |
 
 The token files hold one `KEY=<hex>` line (`PUNKTFUNK_MGMT_TOKEN=…`, `PUNKTFUNK_TRAY_TOKEN=…`),
 so a shell or a systemd `EnvironmentFile` can source them. Send only the value after `=`. The
 admin file is owner-only: your user on Linux, Administrators on Windows. To pin a token of your
 own, see `PUNKTFUNK_MGMT_TOKEN` in [Configuration](/docs/configuration).
 
-`GET /api/v1/health`, the spec and the reference UI need no credential. Errors come back as
-`{"error": "<message>"}` with the HTTP status.
+`GET /api/v1/health`, `GET /api/v1/webtransport`, the device-key exchange
+(`POST /api/v1/auth/device/challenge` and `/token`), the spec and the reference UI need no
+credential. The open and paired-device routes are listed in
+`crates/core/punktfunk-core/src/mgmt_routes.rs`, the plugin allowlist in `plugin_may_access`
+(`crates/host/punktfunk-host/src/mgmt/auth.rs`).
+
+Errors come back as `{"error": "<message>"}` with the HTTP status. A message written for a person
+also carries `code`, naming the host message `apierr_<code>`, and the `params` it is worded with.
 
 ## A first call
 
@@ -65,7 +71,7 @@ the token and certificate for you.
 ## Events
 
 `GET /api/v1/events` is a Server-Sent Events stream of host lifecycle events: clients, sessions,
-streams, pairing, displays, library, updates. [Events & hooks](/docs/automation) has the event
+streams, pairing, displays, library, updates. [Host events](/docs/host-events) has the event
 catalogue, the frame format, resume with `Last-Event-ID`, and the `?kinds=` filter.
 
 ## TypeScript SDK
@@ -138,7 +144,9 @@ Handlers live in `crates/host/punktfunk-host/src/mgmt/`. Annotate a new handler 
    `every_route_is_classified_for_the_plugin_and_cert_lanes` (`mgmt/tests/routes.rs`), and to
    `plugin_may_access` in `mgmt/auth.rs` or `paired_may_access` in `punktfunk-core`'s
    `mgmt_routes.rs` if that lane may call it. The browser client's page server relays by the
-   second. An unclassified route fails the test.
+   second. Then give it a side on a [door](/docs/developers/multi-seat-contract#the-owners-row-and-the-door):
+   a row in `every_route_has_a_side_on_the_door` in the same file, and an entry in `DOOR`
+   (`mgmt/owner.rs`) if the door answers it itself. An unclassified route fails either test.
 2. Regenerate the spec and every copy of it:
 
    ```sh

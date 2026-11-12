@@ -1,6 +1,11 @@
 # Shown on the "new issue" chooser so security reports go to the private channel, not a public issue.
 blank_issues_enabled: true
 contact_links:
+  - name: 🐛 Report a bug or suggest an idea on improve unom
+    url: https://improve.unom.io/p/punktfunk
+    about: >-
+      Bugs are reported, voted on and followed on improve unom, and the roadmap is there too. A bug
+      posted there gets its issue here by itself.
   - name: 🔒 Report a security vulnerability
     url: https://git.unom.io/unom/punktfunk/src/branch/main/SECURITY.md
     about: >-

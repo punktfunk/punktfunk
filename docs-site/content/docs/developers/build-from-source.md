@@ -51,9 +51,9 @@ then run `packaging/rpm/build-rpm.sh` inside it.
 
 ### Arch (PKGBUILD)
 
-The split `PKGBUILD` in `packaging/arch/` builds `punktfunk-host` and `punktfunk-client`. Set
-`PF_WITH_WEB=1` to also build `punktfunk-web` and `PF_WITH_SCRIPTING=1` for `punktfunk-scripting`
-(both need `bun`):
+The split `PKGBUILD` in `packaging/arch/` builds `punktfunk-host`, `punktfunk-client` and
+`punktfunk-seats`. Set `PF_WITH_WEB=1` to also build `punktfunk-web` and `PF_WITH_SCRIPTING=1` for
+`punktfunk-scripting` (both need `bun`):
 
 ```sh
 git clone https://git.unom.io/unom/punktfunk.git && cd punktfunk/packaging/arch
@@ -110,7 +110,7 @@ cargo build --release -p punktfunk-client-linux -p punktfunk-client-session -p p
 target/release/punktfunk-client
 ```
 
-It needs GTK 4.16+, libadwaita 1.5+ and SDL3. The shell starts `punktfunk-session` from beside
+It needs GTK 4.20+, libadwaita 1.8+ and SDL3. The shell starts `punktfunk-session` from beside
 itself, so build both. More:
 [clients/linux](https://git.unom.io/unom/punktfunk/src/branch/main/clients/linux/README.md).
 
@@ -122,10 +122,13 @@ Install the MSVC toolchain, CMake and LLVM (libclang). In PowerShell, keep the t
 $env:CARGO_TARGET_DIR = 'C:\t'
 cargo build --release -p punktfunk-host --features nvenc,qsv
 cargo build --release -p punktfunk-tray
+cargo build --release -p punktfunk-capture-worker
+cargo build --release --manifest-path crates/host/pf-seat-keeper/Cargo.toml
 cargo build --release -p punktfunk-client-windows -p punktfunk-client-session -p punktfunk-cli
 ```
 
-`CARGO_HOME` must be an ASCII path; SDL3's build breaks otherwise. Pack the host installer with
+`CARGO_HOME` must be an ASCII path; SDL3's build breaks otherwise. Pack the host installer, which
+needs the tray, capture worker and seat keeper beside the host, with
 `pwsh -File packaging\windows\pack-host-installer.ps1 -Version 0.0.0-dev -TargetDir C:\t\release`
 (`-NoDriver` skips the driver build). More:
 [packaging/windows](https://git.unom.io/unom/punktfunk/src/branch/main/packaging/windows/README.md),
@@ -153,11 +156,11 @@ On a Mac with Xcode 26.5:
 
 ```sh
 rustup target add aarch64-apple-darwin x86_64-apple-darwin
-bash scripts/build-xcframework.sh     # BUILD_IOS=1 / BUILD_TVOS=1 add those slices
+bash scripts/build-xcframework.sh     # BUILD_IOS=1 / BUILD_TVOS=1 / BUILD_VISIONOS=1 add those slices
 cd clients/apple && open Punktfunk.xcodeproj
 ```
 
-tvOS slices build on a pinned nightly with `rust-src`; the script names it. More:
+tvOS and visionOS slices build on a pinned nightly with `rust-src`; the script names it. More:
 [clients/apple](https://git.unom.io/unom/punktfunk/src/branch/main/clients/apple/README.md).
 
 ## Android client
@@ -195,7 +198,9 @@ All three run on [Bun](https://bun.sh). Run `bun install` in the directory first
 | `sdk/` | `bun src/runner-cli.ts` | The runner with your scripts and installed plugins (`--list` shows them) |
 | `docs-site/` | `bun run dev` | This site on `http://localhost:3001/docs` |
 
-`PUNKTFUNK_MGMT_URL` points the console's dev server at another host. More:
+The console's dev server sends every API call with `PUNKTFUNK_MGMT_TOKEN`: set it to the contents of
+the host's `mgmt-token` file, or every call fails. `PUNKTFUNK_MGMT_URL` points it at another host.
+More:
 [web](https://git.unom.io/unom/punktfunk/src/branch/main/web/README.md),
 [sdk](https://git.unom.io/unom/punktfunk/src/branch/main/sdk/README.md),
 [docs-site](https://git.unom.io/unom/punktfunk/src/branch/main/docs-site/README.md).

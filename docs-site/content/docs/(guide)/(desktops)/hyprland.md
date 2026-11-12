@@ -13,10 +13,9 @@ Stream a Hyprland session. Install the host first: [Arch](/docs/arch), [Ubuntu](
   dialog appears.
 - Keyboard and mouse go in through the virtual pointer and keyboard protocols.
 - Library launches open on their own workspace on the streamed output.
-- A reconnect inside the [keep-alive](/docs/virtual-displays#keep-alive) window gets the same
-  output back; `ctl display` lists it. When the output goes, its windows move to a remaining
-  monitor.
+- When the streamed output goes, its windows move to a remaining monitor.
 - A `hyprctl reload` mid-stream keeps the client's mode.
+- HDR, when the client asks for it: see [HDR](/docs/hdr#linux--hyprland).
 
 It needs a running Hyprland session and xdph. If another portal backend (gtk, wlr) is installed
 too, route ScreenCast to xdph in `~/.config/xdg-desktop-portal/hyprland-portals.conf`, then run
@@ -59,11 +58,10 @@ display manager, and enable lingering so the host starts at boot:
 ## Known limits
 
 - The streamed output runs at scale 1.
-- HDR needs Hyprland's colour management, on by default. With `render:cm_enabled = false` the
-  session streams SDR — see [HDR](/docs/hdr#linux--hyprland).
-- Under **exclusive** [topology](/docs/virtual-displays#topology) your monitors come back through
-  `hyprctl reload` when the display is released. That reload also drops runtime `hyprctl keyword`
-  changes and re-runs `exec =` lines. A reload during the stream lights them early.
+- Under **Turn off** in [Your monitors while streaming](/docs/virtual-displays#topology), your
+  monitors come back through `hyprctl reload` when the display is released. That reload also
+  drops runtime `hyprctl keyword` changes and re-runs `exec =` lines. A reload during the stream
+  lights them early.
 
 ## Troubleshooting
 
@@ -77,18 +75,12 @@ Hyprland couldn't allocate a buffer for the headless output; its log shows
 `GBM: Failed to allocate a GBM buffer`. This is a GPU driver or nested-session problem. Run
 Hyprland as a real session and check your driver's GBM support.
 
-### Black stream, and xdph logs "unavailable cursor mode 4"
-
-A host that predates the cursor-mode check asked xdph for a cursor mode it doesn't offer. Update
-the host, or switch the client to **game** [mouse mode](/docs/input#mouse-modes) meanwhile. If the
-pointer misbehaves on an xdph that does offer it, set `PUNKTFUNK_PORTAL_CURSOR_MODE=embedded`.
-
 ### Black frames with `enforce_permissions` on [#permission-system]
 
 Hyprland's permission system (0.49+, off by default) denies screen capture silently: the stream
-shows black frames. The host logs a warning at startup when it's on. Grant `screencopy` to the host
-and to xdph, which the host falls back to, with the paths your packages installed. In
-`hyprland.lua`:
+shows black frames. When it's on, the host logs a warning at its first stream. Grant
+`screencopy` to the host and to xdph, which the host falls back to, with the paths your packages
+installed. In `hyprland.lua`:
 
 ```lua
 hl.permission("/usr/bin/punktfunk-host", "screencopy", "allow")

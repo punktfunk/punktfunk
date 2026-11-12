@@ -37,7 +37,8 @@ const en: Record<string, Message> = Object.assign(
 );
 const src = new URL("../src/", import.meta.url);
 const calls: { file: string; key: string; args: string }[] = [];
-for (const file of readdirSync(src).filter((f) => /\.tsx?$/.test(f) && f !== "i18n.ts")) {
+const sources = readdirSync(src, { recursive: true, encoding: "utf8" });
+for (const file of sources.filter((f) => /\.tsx?$/.test(f) && f !== "i18n.ts")) {
   const code = readFileSync(new URL(file, src), "utf8");
   for (const m of code.matchAll(/\bt\(\s*"([a-z0-9_]+)"(?:,\s*\{([^}]*)\})?/g)) {
     calls.push({ file, key: m[1], args: m[2] ?? "" });

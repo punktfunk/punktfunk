@@ -93,7 +93,7 @@ host enables a disabled one and retries on its own. If it keeps failing:
 
 Meanwhile, stream a real monitor instead: **Stream this monitor** under **Displays** in the
 console, or `PUNKTFUNK_CAPTURE_MONITOR` — see
-[Virtual displays](/docs/virtual-displays#stream-a-real-monitor-instead).
+[Stream a real monitor](/docs/stream-a-monitor).
 
 ### "Allow remote control?" appears, or input does nothing, with `PUNKTFUNK_INPUT_BACKEND=libei`
 

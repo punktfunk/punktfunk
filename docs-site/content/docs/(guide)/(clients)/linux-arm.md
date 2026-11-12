@@ -5,9 +5,8 @@ description: What the Punktfunk app decodes in hardware on ARM Linux devices —
 
 Find what your ARM Linux device decodes in hardware, and what to expect where it can't.
 
-[Install the app](/docs/install-client) as on any Linux system. It needs no ARM-specific setup: it
-asks the device's video decoder what it takes and tells the host, so the host picks a codec the
-device decodes in hardware.
+[Install the app](/docs/install-client) as on any Linux system. It needs no ARM-specific setup: the
+host picks a codec the device decodes in hardware.
 
 ## What decodes where
 
