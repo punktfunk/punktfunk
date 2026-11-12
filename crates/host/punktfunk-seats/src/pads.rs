@@ -16,6 +16,7 @@ use anyhow::Context as _;
 use pf_inject::pad_broker::{self, BrokeredPad, PadKind, Request, Status};
 use pf_inject::usbip;
 use pf_inject::usbip_relay::Hello;
+use pf_seats::linux::fence::vouch::{self, Vouch};
 use pf_seats::linux::{socket, LinuxBackend};
 use pf_seats::SeatService;
 use rustix::net::Shutdown;
@@ -161,9 +162,9 @@ pub fn revoke(account: &str) {
     }
 }
 
-/// Relays again every pad systemd kept across a supervisor restart, and watches again every
-/// served USB socket. The other kept fds are the caller's. First thing at start: until then
-/// the kept fds would leak into a child.
+/// Relays again every pad systemd kept across a supervisor restart, a uinput pad recorded for
+/// the fence again ([`vouch_kept`]), and watches again every served USB socket. The other kept
+/// fds are the caller's. First thing at start: until then the kept fds would leak into a child.
 pub fn resume() -> Vec<(String, OwnedFd)> {
     let _ = std::fs::remove_dir_all(RELAYED);
     let pad_broker::Kept {
@@ -182,10 +183,12 @@ pub fn resume() -> Vec<(String, OwnedFd)> {
             index = kept.index,
             "seat pad kept across a restart"
         );
+        let vouch = vouch_kept(&kept);
         let spawned = std::thread::Builder::new()
             .name("seat-pad".into())
             .spawn(move || {
                 let _slot = slot;
+                let _vouch = vouch;
                 run_relay(
                     &kept.name,
                     &kept.account,
@@ -415,7 +418,7 @@ fn answer(stream: &UnixStream, account: &str, status: Status) {
     }
 }
 
-/// A uinput or uhid pad, relayed until the seat hangs up.
+/// A uinput or uhid pad, recorded for the fence and relayed until the seat hangs up.
 fn create(stream: UnixStream, account: &str, kind: PadKind, index: u8) {
     let Some(_slot) = Slot::take(&HELD, account, MAX_PER_SEAT) else {
         tracing::warn!(
@@ -426,8 +429,8 @@ fn create(stream: UnixStream, account: &str, kind: PadKind, index: u8) {
         answer(&stream, account, Status::Capacity);
         return;
     };
-    let pad = match pad_broker::build(kind, index, account) {
-        Ok(pad) => pad,
+    let (pad, _vouch) = match build_vouched(kind, index, account) {
+        Ok(built) => built,
         Err(error) => {
             tracing::warn!(error = %format!("{error:#}"), account, pad = kind.label(),
                 "seat pad not made");
@@ -453,6 +456,38 @@ fn create(stream: UnixStream, account: &str, kind: PadKind, index: u8) {
     let name = pad_broker::store_name(kind, index, account);
     pad_broker::keep(&name, &pad, &ours);
     run_relay(&name, account, kind, index, pad, ours);
+}
+
+/// `kind` built for `account`, with the record that vouches for it to the udev fence: a uhid
+/// pad's written under its stamp's token before the pad exists, a uinput pad's once the kernel
+/// names it. Drop the record after the pad.
+fn build_vouched(kind: PadKind, index: u8, account: &str) -> anyhow::Result<(BrokeredPad, Vouch)> {
+    let mut vouch =
+        Vouch::new(Path::new(vouch::DIR), account, !kind.is_uinput()).context("record the pad")?;
+    let pad = pad_broker::build(kind, index, vouch.mark())?;
+    if let Some(name) = pad.sysname() {
+        vouch.made(&name?).context("record the pad")?;
+    }
+    Ok((pad, vouch))
+}
+
+/// A kept uinput pad's record, written again from its own fd: the supervisor that made it may
+/// have written none. A uhid pad keeps the record it was made with.
+fn vouch_kept(kept: &pad_broker::KeptPad) -> Option<Vouch> {
+    let name = kept.pad.sysname()?;
+    let vouched = name.and_then(|name| {
+        let mut vouch = Vouch::new(Path::new(vouch::DIR), &kept.account, false)?;
+        vouch.made(&name)?;
+        Ok(vouch)
+    });
+    match vouched {
+        Ok(vouch) => Some(vouch),
+        Err(error) => {
+            tracing::warn!(error = %format!("{error:#}"), account = kept.account,
+                "kept seat pad not recorded: the fence refuses it");
+            None
+        }
+    }
 }
 
 /// A seat's USB device, served by a pad server of its own: the device, its descriptors and
