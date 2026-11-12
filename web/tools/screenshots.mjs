@@ -125,6 +125,17 @@ async function main() {
 			await page.goto(url, { waitUntil: "networkidle", timeout: 30_000 });
 			// Story root mounted with real content.
 			await page.waitForSelector("#storybook-root > *", { timeout: 20_000 });
+			// The story's play function has run to its end: a menu it opens has settled.
+			await page
+				.waitForFunction(
+					() =>
+						["finished", "errored", "aborted"].includes(
+							window.__STORYBOOK_PREVIEW__?.currentRender?.phase,
+						),
+					null,
+					{ timeout: 10_000 },
+				)
+				.catch(() => {});
 			// Web fonts settled (else text reflows / falls back in the shot).
 			await page.evaluate(() => document.fonts.ready);
 			// Recharts mounts behind a client-only guard — wait for the SVG if present.

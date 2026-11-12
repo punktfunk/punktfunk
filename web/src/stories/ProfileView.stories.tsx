@@ -296,6 +296,9 @@ export const PickList: Story = {
 		});
 		title.focus();
 		await userEvent.keyboard("{ArrowDown}");
+		// The menu fades in; the story ends once it is opaque.
+		const menu = await within(document.body).findByRole("listbox");
+		await Promise.all(menu.getAnimations().map((a) => a.finished));
 	},
 };
 
