@@ -88,12 +88,15 @@ shoot_macos() {
   # pixels — SwiftUI has no release-only visuals. xcodebuild, not `swift build`: SwiftPM copies
   # asset catalogs uncompiled, which blanks every OS mark and launcher icon.
   require_xcode
-  log "macOS — building (xcodebuild PunktfunkClient)…"
+  # The app target, not the package's `PunktfunkClient` executable: that one records SDK 14 in
+  # its binary, and macOS then draws it with the window chrome of that release.
+  log "macOS — building (xcodebuild Punktfunk)…"
   local dd="${PF_SHOT_DERIVED_DATA:-$APPLE_DIR/.build/shots-macos}"
-  xcodebuild -project Punktfunk.xcodeproj -scheme PunktfunkClient -configuration Debug \
-    -destination platform=macOS -derivedDataPath "$dd" CODE_SIGNING_ALLOWED=NO build >/dev/null \
+  xcodebuild -project Punktfunk.xcodeproj -scheme Punktfunk -configuration Debug \
+    -destination platform=macOS -derivedDataPath "$dd" -skipMacroValidation \
+    CODE_SIGNING_ALLOWED=NO build >/dev/null \
     || die "macOS: xcodebuild failed"
-  local bin="$dd/Build/Products/Debug/PunktfunkClient"
+  local bin="$dd/Build/Products/Debug/Punktfunk.app/Contents/MacOS/Punktfunk"
   [ -x "$bin" ] || die "build produced no $bin"
 
   for scene in "${SCENES[@]}"; do
