@@ -108,6 +108,10 @@ paired, gets that level. What narrows it:
 - **Locked secrets.** The management token, the host identity key and the console password are
   readable by Administrators and SYSTEM only.
 
+The web console runs as `LocalSystem` too, so a flaw in it would give an attacker that level. It
+already refuses the internet, and `PUNKTFUNK_UI_BIND=127.0.0.1` keeps it on the host machine
+([above](#what-protects-you)).
+
 None of this stops an attacker who is already an administrator — they own the machine anyway. A
 virtual display is also a real monitor: any process in your session can capture it like a physical
 one. The host streams the composed desktop, so a window hidden from recording tools
@@ -118,8 +122,8 @@ password vault.
 
 ### The Linux host runs as your user
 
-The Linux host runs in your desktop session as your own account, not root, so a compromise is
-scoped to that user.
+The Linux host runs in your desktop session as your own account, not root, and its web console
+runs as that account too, so a compromise is scoped to that user.
 
 ### Linux seats share your games
 
