@@ -62,8 +62,13 @@ There are no accounts and no cloud. Trust is set up device to device, then pinne
 `serve --open` turns required pairing off: the host advertises `pair=optional` and accepts unpaired
 clients. Clients then offer **trust-on-first-use** (TOFU): the first connect shows the host's
 fingerprint, you compare it with the one the host logs at startup, and the client pins it. TOFU
-can't catch an impostor on that first connect; PIN pairing can. Clients never offer TOFU to a host
-that requires pairing, to one typed in by hand, or to one whose policy is unknown.
+can't catch an impostor on that first connect; PIN pairing can. Clients never connect this way to
+a host that requires pairing, to one typed in by hand, or to one whose policy is unknown.
+
+**Request access** proves less than a PIN. Approving a request admits the device to the host, but
+nothing proves to the device that it reached your host: it trusts the fingerprint it found on the
+network, and for an address typed in by hand, some clients trust whichever machine answers there.
+To be sure of the host, pair with a PIN.
 
 ### GameStream / Moonlight compatibility is the weak-crypto path
 
