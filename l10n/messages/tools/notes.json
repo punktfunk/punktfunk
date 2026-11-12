@@ -216,6 +216,8 @@
 	"setup_win_files_locked": "Warning in an uninstall. {count}: how many files were in use; {dir}: the folder; {names}: their file names.",
 	"setup_win_files_locked_by_hand": "Warning in an uninstall when the folder itself could not be queued. {count}, {dir}, {names} as in setup_win_files_locked.",
 	"setup_win_app_runtime_failed": "Warning in a client install. {url}: Microsoft's download link.",
+	"setup_win_data_dir_failed": "Setup stops with this. {dir}: the folder Punktfunk keeps its settings in; {cause}: why, in English.",
+	"setup_win_install_dir_failed": "Setup stops with this. {dir}: the folder picked for the install; {cause}: why, in English.",
 	"wizard_step_welcome": "Step of the Windows installer, in the stepper and as the page heading.",
 	"wizard_step_configure": "Step of the Windows installer: the settings page.",
 	"wizard_step_network": "Step of the Windows installer: the network category question.",
