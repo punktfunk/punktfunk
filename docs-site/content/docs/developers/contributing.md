@@ -6,9 +6,11 @@ description: Get a change merged — hooks, the local pass, draft pull requests,
 How a change gets from your clone into `main`: the hooks, the local pass, the pull request and the
 CI lanes it runs.
 
-Talk a new feature or design through with the maintainer first, for example on
-[Discord](https://discord.gg/wzEGg9y45z), before you open an issue or a pull request; the tracker
-holds bugs and agreed work. A new
+Talk a new feature or design through with the maintainer first, on
+[Discord](https://discord.gg/wzEGg9y45z) or as an idea on
+[improve unom](https://improve.unom.io/p/punktfunk), before you open an issue or a pull request;
+the tracker holds bugs and agreed work. A bug reported on improve unom gets its tracker issue by
+itself ([Reporting an Issue](/docs/report-an-issue)). A new
 player-facing setting needs the maintainer's yes first
 ([docs/settings.md](https://git.unom.io/unom/punktfunk/src/branch/main/docs/settings.md)).
 Security reports go to **security@punktfunk.com**, never to an issue.

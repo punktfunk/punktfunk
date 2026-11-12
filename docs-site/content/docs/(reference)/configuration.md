@@ -205,7 +205,7 @@ Env-only additions to the **Game Mode** rows above. See [gamescope](/docs/gamesc
 | `PUNKTFUNK_STREAM_SINK` | unset · `stream` · `0` | Linux: where desktop audio is captured. Unset, the host creates **Punktfunk Stream Speaker**, makes it the default while streaming and records it. `stream` uses a capture stream in its place; `0` records your current default output. |
 | `PUNKTFUNK_MIC_DEVICE` | name substring | Windows: the device the client's microphone is routed to. |
 | `PUNKTFUNK_LOOPBACK_DEVICE` | name substring | Windows: the output device desktop audio is captured from, in place of the host's own pick. `follow_default` captures the default output instead. |
-| `PUNKTFUNK_MIC_LEGACY_BUFFER` | `1` | Fixed microphone buffering instead of the adaptive one. If the mic only sounds right with this set, report it. |
+| `PUNKTFUNK_MIC_LEGACY_BUFFER` | `1` | Fixed microphone buffering instead of the adaptive one. If the mic only sounds right with this set, [report it](/docs/report-an-issue). |
 | `PUNKTFUNK_NO_MIC_INSTALL` | `1` | Windows: don't install the virtual microphone. |
 | `PUNKTFUNK_NO_AUDIO_MINT` | `1` | Windows: don't create the host's own audio endpoints from Steam's streaming-audio driver; pick devices by name instead. |
 

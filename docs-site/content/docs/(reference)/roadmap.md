@@ -3,9 +3,14 @@ title: "Roadmap"
 description: "Where Punktfunk is heading: what is being worked on, what comes next, and what is not planned."
 ---
 
-What the project is working on and what comes after it. Nothing under **Working on now** or
-**Next** has shipped. For what works today, see the [Support matrix](/docs/support-matrix); for
-what changed, the [release notes](https://git.unom.io/unom/punktfunk/releases).
+What the project is working on and what comes after it. The live roadmap is on
+[improve unom](https://improve.unom.io/p/punktfunk/roadmap): the ideas that are planned, being
+built or already shipped, with their votes. Vote there for what you want, or post an idea of your
+own.
+
+This page is the overview. Nothing under **Working on now** or **Next** has shipped. For what
+works today, see the [Support matrix](/docs/support-matrix); for what changed, the
+[release notes](https://git.unom.io/unom/punktfunk/releases).
 
 ## Working on now
 

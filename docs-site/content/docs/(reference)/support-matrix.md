@@ -415,7 +415,7 @@ SteamOS.
   and no probe would catch it failing.
 - **Touch input from a Windows client** — the same code as Linux, not run on a Windows touchscreen.
 - **Re-applying your resolution after an Omarchy theme switch** — unit-tested, not tried during a
-  live stream. If a theme switch costs you your resolution, report it.
+  live stream. If a theme switch costs you your resolution, [report it](/docs/report-an-issue).
 - **`client-webos` and the browser client** — separate repositories.
 - **Moonlight's client-side features** — Wake-on-LAN, overlays and updates differ per Moonlight app.
 
