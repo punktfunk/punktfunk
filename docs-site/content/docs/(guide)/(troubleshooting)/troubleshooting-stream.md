@@ -55,12 +55,12 @@ The virtual display driver isn't answering, isn't installed, or doesn't match th
 ### Stutter while NVIDIA Instant Replay is on (Windows)
 
 Instant Replay is a second encoder on the same NVENC engine, and NVENC has no priority: the stream's
-frames wait behind its frames. Any streamer stutters the same way. The console's **Troubleshooting**
-page shows it under **Video encoder sharing**.
+frames wait behind its frames. The console's **Troubleshooting** page shows it under **Video
+encoder sharing**.
 
 - By default the host pauses Instant Replay once a stream falls behind while another app encodes,
-  and turns it back on when the last stream ends. **Host → Pause Instant Replay**: `on`
-  pauses it for every stream, `off` leaves it alone.
+  and turns it back on when the last stream ends. **Host → Pause Instant Replay**: **On**
+  pauses it for every stream, **Off** leaves it alone.
 - Or press Alt+Shift+F10 before you connect, or turn it off in the NVIDIA App overlay.
 
 ### The picture freezes for a moment, over and over (Windows)
