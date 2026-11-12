@@ -137,9 +137,9 @@ Desktop) and rewrites them on every connect.
 | Variable | Values | What it does |
 |---|---|---|
 | `PUNKTFUNK_COMPOSITOR` | `kwin` · `mutter` · `gamescope` · `wlroots` · `hyprland` · `niri` · `umbriel` (also `kde`, `plasma`, `gnome`, `sway`, `wlr`, `river`, `hypr`, `biri`) | Pins the virtual-display backend and turns session following off, so a Game Mode ↔ Desktop switch ends the stream. For single-purpose appliances only. |
-| `PUNKTFUNK_INPUT_BACKEND` | `libei` · `kwin` · `gamescope` · `wlr` | Pins input injection. Detected with the compositor; an unknown value is ignored. |
+| `PUNKTFUNK_INPUT_BACKEND` | `libei` · `kwin` · `gamescope` · `wlr` · `wlr-layout` (Umbriel) | Pins input injection. Detected with the compositor; an unknown value is ignored. |
 | `PUNKTFUNK_VIDEO_SOURCE` | `virtual` (default) · `portal` | Moonlight sessions only: `portal` streams an existing monitor, which the GNOME 50+ HDR mirror needs — see [HDR](/docs/hdr#linux--gnome). |
-| `PUNKTFUNK_CAPTURE_MONITOR` | connector name, e.g. `DP-2`; on Windows the display name, e.g. `\\.\DISPLAY1` | Linux and Windows: stream this physical monitor instead of a virtual display, overriding the console. `punktfunk-host list-monitors` lists the names; one that matches nothing fails the session. See [Virtual displays](/docs/virtual-displays#stream-a-real-monitor-instead). |
+| `PUNKTFUNK_CAPTURE_MONITOR` | connector name, e.g. `DP-2`; on Windows the display name, e.g. `\\.\DISPLAY1` | Linux and Windows: stream this physical monitor instead of a virtual display, overriding the console. On Linux, `punktfunk-host list-monitors` lists the names; one that matches nothing fails the session. See [Virtual displays](/docs/virtual-displays#stream-a-real-monitor-instead). |
 | `PUNKTFUNK_MONITOR_LINGER_MS` | ms | Keep a client's virtual display this long after it disconnects. Unset, the display is removed at once. **After a device disconnects** in [Virtual displays](/docs/virtual-displays#keep-alive) supersedes it. |
 | `PUNKTFUNK_ZEROCOPY` | `1` · `0` | Linux: zero-copy capture to encode, on by default with a CPU fallback. `0` forces the CPU path; `1` turns a failed zero-copy setup into an error. |
 | `PUNKTFUNK_RENDER_NODE` | path, e.g. `/dev/dri/renderD129` | Linux: the GPU to capture and encode on (default `/dev/dri/renderD128`). A GPU picked under **Host → GPUs** wins. |

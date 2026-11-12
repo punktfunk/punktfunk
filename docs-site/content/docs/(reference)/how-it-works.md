@@ -23,7 +23,7 @@ own mode.
 | **[sway, scroll](/docs/sway)** | A headless output added over the compositor's IPC |
 | **Windows** | Punktfunk's own display driver, which also shows the secure desktop (UAC, lock screen) |
 
-On Linux you can stream one of your real monitors instead — see
+You can stream one of your real monitors instead — see
 [Virtual displays](/docs/virtual-displays#stream-a-real-monitor-instead).
 
 ## From screen to wire
@@ -37,10 +37,11 @@ Captured frames stay on the GPU all the way into the encoder. Which encoder runs
 | **Intel** | Vulkan Video for HEVC and AV1, VAAPI for H.264 | QSV |
 | **Other** | Software H.264, only if you set `PUNKTFUNK_ENCODER=software` | Media Foundation |
 
-Client and host then agree on a codec: **HEVC** unless the client asks for another, **AV1** where
-both sides support it, **H.264** on the software encoder, and **[PyroWave](/docs/pyrowave)** when
-you pick it on a wired link. **[HDR](/docs/hdr)** works where the host's capture, its encoder and
-your client all support it. The full breakdown is in the [Support matrix](/docs/support-matrix).
+Client and host then agree on a codec: the one the client asks for if the host can encode it,
+otherwise **HEVC**, then **AV1**, then **H.264**, the software encoder's only codec.
+**[PyroWave](/docs/pyrowave)** runs when you pick it, on a wired link. **[HDR](/docs/hdr)** works
+where the host's capture, its encoder and your client all support it. The full breakdown is in the
+[Support matrix](/docs/support-matrix).
 
 ## Two protocols
 
