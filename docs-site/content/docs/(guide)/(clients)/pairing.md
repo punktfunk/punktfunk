@@ -17,6 +17,9 @@ its own after that. There are no accounts and nothing leaves your network.
 
 **Deny** only dismisses the request; the device can ask again. Requests expire after 10 minutes.
 
+**Request access** is offered for a host the device found on your network or opened from a
+[link](/docs/presets-and-links). A host added by its address pairs with a PIN.
+
 ## Pair with a PIN
 
 1. In the console, open **Devices**, click **Pair a device**, enter your console password and

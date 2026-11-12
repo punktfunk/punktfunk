@@ -79,8 +79,8 @@ Forward UDP `9777` to the host. **Never forward `47990`, `47992` or `9778`**: th
 management API, the web console and browser streaming.
 
 Send your friend a [link](/docs/presets-and-links), not a bare address, so their first connect
-checks the host's identity. Copy the **Deep link** from **Host** → **Connect a device** and swap
-in your public address:
+checks the host's identity. A device that was only given the address can't ask for access. Copy
+the **Deep link** from **Host** → **Connect a device** and swap in your public address:
 
 ```
 punktfunk://connect/<id>?host=203.0.113.5&fp=<64 hex>
