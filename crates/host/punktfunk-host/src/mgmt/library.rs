@@ -25,9 +25,11 @@ use sha2::{Digest, Sha256};
 /// A seat host reading the box's library ([`pf_paths::seat::box_library_dir`], `box_library`)
 /// changes none of it: every write under `/api/v1/library` answers 409, but the custom-entry
 /// writes, which land in its own titles ([`crate::library::keeps_own_titles`]). The box host is
-/// the library's one writer. On a person's own account only that person's lane writes them.
+/// the library's one writer. On a person's own account only that person's lane writes them, and
+/// every other lane is told so where `person_lane` is open.
 pub(super) async fn box_library_is_read_only(
     box_library: bool,
+    person_lane: bool,
     req: Request,
     next: Next,
 ) -> Response {
@@ -37,12 +39,20 @@ pub(super) async fn box_library_is_read_only(
     let write = !matches!(*req.method(), Method::GET | Method::HEAD);
     let person = req.extensions().get::<AuthLane>() == Some(&AuthLane::Person);
     if custom && write && pf_paths::seat::own_account() && !person {
-        return api_error_coded(
-            StatusCode::FORBIDDEN,
-            "library_own_account",
-            "Games can't be added to a profile that uses an existing account, because they would \
-             run as that person.",
-        );
+        let (code, why) = if person_lane {
+            (
+                "library_own_account_person",
+                "Games only for a profile that uses an existing account are added by that \
+                 person, from their own desktop.",
+            )
+        } else {
+            (
+                "library_own_account",
+                "Games can't be added to a profile that uses an existing account, because they \
+                 would run as that person.",
+            )
+        };
+        return api_error_coded(StatusCode::FORBIDDEN, code, why);
     }
     let own = custom && crate::library::keeps_own_titles();
     if box_library && library && write && !own {

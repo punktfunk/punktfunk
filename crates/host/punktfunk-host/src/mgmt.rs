@@ -408,6 +408,7 @@ fn app(
         person,
         person_refusals: Default::default(),
     });
+    let person_lane = shared.person.is_some();
     let (api_routes, api) = api_router_parts();
     // Auth, then the door's pass-on, then the library guard and a person's own Linux account: a
     // caller without a credential gets 401, only the lane auth stamped is passed on, and a
@@ -415,7 +416,7 @@ fn app(
     let routed = api_routes
         .route_layer(middleware::from_fn(own_account::gate))
         .route_layer(middleware::from_fn(move |req: Request, next: Next| {
-            library::box_library_is_read_only(box_library, req, next)
+            library::box_library_is_read_only(box_library, person_lane, req, next)
         }))
         .route_layer(middleware::from_fn_with_state(
             shared.clone(),

@@ -306,13 +306,13 @@ async fn the_person_s_own_lane_writes_and_runs_only_what_it_wrote() {
     let token = grant["token"].as_str().unwrap().to_string();
     let person = |req| with_bearer(req, &token);
 
-    // Hooks: the person's hold runs; the console sets none and reads none of theirs.
+    // Hooks: the person's hold runs; the console sets none, told who does, and reads none.
     let hooks = json!({"hooks": [{"on": "game.launching", "run": "true", "hold": true}]});
     let put = || json_req(Method::PUT, "/api/v1/hooks", hooks.clone());
     let (status, why) = send(&app, put()).await;
     assert_eq!(
         (status, &why["code"]),
-        (StatusCode::FORBIDDEN, &json!("hooks_own_account"))
+        (StatusCode::FORBIDDEN, &json!("hooks_own_account_person"))
     );
     assert_eq!(send(&app, person(put())).await.0, StatusCode::OK);
     let stored = std::fs::read_to_string(config.join("hooks.json")).unwrap();
@@ -360,7 +360,7 @@ async fn the_person_s_own_lane_writes_and_runs_only_what_it_wrote() {
     let (status, why) = send(&app, add()).await;
     assert_eq!(
         (status, &why["code"]),
-        (StatusCode::FORBIDDEN, &json!("library_own_account"))
+        (StatusCode::FORBIDDEN, &json!("library_own_account_person"))
     );
     let (status, added) = send(&app, person(add())).await;
     assert_eq!(status, StatusCode::CREATED, "{added}");

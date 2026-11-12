@@ -271,16 +271,16 @@ session by design, and display activation fails while its session is inactive.
   `library.json` in its own config directory. The custom-entry routes write there on a seat host,
   under `own:<12 hex>` ids the box never mints; a write naming any other id answers 409. On a
   person's own account only [their own session](#the-persons-own-session) writes one; any other
-  lane answers 403 `library_own_account`. Its list carries them on
-  top of its profile's view, marked `own`, and they launch, run `prep` and serve art as the seat's
-  user, past the rules for what a seat lists of the box's. `GET library/own` answers each one's
-  id, title, platform and `http(s)` art, never how it starts. The box asks for that when a seat's
-  host comes up and on each `library.changed` the seat sends, and stores it through
-  `PUT library/own?as=<profile id>` on the host that writes the library: the owner's host behind a
-  door, the box host on Windows. It keeps it as `own-titles.json` in the profile's layer, under
-  the profile the seat belongs to, dropping a row with a bad id or title and a cover or platform
-  it would not store; an answer that isn't a list, lists more than 500 or repeats an id leaves
-  the stored titles as they were. `?as=` and the door's answer to a device list those rows,
+  lane answers 403 `library_own_account_person`, or `library_own_account` where that lane is
+  closed. Its list carries them on top of its profile's view, marked `own`, and they launch, run
+  `prep` and serve art as the seat's user, past the rules for what a seat lists of the box's.
+  `GET library/own` answers each one's id, title, platform and `http(s)` art, never how it
+  starts. The box asks for that when a seat's host comes up and on each `library.changed` the
+  seat sends, and stores it through `PUT library/own?as=<profile id>` on the host that writes the
+  library: the owner's host behind a door, the box host on Windows. It keeps it as
+  `own-titles.json` in the profile's layer, under the profile the seat belongs to, dropping a row
+  with a bad id or title and a cover or platform it would not store; an answer that isn't a list,
+  lists more than 500 or repeats an id leaves the stored titles as they were. `?as=` and the door's answer to a device list those rows,
   marked `own`, with no launch: the box refuses to start one with the sentence a title gets that
   this desktop can't start.
 - **Not a host of its own to clients.** A seat host never advertises over mDNS, whatever
@@ -799,9 +799,10 @@ reaches this lane.
   device's person.
 - **What only it writes, on a person's own account.** `PUT hooks` and the custom-entry writes.
   The host marks each with `person: true`, and runs only hooks and lists only own titles so
-  marked: a file planted without the mark runs nothing. A `prep` step runs only when an own title the person
-  wrote names it. Any other lane is refused, reads no hooks there, and reads a marked title as
-  404. Plugins and emulators stay refused, emulators with `emulators_own_account_yet`.
+  marked: a file planted without the mark runs nothing. A `prep` step runs only when an own
+  title the person wrote names it. Any other lane is refused, with `hooks_own_account_person` or
+  `library_own_account_person`, reads no hooks there, and reads a marked title as 404. Plugins
+  and emulators stay refused, emulators with `emulators_own_account_yet`.
 
 #### Who opens a person's seat
 

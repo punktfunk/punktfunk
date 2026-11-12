@@ -12,6 +12,14 @@ fn theirs(lane: AuthLane) -> bool {
     !pf_paths::seat::own_account() || lane == AuthLane::Person
 }
 
+/// What any other lane reads where the person's lane is open: the code of its host message
+/// `apierr_<code>`, and its English. Where it is closed, [`crate::hooks::own_account_refusal`].
+const SET_BY_PERSON: (&str, &str) = (
+    "hooks_own_account_person",
+    "Hooks on a profile that uses an existing account are set by that person, from their own \
+     desktop.",
+);
+
 /// Get the hook configuration
 ///
 /// Empty document when none is stored. On a seat host on a person's own account, empty on
@@ -57,12 +65,17 @@ pub(crate) async fn get_hooks(
     )
 )]
 pub(crate) async fn set_hooks(
+    State(st): State<Arc<MgmtState>>,
     Extension(lane): Extension<AuthLane>,
     ApiJson(cfg): ApiJson<crate::hooks::HooksConfig>,
 ) -> Response {
     if !theirs(lane) {
         if let Some(why) = crate::hooks::own_account_refusal() {
-            return api_error_coded(StatusCode::FORBIDDEN, "hooks_own_account", why);
+            let (code, why) = match st.person {
+                Some(_) => SET_BY_PERSON,
+                None => ("hooks_own_account", why),
+            };
+            return api_error_coded(StatusCode::FORBIDDEN, code, why);
         }
     }
     if let Err(e) = cfg.validate() {
