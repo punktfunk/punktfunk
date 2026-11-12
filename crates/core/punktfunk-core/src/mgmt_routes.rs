@@ -17,14 +17,17 @@ pub fn open_route(method: &str, path: &str) -> bool {
     OPEN_ROUTES.contains(&(method, path))
 }
 
-/// `{}` is exactly one segment. Never a prefix test: `/api/v1/plugins/{}` must not swallow
-/// `/api/v1/plugins/x/ui-credential` the way `starts_with` would.
+/// `{}`, or a named `{id}` as the API document spells it, is exactly one segment. Never a prefix
+/// test: `/api/v1/plugins/{}` must not swallow `/api/v1/plugins/x/ui-credential` the way
+/// `starts_with` would.
 pub fn path_matches(pattern: &str, path: &str) -> bool {
     let (mut p, mut a) = (pattern.split('/'), path.split('/'));
     loop {
         match (p.next(), a.next()) {
             (None, None) => return true,
-            (Some(pe), Some(ae)) if pe == "{}" || pe == ae => continue,
+            (Some(pe), Some(ae)) if pe == ae || (pe.starts_with('{') && pe.ends_with('}')) => {
+                continue
+            }
             _ => return false,
         }
     }

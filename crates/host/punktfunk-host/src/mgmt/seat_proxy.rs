@@ -2,30 +2,17 @@
 //! path and answer rules that keep the box's own routes and origin out of a seat's reach.
 
 use super::profiles::{needs_start, refused, seat_of, seats_now, start_seat};
+use super::scope::{scope_of, Scope};
 use super::shared::*;
-use axum::http::header;
+use axum::http::{header, Method};
+use punktfunk_core::mgmt_routes::path_matches;
 
-/// Paths the seat proxy never passes: pairing, trust and profiles are the box's, a seat host
-/// updates with the box, and a plugin UI's credential stays on its host. A `.` or `..` segment
-/// is refused outright. `rest` is the decoded path; the query travels apart.
-fn proxy_refuses(rest: &str) -> bool {
-    let first = rest
-        .trim_start_matches('/')
-        .split(['/', '?'])
-        .next()
-        .unwrap_or("");
-    let segments: Vec<&str> = rest.split('/').filter(|s| !s.is_empty()).collect();
-    segments.iter().any(|s| *s == "." || *s == "..")
-        || matches!(
-            segments[..],
-            [plugins, _, credential]
-                if plugins.eq_ignore_ascii_case("plugins")
-                    && credential.eq_ignore_ascii_case("ui-credential")
-        )
-        || matches!(
-            first,
-            "native" | "pair" | "profiles" | "update" | "actions" | "clients"
-        )
+/// Whether the seat proxy refuses `method` on `rest`, the decoded path (the query travels apart):
+/// a route with no scope or the box's, and a plugin UI's credential, which stays on its host.
+fn proxy_refuses(method: &Method, rest: &str) -> bool {
+    let path = format!("/api/v1/{rest}");
+    path_matches("/api/v1/plugins/{}/ui-credential", &path)
+        || !matches!(scope_of(method, &path), Some(scope) if scope != Scope::Box)
 }
 
 /// `rest` and `query` as the seat's host reads them. The router hands `rest` over decoded, so each
@@ -48,12 +35,12 @@ fn seat_target(rest: &str, query: Option<&str>) -> String {
 pub(crate) async fn proxy_profile_seat(
     State(st): State<Arc<MgmtState>>,
     Path((id, rest)): Path<(String, String)>,
-    method: axum::http::Method,
+    method: Method,
     uri: axum::http::Uri,
     headers: axum::http::HeaderMap,
     body: axum::body::Bytes,
 ) -> Response {
-    if proxy_refuses(&rest) {
+    if proxy_refuses(&method, &rest) {
         return api_error_coded(
             StatusCode::FORBIDDEN,
             "seat_part_is_box",
@@ -163,25 +150,102 @@ mod tests {
 
     #[test]
     fn the_seat_proxy_keeps_the_box_s_own_routes_to_itself() {
-        assert!(!proxy_refuses("library"));
-        assert!(!proxy_refuses("library/page?as=kid"));
-        assert!(!proxy_refuses("plugins/rom-manager"));
-        assert!(!proxy_refuses("plugins/steam/ui"));
-        for refused in [
-            "native/pair/arm",
-            "profiles",
-            "pair/pin",
-            "update",
-            "actions/power.sleep/invoke",
-            "clients",
-            "library/../native/pair/arm",
-            "./native",
-            "plugins/steam/ui-credential",
-            "Plugins/steam/UI-credential/",
-            "x?/../update",
+        for (method, passed) in [
+            (Method::GET, "library"),
+            (Method::HEAD, "library/page"),
+            (Method::PUT, "plugins/rom-manager"),
+            (Method::GET, "display/state"),
+            (Method::PATCH, "host/settings"),
         ] {
-            assert!(proxy_refuses(refused), "{refused}");
+            assert!(!proxy_refuses(&method, passed), "{method} {passed}");
         }
+        for (method, refused) in [
+            (Method::POST, "native/pair/arm"),
+            (Method::GET, "profiles"),
+            (Method::POST, "pair/pin"),
+            (Method::GET, "update/status"),
+            (Method::POST, "actions/power.sleep"),
+            (Method::GET, "clients"),
+            (Method::PUT, "display/settings"),
+            (Method::GET, "library/../native/clients"),
+            (Method::GET, "./native/clients"),
+            (Method::GET, "plugins/steam/ui-credential"),
+            (Method::GET, "Plugins/steam/UI-credential/"),
+            (Method::GET, "plugins/steam/ui"),
+            (Method::GET, "library/page?as=kid"),
+            (Method::POST, "library"),
+        ] {
+            assert!(proxy_refuses(&method, refused), "{method} {refused}");
+        }
+    }
+
+    /// The proxy's rule before the scope table: a first segment the box keeps, a dot segment,
+    /// and a plugin UI's credential.
+    fn refused_by_name(rest: &str) -> bool {
+        let first = rest
+            .trim_start_matches('/')
+            .split(['/', '?'])
+            .next()
+            .unwrap_or("");
+        let segments: Vec<&str> = rest.split('/').filter(|s| !s.is_empty()).collect();
+        segments.iter().any(|s| *s == "." || *s == "..")
+            || matches!(
+                segments[..],
+                [plugins, _, credential]
+                    if plugins.eq_ignore_ascii_case("plugins")
+                        && credential.eq_ignore_ascii_case("ui-credential")
+            )
+            || matches!(
+                first,
+                "native" | "pair" | "profiles" | "update" | "actions" | "clients"
+            )
+    }
+
+    /// The table refuses every operation the named list did, and the box's own that the list
+    /// let through, each listed here. No other answer changed.
+    #[test]
+    fn the_table_refuses_what_the_named_list_did_and_the_box_s_rest() {
+        const NEWLY_REFUSED: &[(&str, &str)] = &[
+            ("DELETE", "/api/v1/client-logs/{id}"),
+            ("DELETE", "/api/v1/display/presets/{id}"),
+            ("GET", "/api/v1/client-logs"),
+            ("GET", "/api/v1/client-logs/{id}"),
+            ("GET", "/api/v1/display/monitors"),
+            ("GET", "/api/v1/display/presets"),
+            ("GET", "/api/v1/display/settings"),
+            ("GET", "/api/v1/webtransport"),
+            ("POST", "/api/v1/auth/device/challenge"),
+            ("POST", "/api/v1/auth/device/token"),
+            ("POST", "/api/v1/client-logs"),
+            ("POST", "/api/v1/display/presets"),
+            ("POST", "/api/v1/display/release"),
+            ("PUT", "/api/v1/display/layout"),
+            ("PUT", "/api/v1/display/presets/{id}"),
+            ("PUT", "/api/v1/display/settings"),
+            ("PUT", "/api/v1/gpus/preference"),
+        ];
+        let doc: serde_json::Value = serde_json::from_str(&crate::mgmt::openapi_json()).unwrap();
+        let mut changed = Vec::new();
+        for (path, ops) in doc["paths"].as_object().unwrap() {
+            for method in ops.as_object().unwrap().keys() {
+                let method = Method::from_bytes(method.to_uppercase().as_bytes()).unwrap();
+                let rest = path.strip_prefix("/api/v1/").unwrap();
+                let now = proxy_refuses(&method, rest);
+                if now != refused_by_name(rest) {
+                    assert!(
+                        now,
+                        "{method} {path}: the table passes what the list refused"
+                    );
+                    changed.push((method.to_string(), path.clone()));
+                }
+            }
+        }
+        changed.sort();
+        let want: Vec<(String, String)> = NEWLY_REFUSED
+            .iter()
+            .map(|(m, p)| (m.to_string(), p.to_string()))
+            .collect();
+        assert_eq!(changed, want);
     }
 
     /// The router hands `rest` over decoded. An encoded `?` or `%` must reach the seat as the
@@ -202,7 +266,7 @@ mod tests {
             .unwrap();
         let rest = String::from_utf8(body.to_vec()).unwrap();
         assert_eq!(rest, "store/install?/../a%2Fb");
-        assert!(proxy_refuses(&rest));
+        assert!(proxy_refuses(&Method::POST, &rest));
     }
 
     #[test]
@@ -215,33 +279,6 @@ mod tests {
         assert_eq!(seat_target("store/install?", None), "store/install%3F");
         assert_eq!(seat_target("a%2Fb", None), "a%252Fb");
         assert_eq!(seat_target("rom/é#1", None), "rom/%C3%A9%231");
-    }
-
-    /// The console asks for its password on some calls and relays the rest with the admin
-    /// bearer. A gated row with no seat handler in its table must be a path this proxy refuses.
-    #[test]
-    fn a_call_the_console_gates_only_on_the_box_never_passes_the_seat_proxy() {
-        let table = include_str!("../../../../../web/server/util/gates.ts");
-        let rows: Vec<Vec<&str>> = table
-            .split("gated(")
-            .skip(1)
-            .filter_map(|row| row.split_once(')'))
-            .map(|(args, _)| {
-                args.split(',')
-                    .map(|a| a.trim().trim_matches('"'))
-                    .filter(|a| !a.is_empty())
-                    .collect()
-            })
-            .collect();
-        let box_only: Vec<&str> = rows
-            .iter()
-            .filter(|args| args.len() == 2)
-            .map(|args| args[1])
-            .collect();
-        assert!(rows.len() > box_only.len() && !box_only.is_empty());
-        for pattern in box_only {
-            assert!(proxy_refuses(pattern), "{pattern}");
-        }
     }
 
     #[test]

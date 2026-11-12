@@ -226,8 +226,9 @@ session by design, and display activation fails while its session is inactive.
   it as `seat.pin`, so a client pins the seat through the box it already trusts. A seat whose pin
   the box doesn't hold yet is unavailable. Sleep, restart and shut down are refused: the box's own
   host is the one that does them, and it ends the sessions on every seat first.
-- **The box's library, on Windows.** A Windows seat runs no plugins. It lists and launches the
-  box's titles as its own user, and answers every library change with 409. Titles from sources
+- **The box's library, on Windows.** A Windows seat runs no plugins and answers a plugin install
+  with 409. It lists and launches the box's titles as its own user, and answers every library
+  change with 409. Titles from sources
   that belong to one account (Playnite, Game Bar, Amazon, itch, Hydra) are left out. It runs the
   box's emulators from `%ProgramData%\punktfunk\emulators` with the firmware the box's plugins
   staged. The box host tails each running seat's `game.*` into its own bus, with `seat` naming

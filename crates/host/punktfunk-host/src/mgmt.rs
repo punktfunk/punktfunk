@@ -52,6 +52,7 @@ mod plugin_access;
 mod plugin_channel;
 mod plugins;
 mod profiles;
+mod scope;
 mod seat_proxy;
 mod seating;
 mod session;
@@ -648,9 +649,10 @@ fn api_router_parts() -> (Router<Arc<MgmtState>>, utoipa::openapi::OpenApi) {
         .routes(routes!(update::apply_update))
         .routes(routes!(actions::list_actions))
         .routes(routes!(actions::invoke_action));
-    let (router, api) = OpenApiRouter::with_openapi(ApiDoc::openapi())
+    let (router, mut api) = OpenApiRouter::with_openapi(ApiDoc::openapi())
         .nest("/api/v1", api_v1)
         .split_for_parts();
+    scope::stamp(&mut api);
     // Any method passes through to the seat's host, so the spec has no one shape to document.
     let router = router.route(
         "/api/v1/profiles/{id}/proxy/{*rest}",

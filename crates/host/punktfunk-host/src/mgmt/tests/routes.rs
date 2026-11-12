@@ -883,3 +883,100 @@ fn every_device_route_has_a_side_on_the_door() {
         );
     }
 }
+
+/// Every operation in the document has one row in `mgmt::scope::SCOPES`, and the table names
+/// nothing the document lacks. A concrete path finds its own row, and the document carries it
+/// as `x-scope`.
+#[test]
+fn every_route_has_one_scope() {
+    use crate::mgmt::scope::{row_of, scope_of, Scope, SCOPES};
+    use axum::http::Method;
+
+    let doc: serde_json::Value = serde_json::from_str(&openapi_json()).unwrap();
+    let mut live: Vec<(String, &str)> = Vec::new();
+    for (path, ops) in doc["paths"].as_object().unwrap() {
+        for (method, op) in ops.as_object().unwrap() {
+            let method = method.to_uppercase();
+            let rows: Vec<Scope> = SCOPES
+                .iter()
+                .filter(|(m, p, _)| *m == method && p == path)
+                .map(|&(.., scope)| scope)
+                .collect();
+            assert_eq!(
+                rows.len(),
+                1,
+                "{method} {path} has {} rows in SCOPES (mgmt/scope.rs): decide whose it is",
+                rows.len()
+            );
+            assert_eq!(op["x-scope"], rows[0].wire(), "{method} {path}");
+            live.push((method, path));
+        }
+    }
+    for &(method, path, scope) in SCOPES {
+        let pin = matches!(path, "/api/v1/pair" | "/api/v1/pair/pin");
+        assert!(
+            (pin && !cfg!(feature = "gamestream"))
+                || live.iter().any(|(m, p)| m == method && *p == path),
+            "SCOPES names {method} {path}, which the document lacks"
+        );
+        let concrete = path
+            .split('/')
+            .map(|s| if s.starts_with('{') { "sample" } else { s })
+            .collect::<Vec<_>>()
+            .join("/");
+        let m = Method::from_bytes(method.as_bytes()).unwrap();
+        assert_eq!(scope_of(&m, &concrete), Some(scope), "{method} {concrete}");
+    }
+    // A forward resolves a dot segment, so it has no scope; the router reads it as a segment.
+    let adopt = "/api/v1/emulators/../adopt";
+    assert_eq!(scope_of(&Method::POST, adopt), None);
+    assert_eq!(row_of(&Method::POST, adopt), Some(Scope::ProfileExec));
+    assert_eq!(scope_of(&Method::GET, "/api/v1/library/%2E/x"), None);
+    assert_eq!(
+        scope_of(&Method::HEAD, "/api/v1/library"),
+        Some(Scope::ProfileData)
+    );
+}
+
+/// What a paired device may call is a host's report, a profile's data, or one of the few routes
+/// of the box a device needs: its picker, power and its log upload. Never a route that runs code.
+#[test]
+fn a_device_reaches_no_route_of_the_box_but_its_picker_power_and_logs() {
+    use crate::mgmt::scope::{scope_of, Scope};
+    use axum::http::Method;
+
+    const DEVICE_BOX: &[(&str, &str)] = &[
+        ("GET", "/api/v1/profiles/enumerate"),
+        ("GET", "/api/v1/profiles/{id}/avatar"),
+        ("POST", "/api/v1/profiles/{id}/wake"),
+        ("POST", "/api/v1/profiles/{id}/unlock-challenge"),
+        ("GET", "/api/v1/actions"),
+        ("POST", "/api/v1/actions/{id}"),
+        ("POST", "/api/v1/client-logs"),
+    ];
+
+    let doc: serde_json::Value = serde_json::from_str(&openapi_json()).unwrap();
+    let mut device: Vec<(String, &str)> = Vec::new();
+    for (path, ops) in doc["paths"].as_object().unwrap() {
+        for method in ops.as_object().unwrap().keys() {
+            let method = Method::from_bytes(method.to_uppercase().as_bytes()).unwrap();
+            if !auth::cert_may_access(&method, path) {
+                continue;
+            }
+            let scope = scope_of(&method, path);
+            assert_ne!(scope, Some(Scope::ProfileExec), "{method} {path} runs code");
+            assert!(
+                matches!(scope, Some(Scope::Host | Scope::ProfileData))
+                    || DEVICE_BOX.contains(&(method.as_str(), path.as_str())),
+                "{method} {path} is {scope:?} and a device calls it"
+            );
+            device.push((method.to_string(), path));
+        }
+    }
+    for (method, path) in DEVICE_BOX {
+        assert!(
+            device.iter().any(|(m, p)| m == method && p == path),
+            "DEVICE_BOX names {method} {path}, which no device may call"
+        );
+    }
+}

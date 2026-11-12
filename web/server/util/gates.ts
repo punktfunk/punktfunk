@@ -4,7 +4,7 @@
 // row's file answers and never forwards. `seat` is that file's handler when the same call can
 // arrive for a seat's host through `/api/v1/profiles/<id>/proxy/`, where the box holds the bearer.
 // gates.test.ts fails on an operation in api/openapi.json with no row or no decision, and pins
-// the rows to the route files and to the paths a seat's host refuses.
+// the rows to the route files and to each operation's `x-scope`: the seat proxy refuses `box`.
 import type { EventHandler } from "h3";
 import adoptPost from "../routes/api/v1/emulators/[id]/adopt.post";
 import removePost, {

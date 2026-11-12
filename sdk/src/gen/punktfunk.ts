@@ -4942,8 +4942,9 @@ readonly "getPluginCatalog": {
   /**
 * `{source, id}` installs the catalog pin after re-checking integrity, or `{spec,
 * accept_unverified: true}` installs unreviewed code the operator owns. `202` + job id; watch at
-* `GET /store/jobs/{id}`. A seat host on a person's own account installs from the built-in
-* source alone: anything else would run code the box chose as that person.
+* `GET /store/jobs/{id}`. A Windows seat host installs none: the box's runner, which it shares,
+* never reads them. A seat host on a person's own account installs from the built-in source
+* alone: anything else would run code the box chose as that person.
 * 
 * One package operation at a time (`409` otherwise): `bun` shares a lockfile and `node_modules`.
 */
