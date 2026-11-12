@@ -3582,7 +3582,7 @@
           "library"
         ],
         "summary": "Hide or un-hide one library title.",
-        "description": "Curation, not access control: the title leaves every play surface and launch resolution\nbut is not deleted. The operator console still lists it (`hidden: true`) so it can return.\nThe id is not required to exist now — a plugin mid-sync or an unmounted drive would\notherwise refuse a choice that should stick. With `as`, the hide is that profile's own; it\ncannot bring back a title the box hides. Emits `library.changed` only on a real change.",
+        "description": "Curation, not access control: the title leaves every play surface and launch resolution\nbut is not deleted. The operator console still lists it (`hidden: true`) so it can return.\nThe id is not required to exist now — a plugin mid-sync or an unmounted drive would\notherwise refuse a choice that should stick. With `as`, the hide is that profile's own; it\ncannot bring back a title the box hides. A paired device that is that locked profile's person\nmay set it too. Emits `library.changed` only on a real change.",
         "operationId": "setLibraryEntryHidden",
         "parameters": [
           {
@@ -3637,6 +3637,16 @@
           },
           "401": {
             "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "A device that isn't the person of the profile `as` names, or a plugin",
             "content": {
               "application/json": {
                 "schema": {

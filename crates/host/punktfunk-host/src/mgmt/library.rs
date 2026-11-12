@@ -123,8 +123,10 @@ fn check_privileged_fields(
 }
 
 /// `?as=<profile id>`: the profile a library call is for. Absent or empty: this host's own view.
-/// A write that names one changes that profile's own layer, which only the admin lane may do;
-/// any other lane gets 403. A paired device reads only a profile it opens with nothing asked
+/// A write that names one changes that profile's own layer: the admin lane's, and on a
+/// [`punktfunk_core::mgmt_routes::PERSON`] route a device that is that profile's person
+/// ([`super::person::check`]). Any other write that names one, and every other device write, is
+/// 403. A paired device reads only a profile it opens with nothing asked
 /// ([`crate::profiles::Profiles::opens`]); any other reads as one this host doesn't hold.
 #[derive(Deserialize)]
 pub(crate) struct AsProfile {
@@ -135,24 +137,37 @@ pub(crate) struct AsProfile {
     device: Option<String>,
 }
 
-impl<S: Send + Sync> axum::extract::FromRequestParts<S> for AsProfile {
+impl axum::extract::FromRequestParts<Arc<MgmtState>> for AsProfile {
     type Rejection = Response;
 
     async fn from_request_parts(
         parts: &mut axum::http::request::Parts,
-        state: &S,
+        st: &Arc<MgmtState>,
     ) -> Result<Self, Response> {
-        let Query(mut who) = Query::<Self>::from_request_parts(parts, state)
+        let Query(mut who) = Query::<Self>::from_request_parts(parts, st)
             .await
             .map_err(IntoResponse::into_response)?;
         let names = who.profile.as_deref().is_some_and(|p| !p.is_empty());
-        let lane = parts.extensions.get::<AuthLane>();
-        if lane == Some(&AuthLane::Cert) {
+        let lane = parts.extensions.get::<AuthLane>().copied();
+        if lane == Some(AuthLane::Cert) {
             let device = parts.extensions.get::<super::auth::PairedDevice>();
             who.device = Some(device.map(|d| d.0.clone()).unwrap_or_default());
         }
-        let admin = lane == Some(&AuthLane::Admin);
-        if names && !admin && !matches!(parts.method, Method::GET | Method::HEAD) {
+        if lane == Some(AuthLane::Admin) || matches!(parts.method, Method::GET | Method::HEAD) {
+            return Ok(who);
+        }
+        // Nested routes see their path without `/api/v1`; the table spells it whole.
+        let original = parts.extensions.get::<axum::extract::OriginalUri>();
+        let path = original.map_or(parts.uri.path(), |u| u.0.path());
+        if lane == Some(AuthLane::Cert) && super::person::person_route(parts.method.as_str(), path)
+        {
+            let vouched = parts.extensions.get::<super::person::Vouched>();
+            let fp = who.device.as_deref().unwrap_or_default();
+            let vouched = vouched.map(|v| v.0.as_str());
+            super::person::check(st, who.profile.as_deref(), fp, vouched).await?;
+            return Ok(who);
+        }
+        if names || lane == Some(AuthLane::Cert) {
             return Err(api_error_coded(
                 StatusCode::FORBIDDEN,
                 "profile_layer_console_only",
@@ -162,6 +177,15 @@ impl<S: Send + Sync> axum::extract::FromRequestParts<S> for AsProfile {
         }
         Ok(who)
     }
+}
+
+/// The 404 for a profile id this host doesn't hold, or one the asker may not see.
+pub(super) fn profile_unknown() -> Response {
+    api_error_coded(
+        StatusCode::NOT_FOUND,
+        "profile_unknown",
+        "That profile is gone from this host. Pick another one.",
+    )
 }
 
 /// Where the profile a call names plays.
@@ -208,11 +232,7 @@ impl AsProfile {
             .filter(|store| opens(store))
             .and_then(|store| Some((store.get(id)?, store.owner_id())));
         let Some((profile, owner)) = found else {
-            return Err(api_error_coded(
-                StatusCode::NOT_FOUND,
-                "profile_unknown",
-                "That profile is gone from this host. Pick another one.",
-            ));
+            return Err(profile_unknown());
         };
         let mine = Some(id.to_string());
         let (whose, reach) = if pf_paths::seat::role().follows_contract() {
@@ -244,7 +264,7 @@ impl Scoped {
 /// Whether seat row `seat` runs on a person's own account, by the seat ledger. On Linux a seat
 /// lists no command tile either way, so only Windows asks. A row the ledger doesn't name counts
 /// as one: the view never shows a tile that seat would not.
-async fn on_own_account(seat: String) -> Result<bool, Response> {
+pub(super) async fn on_own_account(seat: String) -> Result<bool, Response> {
     if !cfg!(windows) {
         return Ok(false);
     }
@@ -616,7 +636,8 @@ pub(crate) struct HiddenState {
 /// but is not deleted. The operator console still lists it (`hidden: true`) so it can return.
 /// The id is not required to exist now — a plugin mid-sync or an unmounted drive would
 /// otherwise refuse a choice that should stick. With `as`, the hide is that profile's own; it
-/// cannot bring back a title the box hides. Emits `library.changed` only on a real change.
+/// cannot bring back a title the box hides. A paired device that is that locked profile's person
+/// may set it too. Emits `library.changed` only on a real change.
 #[utoipa::path(
     put,
     path = "/library/hidden/{id}",
@@ -631,6 +652,7 @@ pub(crate) struct HiddenState {
         (status = OK, description = "Stored; the entry's visibility after the call", body = HiddenState),
         (status = BAD_REQUEST, description = "Empty entry id", body = ApiError),
         (status = UNAUTHORIZED, description = "Missing or invalid bearer token", body = ApiError),
+        (status = FORBIDDEN, description = "A device that isn't the person of the profile `as` names, or a plugin", body = ApiError),
         (status = NOT_FOUND, description = "`as` names no profile on this host", body = ApiError),
         (status = INTERNAL_SERVER_ERROR, description = "Couldn't save the settings", body = ApiError),
     )

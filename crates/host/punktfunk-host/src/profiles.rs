@@ -752,6 +752,11 @@ impl Profiles {
         &self.locks
     }
 
+    /// Whether this is a seat host's read-only copy of the box's profiles.
+    pub(crate) fn reads_box(&self) -> bool {
+        self.lock().read_only
+    }
+
     /// The profile a connect from `fp` asking for `asked` lands in and plays now
     /// (`profiles-and-seats.md` §6.2): [`Self::pick`], refused while its account can't play.
     pub fn resolve(&self, fp: Option<&str>, asked: Option<&str>) -> Result<Resolved, ProfileError> {
