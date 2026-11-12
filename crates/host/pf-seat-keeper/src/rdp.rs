@@ -254,11 +254,23 @@ fn connector_config(
 }
 
 /// The listener [`keeper::rdp_port`] names: same TermService and certificate either way, but
-/// only the seat listener's sessions get pad audio endpoints. A refusal there is a failed connect.
+/// only the seat listener's sessions get pad audio endpoints. A seat listener that is in place
+/// and refuses has not been opened by TermService yet: nothing answers there, so Remote
+/// Desktop's own port serves the seat, without pad audio.
 fn connect() -> WinResult<TcpStream> {
-    let address = SocketAddr::new(LOOPBACK, keeper::rdp_port());
-    TcpStream::connect_timeout(&address, CONNECT_TIMEOUT)
-        .map_err(|error| io_error("rdp_connect", &format!("connect to {address}"), error))
+    let dial = |port| {
+        let address = SocketAddr::new(LOOPBACK, port);
+        TcpStream::connect_timeout(&address, CONNECT_TIMEOUT)
+            .map_err(|error| (error.kind(), format!("connect to {address}"), error))
+    };
+    let port = keeper::rdp_port();
+    let connected = match dial(port) {
+        Err((std::io::ErrorKind::ConnectionRefused, ..)) if port != keeper::RDP_PORT => {
+            dial(keeper::RDP_PORT)
+        }
+        connected => connected,
+    };
+    connected.map_err(|(_, what, error)| io_error("rdp_connect", &what, error))
 }
 
 /// Connects `connector` and runs it to the TLS upgrade, then the TLS handshake against
