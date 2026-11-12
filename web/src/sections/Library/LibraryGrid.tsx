@@ -13,14 +13,15 @@ import {
 	getGetLibraryPageQueryKey,
 	getLibraryPage,
 	useDeleteCustomGame,
-	useGetLibraryOverrides,
 	useGetLibraryPage,
 	useSetGameOverrides,
 	useSetLibraryEntryHidden,
 } from "@/api/gen/library/library";
 import type { Download } from "@/api/gen/model/download";
 import type { OperatorGameEntry } from "@/api/gen/model/operatorGameEntry";
+import type { OverrideEntry } from "@/api/gen/model/overrideEntry";
 import type { PlatformCount } from "@/api/gen/model/platformCount";
+import { useAs, useProfileView } from "@/api/seat";
 import { useDialogs } from "@/components/dialogs";
 import { LauncherIcon } from "@/components/launcher-icon";
 import { QueryState } from "@/components/query-state";
@@ -49,7 +50,7 @@ import { customId, refreshLibrary } from "./helpers";
 import { DownloadsList } from "./Install";
 import { setList } from "./overrides";
 import { useSourceNames } from "./Sources";
-import { refreshOverrides } from "./Stream";
+import { refreshOverrides, useOverrideDocs } from "./Stream";
 
 /** Titles asked for at a time: a few rows of a wide grid, a screen and a half of the list. */
 const PAGE = 60;
@@ -64,7 +65,8 @@ const isView = (v: unknown): v is LibraryView => v === "grid" || v === "rows";
 /**
  * Container: the library OVERVIEW. The host pages the list by cursor and searches it, so a
  * library of thousands costs one page at a time; this owns the filters, the pages, per-title
- * delete and hide. A card or row opens the entry's own page.
+ * delete and hide. A card or row opens the entry's own page. A profile's view lists the titles
+ * as that profile has them and changes only its own values: no delete, no downloads.
  */
 export const LibraryGridSection: FC<{
 	/** Show only entries owned by this provider, or everything when null. */
@@ -77,6 +79,8 @@ export const LibraryGridSection: FC<{
 	const locale = useLocale();
 	const qc = useQueryClient();
 	const { confirm } = useDialogs();
+	const profile = useProfileView();
+	const as = useAs();
 	const [query, setQuery] = useState("");
 	const q = useDebounced(query.trim(), 250);
 	const [platform, setPlatform] = useState<string | null>(null);
@@ -95,6 +99,7 @@ export const LibraryGridSection: FC<{
 		...(platform ? { platform } : {}),
 		...(install ? { install } : {}),
 		...(providerFilter ? { provider: providerFilter } : {}),
+		...as,
 	};
 	const games = useInfiniteQuery({
 		queryKey: [...getGetLibraryPageQueryKey(filters), "pages"],
@@ -108,11 +113,15 @@ export const LibraryGridSection: FC<{
 		// Typing must not blank the grid between two answers.
 		placeholderData: keepPreviousData,
 	});
-	const launchers = useGetLibraryPage({
-		role: "launcher",
-		limit: 200,
-		...(providerFilter ? { provider: providerFilter } : {}),
-	});
+	const launchers = useGetLibraryPage(
+		{
+			role: "launcher",
+			limit: 200,
+			...(providerFilter ? { provider: providerFilter } : {}),
+			...as,
+		},
+		{ query: { placeholderData: keepPreviousData } },
+	);
 
 	const refresh = () => void refreshLibrary(qc);
 	const remove = useDeleteCustomGame();
@@ -145,6 +154,7 @@ export const LibraryGridSection: FC<{
 			await setHidden.mutateAsync({
 				id: entry.id,
 				data: { hidden: entry.hidden !== true },
+				params: as,
 			});
 		} catch (e) {
 			toast.error(apiErrorMessage(e) ?? m.library_hide_failed());
@@ -157,7 +167,7 @@ export const LibraryGridSection: FC<{
 	const [selecting, setSelecting] = useState(false);
 	const [picked, setPicked] = useState<ReadonlySet<string>>(new Set());
 	const [applying, setApplying] = useState(false);
-	const overrides = useGetLibraryOverrides({ query: { enabled: selecting } });
+	const overrides = useOverrideDocs(selecting);
 	const setGame = useSetGameOverrides();
 	const leave = () => {
 		setSelecting(false);
@@ -174,12 +184,12 @@ export const LibraryGridSection: FC<{
 		window.addEventListener("keydown", onKey);
 		return () => window.removeEventListener("keydown", onKey);
 	}, [selecting]);
-	const onApply = async (set: string | null) => {
+	const onApply = async (entry: OverrideEntry) => {
 		setApplying(true);
 		let failed = 0;
 		for (const id of picked) {
 			try {
-				await setGame.mutateAsync({ id, data: set ? { set } : {} });
+				await setGame.mutateAsync({ id, data: entry, params: as });
 			} catch {
 				failed++;
 			}
@@ -195,7 +205,7 @@ export const LibraryGridSection: FC<{
 	const byApp = new Map((downloads.data ?? []).map((d) => [d.app_id, d]));
 	return (
 		<>
-			<DownloadsList />
+			{!profile && <DownloadsList />}
 			<LibraryGrid
 				games={{
 					data: games.data?.pages.flatMap((p) => p.items),
@@ -224,7 +234,7 @@ export const LibraryGridSection: FC<{
 				onSources={onSources}
 				view={view}
 				onView={setView}
-				onDelete={onDelete}
+				{...(profile ? { who: profile.name } : { onDelete })}
 				// The custom id whose delete is in flight (if any), so only that title's button disables.
 				deletingId={remove.isPending ? (remove.variables?.id ?? null) : null}
 				onToggleHidden={onToggleHidden}
@@ -243,11 +253,18 @@ export const LibraryGridSection: FC<{
 							if (!next.delete(id)) next.add(id);
 							return next;
 						}),
-					sets: setList(overrides.data, locale).map((s) => ({
+					sets: setList(overrides.sets, locale).map((s) => ({
 						id: s.id,
 						name: s.name ?? s.id,
 					})),
-					onApply: (set) => void onApply(set),
+					...(profile
+						? {
+								sameAs: m.profile_view_same_as_owner({
+									owner: profile.ownerName,
+								}),
+							}
+						: {}),
+					onApply: (entry) => void onApply(entry),
 					busy: applying,
 				}}
 			/>
@@ -266,13 +283,17 @@ export interface LibrarySelection {
 	onToggle: (id: string) => void;
 	/** The shared overrides to pick from, by name. */
 	sets: { id: string; name: string }[];
-	/** Every checked title takes shared override `set`, or none when null. */
-	onApply: (set: string | null) => void;
+	/** A profile's view: following the owner's library again, by name (*Same as Enrico*). */
+	sameAs?: string;
+	/** Every checked title takes `entry`. */
+	onApply: (entry: OverrideEntry) => void;
 	busy: boolean;
 }
 
-/** `Select` value for "Device decides" in the selection bar; a set id is 12 hex. */
+/** `Select` values for "Device decides" and "Same as Enrico" in the selection bar; a set id is
+ * 12 hex. */
 const NO_SET = "device";
+const SAME_AS = "same";
 
 export interface LibraryGridProps {
 	/** The titles loaded so far, every page in order. */
@@ -300,7 +321,8 @@ export interface LibraryGridProps {
 	onSources?: () => void;
 	view: LibraryView;
 	onView: (v: LibraryView) => void;
-	onDelete: (entry: OperatorGameEntry) => void;
+	/** Absent in a profile's view: the titles are the owner's library's. */
+	onDelete?: (entry: OperatorGameEntry) => void;
 	/** Custom id of the title whose delete is in flight, or null — only that one disables. */
 	deletingId: string | null;
 	onToggleHidden: (entry: OperatorGameEntry) => void;
@@ -310,11 +332,22 @@ export interface LibraryGridProps {
 	nameOf?: (id: string) => string | undefined;
 	/** Selection mode for the bulk action; absent, the titles only open their pages. */
 	selection?: LibrarySelection;
+	/** The profile whose view this is, by name: its hides and own values are marked as its. */
+	who?: string;
 }
 
 /** The checked count, the shared override chooser, and Done. Escape leaves too. */
 const SelectionBar: FC<{ selection: LibrarySelection }> = ({ selection }) => {
-	const { ids, sets, onApply, onActive, busy } = selection;
+	const { ids, sets, sameAs, onApply, onActive, busy } = selection;
+	// In a profile's view `{}` follows the owner's library again, so Device decides is `none`.
+	const entryOf = (v: string): OverrideEntry =>
+		v === SAME_AS
+			? {}
+			: v === NO_SET
+				? sameAs
+					? { none: true }
+					: {}
+				: { set: v };
 	return (
 		<div className="sticky bottom-4 z-30 flex flex-wrap items-center gap-3 rounded-card border bg-card p-3">
 			<p className="text-sm font-medium tabular-nums" aria-live="polite">
@@ -323,13 +356,14 @@ const SelectionBar: FC<{ selection: LibrarySelection }> = ({ selection }) => {
 			<div className="min-w-0 flex-1 sm:max-w-64">
 				<Select
 					value=""
-					onValueChange={(v) => onApply(v === NO_SET ? null : v)}
+					onValueChange={(v) => onApply(entryOf(v))}
 					disabled={busy || ids.size === 0}
 				>
 					<SelectTrigger aria-label={m.library_stream_bulk()}>
 						<SelectValue placeholder={m.library_stream_bulk()} />
 					</SelectTrigger>
 					<SelectContent>
+						{sameAs && <SelectItem value={SAME_AS}>{sameAs}</SelectItem>}
 						<SelectItem value={NO_SET}>{m.library_stream_device()}</SelectItem>
 						{sets.map((s) => (
 							<SelectItem key={s.id} value={s.id}>
@@ -426,6 +460,7 @@ export const LibraryGrid: FC<LibraryGridProps> = ({
 	hidingId,
 	nameOf,
 	selection,
+	who,
 }) => {
 	const shown = games.data ?? [];
 	const selecting = selection?.active === true;
@@ -433,7 +468,8 @@ export const LibraryGrid: FC<LibraryGridProps> = ({
 		const download = downloadOf?.(game.id);
 		return {
 			game,
-			onDelete: () => onDelete(game),
+			...(onDelete ? { onDelete: () => onDelete(game) } : {}),
+			...(who ? { who } : {}),
 			deleting: deletingId === customId(game),
 			onToggleHidden: () => onToggleHidden(game),
 			hiding: hidingId === game.id,
@@ -609,7 +645,7 @@ export const LibraryGrid: FC<LibraryGridProps> = ({
 							{/* A fresh host has no sources, so "no games" is the expected first-run
 							    state. Point at the fix instead of leaving a bare empty grid. */}
 							<p>{m.library_empty()}</p>
-							<p className="mt-2">{m.library_empty_add_source()}</p>
+							{!who && <p className="mt-2">{m.library_empty_add_source()}</p>}
 							{onSources && (
 								<Button className="mt-4" variant="outline" onClick={onSources}>
 									{m.library_open_sources()}

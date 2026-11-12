@@ -1,8 +1,10 @@
-// A seat's own library, game sources and plugins: the three pages that differ per seat read and
-// write the seat's host through the box (`/api/v1/profiles/{id}/proxy/…`), the rest stay the box's.
+// Whose page it is. The library shows any profile's view: the box's routes with `?as=<id>`.
+// Plugins and Automation read and write a seat's own host through the box
+// (`/api/v1/profiles/{id}/proxy/…`). The rest stay the box's.
 import { QueryClient } from "@tanstack/react-query";
 import { createContext, useContext } from "react";
 import type { ProfileAdmin } from "@/api/gen/model/profileAdmin";
+import { m } from "@/paraglide/messages";
 import { inSeat } from "./fetcher";
 
 /** A seat that runs on a person's own account, by the host's platform. Its host refuses hooks; a
@@ -18,27 +20,38 @@ export interface SeatChoice {
 	own?: OwnAccount;
 }
 
-/** The pages that differ per seat. The entry page shares the library's pick. */
-export type SeatPage = "library" | "plugins";
+/** The pages that differ per profile. The entry page shares the library's pick. */
+export type SeatPage = "library" | "plugins" | "automation";
+
+/** One entry of a page's title pick. */
+export interface ScopeChoice {
+	/** The profile's id; `null` for the owner, whose entry is the box's own. */
+	id: string | null;
+	name: string;
+	/** The seat whose host answers the page's calls; `null` is this box. */
+	seat: SeatChoice | null;
+	/** The profile the library's calls name in `as`; absent for the owner's library. */
+	as?: string;
+}
 
 export interface SeatScopeValue {
 	page: SeatPage;
-	/** The seat the page shows; `null` is the box's own. */
-	seat: SeatChoice | null;
-	seats: SeatChoice[];
-	ownerName: string;
+	/** What the title offers, the owner first. Fewer than two: the title is plain. */
+	choices: ScopeChoice[];
+	/** The pick the page shows; `null` only when the host has no profiles. */
+	current: ScopeChoice | null;
 	/** The owner's profile id, which is their seat's on a door. */
 	ownerId?: string;
-	/** The box is a door: it has no library of its own, so every pick is a seat. */
+	/** The box is a door: it has no library of its own, so every call goes to a seat. */
 	door?: boolean;
 	pick: (id: string | null) => void;
 }
 
 export const SeatScopeContext = createContext<SeatScopeValue | null>(null);
 
-/** The seat the page in view shows; `null` is the box's own, and outside the three pages. */
+/** The seat the page in view shows; `null` is the box's own, and outside the scoped pages. */
 export const useSeat = (): SeatChoice | null =>
-	useContext(SeatScopeContext)?.seat ?? null;
+	useContext(SeatScopeContext)?.current?.seat ?? null;
 
 /** Whose own account the page's seat runs on, if it is a person's; `null` for every other host. */
 export const useOwnAccount = (): OwnAccount | null => useSeat()?.own ?? null;
@@ -49,9 +62,36 @@ export const useOwnAccount = (): OwnAccount | null => useSeat()?.own ?? null;
  */
 export const usePluginsReachable = (): boolean => {
 	const scope = useContext(SeatScopeContext);
-	return (
-		!scope?.seat || (scope.door === true && scope.seat.id === scope.ownerId)
-	);
+	const seat = scope?.current?.seat;
+	return !seat || (scope?.door === true && seat.id === scope.ownerId);
+};
+
+/** A profile's view of the library: whose it is, and the owner's library it is built on. */
+export interface ProfileView {
+	id: string;
+	name: string;
+	ownerName: string;
+	/** Switches the console's pick to the owner. */
+	toOwner: () => void;
+}
+
+/** The profile whose view of the library the page shows; `null` for the owner's own. */
+export const useProfileView = (): ProfileView | null => {
+	const scope = useContext(SeatScopeContext);
+	const as = scope?.current?.as;
+	if (!scope || !as) return null;
+	return {
+		id: as,
+		name: scope.current?.name ?? "",
+		ownerName: scope.choices[0]?.name ?? m.seat_box(),
+		toOwner: () => scope.pick(null),
+	};
+};
+
+/** `{ as }` for a library call in a profile's view; `undefined` for the owner's library. */
+export const useAs = (): { as: string } | undefined => {
+	const as = useContext(SeatScopeContext)?.current?.as;
+	return as ? { as } : undefined;
 };
 
 /**
@@ -90,6 +130,44 @@ export function seatChoices(
 			name: p.display_name,
 			...(p.seat?.account ? { own } : {}),
 		}));
+}
+
+/**
+ * What page `page`'s title offers, the owner first. The library offers every profile, each
+ * read from the owner's host with `as`. Plugins and Automation offer the profiles whose seat has
+ * a host of its own. A door's owner is a seat, except on Automation, whose calls the door
+ * forwards to the owner itself.
+ */
+export function scopeChoices(
+	page: SeatPage,
+	profiles: ProfileAdmin[] | undefined,
+	os: string | undefined,
+	door = false,
+): ScopeChoice[] {
+	const list = profiles ?? [];
+	const owner = list.find((p) => p.owner);
+	const name = owner?.display_name ?? m.seat_box();
+	if (page === "library") {
+		if (door && !owner) return [];
+		const seat = door && owner ? { id: owner.id, name } : null;
+		return [
+			{ id: null, name, seat },
+			...list
+				.filter((p) => !p.owner)
+				.map((p) => ({ id: p.id, name: p.display_name, seat, as: p.id })),
+		];
+	}
+	const seats = seatChoices(list, os, door);
+	const ownerSeat =
+		door && page === "plugins"
+			? (seats.find((s) => s.id === owner?.id) ?? null)
+			: null;
+	return [
+		{ id: null, name, seat: ownerSeat },
+		...seats
+			.filter((s) => s.id !== owner?.id)
+			.map((s) => ({ id: s.id, name: s.name, seat: s })),
+	];
 }
 
 const bound = new WeakSet<object>();

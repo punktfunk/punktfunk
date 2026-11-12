@@ -3,7 +3,7 @@ import { MutationObserver, QueryClient } from "@tanstack/react-query";
 import type { CatalogEntry } from "@/api/gen/model";
 import type { ProfileAdmin } from "@/api/gen/model/profileAdmin";
 import { apiFetch } from "./fetcher";
-import { isFullSeat, seatChoices, seatClient } from "./seat";
+import { isFullSeat, scopeChoices, seatChoices, seatClient } from "./seat";
 import { installable } from "./store";
 
 const KID = "0a1b2c3d4e5f";
@@ -87,6 +87,70 @@ test("a seat on a person's own account is marked with its host's platform", () =
 		{ id: "m".repeat(32), name: "Made" },
 		{ id: KID, name: "Kid", own: "windows" },
 	]);
+});
+
+const OWNER = "4f1c3a9b0e27";
+const owner = profile({ id: OWNER, owner: true, display_name: "Enrico" });
+const sharer = profile({ id: "0b7d5e2a91c4", display_name: "Anna" });
+const turns = profile({
+	id: "1c2d3e4f5a6b",
+	display_name: "Tom",
+	seat: { ...seat, take_turns: true } as typeof seat,
+});
+const own = profile({
+	id: "3d5f7b9a1c3e",
+	display_name: "Oma",
+	seat: { ...seat, account: "oma" } as typeof seat,
+});
+const made = profile({ display_name: "Kid", seat });
+
+test("the library offers the owner and then every profile, each seen as itself", () => {
+	const all = [owner, sharer, turns, made, own];
+	expect(scopeChoices("library", all, "windows")).toEqual([
+		{ id: null, name: "Enrico", seat: null },
+		{ id: sharer.id, name: "Anna", seat: null, as: sharer.id },
+		{ id: turns.id, name: "Tom", seat: null, as: turns.id },
+		{ id: KID, name: "Kid", seat: null, as: KID },
+		{ id: own.id, name: "Oma", seat: null, as: own.id },
+	]);
+	// A door has no library of its own: every view is read from the owner's host.
+	const door = scopeChoices("library", [owner, sharer], "linux", true);
+	const ownerSeat = { id: OWNER, name: "Enrico" };
+	expect(door).toEqual([
+		{ id: null, name: "Enrico", seat: ownerSeat },
+		{ id: sharer.id, name: "Anna", seat: ownerSeat, as: sharer.id },
+	]);
+	// One person: one choice, so the title stays plain.
+	expect(scopeChoices("library", [owner], "linux")).toHaveLength(1);
+	expect(scopeChoices("library", undefined, undefined)).toHaveLength(1);
+});
+
+test("plugins and automation offer the owner and the seats with a host of their own", () => {
+	const all = [owner, sharer, turns, made, own];
+	const seats = [
+		{ id: null, name: "Enrico", seat: null },
+		{ id: KID, name: "Kid", seat: { id: KID, name: "Kid" } },
+		{
+			id: own.id,
+			name: "Oma",
+			seat: { id: own.id, name: "Oma", own: "windows" },
+		},
+	];
+	expect(scopeChoices("plugins", all, "windows")).toEqual(seats);
+	expect(scopeChoices("automation", all, "windows")).toEqual(seats);
+	// On a door the owner's plugins are on its seat; its hooks the door forwards itself.
+	const desk = profile({
+		id: "7e1f3b5d9a2c",
+		display_name: "Leon",
+		seat: { port: 9779, state: "ready", kind: "desktop" },
+	});
+	const door = [{ ...owner, seat: { ...seat, kind: "shared" } }, desk];
+	expect(scopeChoices("plugins", door, "linux", true)[0]?.seat).toEqual({
+		id: OWNER,
+		name: "Enrico",
+	});
+	expect(scopeChoices("automation", door, "linux", true)[0]?.seat).toBeNull();
+	expect(scopeChoices("automation", door, "linux", true)).toHaveLength(2);
 });
 
 const entry = (id: string, tier: string): CatalogEntry =>

@@ -1,9 +1,10 @@
 import Section from "@unom/ui/section";
 import type { FC, ReactNode } from "react";
-import { SeatNote } from "@/components/seat-scope";
+import { useProfileView } from "@/api/seat";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { m } from "@/paraglide/messages";
 import { InstallPanel } from "../Install";
+import { SharedNote } from "../SharedNote";
 import { EntryHeader, type EntryHeaderProps } from "./Header";
 import { InformationTab } from "./tabs/Information";
 import { LaunchTab } from "./tabs/Launch";
@@ -26,7 +27,10 @@ export type EntryViewProps = TabProps & {
 	pluginTabs?: PluginTabSpec[];
 };
 
-/** The entry page without its queries: header, then the tab strip. */
+/**
+ * The entry page without its queries: header, then the tab strip. A profile's view says the
+ * title is the owner's library's, and offers no install.
+ */
 export const EntryView: FC<EntryViewProps> = ({
 	header,
 	tab,
@@ -34,6 +38,7 @@ export const EntryView: FC<EntryViewProps> = ({
 	pluginTabs = [],
 	...tabProps
 }) => {
+	const view = useProfileView();
 	const plugins = pluginTabs.filter(
 		(p) => !(BUILTIN_TABS as readonly string[]).includes(p.id),
 	);
@@ -42,13 +47,13 @@ export const EntryView: FC<EntryViewProps> = ({
 	return (
 		<Section maxWidth={false}>
 			<div className="flex flex-col gap-card">
-				<SeatNote />
 				<EntryHeader
 					{...header}
 					entry={tabProps.entry}
 					title={tabProps.draft.title}
 				/>
-				<InstallPanel entry={tabProps.entry} />
+				<SharedNote />
+				{!view && <InstallPanel entry={tabProps.entry} />}
 				<Tabs value={active} onValueChange={onTab}>
 					<div className="-mx-1 overflow-x-auto px-1">
 						<TabsList>
