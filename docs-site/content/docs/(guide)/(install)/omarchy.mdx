@@ -126,14 +126,17 @@ console. `setup` turns it on for you.
 Run `punktfunk-omarchy status` first. It checks the units, ufw rules, groups, the portal and
 Hyprland's permission mode in one pass.
 
-### Black frames, or input does nothing
+### Black frames
 
-Hyprland's permission enforcement is on and silently denies the host. Add to your Hyprland config:
+Hyprland's permission enforcement is on and denies the host's screen capture. Input is not
+affected. Add to your Hyprland config, then restart Hyprland:
 
 ```lua
-o.permission("/usr/bin/punktfunk-host", "screencopy", "allow")
-o.permission("/usr/bin/punktfunk-host", "plugin", "allow")
+hl.permission("/usr/bin/punktfunk-host", "screencopy", "allow")
+hl.permission("/usr/(lib|libexec|lib64)/xdg-desktop-portal-hyprland", "screencopy", "allow")
 ```
+
+More on the [Hyprland page](/docs/hyprland#permission-system).
 
 ### No picture at all
 
