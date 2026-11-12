@@ -176,6 +176,12 @@ impl WindowsBackend {
         enable::keep_rdp_local();
     }
 
+    /// Deletes the profiles of removed seat accounts this install made whose profile was still
+    /// loaded at the removal. For the service's start.
+    pub fn delete_owed_profiles(&self) {
+        accounts::delete_owed_profiles();
+    }
+
     /// With seats on, waits until TermService runs, `stop` is set or [`TERMSERVICE_WAIT`] is
     /// up. The service starts at boot without waiting for it, and no seat starts before it.
     pub fn wait_for_termservice(&self, stop: &AtomicBool) {

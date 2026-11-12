@@ -11,7 +11,8 @@
 //! release takes back only what adopt gave.
 //! Administrator membership and remote-interactive denial make a seat unusable;
 //! deletion requires the same exact identity and an explicit caller action. A made account
-//! goes with its profile; an adopted one is never deleted.
+//! goes with its profile, at the next service start if the profile won't go at once; an
+//! adopted one is never deleted.
 
 use crate::backend::BackendError;
 use crate::doctor::AccountInspection;
@@ -51,6 +52,8 @@ use windows::Win32::Security::{
     LOGON32_PROVIDER_DEFAULT, PSID, SID_NAME_USE,
 };
 use windows::Win32::UI::Shell::DeleteProfileW;
+use winreg::enums::{HKEY_LOCAL_MACHINE, KEY_READ, KEY_SET_VALUE, KEY_WOW64_64KEY};
+use winreg::RegKey;
 use zeroize::Zeroizing;
 
 /// The local group every seat account joins, so an ACL can refuse seat accounts by one name.
@@ -147,7 +150,7 @@ impl AccountManager {
 
     /// Removes a made account with its profile and blob, or releases an adopted one by its SID.
     /// A made account that is gone leaves only its blob to delete; one that isn't the row's is
-    /// refused.
+    /// refused. The SID outlives the account, so a profile still loaded goes after it.
     pub(super) fn delete(&self, seat: &Seat) -> WinResult<()> {
         require_local_system()?;
         if let Some(sid) = &seat.adopted_sid {
@@ -156,10 +159,11 @@ impl AccountManager {
         match account_comment(&seat.account)? {
             None => self.credentials.delete(&seat.id),
             Some(comment) if comment == marker(&seat.id) => {
-                if let Some(sid) = sid_string(&seat.account) {
-                    delete_profile(&seat.account, &sid);
-                }
+                let kept = sid_string(&seat.account).filter(|sid| !delete_profile(sid));
                 delete_account(&seat.account)?;
+                if let Some(sid) = kept {
+                    delete_profile_later(&sid);
+                }
                 self.credentials.delete(&seat.id)
             }
             Some(_) => Err(not_ours(seat)),
@@ -671,13 +675,15 @@ fn join_seats_group(account: &str) -> WinResult<bool> {
 
 /// How long a profile gets to unload its hive after the logoff before its delete gives up.
 const PROFILE_UNLOAD: Duration = Duration::from_secs(5);
+/// The SIDs of made seat accounts deleted with their profile still on disk, one value each.
+/// Only [`delete_profile_later`] adds one, once the account is gone.
+const OWED_PROFILES: &str = r"SOFTWARE\Punktfunk\SeatProfiles";
 
-/// Removes the profile of `account`, which `sid` names, and the seat's Steam copy inside it, as
-/// `userdel -r` takes a Linux seat's home. The delete retries while the hive unloads. A failure
-/// is logged and the account goes regardless.
-fn delete_profile(account: &str, sid: &str) {
+/// Removes the profile `sid` names and the seat's Steam copy inside it, as `userdel -r` takes a
+/// Linux seat's home. The delete retries while the hive unloads. `true` once no profile is left.
+fn delete_profile(sid: &str) -> bool {
     let Ok(sid_w) = wide(sid, "account sid") else {
-        return;
+        return false;
     };
     let give_up = Instant::now() + PROFILE_UNLOAD;
     loop {
@@ -685,14 +691,48 @@ fn delete_profile(account: &str, sid: &str) {
         let deleted =
             unsafe { DeleteProfileW(PCWSTR(sid_w.as_ptr()), PCWSTR::null(), PCWSTR::null()) };
         match deleted {
-            Ok(()) => return,
+            Ok(()) => return true,
             // An account that never logged on has no profile.
-            Err(error) if error.code() == ERROR_FILE_NOT_FOUND.to_hresult() => return,
+            Err(error) if error.code() == ERROR_FILE_NOT_FOUND.to_hresult() => return true,
             Err(error) if Instant::now() >= give_up => {
-                tracing::warn!(%error, account, "seat profile not deleted");
-                return;
+                tracing::warn!(%error, sid, "seat profile not deleted");
+                return false;
             }
             Err(_) => std::thread::sleep(Duration::from_millis(250)),
+        }
+    }
+}
+
+/// Tries the profile of a deleted made account once more, then notes its SID under
+/// [`OWED_PROFILES`] for [`delete_owed_profiles`].
+fn delete_profile_later(sid: &str) {
+    if delete_profile(sid) {
+        return;
+    }
+    let noted = RegKey::predef(HKEY_LOCAL_MACHINE)
+        .create_subkey_with_flags(OWED_PROFILES, KEY_SET_VALUE | KEY_WOW64_64KEY)
+        .and_then(|(owed, _)| owed.set_value(sid, &1_u32));
+    match noted {
+        Ok(()) => tracing::warn!(sid, "seat profile left for the next service start"),
+        Err(error) => tracing::warn!(%error, sid, "seat profile left behind"),
+    }
+}
+
+/// Deletes the profiles [`delete_profile_later`] noted; each that goes leaves the note. For the
+/// service's start, when no seat holds a hive.
+pub(super) fn delete_owed_profiles() {
+    let Ok(owed) = RegKey::predef(HKEY_LOCAL_MACHINE)
+        .open_subkey_with_flags(OWED_PROFILES, KEY_READ | KEY_SET_VALUE | KEY_WOW64_64KEY)
+    else {
+        return;
+    };
+    let sids: Vec<String> = owed.enum_values().flatten().map(|(sid, _)| sid).collect();
+    for sid in sids {
+        if delete_profile(&sid) {
+            tracing::info!(sid, "seat profile deleted");
+            if let Err(error) = owed.delete_value(&sid) {
+                tracing::warn!(%error, sid, "seat profile note not removed");
+            }
         }
     }
 }

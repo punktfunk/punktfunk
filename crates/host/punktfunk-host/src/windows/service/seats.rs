@@ -62,6 +62,7 @@ impl SeatsSlot {
             .spawn(move || {
                 warm.keep_rdp_local();
                 drop(pf_seats::backend::PlatformBackend::seating(&warm));
+                warm.delete_owed_profiles();
                 for second in 1_u64.. {
                     std::thread::sleep(std::time::Duration::from_secs(1));
                     if checks_stop.load(Ordering::SeqCst) {
