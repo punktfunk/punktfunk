@@ -11,6 +11,7 @@ use super::auth::PairedDevice;
 use super::shared::*;
 use crate::vdisplay::policy::{ClientOverlay, DisplayTarget, SetBy};
 use axum::Extension;
+use punktfunk_core::quic::GRANT_DISPLAY;
 
 /// Picker row. `fields` is the expansion so the console does not hardcode it.
 #[derive(Serialize, ToSchema)]
@@ -434,8 +435,9 @@ pub(crate) async fn get_display_client(
 ///
 /// The operator writes the WHOLE overlay: a field absent from the body stops being pinned and
 /// the device follows the host again. An overlay that pins nothing is dropped, which is the
-/// same as `DELETE`. A paired device writes only `screen`, and only on its own row; its other
-/// fields stay, and it is answered 204. `set_by` records which of the two wrote the screen.
+/// same as `DELETE`. A paired device writes only `screen`, only on its own row, and only while
+/// its access holds `GRANT_DISPLAY` (`0x100`); its other fields stay, and it is answered 204.
+/// `set_by` records which of the two wrote the screen.
 #[utoipa::path(
     put,
     path = "/display/clients/{fingerprint}",
@@ -447,20 +449,21 @@ pub(crate) async fn get_display_client(
         (status = OK, description = "Overlay stored; the new settings state", body = DisplaySettingsState),
         (status = NO_CONTENT, description = "A device's screen stored"),
         (status = BAD_REQUEST, description = "Empty fingerprint", body = ApiError),
-        (status = FORBIDDEN, description = "A device wrote another row, or more than its screen", body = ApiError),
+        (status = FORBIDDEN, description = "A device wrote another row or more than its screen, or may not choose its screen (`screen_choice_not_granted`)", body = ApiError),
         (status = UNPROCESSABLE_ENTITY, description = "The body is not an overlay", body = ApiError),
         (status = INTERNAL_SERVER_ERROR, description = "Overlay could not be persisted", body = ApiError),
         (status = UNAUTHORIZED, description = "Missing or invalid bearer token", body = ApiError),
     )
 )]
 pub(crate) async fn set_display_client(
+    State(st): State<Arc<MgmtState>>,
     device: Option<Extension<PairedDevice>>,
     Path(fingerprint): Path<String>,
     ApiJson(body): ApiJson<serde_json::Value>,
 ) -> Response {
     let key = fingerprint.trim().to_ascii_lowercase();
     if let Some(Extension(PairedDevice(me))) = device {
-        return set_own_screen(&me, &key, body);
+        return set_own_screen(&st, &me, &key, body);
     }
     if let Some(refused) = refused_on_seat() {
         return refused;
@@ -508,13 +511,20 @@ pub(crate) async fn set_display_client(
     Json(display_settings_state()).into_response()
 }
 
-/// A paired device `me` sets the screen of its row `key`. The answer carries no settings: the
-/// state names every other device.
-fn set_own_screen(me: &str, key: &str, body: serde_json::Value) -> Response {
+/// A paired device `me` sets the screen of its row `key`, while its live access holds
+/// `GRANT_DISPLAY`. The answer carries no settings: the state names every other device.
+fn set_own_screen(st: &MgmtState, me: &str, key: &str, body: serde_json::Value) -> Response {
     let screen = match device_screen(me, key, body) {
         Ok(screen) => screen,
         Err((status, why)) => return api_error(status, &why),
     };
+    if !super::downloads::granted(st, Some(me), GRANT_DISPLAY) {
+        return api_error_coded(
+            StatusCode::FORBIDDEN,
+            "screen_choice_not_granted",
+            "This host decides the screen for this device.",
+        );
+    }
     if let Some(refused) = refused_on_seat() {
         return refused;
     }
@@ -796,16 +806,20 @@ pub(crate) struct DisplayTargets {
     /// What a device with no screen of its own streams.
     host_default: DisplayTarget,
     /// What the calling device is set to, before a taken or missing monitor falls back to its
-    /// own screen. Null on the operator and plugin lanes.
+    /// own screen. A screen it set itself counts only while `may_choose`. Null on the operator
+    /// and plugin lanes.
     yours: Option<DisplayTarget>,
+    /// Whether the caller may choose the screen: a paired device's `GRANT_DISPLAY`, always on
+    /// the operator and plugin lanes. A device's write without it is 403.
+    may_choose: bool,
     targets: Vec<ScreenRow>,
 }
 
 /// Screen picker
 ///
 /// The device's own screen, then each of the host's monitors with the device streaming it
-/// now. A paired device also reads what it is set to. A host with no mirror backend lists its
-/// own screen alone.
+/// now. A paired device also reads what it is set to and whether it may choose. A host with no
+/// mirror backend lists its own screen alone.
 #[utoipa::path(
     get,
     path = "/display/targets",
@@ -817,9 +831,13 @@ pub(crate) struct DisplayTargets {
     )
 )]
 pub(crate) async fn get_display_targets(
+    State(st): State<Arc<MgmtState>>,
     device: Option<Extension<PairedDevice>>,
 ) -> Result<Json<DisplayTargets>, Response> {
     let me = device.map(|Extension(PairedDevice(fp))| fp.to_ascii_lowercase());
+    let may_choose = me
+        .as_deref()
+        .is_none_or(|fp| super::downloads::granted(&st, Some(fp), GRANT_DISPLAY));
     let own = ScreenRow {
         id: "own".into(),
         label: "Own screen".into(),
@@ -834,13 +852,14 @@ pub(crate) async fn get_display_targets(
             locked: false,
             host_default: DisplayTarget::Own,
             yours: me.map(|_| DisplayTarget::Own),
+            may_choose,
             targets: vec![own],
         }));
     }
-    let (host_default, locked) = crate::vdisplay::screen_target(None);
+    let (host_default, locked) = crate::vdisplay::screen_target(None, false);
     let yours = me
         .as_deref()
-        .map(|fp| crate::vdisplay::screen_target(Some(fp)).0);
+        .map(|fp| crate::vdisplay::screen_target(Some(fp), may_choose).0);
     // Shells out / D-Bus / Wayland, or walks CCD on Windows: off the async worker.
     let heads = blocking("monitor_list", || crate::vdisplay::heads(None)).await?;
     let streamed = crate::vdisplay::streamed_monitors();
@@ -872,6 +891,7 @@ pub(crate) async fn get_display_targets(
         locked,
         host_default,
         yours,
+        may_choose,
         targets,
     }))
 }

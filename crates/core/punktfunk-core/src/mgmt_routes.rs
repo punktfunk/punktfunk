@@ -59,8 +59,8 @@ pub fn paired_may_access(method: &str, path: &str) -> bool {
     if method == "POST" && path_matches("/api/v1/library/install/{}/pause", path) {
         return true;
     }
-    // A device picks its own screen. The handler refuses another device's row and any field
-    // but `screen`; reading and clearing a row stay the console's.
+    // A device picks its own screen. The handler refuses another device's row, any field but
+    // `screen`, and a device without `GRANT_DISPLAY`; reading and clearing a row stay the console's.
     if method == "PUT" && path_matches("/api/v1/display/clients/{}", path) {
         return true;
     }

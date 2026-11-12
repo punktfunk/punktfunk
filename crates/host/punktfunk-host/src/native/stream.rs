@@ -611,6 +611,8 @@ pub(super) struct SessionContext {
     pub(super) join_live: bool,
     /// The handshake's screen is a host monitor ([`SessionPlan::mirrored`](crate::session_plan::SessionPlan::mirrored)).
     pub(super) mirrored: bool,
+    /// The screen the handshake settled this session wants ([`crate::vdisplay::SessionParams::screen`]).
+    pub(super) screen: Option<crate::vdisplay::policy::DisplayTarget>,
     /// The view and fit the encoder frames for: a joiner's, or this client's own view
     /// ([`SessionPlan::reframe_to`](crate::session_plan::SessionPlan::reframe_to)).
     pub(super) reframe_to: Option<(punktfunk_core::video_fit::VideoFit, (u32, u32))>,

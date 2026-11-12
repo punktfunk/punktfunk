@@ -419,7 +419,7 @@ pub fn rebuild_probe_active() -> bool {
 
 /// The host-wide monitor to mirror, or `None`: [`screen_target`] of a device with no row.
 pub fn capture_monitor() -> Option<String> {
-    screen_target(None).0.into_monitor()
+    screen_target(None, false).0.into_monitor()
 }
 
 /// What the device with pairing fingerprint `fp` (hex) is set to stream, and whether
@@ -427,13 +427,14 @@ pub fn capture_monitor() -> Option<String> {
 ///
 /// **The env pin wins over stored policy**: an appliance pin in `host.env` must not be
 /// overridden by a console click (the env is snapshotted at startup, so a UI cannot write
-/// it). Unset, the device's row, then the host's screen, then its own screen. Read per call,
-/// not cached, so a console change takes effect on the next session.
-pub fn screen_target(fp: Option<&str>) -> (policy::DisplayTarget, bool) {
+/// it). Unset, the device's row (a pick it set itself only when it `may_choose`), then the
+/// host's screen, then its own screen. Read per call, not cached, so a console change takes
+/// effect on the next session.
+pub fn screen_target(fp: Option<&str>, may_choose: bool) -> (policy::DisplayTarget, bool) {
     if let Some(env) = pf_host_config::config().capture_monitor.as_deref() {
         return (policy::DisplayTarget::Monitor(env.to_string()), true);
     }
-    let target = policy::prefs().get().screen_for(fp);
+    let target = policy::prefs().get().screen_for(fp, may_choose);
     (target.unwrap_or(policy::DisplayTarget::Own), false)
 }
 
@@ -464,12 +465,12 @@ pub fn mirrors(target: &policy::DisplayTarget) -> bool {
 
 /// [`mirrors`] for a device with no row of its own: the host-wide screen.
 pub fn mirrors_pinned() -> bool {
-    mirrors(&screen_target(None).0)
+    mirrors(&screen_target(None, false).0)
 }
 
 /// [`open_for`] the host-wide screen: what a device with no row of its own streams.
 pub fn open(compositor: Compositor) -> Result<Box<dyn VirtualDisplay>> {
-    open_for(compositor, screen_target(None).0)
+    open_for(compositor, screen_target(None, false).0)
 }
 
 /// Open the display `target` names on `compositor`: the mirror backend for a monitor

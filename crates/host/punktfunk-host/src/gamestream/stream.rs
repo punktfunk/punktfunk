@@ -333,7 +333,7 @@ fn run(
         .as_deref()
         .and_then(|h| <[u8; 32] as hex::FromHex>::from_hex(h).ok());
     // Decided once: every plan of this stream, and the pooled capturer's key, read this pick.
-    let screen = crate::vdisplay::resolve_screen(device);
+    let screen = crate::vdisplay::resolve_screen(device, None);
     cfg.mirrored = crate::vdisplay::mirrors(&screen.target);
 
     // Not pooled: a reconnect at a different resolution needs a freshly-sized output.
@@ -849,7 +849,8 @@ fn open_gs_virtual_source(
             revive,
         )?
     };
-    let mut vd = crate::vdisplay::open_for(compositor, device).context("open virtual display")?;
+    let mut vd =
+        crate::vdisplay::open_for(compositor, device, None).context("open virtual display")?;
     vd.set_hw_cursor(host_composites_metadata_cursor(compositor, cfg));
     // gamescope takes its HDR flags and display-reuse key from this. An HDR plan captures PQ
     // only, so without it an SDR gamescope streams SDR inside a PQ container.

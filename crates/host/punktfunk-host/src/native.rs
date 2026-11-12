@@ -2042,6 +2042,7 @@ fn display_half(
         view,
         features,
         mirrored,
+        screen,
         ..
     } = n;
     // Read back from what the ServerHello agreed, like `cursor_forward` below.
@@ -2084,6 +2085,7 @@ fn display_half(
         client_hdr: hello.display_hdr.map(crate::encode::hdr_meta_from_wire),
         join_live: joined.is_some(),
         mirrored,
+        screen,
         reframe_to,
         frame_map: lanes.frame_map,
         #[cfg(target_os = "linux")]

@@ -534,6 +534,7 @@ mod tests {
             mic_source: None,
         };
         let params = crate::SessionParams {
+            screen: None,
             client_fp: Some([7; 32]),
             client_hdr: Some(pf_frame::HdrMeta::default()),
             hdr: true,

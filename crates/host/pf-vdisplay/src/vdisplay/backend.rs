@@ -183,11 +183,15 @@ impl VirtualOutput {
     }
 }
 
-/// One session's display request: every per-session [`VirtualDisplay`] setter, in one value.
-/// No `Default`, so an open site that forgets a field does not compile. [`Self::apply`] hands
-/// it to a backend before its `create`.
+/// One session's display request: the screen it wants and every per-session
+/// [`VirtualDisplay`] setter, in one value. No `Default`, so an open site that forgets a field
+/// does not compile. [`Self::apply`] hands the setters to a backend before its `create`.
 #[derive(Clone)]
 pub struct SessionParams {
+    /// The screen this session wants, settled once with the device's access. Each open checks
+    /// it is still free and falls back to the device's own screen. `None` resolves by
+    /// `client_fp`. The opener reads it; no backend does.
+    pub screen: Option<crate::policy::DisplayTarget>,
     /// [`VirtualDisplay::set_client_identity`]: per-device topology, KWin slot, Mutter scale.
     pub client_fp: Option<[u8; 32]>,
     /// [`VirtualDisplay::set_client_hdr`].

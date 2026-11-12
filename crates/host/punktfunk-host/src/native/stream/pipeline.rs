@@ -99,6 +99,8 @@ pub(in crate::native) struct DisplayPrep {
     pub(in crate::native) encoder: Arc<crate::encode::Resolved>,
     /// The session streams a host monitor ([`SessionPlan::mirrored`](crate::session_plan::SessionPlan::mirrored)).
     pub(in crate::native) mirrored: bool,
+    /// The screen the session wants ([`crate::vdisplay::SessionParams::screen`]).
+    pub(in crate::native) screen: Option<crate::vdisplay::policy::DisplayTarget>,
 }
 
 /// A virtual-display session's plan on `compositor`, `pyrowave_bpp` and `encoder` the
@@ -191,6 +193,7 @@ pub(in crate::native) fn prepare_display(
         join_live,
         encoder,
         mirrored,
+        screen,
     } = prep;
     let plan = resolve_plan(
         &encoder,
@@ -214,8 +217,9 @@ pub(in crate::native) fn prepare_display(
         cursor_forward,
         compositor == pf_vdisplay::Compositor::Gamescope,
     );
-    let mut vd = crate::vdisplay::open_for(compositor, client_identity)?;
+    let mut vd = crate::vdisplay::open_for(compositor, client_identity, screen.clone())?;
     crate::vdisplay::SessionParams {
+        screen,
         client_fp: client_identity,
         client_hdr,
         hdr,

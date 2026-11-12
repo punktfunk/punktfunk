@@ -487,7 +487,7 @@ fn paired_app(name: &str, fp: &str) -> Router {
 }
 
 /// The picker answers every lane with the own screen first; only a paired device is told
-/// what it is set to.
+/// what it is set to. The operator, a plugin and a Full device may choose.
 #[tokio::test]
 async fn display_targets_answer_each_lane() {
     let fp = "deadbeefcafe";
@@ -495,6 +495,7 @@ async fn display_targets_answer_each_lane() {
     let check = |body: &serde_json::Value| {
         assert!(body["locked"].is_boolean(), "{body}");
         assert!(!body["host_default"].is_null(), "{body}");
+        assert_eq!(body["may_choose"], true, "{body}");
         assert_eq!(
             body["targets"][0],
             serde_json::json!({"id": "own", "label": "Own screen"})
@@ -565,6 +566,62 @@ async fn a_device_sets_only_its_own_screen() {
     );
     assert_eq!(row.set_by, Some(SetBy::Device));
     assert_eq!(row.capture_monitor.as_deref(), Some("HDMI-A-1"));
+}
+
+/// A device without `GRANT_DISPLAY` reads that it may not choose, and its write is refused
+/// after the row and body checks, on its own lane and when the door vouches for it.
+#[tokio::test]
+async fn a_device_without_the_screen_grant_may_not_choose() {
+    use punktfunk_core::quic::{GRANT_ALL, GRANT_DISPLAY};
+    let fp = "ab".repeat(32);
+    let np = Arc::new(
+        crate::native_pairing::NativePairing::load_with(
+            Some(crate::test_support::scratch().join("pf-mgmt-screen-grant.json")),
+            None,
+            false,
+        )
+        .unwrap(),
+    );
+    let access = crate::native_pairing::Access {
+        grants: GRANT_ALL & !GRANT_DISPLAY,
+        expires_unix: None,
+        until_disconnect: false,
+    };
+    np.add_with_access("tablet", &fp, Some(access)).unwrap();
+    let app = test_app_native(test_state(), np);
+    let as_device = |mut req: axum::http::Request<Body>| {
+        req.extensions_mut()
+            .insert(PeerCertFingerprint(Some(fp.clone())));
+        req
+    };
+
+    let (status, body) = send(&app, as_device(get_req("/api/v1/display/targets"))).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["may_choose"], false, "{body}");
+
+    let put = |row: &str, body: serde_json::Value| {
+        json_req(Method::PUT, &format!("/api/v1/display/clients/{row}"), body)
+    };
+    let own = serde_json::json!({"screen": "own"});
+    let (status, body) = send(&app, as_device(put("0123456789ab", own.clone()))).await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert!(body["code"].is_null(), "another row first: {body}");
+    let (status, body) = send(&app, as_device(put(&fp, own.clone()))).await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert_eq!(body["code"], "screen_choice_not_granted");
+    assert_eq!(
+        body["error"],
+        "This host decides the screen for this device."
+    );
+
+    let mut vouched = put(&fp, own);
+    vouched.headers_mut().insert(
+        crate::mgmt::auth::VOUCH_HEADER,
+        axum::http::HeaderValue::from_str(&fp).unwrap(),
+    );
+    let (status, body) = send(&app, vouched).await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+    assert_eq!(body["code"], "screen_choice_not_granted");
 }
 
 /// A body that is not an object has no keys to merge.

@@ -9,10 +9,14 @@ pub(crate) use pf_vdisplay::*;
 use pf_vdisplay::monitors::PhysicalMonitor;
 use pf_vdisplay::policy::{DisplayTarget, ScreenPick, ScreenReason};
 
-/// The screen `client` gets now: what it is set to ([`screen_target`]), else its own screen
-/// when that monitor is off, missing, or streamed by another device.
-pub(crate) fn resolve_screen(client: Option<[u8; 32]>) -> ScreenPick {
-    pick(None, policy::fp_hex(client).as_deref())
+/// The screen `client` gets now: `wanted`, else what the operator set it to ([`screen_target`]
+/// without its own pick), or its own screen when that monitor is off, missing, or streamed by
+/// another device.
+pub(crate) fn resolve_screen(
+    client: Option<[u8; 32]>,
+    wanted: Option<DisplayTarget>,
+) -> ScreenPick {
+    pick(None, policy::fp_hex(client).as_deref(), wanted)
 }
 
 /// Open the display `client` gets on `compositor` ([`resolve_screen`]), and anchor absolute
@@ -20,8 +24,9 @@ pub(crate) fn resolve_screen(client: Option<[u8; 32]>) -> ScreenPick {
 pub(crate) fn open_for(
     compositor: Compositor,
     client: Option<[u8; 32]>,
+    wanted: Option<DisplayTarget>,
 ) -> anyhow::Result<Box<dyn VirtualDisplay>> {
-    let pick = pick(Some(compositor), policy::fp_hex(client).as_deref());
+    let pick = pick(Some(compositor), policy::fp_hex(client).as_deref(), wanted);
     let vd = pf_vdisplay::open_for(compositor, pick.target.clone())?;
     #[cfg(target_os = "linux")]
     crate::aim_capture_anchor(pick.target.into_monitor(), "session open");
@@ -51,8 +56,15 @@ pub(crate) fn device_label(fp: &str) -> String {
 }
 
 /// [`resolve_screen`] for the device `fp`, against the heads of `compositor`.
-fn pick(compositor: Option<Compositor>, fp: Option<&str>) -> ScreenPick {
-    let (target, locked) = screen_target(fp);
+fn pick(
+    compositor: Option<Compositor>,
+    fp: Option<&str>,
+    wanted: Option<DisplayTarget>,
+) -> ScreenPick {
+    let (target, locked) = match wanted {
+        Some(t) => (t, pf_host_config::config().capture_monitor.is_some()),
+        None => screen_target(fp, false),
+    };
     let DisplayTarget::Monitor(want) = &target else {
         return ScreenPick {
             target,

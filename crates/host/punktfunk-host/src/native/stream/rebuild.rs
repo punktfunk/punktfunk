@@ -506,7 +506,8 @@ impl StreamState {
             }
             (build, Some(DisplayChange::Switch(to))) => {
                 let client = prep.params.as_ref().unwrap_or(&self.display.vd_params);
-                let mut vd = crate::vdisplay::open_for(to, client.client_fp)?;
+                let mut vd =
+                    crate::vdisplay::open_for(to, client.client_fp, client.screen.clone())?;
                 let params = crate::vdisplay::SessionParams {
                     launch: prep.launch.take(),
                     ..prep
@@ -966,7 +967,8 @@ impl StreamState {
             ) {
                 crate::vdisplay::settle_desktop_portal(c);
             }
-            match crate::vdisplay::open_for(c, self.display.vd_params.client_fp) {
+            let params = &self.display.vd_params;
+            match crate::vdisplay::open_for(c, params.client_fp, params.screen.clone()) {
                 Ok(v) => {
                     tracing::info!(
                         from = self.display.compositor.id(),

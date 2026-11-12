@@ -599,9 +599,11 @@ impl DisplayPolicy {
     }
 
     /// What this device streams: its row's `screen`, else the host's. `Own` on a row is an
-    /// answer, so it wins over a host-wide monitor. `None` is its own screen.
-    pub fn screen_for(&self, fp: Option<&str>) -> Option<DisplayTarget> {
+    /// answer, so it wins over a host-wide monitor. A screen the device set itself counts only
+    /// when it `may_choose` (`GRANT_DISPLAY`). `None` is its own screen.
+    pub fn screen_for(&self, fp: Option<&str>, may_choose: bool) -> Option<DisplayTarget> {
         self.overlay_for(fp)
+            .filter(|o| may_choose || o.set_by != Some(SetBy::Device))
             .and_then(|o| o.screen.clone())
             .or_else(|| self.screen.clone())
     }
@@ -2020,7 +2022,7 @@ mod tests {
             .with_box_overlays(Some(box_file))
             .with_contract(true);
         let p = seat.get();
-        assert_eq!(p.screen_for(Some("aa")), None);
+        assert_eq!(p.screen_for(Some("aa"), true), None);
         assert!(!p.ddc_power_off && !p.pnp_disable_monitors && p.keep_monitors.is_empty());
         // The box gives "aa" its own screen, which a seat has none of.
         assert_eq!(
@@ -2632,11 +2634,34 @@ mod tests {
                 },
             );
             let p = p.sanitized();
-            assert_eq!(p.screen_for(Some(TV)), monitor("HDMI-A-1"));
-            assert_eq!(p.screen_for(Some(PAD)), monitor("DP-2"));
-            assert_eq!(p.screen_for(Some("dd44")), monitor("DP-1"), "no row");
-            assert_eq!(p.screen_for(None), monitor("DP-1"));
-            assert_eq!(p.screen_for(Some(PHONE)), Some(DisplayTarget::Own));
+            assert_eq!(p.screen_for(Some(TV), false), monitor("HDMI-A-1"));
+            assert_eq!(p.screen_for(Some(PAD), false), monitor("DP-2"));
+            assert_eq!(p.screen_for(Some("dd44"), false), monitor("DP-1"), "no row");
+            assert_eq!(p.screen_for(None, false), monitor("DP-1"));
+            assert_eq!(p.screen_for(Some(PHONE), false), Some(DisplayTarget::Own));
+        }
+
+        /// A screen the device set itself counts only while it may choose; the host's screen
+        /// answers otherwise. One the console set counts either way.
+        #[test]
+        fn a_devices_own_pick_needs_the_grant() {
+            let mut p = host();
+            p.screen = Some(DisplayTarget::Own);
+            p.clients
+                .get_mut(TV)
+                .unwrap()
+                .set_screen(monitor("HDMI-A-1"), SetBy::Device);
+            p.clients.insert(
+                PAD.into(),
+                ClientOverlay {
+                    screen: monitor("DP-2"),
+                    set_by: Some(SetBy::Console),
+                    ..ClientOverlay::default()
+                },
+            );
+            assert_eq!(p.screen_for(Some(TV), true), monitor("HDMI-A-1"));
+            assert_eq!(p.screen_for(Some(TV), false), Some(DisplayTarget::Own));
+            assert_eq!(p.screen_for(Some(PAD), false), monitor("DP-2"));
         }
 
         /// A file from before `screen` reads its connector as the monitor, and a write
@@ -2647,7 +2672,7 @@ mod tests {
                 "clients": { "aa11": { "capture_monitor": "HDMI-1" } } }"#;
             let mut p = DisplayPolicyStore::parse(std::path::Path::new("t.json"), doc).unwrap();
             assert_eq!(p.screen, monitor("DP-2"));
-            assert_eq!(p.screen_for(Some(TV)), monitor("HDMI-1"));
+            assert_eq!(p.screen_for(Some(TV), false), monitor("HDMI-1"));
 
             p.screen = Some(DisplayTarget::Own);
             p.clients

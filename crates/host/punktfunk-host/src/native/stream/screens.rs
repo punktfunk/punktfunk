@@ -960,6 +960,7 @@ mod tests {
         let base = ScreenBase {
             compositor: crate::vdisplay::Compositor::Kwin,
             params: crate::vdisplay::SessionParams {
+                screen: None,
                 client_fp: Some([3; 32]),
                 client_hdr: None,
                 hdr: false,

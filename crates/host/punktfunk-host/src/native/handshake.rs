@@ -476,6 +476,8 @@ pub(super) struct Negotiated {
     pub(super) encoder: Arc<crate::encode::Resolved>,
     /// The session streams a host monitor: the device's screen as `ServerHello` stated it.
     pub(super) mirrored: bool,
+    /// The screen this session wants ([`session_screen`]); every open of it re-checks it is free.
+    pub(super) screen: Option<crate::vdisplay::policy::DisplayTarget>,
     /// The client asked for a game, and joining a shared screen dropped it.
     pub(super) launch_dropped: bool,
 }
@@ -600,6 +602,8 @@ struct Terms {
     screen: Option<ScreenEcho>,
     /// `screen` is a monitor this session mirrors.
     mirrored: bool,
+    /// The screen this session wants ([`session_screen`]), which every open re-checks.
+    wanted: Option<crate::vdisplay::policy::DisplayTarget>,
 }
 
 /// `ClientHello` → `ServerHello` → `Ready`. Borrows the control streams; the caller keeps them
@@ -633,7 +637,7 @@ pub(super) async fn negotiate(
         compositor = d.compositor;
         gamescope_route = d.route.clone();
     }
-    let screen = session_screen(&n, joined.is_some()).await?;
+    let (wanted, screen) = session_screen(&n, joined.is_some()).await?;
     let mirrored = matches!(screen, Some(ScreenEcho::Monitor(_)));
     // A joiner's view rides `joined`; a mirrored head keeps its own fit.
     let view = view.filter(|_| joined.is_none() && !mirrored);
@@ -734,6 +738,7 @@ pub(super) async fn negotiate(
         audio_plane,
         screen,
         mirrored,
+        wanted,
     };
     let server_hello = server_hello(&n, &t, welcome(&n, &t));
     let host_link = crate::telemetry::net_health::host_link(
@@ -771,28 +776,42 @@ pub(super) async fn negotiate(
         resolved: n.resolved,
         encoder: t.encoder,
         mirrored: t.mirrored,
+        screen: t.wanted,
         launch_dropped,
     })
 }
 
-/// The screen this session streams, decided once: the Welcome says it and the plan captures it.
-/// A monitor the session cannot mirror now reads as its own screen. A joiner streams the owner's
-/// display and a synthetic source none, so neither picks one. Blocks on a compositor read.
-async fn session_screen(n: &Negotiation<'_>, joined: bool) -> Result<Option<ScreenEcho>> {
-    if joined || !matches!(n.source, Punktfunk1Source::Virtual) {
-        return Ok(None);
+/// The screen this session wants and the one the Welcome states, decided once. The device's
+/// own pick counts only with `GRANT_DISPLAY` in its mask. A monitor the session cannot mirror
+/// now is stated as its own screen. A joiner streams the owner's display and states none; a
+/// synthetic source wants none. Blocks on a compositor read.
+async fn session_screen(
+    n: &Negotiation<'_>,
+    joined: bool,
+) -> Result<(
+    Option<crate::vdisplay::policy::DisplayTarget>,
+    Option<ScreenEcho>,
+)> {
+    if !matches!(n.source, Punktfunk1Source::Virtual) {
+        return Ok((None, None));
     }
     let client = n.conn.peer_fingerprint();
-    let echo = tokio::task::spawn_blocking(move || {
-        let target = crate::vdisplay::resolve_screen(client).target;
-        match target.clone().into_monitor() {
-            Some(c) if crate::vdisplay::mirrors(&target) => ScreenEcho::Monitor(c),
-            _ => ScreenEcho::Own,
-        }
+    let may_choose = n.grants & punktfunk_core::quic::GRANT_DISPLAY != 0;
+    let (wanted, echo) = tokio::task::spawn_blocking(move || {
+        let fp = crate::vdisplay::policy::fp_hex(client);
+        let wanted = crate::vdisplay::screen_target(fp.as_deref(), may_choose).0;
+        let echo = (!joined).then(|| {
+            let target = crate::vdisplay::resolve_screen(client, Some(wanted.clone())).target;
+            match target.clone().into_monitor() {
+                Some(c) if crate::vdisplay::mirrors(&target) => ScreenEcho::Monitor(c),
+                _ => ScreenEcho::Own,
+            }
+        });
+        (wanted, echo)
     })
     .await
     .context("resolve screen task")?;
-    Ok(Some(echo))
+    Ok((Some(wanted), echo))
 }
 
 /// The Welcome's shard payload. Before Welcome: a path a previous session proved jumbo is given
@@ -993,6 +1012,7 @@ fn prepare_at_welcome(
         shard_payload: welcome.shard_payload,
         encoder: t.encoder.clone(),
         mirrored: t.mirrored,
+        screen: t.wanted.clone(),
         // As `SessionContext::reframe_to` and `join_live` carry them.
         reframe_to: reframe_to(t.hello.video_fit, joined_view(&t.joined), t.view),
         join_live: t.joined.is_some(),
