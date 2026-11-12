@@ -1118,8 +1118,26 @@ pub struct PrepGuard {
 
 /// Run prep steps synchronously, in order — the exception to fire-and-forget, because
 /// prep must land before launch. Failed/refused `do` logs and continues; its `undo`
-/// stays disarmed. Returns the guard that runs armed `undo`s at drop.
+/// stays disarmed. Returns the guard that runs armed `undo`s at drop. A seat on a person's
+/// own account runs none ([`own_account_refusal`]): the steps are the operator's commands.
 pub fn run_prep(cmds: &[PrepCmd], env: &[(String, String)]) -> PrepGuard {
+    run_prep_on(cmds, env, own_account_refusal().is_some())
+}
+
+/// [`run_prep`] on a host that is, or is not, a seat on a person's `own_account`.
+fn run_prep_on(cmds: &[PrepCmd], env: &[(String, String)], own_account: bool) -> PrepGuard {
+    if own_account {
+        if !cmds.is_empty() {
+            tracing::info!(
+                steps = cmds.len(),
+                "prep steps not run on a person's own account"
+            );
+        }
+        return PrepGuard {
+            undo: Vec::new(),
+            env: env.to_vec(),
+        };
+    }
     let timeout = Duration::from_secs(u64::from(DEFAULT_TIMEOUT_S));
     let mut undo = Vec::new();
     for c in cmds {
@@ -1540,6 +1558,27 @@ mod tests {
             started.elapsed() < Duration::from_secs(5),
             "timeout must kill the hook, not wait it out"
         );
+    }
+
+    /// The steps are the operator's commands: a seat on a person's own account runs none, and
+    /// arms no undo.
+    #[cfg(unix)]
+    #[test]
+    fn prep_runs_nothing_on_a_person_s_own_account() {
+        let dir = tempfile::tempdir().unwrap();
+        let out = dir.path().join("prep.txt");
+        let cmds = vec![PrepCmd {
+            run: format!("echo do >> {}", out.display()),
+            undo: Some(format!("echo undo >> {}", out.display())),
+            elevated: false,
+        }];
+        let guard = run_prep_on(&cmds, &[], true);
+        assert!(guard.undo.is_empty());
+        drop(guard);
+        assert!(!out.exists(), "a step ran as the person");
+        // The same steps on any other host run.
+        drop(run_prep_on(&cmds, &[], false));
+        assert!(out.exists());
     }
 
     #[cfg(unix)]

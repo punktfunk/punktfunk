@@ -10,10 +10,11 @@
 //! - `trust/<id>/` is a read-only copy of the box's pairing store and profiles from the door's
 //!   directory, so a seat user can read what it needs and nothing else there. A seat on a
 //!   person's own account gets only the pairing records of the devices its row admits. A seat
-//!   other than the owner's also finds the box's library there.
+//!   other than the owner's also finds the box's library there, with its own profile's layer
+//!   and no other.
 //! - `library/` is the box's library: a copy of the owner's, which the owner's host writes, with
-//!   the plugins' grants and the firmware they staged. The door serves it to every client, and
-//!   each seat's trust copy takes it from here.
+//!   every profile's layer, the plugins' grants and the firmware they staged. The door serves it
+//!   to every client, and each seat's trust copy takes it from here.
 //! - `seats/hosts/<id>/mgmt-token` is the token the box presents to that seat host's loopback
 //!   API. It belongs to the `punktfunk` user, not the seat group: every seat user is a member.
 
@@ -65,6 +66,17 @@ const LIBRARY_FILES: [&str; 6] = [
 
 /// One table per metadata source, a flat folder beside the library files.
 const LIBRARY_METADATA: &str = "library-metadata";
+
+/// A profile's own layer of the library: one folder per profile, named by its id.
+const LIBRARY_PROFILES: &str = "library-profiles";
+/// What a profile's folder holds. Nothing in them runs.
+const PROFILE_FILES: [&str; 5] = [
+    "library-hidden.json",
+    "library-overrides.json",
+    "library-picks.json",
+    "library-scanners.json",
+    "session-settings.json",
+];
 
 /// The owner's host's file that the door and every seat read beside the library: the display
 /// policy, whose one writer is the owner's host. Copied with the library, into the same dir.
@@ -878,16 +890,19 @@ pub(super) fn refresh_box_library(
     };
     let dst =
         open_copy(&box_library_dir(state), reader).map_err(|e| io("open the library copy", e))?;
-    let library =
-        sync_library(Some(&src), &dst, reader).map_err(|e| io("copy the owner's library", e));
+    let library = sync_library(Some(&src), &dst, reader, &|_| true)
+        .map_err(|e| io("copy the owner's library", e));
     let policy = sync_file(Some(&src), &dst, OWNER_POLICY, reader, MAX_TRUST_BYTES)
         .map_err(|e| io("copy the owner's display policy", e));
     Ok(library? | policy?)
 }
 
 /// Brings the box's library in a seat's trust copy level with [`box_library_dir`]: the seat's
-/// `PUNKTFUNK_LIBRARY_DIR`. Never the owner's row, whose host writes the library it reads.
+/// `PUNKTFUNK_LIBRARY_DIR`. Of [`LIBRARY_PROFILES`] it holds only the folder of the profile the
+/// door's `profiles.json` in `box_dir` puts on this seat ([`seat_profile`]). Never the owner's
+/// row, whose host writes the library it reads.
 pub(super) fn refresh_seat_library(
+    box_dir: &Path,
     state: &Path,
     id: &SeatId,
     reader: Reader,
@@ -895,7 +910,36 @@ pub(super) fn refresh_seat_library(
     let io = |what: &str, e| io_err("trust_copy", what, e);
     let dst = open_copy(&trust_dir(state, id), reader).map_err(|e| io("open the trust copy", e))?;
     let src = open_source(&box_library_dir(state)).map_err(|e| io("open the box library", e))?;
-    sync_library(src.as_ref(), &dst, reader).map_err(|e| io("copy the box library", e))
+    let own = seat_profile(box_dir, id);
+    sync_library(src.as_ref(), &dst, reader, &|p| own.as_deref() == Some(p))
+        .map_err(|e| io("copy the box library", e))
+}
+
+/// The profile seat `id` plays: the first in `box_dir`'s `profiles.json` whose `os_account` is
+/// `{"kind": "seat", "seat": id}`, as its host picks its own. Read from the door's file, never
+/// the trust copy: a person owns theirs. A file [`safe_open`] refuses, one over
+/// [`MAX_TRUST_BYTES`] or not `{"profiles": [...]}`, and an id that is not 12 lowercase hex,
+/// name none.
+fn seat_profile(box_dir: &Path, id: &SeatId) -> Option<String> {
+    #[derive(serde::Deserialize)]
+    struct File {
+        profiles: Vec<serde_json::Value>,
+    }
+    let (bytes, _) = safe_open::read(&box_dir.join("profiles.json"), MAX_TRUST_BYTES).ok()??;
+    let file: File = serde_json::from_slice(&bytes).ok()?;
+    let mine = file.profiles.into_iter().find(|p| {
+        let account = &p["os_account"];
+        account["kind"] == "seat" && account["seat"] == id.as_str()
+    })?;
+    mine["id"]
+        .as_str()
+        .filter(|p| profile_id(p))
+        .map(str::to_owned)
+}
+
+/// A profile id as the host mints it: 12 lowercase hex.
+fn profile_id(name: &str) -> bool {
+    name.len() == 12 && name.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
 }
 
 /// Removes the box's library: the owner's row is gone, and so is the door it was for.
@@ -906,29 +950,81 @@ pub(super) fn remove_box_library(state: &Path) -> std::io::Result<()> {
     }
 }
 
-/// The library files, the metadata folder, the plugins' grants and the firmware they staged,
-/// from `src` into `dst`, for `reader`. An item that can't be copied keeps its last good copy
-/// and the rest still follow; the first failure is the answer.
-fn sync_library(src: Option<&OwnedFd>, dst: &OwnedFd, reader: Reader) -> std::io::Result<bool> {
-    let (mut changed, mut first) = (false, None);
-    let mut note = |copied: std::io::Result<bool>| match copied {
-        Ok(did) => changed |= did,
-        Err(e) => {
-            first.get_or_insert(e);
-        }
-    };
+/// The library files, the metadata folder, the folders of the profiles `profile` admits, the
+/// plugins' grants and the firmware they staged, from `src` into `dst`, for `reader`. An item
+/// that can't be copied keeps its last good copy and the rest still follow; the first failure is
+/// the answer.
+fn sync_library(
+    src: Option<&OwnedFd>,
+    dst: &OwnedFd,
+    reader: Reader,
+    profile: &dyn Fn(&str) -> bool,
+) -> std::io::Result<bool> {
+    let mut tally = Tally::default();
     for name in LIBRARY_FILES {
-        note(sync_file(src, dst, name, reader, MAX_LIBRARY_BYTES));
+        tally.note(sync_file(src, dst, name, reader, MAX_LIBRARY_BYTES));
     }
     let metadata = sync_flat_dir(src, dst, LIBRARY_METADATA, reader, MAX_LIBRARY_BYTES);
-    note(metadata);
-    note(sub(src, PLUGIN_RUN).and_then(|run| {
+    tally.note(metadata);
+    tally.note(sync_profiles(src, dst, reader, profile));
+    tally.note(sub(src, PLUGIN_RUN).and_then(|run| {
         sync_dir(run.as_ref(), dst, PLUGIN_RUN, reader, &|run, copy| {
             sync_file(run, copy, PLUGIN_GRANTS, reader, MAX_TRUST_BYTES)
         })
     }));
-    note(sync_firmware(src, dst, reader));
-    first.map_or(Ok(changed), Err)
+    tally.note(sync_firmware(src, dst, reader));
+    tally.answer()
+}
+
+/// Whether any step changed its copy, and the first step that failed.
+#[derive(Default)]
+struct Tally {
+    changed: bool,
+    first: Option<std::io::Error>,
+}
+
+impl Tally {
+    fn note(&mut self, step: std::io::Result<bool>) {
+        match step {
+            Ok(did) => self.changed |= did,
+            Err(e) => {
+                self.first.get_or_insert(e);
+            }
+        }
+    }
+
+    fn answer(self) -> std::io::Result<bool> {
+        self.first.map_or(Ok(self.changed), Err)
+    }
+}
+
+/// [`LIBRARY_PROFILES`] from `src` into `dst`: the folder of each profile id `keep` admits,
+/// holding [`PROFILE_FILES`] alone, and every other folder in `dst` emptied and removed. A name
+/// that is no profile id, or a link or file where a folder belongs, counts as absent. A folder
+/// on its way out loses the temp a cut-short copy left too.
+fn sync_profiles(
+    src: Option<&OwnedFd>,
+    dst: &OwnedFd,
+    reader: Reader,
+    keep: &dyn Fn(&str) -> bool,
+) -> std::io::Result<bool> {
+    let files = |src: Option<&OwnedFd>, copy: &OwnedFd| {
+        let mut tally = Tally::default();
+        for name in PROFILE_FILES {
+            tally.note(sync_file(src, copy, name, reader, MAX_LIBRARY_BYTES));
+            if src.is_none() {
+                tally.note(unlink(copy, &format!("{name}.tmp")));
+            }
+        }
+        tally.answer()
+    };
+    let profiles = |src: Option<&OwnedFd>, copy: &OwnedFd| {
+        let mut found = folders(src, |dir| Ok(Some(dir)))?;
+        found.retain(|(name, _)| profile_id(name) && keep(name));
+        sync_each(found, copy, reader, &files)
+    };
+    let src = sub(src, LIBRARY_PROFILES)?;
+    sync_dir(src.as_ref(), dst, LIBRARY_PROFILES, reader, &profiles)
 }
 
 /// `plugin-state/<provider>/firmware/<platform>/<file>` from `src` into `dst`: what a plugin
@@ -982,24 +1078,25 @@ fn folders(
     Ok(out)
 }
 
-/// Each of `found` copied into `dst` through `fill`, and every other folder in `dst` emptied
-/// and removed.
+/// Every folder in `dst` not in `found` emptied and removed, then each of `found` copied into
+/// `dst` through `fill`. A folder that fails keeps what it has and stops none after it; the
+/// first failure is the answer.
 fn sync_each(
     found: Vec<(String, OwnedFd)>,
     dst: &OwnedFd,
     reader: Reader,
     fill: Fill<'_>,
 ) -> std::io::Result<bool> {
-    let mut changed = false;
-    for (name, src) in &found {
-        changed |= sync_dir(Some(src), dst, name, reader, fill)?;
-    }
+    let mut tally = Tally::default();
     for name in names(dst)? {
         if found.iter().all(|(kept, _)| *kept != name) {
-            changed |= sync_dir(None, dst, &name, reader, fill)?;
+            tally.note(sync_dir(None, dst, &name, reader, fill));
         }
     }
-    Ok(changed)
+    for (name, src) in &found {
+        tally.note(sync_dir(Some(src), dst, name, reader, fill));
+    }
+    tally.answer()
 }
 
 /// The folder `name` in `dst` level with `src`, its source already opened: made for `reader`
@@ -1778,7 +1875,7 @@ mod tests {
             "unchanged is a no-op"
         );
 
-        assert!(refresh_seat_library(&state, &id(), reader).unwrap());
+        assert!(refresh_seat_library(&home, &state, &id(), reader).unwrap());
         let trust = trust_dir(&state, &id());
         assert!(trust.join("library.json").exists());
         assert!(trust.join("library-metadata/sgdb.json").exists());
@@ -1826,7 +1923,7 @@ mod tests {
         std::fs::remove_dir_all(romm.join("firmware/psx")).unwrap();
         std::fs::remove_file(run.join("plugin-grants.json")).unwrap();
         assert!(refresh_box_library(&home, &state, reader).unwrap());
-        assert!(refresh_seat_library(&state, &id(), reader).unwrap());
+        assert!(refresh_seat_library(&home, &state, &id(), reader).unwrap());
         assert!(!trust.join("library-metadata/sgdb.json").exists());
         assert!(!trust.join("plugin-state/romm/firmware/psx").exists());
         assert!(!trust.join("plugin-run/plugin-grants.json").exists());
@@ -1842,9 +1939,201 @@ mod tests {
 
         remove_box_library(&state).unwrap();
         assert!(!copy.exists());
-        assert!(refresh_seat_library(&state, &id(), reader).unwrap());
+        assert!(refresh_seat_library(&home, &state, &id(), reader).unwrap());
         assert!(!trust.join("library.json").exists());
         assert!(!state_copy.exists());
+    }
+
+    const ANNA: &str = "a1a1a1a1a1a1";
+    const BEN: &str = "b2b2b2b2b2b2";
+    const OTHER_SEAT: &str = "fedcba9876543210fedcba9876543210";
+
+    /// The door's `profiles.json`: the owner, Anna on `anna`'s seat, Ben on `ben`'s.
+    fn profiles_on(box_dir: &Path, anna: &str, ben: &str) {
+        let file = serde_json::json!({"version": 1, "profiles": [
+            {"id": "c3c3c3c3c3c3", "display_name": "Owner", "os_account": {"kind": "operator"}},
+            {"id": ANNA, "display_name": "Anna", "os_account": {"kind": "seat", "seat": anna}},
+            {"id": BEN, "display_name": "Ben", "os_account": {"kind": "seat", "seat": ben}},
+        ]});
+        std::fs::write(box_dir.join("profiles.json"), file.to_string()).unwrap();
+    }
+
+    /// The names in `dir`, sorted; none when it is absent.
+    fn listing(dir: &Path) -> Vec<String> {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return Vec::new();
+        };
+        let mut names: Vec<String> = entries
+            .map(|e| e.unwrap().file_name().into_string().unwrap())
+            .collect();
+        names.sort();
+        names
+    }
+
+    /// The door's copy holds every profile's layer; a seat's trust copy holds its own profile's
+    /// alone and drops a folder that stops being its own.
+    #[test]
+    fn a_seat_gets_its_own_profile_s_layer_and_no_other() {
+        let temp = tempfile::tempdir().unwrap();
+        let (home, state, box_dir) = (
+            temp.path().join("home"),
+            temp.path().join("state"),
+            temp.path().join("box"),
+        );
+        let layer = home.join(".config/punktfunk").join(LIBRARY_PROFILES);
+        for dir in [
+            layer.join(ANNA),
+            layer.join(BEN),
+            state.clone(),
+            box_dir.clone(),
+        ] {
+            std::fs::create_dir_all(dir).unwrap();
+        }
+        std::fs::write(layer.join(ANNA).join("library-hidden.json"), "[1]").unwrap();
+        std::fs::write(layer.join(ANNA).join("session-settings.json"), "{}").unwrap();
+        std::fs::write(layer.join(ANNA).join("notes.txt"), "not a store").unwrap();
+        std::fs::write(layer.join(BEN).join("library-picks.json"), "{}").unwrap();
+        profiles_on(&box_dir, id().as_str(), OTHER_SEAT);
+        let door = Reader::group(own_gid(&home));
+        assert!(refresh_box_library(&home, &state, door).unwrap());
+        let copy = box_library_dir(&state).join(LIBRARY_PROFILES);
+        assert_eq!(listing(&copy), [ANNA, BEN]);
+        assert_eq!(mode(&copy.join(ANNA)), 0o750);
+        assert_eq!(mode(&copy.join(ANNA).join("library-hidden.json")), 0o640);
+        assert_eq!(
+            listing(&copy.join(ANNA)),
+            ["library-hidden.json", "session-settings.json"],
+            "the stores alone"
+        );
+
+        let me = std::fs::metadata(&home).unwrap();
+        let seat = Reader::person(me.uid(), me.gid());
+        let seat_copy = |box_dir: &Path| refresh_seat_library(box_dir, &state, &id(), seat);
+        assert!(seat_copy(&box_dir).unwrap());
+        let trust = trust_dir(&state, &id()).join(LIBRARY_PROFILES);
+        assert_eq!(listing(&trust), [ANNA]);
+        assert_eq!(mode(&trust.join(ANNA)), 0o700);
+        assert_eq!(
+            std::fs::read_to_string(trust.join(ANNA).join("library-hidden.json")).unwrap(),
+            "[1]"
+        );
+        assert_eq!(mode(&trust.join(ANNA).join("library-hidden.json")), 0o600);
+        assert!(!seat_copy(&box_dir).unwrap(), "unchanged is a no-op");
+
+        // The seat becomes Ben's: Anna's folder goes, with what a cut-short copy left.
+        std::fs::write(trust.join(ANNA).join("library-picks.json.tmp"), "{").unwrap();
+        profiles_on(&box_dir, OTHER_SEAT, id().as_str());
+        assert!(seat_copy(&box_dir).unwrap());
+        assert_eq!(listing(&trust), [BEN]);
+
+        // No profile plays the seat, or the door's file is gone: no profile's folder.
+        profiles_on(&box_dir, OTHER_SEAT, OTHER_SEAT);
+        assert!(seat_copy(&box_dir).unwrap());
+        assert!(listing(&trust).is_empty());
+        profiles_on(&box_dir, id().as_str(), OTHER_SEAT);
+        assert!(seat_copy(&box_dir).unwrap());
+        assert!(seat_copy(&temp.path().join("gone")).unwrap());
+        assert!(listing(&trust).is_empty());
+
+        // The owner's host drops Anna's layer: it leaves the door's copy, then the seat's.
+        assert!(seat_copy(&box_dir).unwrap());
+        std::fs::remove_dir_all(layer.join(ANNA)).unwrap();
+        assert!(refresh_box_library(&home, &state, door).unwrap());
+        assert_eq!(listing(&copy), [BEN]);
+        assert!(seat_copy(&box_dir).unwrap());
+        assert!(listing(&trust).is_empty());
+    }
+
+    /// A link, a file where a folder belongs, a name that is no profile id, and a store that is
+    /// a link, a folder or over its cap never cross; the rest of the layer still follows.
+    #[test]
+    fn hostile_profile_entries_are_not_copied() {
+        let temp = tempfile::tempdir().unwrap();
+        let (home, state, box_dir) = (
+            temp.path().join("home"),
+            temp.path().join("state"),
+            temp.path().join("box"),
+        );
+        let layer = home.join(".config/punktfunk").join(LIBRARY_PROFILES);
+        let (anna, secret) = (layer.join(ANNA), temp.path().join("secret"));
+        for dir in [&anna, &state, &box_dir, &secret] {
+            std::fs::create_dir_all(dir).unwrap();
+        }
+        std::fs::write(secret.join("library-hidden.json"), "root only").unwrap();
+        std::os::unix::fs::symlink(
+            secret.join("library-hidden.json"),
+            anna.join("library-hidden.json"),
+        )
+        .unwrap();
+        std::fs::create_dir(anna.join("library-overrides.json")).unwrap();
+        let big = std::fs::File::create(anna.join("library-picks.json")).unwrap();
+        big.set_len(MAX_LIBRARY_BYTES + 1).unwrap();
+        std::fs::write(anna.join("library-scanners.json"), "{}").unwrap();
+        std::os::unix::fs::symlink(&secret, layer.join(BEN)).unwrap();
+        std::fs::write(layer.join("d4d4d4d4d4d4"), "a file").unwrap();
+        for name in ["A1A1A1A1A1A1", "notaprofile", "a1a1a1a1a1a1a1"] {
+            std::fs::create_dir(layer.join(name)).unwrap();
+            std::fs::write(layer.join(name).join("library-hidden.json"), "[]").unwrap();
+        }
+        let door = Reader::group(own_gid(&home));
+        let error = refresh_box_library(&home, &state, door).unwrap_err();
+        assert_eq!(error.code, "box_library");
+        let copy = box_library_dir(&state).join(LIBRARY_PROFILES);
+        assert_eq!(listing(&copy), [ANNA]);
+        assert_eq!(listing(&copy.join(ANNA)), ["library-scanners.json"]);
+
+        profiles_on(&box_dir, id().as_str(), OTHER_SEAT);
+        assert!(refresh_seat_library(&box_dir, &state, &id(), door).unwrap());
+        let trust = trust_dir(&state, &id()).join(LIBRARY_PROFILES);
+        assert_eq!(listing(&trust.join(ANNA)), ["library-scanners.json"]);
+
+        // A linked layer folder is refused whole: the copies keep what they had.
+        std::fs::remove_dir_all(&layer).unwrap();
+        std::os::unix::fs::symlink(&secret, &layer).unwrap();
+        assert!(refresh_box_library(&home, &state, door).is_err());
+        assert_eq!(listing(&copy), [ANNA]);
+    }
+
+    /// A seat's profile is the one whose account names that seat. The owner's row, a light seat,
+    /// an id that is no profile id, and a door file that is a link or no JSON name none.
+    #[test]
+    fn a_seat_s_profile_comes_from_the_door_s_file_alone() {
+        let temp = tempfile::tempdir().unwrap();
+        let box_dir = temp.path();
+        assert_eq!(seat_profile(box_dir, &id()), None, "no file");
+        profiles_on(box_dir, id().as_str(), OTHER_SEAT);
+        assert_eq!(seat_profile(box_dir, &id()).as_deref(), Some(ANNA));
+        let other = SeatId::parse(OTHER_SEAT).unwrap();
+        assert_eq!(seat_profile(box_dir, &other).as_deref(), Some(BEN));
+
+        let file = |rows: serde_json::Value| {
+            let file = serde_json::json!({ "profiles": rows });
+            std::fs::write(box_dir.join("profiles.json"), file.to_string()).unwrap();
+            seat_profile(box_dir, &id())
+        };
+        let seat = serde_json::json!({"kind": "seat", "seat": id().as_str()});
+        for bad in [
+            "../a1a1a1a1a",
+            "A1A1A1A1A1A1",
+            "a1a1a1a1a1a1/..",
+            "operator",
+            "",
+        ] {
+            let rows = serde_json::json!([{"id": bad, "os_account": seat}]);
+            assert_eq!(file(rows), None, "{bad}");
+        }
+        let light = serde_json::json!([{"id": ANNA, "os_account": {"kind": "seat"}}]);
+        assert_eq!(file(light), None, "a light seat");
+        let owner = serde_json::json!([{"id": ANNA, "os_account": {"kind": "operator"}}]);
+        assert_eq!(file(owner), None, "the owner's");
+
+        std::fs::write(box_dir.join("profiles.json"), "not json").unwrap();
+        assert_eq!(seat_profile(box_dir, &id()), None);
+        let real = temp.path().join("real.json");
+        profiles_on(box_dir, id().as_str(), OTHER_SEAT);
+        std::fs::rename(box_dir.join("profiles.json"), &real).unwrap();
+        std::os::unix::fs::symlink(&real, box_dir.join("profiles.json")).unwrap();
+        assert_eq!(seat_profile(box_dir, &id()), None, "a link");
     }
 
     /// The owner's display policy travels with the library: into the copy the door reads, and
