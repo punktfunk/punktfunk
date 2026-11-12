@@ -2,7 +2,6 @@
 // focuses it (steam/), patch Steam's game page (game-page/), and stand in front of the trust
 // decision that gates a stream (panel/, trust/). The client's own console home does the rest.
 import { definePlugin } from "@decky/api";
-import { staticClasses } from "@decky/ui";
 import { FaTv } from "react-icons/fa";
 import { installGamePageStream } from "./game-page/library-page";
 import { refreshHosts } from "./hosts/store";
@@ -29,14 +28,10 @@ export default definePlugin(() => {
       removeGamePageStream();
       unwatchRunning();
     },
-    // `name` must stay in sync with plugin.json (the loader keys plugins by it) — and it is
-    // USER-VISIBLE: Decky labels the entry in its plugin list with it, so it carries the brand
-    // case. Decky finds an installed plugin by matching plugin.json "name" (never the folder
-    // name), so this is independent of the on-disk dir, which stays lowercase `punktfunk`.
+    // Equals plugin.json "name": Decky finds the plugin by it, not by the lowercase folder, and
+    // shows it in its list and as the panel's title. No `titleView`: Decky's title bar already
+    // carries Steam's title class, and nesting that class shifts the name and shadows the back button.
     name: "Punktfunk",
-    // `staticClasses?.Title` is guarded so a future client that drops the export can't throw
-    // at plugin-load time (an error boundary only catches render-time, not load-time, errors).
-    titleView: <div className={staticClasses?.Title}>Punktfunk</div>,
     content: (
       <PluginErrorBoundary>
         <QamPanel />
