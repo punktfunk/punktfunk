@@ -46,6 +46,10 @@ pub struct NativeVaapiEncoder {
     anchor: Option<usize>,
     /// The newest frame the client confirmed, while the host holds confirmed references.
     reference_floor: Option<crate::Acked>,
+    /// What the client confirmed it decoded clean, whatever the link.
+    confirmed: Option<crate::Acked>,
+    /// The two pictures the session never replaces, in host wires: a late loss's anchor.
+    kept: rfi::Kept,
     /// Intra refresh wave in flight: the rung a loss with no anchor takes instead of the
     /// IDR ([`recovery_policy`]).
     recovery: Recovery,
@@ -125,6 +129,8 @@ impl NativeVaapiEncoder {
             force_kf: true,
             anchor: None,
             reference_floor: None,
+            confirmed: None,
+            kept: rfi::Kept::default(),
             recovery: Recovery::default(),
             wire_offset: 0,
             frames: 0,
@@ -516,6 +522,18 @@ impl Encoder for NativeVaapiEncoder {
         self.anchor = None;
         self.force_kf = false;
         self.recovery = plan.next;
+        let offset = self.wire_offset;
+        let held: Vec<i64> = session
+            .slots()
+            .into_iter()
+            .map(|(_, w)| w + offset)
+            .collect();
+        let wire = session.next_wire() - 1 + offset;
+        self.kept
+            .step(wire, !plan.dirty, self.confirmed.as_ref(), |w| {
+                held.contains(&w)
+            });
+        session.keep([self.kept.pin, self.kept.candidate].map(|w| w.map(|w| w - offset)));
         let pts_ns = self.frames * 1_000_000_000 / u64::from(self.params.fps_num.max(1));
         self.frames += 1;
         self.meta.push_back(PendingMeta {
@@ -617,6 +635,10 @@ impl Encoder for NativeVaapiEncoder {
 
     fn set_reference_floor(&mut self, acked: Option<crate::Acked>) {
         self.reference_floor = acked;
+    }
+
+    fn note_confirmed(&mut self, acked: Option<crate::Acked>) {
+        self.confirmed = acked;
     }
 
     fn distrust_references(&mut self) {

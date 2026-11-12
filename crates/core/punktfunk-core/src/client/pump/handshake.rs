@@ -287,6 +287,7 @@ async fn dial(
             access_only: false,
             screens: p.screens.clone(),
             view: p.view,
+            screen_wish: p.screen_wish.clone(),
         };
         v2io::send(&mut send, &hello).await?;
         if let Some(unlock) = unlock {
@@ -409,6 +410,7 @@ async fn dial(
                 clock_rtt_ns,
                 profile: server.profile.clone(),
                 screen: server.screen.clone(),
+                role: server.role,
                 scroll_axis_units: server.features.has(registry::FEATURE_SCROLL_AXIS_UNITS),
                 picture: server.picture,
             },

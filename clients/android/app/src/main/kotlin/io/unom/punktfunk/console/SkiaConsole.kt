@@ -45,6 +45,7 @@ import io.unom.punktfunk.runSpeedTest
 import io.unom.punktfunk.shortcutId
 import io.unom.punktfunk.kit.DsDevice
 import io.unom.punktfunk.kit.Gamepad
+import io.unom.punktfunk.kit.HostText
 import io.unom.punktfunk.kit.NativeBridge
 import io.unom.punktfunk.kit.ProfilePick
 import io.unom.punktfunk.kit.R
@@ -702,6 +703,14 @@ object SkiaConsole {
         if (handle != 0L) NativeBridge.nativeConsoleNotice(handle, text)
     }
 
+    /** The held launch's refusal in the host's words, read on the hold's own poll: the hold says it. */
+    private fun tellRefusal() {
+        val res = appContext?.resources ?: return
+        val session = state.now { pendingSession } ?: return
+        val said = HostText.launch(NativeBridge.nativeLaunchRefusal(session.handle)) ?: return
+        NativeBridge.nativeConsoleLaunchRefused(handle, said.words(res))
+    }
+
     /** The system keyboard finished: [typed] replaces the field's text, and the field closes. */
     fun finishEntry(typed: String) {
         val entry = systemEntry ?: return
@@ -959,7 +968,7 @@ object SkiaConsole {
         "Probe" to { _ -> resumeDiscovery(); pushHosts() },
         "LoadLicenses" to { _ -> loadLicenses() },
         "FetchLibrary" to { c -> fetchLibrary(c, refreshOnly = false) },
-        "RefreshRunning" to { c -> fetchLibrary(c, refreshOnly = true) },
+        "RefreshRunning" to { c -> tellRefusal(); fetchLibrary(c, refreshOnly = true) },
         "Pair" to ::pair,
         "RequestAccess" to ::requestAccess,
         "SendLogs" to ::sendLogs,
@@ -1193,12 +1202,13 @@ object SkiaConsole {
     }
 
     /**
-     * Write this device's screen on the host, then ask again: the row the card shows is the
-     * host's answer, refused or not. The console already toasted the pick; a refusal is a notice.
+     * Write a Screen row's pick on the host, a role's topology with it, then ask again: the row
+     * the card shows is the host's answer, refused or not. The console already toasted the pick;
+     * a refusal is a notice.
      */
     private fun setScreen(c: JSONObject) {
         val addr = c.optString("addr"); val mgmt = c.optInt("mgmt"); val fp = c.optString("fp_hex")
-        val target = DisplayTargets.DisplayTarget.of(c.opt("screen")) ?: return
+        val pick = DisplayTargets.Pick.of(c) ?: return
         val label = c.optString("label")
         val id = identity
         if (id == null) {
@@ -1207,7 +1217,7 @@ object SkiaConsole {
         }
         val res = appContext?.resources ?: return
         ioPool.execute {
-            val refused = DisplayTargets.setScreen(id, addr, mgmt, fp, target, label, streamPort(fp))
+            val refused = DisplayTargets.setPick(id, addr, mgmt, fp, pick, label, streamPort(fp))
             val found = DisplayTargets.fetch(id, addr, mgmt, fp, streamPort(fp))
             state.launch {
                 services.screensAt[fp] = android.os.SystemClock.elapsedRealtime()

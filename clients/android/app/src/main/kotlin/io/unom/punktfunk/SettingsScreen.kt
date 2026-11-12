@@ -95,7 +95,12 @@ import io.unom.punktfunk.kit.asciiDigits
 import io.unom.punktfunk.kit.deviceBodyVibrator
 import io.unom.punktfunk.kit.link.StartIn
 import io.unom.punktfunk.kit.link.StartScreen
+import io.unom.punktfunk.kit.security.IdentityHolder
 import io.unom.punktfunk.kit.security.KnownHostStore
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.withContext
 
 /**
  * Stream settings, organised as an iOS-Settings / Android-system-settings style list of category
@@ -432,9 +437,9 @@ private fun PresetDialogs(
             initialAccent = existing?.accent ?: (intent as? EditIntent.New)?.accent,
             creating = existing == null,
             taken = { presetStore.nameTaken(it, except = existing?.id) },
-            onConfirm = { name, accent ->
+            onConfirm = { name, accent, secondScreen ->
                 val saved = existing?.copy(name = name, accent = accent)
-                    ?: newPreset(name, accent)
+                    ?: if (secondScreen) secondScreenPreset(name, accent) else newPreset(name, accent)
                 presetStore.save(saved)
                 onSaved(saved.id)
             },
@@ -896,6 +901,7 @@ private fun DisplaySettings(s: Settings, update: (String, Settings) -> Unit, con
     val showCustom = customPicked || s.isCustomResolution(families)
     var customBitratePicked by remember { mutableStateOf(false) }
     var customScalePicked by remember { mutableStateOf(false) }
+    HostScreenGroup(s, update)
     SettingsGroup(stringResource(R.string.prefs_group_resolution)) {
         // The family the dropdown lists. A chip writes that family's size nearest the current
         // height, so the dropdown always holds a row of the family it shows.
@@ -1200,6 +1206,43 @@ private fun DisplaySettings(s: Settings, update: (String, Settings) -> Unit, con
             field = "compositor",
             caption = stringResource(R.string.player_compositor_hint),
         ) { c -> update("compositor", s.copy(compositor = c)) }
+    }
+}
+
+/**
+ * A preset's Host screen: as on the host card, a role, or a monitor of a host this device knows,
+ * from each paired host's answer, asked when the row shows. Preset scope only: a host's default
+ * is the pick on its card.
+ */
+@Composable
+private fun HostScreenGroup(s: Settings, update: (String, Settings) -> Unit) {
+    if (!LocalSettingsScope.current.presetScope) return
+    val context = LocalContext.current
+    var known by remember { mutableStateOf<List<Pair<String, DisplayTargets.Targets>>>(emptyList()) }
+    LaunchedEffect(Unit) {
+        val hosts = KnownHostStore(context).all().filter { it.paired && it.fpHex.isNotEmpty() }
+        if (hosts.isEmpty()) return@LaunchedEffect
+        known = withContext(Dispatchers.IO) {
+            val id = IdentityHolder.shared(context).await() ?: return@withContext emptyList()
+            hosts.map { kh ->
+                async {
+                    DisplayTargets.fetch(id, kh.address, kh.effectiveMgmtPort, kh.fpHex, kh.port)
+                        ?.let { kh.name.ifBlank { kh.address } to it }
+                }
+            }.awaitAll().filterNotNull()
+        }
+    }
+    val choices = DisplayTargets.hostScreenChoices(known, s.hostScreen, context.resources)
+    val picked = choices.firstOrNull { it.checked }
+    SettingsGroup {
+        SettingDropdown(
+            label = stringResource(R.string.preset_host_screen),
+            options = choices.map { it.value.orEmpty() to it.label },
+            selected = picked?.value.orEmpty(),
+            field = "host_screen",
+            caption = picked?.hint,
+            headers = choices.mapNotNull { c -> c.header?.let { c.value.orEmpty() to it } }.toMap(),
+        ) { v -> update("host_screen", s.copy(hostScreen = v)) }
     }
 }
 
@@ -1635,7 +1678,7 @@ private fun ClickableRow(title: String, subtitle: String, onClick: () -> Unit) {
  * [caption] is the field's own explanation, rendered directly under the control — the `described()`
  * idiom the other clients use, so a dropdown's guidance belongs to it instead of floating as a
  * loose paragraph between rows. [field] is the overlay field this row writes, which is what its
- * override marker keys on.
+ * override marker keys on. [headers] start a group in the menu at the option of that value.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -1646,6 +1689,7 @@ internal fun <T> SettingDropdown(
     field: String? = null,
     caption: String? = null,
     enabled: Boolean = true,
+    headers: Map<T, String> = emptyMap(),
     onSelect: (T) -> Unit,
 ) {
     var expanded by remember { mutableStateOf(false) }
@@ -1673,6 +1717,15 @@ internal fun <T> SettingDropdown(
                 onDismissRequest = { expanded = false },
             ) {
                 options.forEach { (value, lbl) ->
+                    headers[value]?.let { header ->
+                        HorizontalDivider()
+                        Text(
+                            header,
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(start = 12.dp, end = 12.dp, top = 8.dp, bottom = 2.dp),
+                        )
+                    }
                     DropdownMenuItem(
                         text = { Text(lbl) },
                         onClick = {

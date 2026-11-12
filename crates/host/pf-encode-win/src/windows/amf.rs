@@ -505,8 +505,8 @@ fn ltr_disabled() -> bool {
     crate::knobs::get().no_amf_ltr != 0
 }
 
-/// Frames between LTR marks. Default `fps/2` (~0.5 s); [`NUM_LTR_SLOTS`] then covers ~1 s of
-/// recent references. `PUNKTFUNK_LTR_INTERVAL_FRAMES` overrides.
+/// Frames between LTR marks while the client sends no confirmations. Default `fps/2` (~0.5 s);
+/// [`NUM_LTR_SLOTS`] then covers ~1 s of recent references. `PUNKTFUNK_LTR_INTERVAL_FRAMES` overrides.
 fn ltr_mark_interval(fps: u32) -> i64 {
     super::policy::ltr_interval().unwrap_or_else(|| (fps.max(2) / 2).max(1) as i64)
 }
@@ -1085,6 +1085,8 @@ pub struct AmfEncoder {
     ltr_mark_interval: i64,
     /// The newest frame the client confirmed, while the host holds confirmed references.
     reference_floor: Option<crate::Acked>,
+    /// What the client confirmed it decoded clean, whatever the link: the kept pair's marks.
+    confirmed: Option<crate::Acked>,
     /// `PUNKTFUNK_LTR_FORCE_AT=N`: self-trigger [`Encoder::invalidate_ref_frames`] at that index.
     ltr_test_force_at: Option<i64>,
     /// Refuse this frame after the LTR decision, as a failed surface creation would.
@@ -1168,6 +1170,7 @@ impl AmfEncoder {
             hdr_meta: None,
             ltr_mark_interval: ltr_mark_interval(fps),
             reference_floor: None,
+            confirmed: None,
             ltr_test_force_at: ltr_test_force_at(),
             #[cfg(test)]
             fail_submit_at: None,
@@ -1740,7 +1743,9 @@ impl AmfEncoder {
         } = if live.ltr_active {
             let interval = self.ltr_mark_interval;
             let (floor, keep) = (self.reference_floor, live.ltr_keep);
-            live.ltr.step(forced, cur_idx, interval, floor, keep, true)
+            let confirmed = self.confirmed.as_ref();
+            live.ltr
+                .step(forced, cur_idx, interval, confirmed, floor, keep, true)
         } else {
             LtrStep::default()
         };
@@ -1970,6 +1975,10 @@ impl Encoder for AmfEncoder {
 
     fn set_reference_floor(&mut self, acked: Option<crate::Acked>) {
         self.reference_floor = acked;
+    }
+
+    fn note_confirmed(&mut self, acked: Option<crate::Acked>) {
+        self.confirmed = acked;
     }
 
     /// Withdraw anchor trust from every live LTR and drop a queued force

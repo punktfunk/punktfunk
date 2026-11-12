@@ -77,6 +77,11 @@ object NativeBridge {
     /** The session on [handle] started on a screen another device opened and sized. */
     external fun nativeSharesScreen(handle: Long): Boolean
 
+    /** Why the session on [handle] did not get the screen it asked for, as the host's echo says:
+     *  `0` as asked (also with no echo), `1` not allowed, `2` monitors held, `3` unavailable,
+     *  `4` no monitors. */
+    external fun nativeScreenRoleReason(handle: Long): Int
+
     /**
      * Has the underlying QUIC session ended? `true` once the connection closed — a host suspend /
      * crash / network drop idle-timed it out (~8 s), or the host closed it — from then on no frame
@@ -121,6 +126,13 @@ object NativeBridge {
      * enforces. Poll ~1 Hz alongside [nativeSessionEnded]. Cheap; safe on the UI thread.
      */
     external fun nativeAccessState(handle: Long): IntArray?
+
+    /**
+     * The host's sentence when it did not start this session's game (refused it, or it closed
+     * again at once), as `{"id", "message", "params"}` for [HostText.launch]; "" otherwise. The
+     * latest verdict wins, so poll it. Cheap; safe on the UI thread.
+     */
+    external fun nativeLaunchRefusal(handle: Long): String
 
     /**
      * Run the SPAKE2 PIN ceremony, presenting [certPem]/[keyPem]. Returns the host's verified
@@ -1128,6 +1140,9 @@ object NativeBridge {
 
     /** A one-shot toast from a service worker. */
     external fun nativeConsoleNotice(handle: Long, text: String)
+
+    /** The host's sentence for the held launch it did not start: the hold says it and stops waiting. */
+    external fun nativeConsoleLaunchRefused(handle: Long, text: String)
 
     /** This device's code, once its identity has loaded: shown while a request waits for approval. */
     external fun nativeConsoleSetDeviceCode(handle: Long, code: String)

@@ -416,15 +416,23 @@ impl Shell {
         self.actions.push_back(OverlayAction::ShowStream);
     }
 
-    /// One frame of the launch hold: reveal when the host has answered, or
-    /// when it never will; else keep the poll going.
+    /// One frame of the launch hold: the host's own refusal ends it at once; else reveal when
+    /// the host has answered, or when it never will, and keep the poll going meanwhile.
     pub(super) fn tick_launch(&mut self) {
         let t = self.t();
         let reads = self.library.status_gen();
+        // Taken with no hold up too, so a late one never lands on the next launch.
+        let refused = self.console.take_launch_refused();
         let Some(l) = self.connect.launching() else {
             return;
         };
         if l.failed.is_some() {
+            return;
+        }
+        if let Some(why) = refused {
+            if let Some(l) = self.connect.launching_mut() {
+                l.failed = Some(why);
+            }
             return;
         }
         let fresh = reads > l.base_gen;

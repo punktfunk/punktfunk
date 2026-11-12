@@ -578,8 +578,10 @@ pub(super) struct SessionContext {
     pub(super) compositor: crate::vdisplay::Compositor,
     /// Per-instance, not via `PUNKTFUNK_GAMESCOPE_NODE` — two sessions must not overwrite each other.
     pub(super) gamescope_route: Option<crate::vdisplay::GamescopeRoute>,
-    /// What the handshake's format rule read, re-run for a codec change.
+    /// What the handshake's format rule read, re-run when the codec or the source moves.
     pub(super) format_facts: super::handshake::FormatFacts,
+    /// The display is lit in HDR ([`Verdict::display_hdr`](super::handshake::Verdict)).
+    pub(super) display_hdr: bool,
     /// The handshake's encode resolution, which the session keeps for every open.
     pub(super) encoder: Arc<crate::encode::Resolved>,
     pub(super) host_knobs: &'static super::HostKnobs,
@@ -611,6 +613,10 @@ pub(super) struct SessionContext {
     pub(super) join_live: bool,
     /// The handshake's screen is a host monitor ([`SessionPlan::mirrored`](crate::session_plan::SessionPlan::mirrored)).
     pub(super) mirrored: bool,
+    /// The screen the handshake settled this session wants ([`crate::vdisplay::SessionParams::screen`]).
+    pub(super) screen: Option<crate::vdisplay::policy::DisplayTarget>,
+    /// The topology the handshake settled ([`crate::vdisplay::SessionParams::topology`]).
+    pub(super) topology: Option<crate::vdisplay::policy::Topology>,
     /// The view and fit the encoder frames for: a joiner's, or this client's own view
     /// ([`SessionPlan::reframe_to`](crate::session_plan::SessionPlan::reframe_to)).
     pub(super) reframe_to: Option<(punktfunk_core::video_fit::VideoFit, (u32, u32))>,

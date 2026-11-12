@@ -63,6 +63,9 @@ running as long as its screen does.
 - **Turn off**: the stream is the only screen until streaming ends.
 - **Automatic**: **Turn off**, or **Stay on** when `PUNKTFUNK_COMPOSITOR` pins a compositor.
 
+Devices that may [choose their screen](/docs/access-levels#individual-grants) can pick otherwise
+([Per-device settings](#per-device-settings)).
+
 | | KWin | GNOME | Sway · Hyprland · niri · Umbriel | Windows |
 |---|---|---|---|---|
 | Stay on | ✅ | ✅ | ✅ | ✅ |
@@ -110,14 +113,16 @@ it. **Arrange automatically**, under **Advanced**, puts them back in a row.
 Open **Display settings…** from a device's row in **Devices**. Each question offers **Follow
 host** or an answer for this device only:
 
-- **Screen it streams** (Linux and Windows hosts): **Own screen**, or one of your monitors. **Own
-  screen** keeps this device off a monitor the whole host streams. A device can also pick its
-  screen in its own app ([Screen](/docs/client-settings#screen)); the sheet then says **Chosen on
-  the device.** The latest pick wins, from either side;
+- **This device is** (Linux and Windows hosts): **Only screen**, **Main screen**, **Second
+  screen**, or one of your monitors. The three roles are **Turn off**, **Stay on, stream is main**
+  and **Stay on** from [Your monitors while streaming](#topology), for this device only, and each
+  keeps it off a monitor the whole host streams. A device whose access includes **Choose its
+  screen** ([Access levels](/docs/access-levels#individual-grants)) can also pick its role in its
+  own app ([Screen](/docs/client-settings#screen)); the sheet then says **Chosen on the device.**
+  The latest pick wins, from either side. Without the grant the sheet says **You decide this for**
+  the device, and the device's own pick does not count;
 - the keep-alive (including **Keep for** a number of seconds), second-device and remember
   questions above;
-- **Your monitors while streaming**. On a Windows host the first device to connect decides it for
-  every device that joins;
 - **Largest screen this device gets**, such as `2560x1440@60`. The device is told the smaller mode
   when it asks for more, in its own screen's shape: a 2560×1600 device under `1920x1080@60` gets
   1728×1080;
@@ -126,6 +131,18 @@ host** or an answer for this device only:
   that device.
 
 **Follow the host in everything** removes the device's overrides.
+
+## Two devices at once
+
+The first device to stream decides what your monitors do. A device that connects while another
+one holds a screen, live or [kept](#keep-alive), never turns them off:
+
+- A later **Only screen** acts as **Main screen**, or as **Second screen** on Sway, Hyprland, niri
+  and Umbriel. **Main screen** and **Second screen** keep their role.
+- A device set to a monitor that is off or streamed by another device gets its own screen.
+
+Monitors the first device turned off come back as each desktop restores them: see the notes
+under [Your monitors while streaming](#topology).
 
 ## Stream a real monitor instead
 
@@ -193,8 +210,9 @@ or pick **Desk PC**.
 
 ### The streamed screen shows only my wallpaper
 
-Your monitors **Stay on**, so the stream is an empty extra screen. Pick **Stay on, stream is main**
-or **Turn off**.
+The device is a **Second screen**: your monitors **Stay on**, and the stream is an empty extra
+screen beside them. Pick **Main screen** or **Only screen** for the device, in its app or its
+**Display settings…**, or **Stay on, stream is main** or **Turn off** for every device.
 
 ### KWin can't create the virtual output
 

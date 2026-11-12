@@ -74,6 +74,9 @@ pub struct SessionParams {
     /// Ask the host to keep its default playback device (not a silent endpoint).
     /// Request-only — an older host ignores it.
     pub keep_host_audio: bool,
+    /// The role or monitor a preset asks for this connect only; `None` takes the host card's
+    /// pick. The host may not grant it, and the first window says why.
+    pub screen_wish: Option<punktfunk_core::quic::v2::hello::ScreenWish>,
     /// How the presenter fills the window; rides the Hello so a host framing the picture for
     /// another device reframes it for this one.
     pub video_fit: punktfunk_core::video_fit::VideoFit,
@@ -211,7 +214,7 @@ impl SessionParams {
     /// ([`ResolvedSpec::new`](crate::orchestrate::ResolvedSpec::new)). `exclude_codecs` stays
     /// 0. `want_444` is the switch; caps carry 4:4:4 only when `hevc_444_hardware` is set
     /// too. HDR caps need the setting and [`Probes::hdr_enabled`]. The panel volume follows
-    /// the probe alone.
+    /// the probe alone. `host_screen` becomes the screen wish; a spelling it can't read is none.
     pub fn from_plan(
         settings: &crate::trust::Settings,
         clipboard: bool,
@@ -271,6 +274,7 @@ impl SessionParams {
             pad_speaker: settings.pad_speaker.clone(),
             clipboard,
             keep_host_audio: settings.keep_host_audio,
+            screen_wish: punktfunk_core::quic::v2::hello::ScreenWish::parse(&settings.host_screen),
             video_fit: punktfunk_core::video_fit::VideoFit::from_name(&settings.video_fit),
             cursor_forward: settings.mouse_mode() == crate::trust::MouseMode::Desktop,
             decoder: settings.decoder.clone(),
@@ -746,6 +750,7 @@ fn dial(
         // it this parks the pump for the whole budget (185 s on a request-access
         // connect the host holds pending) and cancel cannot be answered until return.
         cancel: Some(stop.clone()),
+        screen_wish: params.screen_wish.clone(),
         screens: params.screens.clone(),
         shows_screens: params.shows_screens,
         prompts_unlock: params.prompts_unlock,
@@ -1288,8 +1293,11 @@ fn pump(
         // a faulted run's fixture is the clean bitstream and will not replay the damage.
         au_dump: crate::au_dump::AuDump::from_env(connector.codec),
         notices: WindowNotices {
-            shared_unsaid: connector.screen()
-                == Some(&punktfunk_core::quic::v2::hello::ScreenEcho::Shared),
+            start_unsaid: start_line(
+                connector.screen() == Some(&punktfunk_core::quic::v2::hello::ScreenEcho::Shared),
+                params.screen_wish.as_ref(),
+                connector.role(),
+            ),
             ..Default::default()
         },
         window_start: Instant::now(),
@@ -1844,8 +1852,22 @@ struct WindowNotices {
     overrun_noticed: bool,
     /// The last launch verdict turned into a notice: each verdict is said once.
     launch_told: Option<punktfunk_core::quic::LaunchOutcome>,
-    /// The session started on another device's screen, and the first window has not said so.
-    shared_unsaid: bool,
+    /// What the first window owes about the screen ([`start_line`]), until it says it.
+    start_unsaid: Option<String>,
+}
+
+/// The one line a session owes about its screen at start: that it is another device's, else
+/// why it is not the one asked ([`crate::host_text::screen_wish_line`]). One, because the
+/// presenter shows one notice at a time; the shared screen explains a lost wish too.
+fn start_line(
+    shared: bool,
+    wish: Option<&punktfunk_core::quic::v2::hello::ScreenWish>,
+    echo: Option<punktfunk_core::quic::v2::hello::RoleEcho>,
+) -> Option<String> {
+    if shared {
+        return Some(pf_l10n::client::notice_shared_screen().into());
+    }
+    crate::host_text::screen_wish_line(wish, echo?.reason)
 }
 
 impl WindowNotices {
@@ -1861,9 +1883,7 @@ impl WindowNotices {
         launch: Option<punktfunk_core::quic::LaunchOutcome>,
     ) -> Vec<String> {
         let mut notices = Vec::new();
-        if std::mem::take(&mut self.shared_unsaid) {
-            notices.push(pf_l10n::client::notice_shared_screen().to_string());
-        }
+        notices.extend(self.start_unsaid.take());
         if pin_kbps != 0 && !self.pin_noticed {
             self.pin_noticed = true;
             notices.push(pf_l10n::client::notice_pin_unsustainable(pin_kbps / 1000));
@@ -2480,7 +2500,7 @@ mod tests {
     #[test]
     fn a_shared_screen_is_said_once_at_start() {
         let mut w = WindowNotices {
-            shared_unsaid: true,
+            start_unsaid: start_line(true, None, None),
             ..Default::default()
         };
         assert_eq!(
@@ -2488,6 +2508,70 @@ mod tests {
             ["You're sharing this screen. Its size was set by the first device to connect."]
         );
         assert!(w.tick(0, 120, 0, mode_1080p(), None).is_empty());
+    }
+
+    /// A preset's wish the host did not grant is said at start; a granted one, a session with
+    /// no echo, and a shared screen's say nothing of it.
+    #[test]
+    fn a_lost_screen_wish_is_said_at_start() {
+        use punktfunk_core::quic::v2::hello::{Role, RoleEcho, RoleReason, ScreenWish};
+        let echo = |reason| {
+            Some(RoleEcho {
+                role: Some(Role::Main),
+                reason,
+            })
+        };
+        let second = Some(&ScreenWish::Second);
+        assert_eq!(
+            start_line(false, second, echo(RoleReason::NotAllowed)).as_deref(),
+            Some("Second screen wasn't applied: this host decides the screen for this device.")
+        );
+        assert_eq!(start_line(false, second, echo(RoleReason::AsAsked)), None);
+        assert_eq!(start_line(false, second, None), None, "an older host");
+        assert_eq!(
+            start_line(true, second, echo(RoleReason::NotAllowed)),
+            start_line(true, None, None),
+            "the shared screen is the one line"
+        );
+    }
+
+    /// The preset's `host_screen` is the dial's wish; a spelling the wire can't carry is none.
+    #[test]
+    fn the_host_screen_setting_is_the_dials_wish() {
+        use punktfunk_core::quic::v2::hello::ScreenWish;
+        let params = |host_screen: &str| {
+            let settings = crate::trust::Settings {
+                host_screen: host_screen.into(),
+                ..Default::default()
+            };
+            let dial = Dial {
+                host: "10.0.0.9".into(),
+                port: 9777,
+                pin: [9; 32],
+                launch: None,
+                profile: None,
+                connect_timeout: Duration::from_secs(5),
+            };
+            let probes = Probes {
+                mode: mode_1080p(),
+                vulkan: None,
+                display_hdr: None,
+                hdr_enabled: false,
+                identity: ("cert".into(), "key".into()),
+                gamepad: GamepadPref::Auto,
+                force_software: Arc::default(),
+                stats_verbosity: crate::trust::StatsVerbosity::Off,
+                hevc_444_hardware: false,
+            };
+            SessionParams::from_plan(&settings, false, None, None, None, dial, probes).screen_wish
+        };
+        assert_eq!(params("second"), Some(ScreenWish::Second));
+        assert_eq!(
+            params("monitor:HDMI-A-1"),
+            Some(ScreenWish::Monitor("HDMI-A-1".into()))
+        );
+        assert_eq!(params(""), None);
+        assert_eq!(params("tablet"), None);
     }
 
     /// Each launch verdict is said once; one that needs no words says nothing.

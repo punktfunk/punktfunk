@@ -1251,8 +1251,8 @@ mod tests {
     }
 }
 
-/// RFI DPB depth (Apollo's 5). [`plan_range_recovery`] treats
-/// `next_ts - RFI_DPB` as the oldest frame still in the DPB.
+/// RFI DPB depth (Apollo's 5): short-term and long-term pictures share it, so the
+/// short-term window [`plan_range_recovery`] reaches back over is this minus the long-term slots.
 pub const RFI_DPB: u32 = 5;
 
 /// One loss event's recovery for timestamp-range RFI. The per-timestamp
@@ -1277,8 +1277,8 @@ pub enum RangePlan {
 /// 1. nonsense range (`first < 0 || first > last`) → [`RangePlan::Decline`];
 /// 2. covering-range dedup with the client's `last`, before the DPB window,
 ///    so a covered re-ask never touches the driver after leaving the DPB;
-/// 3. anchor check: a frame older than `first`, still in the DPB and not already
-///    invalidated must exist, else Decline;
+/// 3. anchor check: a frame older than `first`, still in the `dpb` short-term pictures
+///    and not already invalidated must exist, else Decline;
 /// 4. `last` becomes `next_ts - 1`: every frame encoded since the loss predicts
 ///    from it, so the client decoded all of them against a hole. Invalidating
 ///    only the frames the client named left NVENC anchoring on one of these.
@@ -1292,6 +1292,7 @@ pub fn plan_range_recovery(
     last: i64,
     next_ts: i64,
     last_rfi_range: Option<(i64, i64)>,
+    dpb: u32,
 ) -> RangePlan {
     if first < 0 || first > last {
         return RangePlan::Decline;
@@ -1301,7 +1302,7 @@ pub fn plan_range_recovery(
             return RangePlan::Covered;
         }
     }
-    let oldest_in_dpb = (next_ts - RFI_DPB as i64).max(0);
+    let oldest_in_dpb = (next_ts - i64::from(dpb)).max(0);
     let newest_anchor = first - 1;
     let prior_covers =
         last_rfi_range.is_some_and(|(pf, pl)| pf <= oldest_in_dpb && pl >= newest_anchor);
@@ -1320,7 +1321,7 @@ mod range_policy_tests {
     use super::{plan_range_recovery, RangePlan, RFI_DPB};
 
     fn plan(first: i64, last: i64, next_ts: i64) -> RangePlan {
-        plan_range_recovery(first, last, next_ts, None)
+        plan_range_recovery(first, last, next_ts, None, RFI_DPB)
     }
 
     #[test]
@@ -1377,17 +1378,17 @@ mod range_policy_tests {
         // Exact cover and sub-range stay Covered, including across a keyframe
         // (`last_rfi_range` is not cleared on IDR).
         assert!(matches!(
-            plan_range_recovery(90, 95, 100, prior),
+            plan_range_recovery(90, 95, 100, prior, RFI_DPB),
             RangePlan::Covered
         ));
         assert!(matches!(
-            plan_range_recovery(92, 94, 100, prior),
+            plan_range_recovery(92, 94, 100, prior, RFI_DPB),
             RangePlan::Covered
         ));
         // A later loss re-invalidates from its own `first` to the head: the prior
         // anchor (96) survives, so recovery is still possible.
         assert!(matches!(
-            plan_range_recovery(97, 97, 98, prior),
+            plan_range_recovery(97, 97, 98, prior, RFI_DPB),
             RangePlan::Invalidate {
                 first: 97,
                 last: 97
@@ -1401,7 +1402,7 @@ mod range_policy_tests {
     fn covered_is_checked_before_the_dpb_window() {
         let prior = Some((10i64, 12i64));
         assert!(matches!(
-            plan_range_recovery(10, 12, 100, prior),
+            plan_range_recovery(10, 12, 100, prior, RFI_DPB),
             RangePlan::Covered
         ));
         // Same range with no prior invalidation is outside the window → Decline.
@@ -1429,12 +1430,12 @@ mod range_policy_tests {
         // Loss at 100 was repaired at head 103 (100..102 invalid, anchor 103).
         // The anchor is lost; the client reports it at head 105.
         assert!(matches!(
-            plan_range_recovery(103, 103, 105, Some((100, 102))),
+            plan_range_recovery(103, 103, 105, Some((100, 102)), RFI_DPB),
             RangePlan::Decline
         ));
         // With the anchor received and a later loss, 103 anchors the repair.
         assert!(matches!(
-            plan_range_recovery(104, 104, 106, Some((100, 102))),
+            plan_range_recovery(104, 104, 106, Some((100, 102)), RFI_DPB),
             RangePlan::Invalidate {
                 first: 104,
                 last: 105

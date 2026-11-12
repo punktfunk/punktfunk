@@ -54,7 +54,8 @@ pub enum Layer {
     Device,
     /// This device's, shown in both scopes: it changes the dialog, not a stream.
     Dialog,
-    /// A stream setting whose defaults-scope row is a device variant (the fullscreen switch).
+    /// A stream setting with no defaults-scope row of its own: the fullscreen switch's is a
+    /// device variant, and Host screen's default is the host card.
     PresetOnly,
 }
 
@@ -165,6 +166,7 @@ specs! {
     VIDEO_FIT: "video_fit", client::player_video_fit(), VIDEO_FIT_CAPTIONS[0](),
         Display, false, Stream;
     SCREENS: "screens", client::player_screens(), SCREENS_CAPTIONS[0](), Display, false, Stream;
+    HOST_SCREEN: "host_screen", client::preset_host_screen(), "", Display, false, PresetOnly;
     HDR: "hdr_enabled", client::player_hdr_enabled(), client::player_hdr_enabled_hint(),
         Display, false, Stream;
     PRESENT: "present_priority", client::player_present_priority(),
@@ -336,9 +338,11 @@ mod tests {
         }
     }
 
-    /// Rows with no catalog entry: this client's own variants and device pickers.
+    /// Rows with no catalog entry: this client's own variants and device pickers, and Host
+    /// screen, which only a preset holds.
     const LOCAL: &[&str] = &[
         "fullscreen",
+        "host_screen",
         "omarchy_menu",
         "adapter",
         "speaker_device",

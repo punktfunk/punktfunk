@@ -702,8 +702,12 @@ impl ServiceState {
                 mgmt,
                 fp_hex,
                 screen,
+                topology,
                 label,
-            } => self.set_screen(addr, mgmt, fp_hex, screen, label),
+            } => {
+                let pick = pf_client_core::display_targets::Pick { screen, topology };
+                self.set_screen(addr, mgmt, fp_hex, pick, label)
+            }
             ConsoleCmd::EndGame {
                 addr,
                 mgmt,
@@ -1056,14 +1060,14 @@ impl ServiceState {
             .ok();
     }
 
-    /// Write this device's screen on a worker, as [`Self::host_action`] does. Only a refusal
+    /// Write a Screen row's pick on a worker, as [`Self::host_action`] does. Only a refusal
     /// says anything: the pick itself shows on the card once the rows come back.
     fn set_screen(
         &self,
         addr: String,
         mgmt: u16,
         fp_hex: String,
-        screen: pf_client_core::display_targets::DisplayTarget,
+        pick: pf_client_core::display_targets::Pick,
         label: String,
     ) {
         let identity = self.identity.clone();
@@ -1072,11 +1076,11 @@ impl ServiceState {
             .name("punktfunk-screen".into())
             .spawn(move || {
                 let port = stream_port(&fp_hex);
-                let set = pf_client_core::display_targets::set_target(
-                    &addr, mgmt, port, &identity, &fp_hex, &screen,
+                let set = pf_client_core::display_targets::set_pick(
+                    &addr, mgmt, port, &identity, &fp_hex, &pick,
                 );
                 if let Err(e) = set {
-                    tracing::warn!(?screen, error = %e, "screen pick refused");
+                    tracing::warn!(?pick, error = %e, "screen pick refused");
                     console.set_notice(pf_l10n::client::hostcard_action_failed(&label, e));
                 }
             })
@@ -1509,6 +1513,7 @@ fn build_rows(
         // Only the speed test reads this: a preset that PINS bitrate is the layer its
         // host streams at, so the console must not offer to write the global instead.
         bitrate_kbps: p.overrides.bitrate_kbps,
+        host_screen: p.overrides.host_screen.clone(),
     };
     let mut rows: Vec<HostRow> = known
         .hosts

@@ -328,7 +328,7 @@ impl SettingsScreen {
             RowId::NewPreset => {
                 return match msg {
                     ListMsg::Activate => {
-                        fx.push(Screen::PresetName(super::preset::PresetName::new()));
+                        fx.push(Screen::PresetStarter(super::preset::PresetStarter::new()));
                         pulse
                     }
                     ListMsg::Adjust(_) => Some(MenuPulse::Boundary),

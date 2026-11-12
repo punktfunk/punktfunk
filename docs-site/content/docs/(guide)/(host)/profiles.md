@@ -127,7 +127,9 @@ A player who picks a stopped seat sees `Getting Kid's desktop ready…` while it
 running.
 
 A seat's desktop is one virtual screen at its player's resolution. It never shows, turns off or
-powers down a monitor of this machine. A second device on the same seat shares the screen when
+powers down a monitor of this machine, so a seat offers no
+[screen roles](/docs/client-settings#screen): a host card's **Screen** section shows no rows there,
+whatever the device's access. A second device on the same seat shares the screen when
 its **A second device connects** is **Shares the screen**, and is told the seat is busy
 otherwise. Only the owner's desktop follows **Displays**; of a device's display settings, only
 **Largest screen this device gets**, the scale and **A second device connects** follow it onto a

@@ -5,6 +5,7 @@
 use crate::screens::{home, Ctx};
 use crate::widgets::RowSpec;
 use pf_client_core::audio_format::{AUDIO_FORMATS, AUDIO_FORMAT_OPUS};
+use pf_client_core::display_targets::{host_screen_choices, HostScreenChoice, Targets};
 use pf_client_core::presets::SettingsOverlay;
 use pf_client_core::settings::Label;
 use pf_client_core::start;
@@ -29,6 +30,9 @@ pub enum RowId {
     VideoFit,
     /// `trust::Settings::screens`: this monitor, or a host screen on each monitor.
     Screens,
+    /// A preset's `host_screen`: the role or monitor its connects ask for. The preset editor's
+    /// row alone; no tab lists it, as a host's default is on its card.
+    HostScreen,
     /// How a Vision Pro bends the picture: flat, or a curved monitor's radius.
     /// Device-local, under [`device_keys::SCREEN`].
     Screen,
@@ -904,6 +908,8 @@ pub fn row_on(id: RowId, platform: crate::platform::Platform) -> bool {
         RowId::VideoFit => &[Desktop, Android, Apple],
         // The clients that open a window per monitor; Apple's is the Mac (`row_applies`).
         RowId::Screens => &[Desktop, Apple],
+        // Every client's dial sends a preset's screen wish.
+        RowId::HostScreen => &Platform::ALL,
         // The clients whose dial sends `pyrowave_bpp`.
         RowId::PyroWaveQuality => &[Desktop, Android, Apple, Ps5, Switch],
         // Offered wherever there is a second UI to fall back to: Android's touch home,
@@ -1214,7 +1220,7 @@ pub(super) fn row_icon(id: RowId) -> &'static str {
         | RowId::Controllers => "gamepad-2",
         RowId::SystemButtons => "house",
         RowId::PhoneGyro => "rotate-cw",
-        RowId::SecondScreen | RowId::Screen | RowId::Screens => "monitor",
+        RowId::SecondScreen | RowId::Screen | RowId::Screens | RowId::HostScreen => "monitor",
         RowId::Touch | RowId::CursorGestures => "pointer",
         RowId::Mouse => "mouse",
         RowId::QuickActions => "ellipsis",
@@ -1274,6 +1280,7 @@ pub(crate) fn preset_field(id: RowId) -> Option<&'static str> {
         RowId::RenderScale => "render_scale",
         RowId::VideoFit => "video_fit",
         RowId::Screens => "screens",
+        RowId::HostScreen => "host_screen",
         RowId::Bitrate => "bitrate_kbps",
         RowId::PyroWaveQuality => "pyrowave_bpp",
         RowId::Compositor => "compositor",
@@ -1305,10 +1312,24 @@ pub(crate) fn preset_field(id: RowId) -> Option<&'static str> {
     })
 }
 
-/// The rows a preset can hold on this platform this frame, each with its section.
+/// The Host screen row's choices at `s`'s value, over each host the console shows that has
+/// answered for its screens. A pinned card repeats its host, so it is skipped.
+fn host_screens(hosts: &[crate::model::HostRow], s: &Settings) -> Vec<HostScreenChoice> {
+    let known: Vec<(&str, &Targets)> = (hosts.iter().filter(|h| h.pin.is_none()))
+        .filter_map(|h| Some((h.name.as_str(), h.screens.as_ref()?)))
+        .collect();
+    host_screen_choices(&known, Some(&s.host_screen))
+}
+
+/// The rows a preset can hold on this platform this frame, each with its section. Host screen,
+/// on no tab, follows Screens.
 pub(crate) fn preset_rows(ctx: &Ctx) -> Vec<(Section, RowId)> {
     (TABS.iter())
         .flat_map(|(tab, rows)| rows.iter().map(move |id| (*tab, *id)))
+        .flat_map(|(tab, id)| {
+            let host_screen = (id == RowId::Screens).then_some((tab, RowId::HostScreen));
+            std::iter::once((tab, id)).chain(host_screen)
+        })
         .filter(|(_, id)| preset_field(*id).is_some())
         .filter(|(_, id)| row_on(*id, ctx.device.platform) && row_applies(*id, ctx))
         .collect()
@@ -1458,6 +1479,14 @@ fn row_spec_base(id: RowId, ctx: &Ctx, presets: &[(String, String)]) -> RowSpec 
             None,
             m::player_screens(),
             MONITORS[usize::from(s.all_screens())].1().into(),
+        ),
+        RowId::HostScreen => (
+            None,
+            m::preset_host_screen(),
+            (host_screens(ctx.hosts, s).into_iter())
+                .find(|c| c.checked)
+                .map(|c| c.label)
+                .unwrap_or_default(),
         ),
         RowId::Bitrate => (
             None,
@@ -1715,6 +1744,12 @@ pub fn detail(id: RowId, ctx: &Ctx) -> Cow<'static, str> {
         RowId::RenderScale => m::player_render_scale_hint().into(),
         RowId::VideoFit => m::player_video_fit_hint().into(),
         RowId::Screens => m::player_screens_hint().into(),
+        // The picked role's hint; none for the host card's pick or a monitor.
+        RowId::HostScreen => (host_screens(ctx.hosts, ctx.settings).into_iter())
+            .find(|c| c.checked)
+            .and_then(|c| c.hint)
+            .unwrap_or_default()
+            .into(),
         RowId::PyroWaveQuality => m::player_pyrowave_bpp_hint().into(),
         RowId::Bitrate if pyrowave_rate(ctx) => m::player_bitrate_kbps_pyrowave_hint().into(),
         RowId::Bitrate => m::player_bitrate_kbps_hint().into(),
@@ -1913,6 +1948,7 @@ pub fn adjust(id: RowId, delta: i32, wrap: bool, ctx: &mut Ctx) -> bool {
     let fams = families(ctx.device.screen);
     let window = has_window(ctx.device);
     let pyrowave = pyrowave_rate(ctx);
+    let hosts = ctx.hosts;
     let s = &mut *ctx.settings;
     match id {
         RowId::Resolution => {
@@ -1980,6 +2016,13 @@ pub fn adjust(id: RowId, delta: i32, wrap: bool, ctx: &mut Ctx) -> bool {
             let cur = Some(usize::from(s.all_screens()));
             step_option(cur, MONITORS.len(), delta, wrap)
                 .map(|i| s.screens = MONITORS[i].0.to_string())
+        }
+        // Empty is the host card's pick, which the preset editor stores as no pin.
+        RowId::HostScreen => {
+            let choices = host_screens(hosts, s);
+            let cur = choices.iter().position(|c| c.checked);
+            step_option(cur, choices.len(), delta, wrap)
+                .map(|i| s.host_screen = choices[i].value.clone().unwrap_or_default())
         }
         // Automatic or Fixed: the quality row stands in for the rate.
         RowId::Bitrate if pyrowave => {

@@ -2076,17 +2076,25 @@ fn display_half(
         view,
         features,
         mirrored,
+        screen,
+        topology,
+        display_hdr,
         ..
     } = n;
     // Read back from what the ServerHello agreed, like `cursor_forward` below.
-    let format_facts = handshake::FormatFacts::of(
+    let mut format_facts = handshake::FormatFacts::of(
         &hello,
         crate::session_plan::StudioAsk::of(&features),
         compositor,
         gamescope_route.as_ref(),
         &knobs,
         joined.as_ref().map(|(d, _)| d),
+        handshake::follows_source(&features, mirrored),
     );
+    // The content the Welcome was resolved for, not a second look at it.
+    format_facts.content_hdr = format_facts
+        .follows_content()
+        .then_some(welcome.color.is_hdr());
     let reframe_to = handshake::reframe_to(hello.video_fit, handshake::joined_view(&joined), view);
     // Read back from Welcome, not recomputed (would re-probe and could drift).
     let cursor_forward = welcome.host_caps & punktfunk_core::quic::HOST_CAP_CURSOR != 0;
@@ -2098,6 +2106,7 @@ fn display_half(
             .expect("the Virtual source resolves a compositor during the handshake"),
         gamescope_route,
         format_facts,
+        display_hdr,
         encoder,
         host_knobs,
         knobs,
@@ -2118,6 +2127,8 @@ fn display_half(
         client_hdr: hello.display_hdr.map(crate::encode::hdr_meta_from_wire),
         join_live: joined.is_some(),
         mirrored,
+        screen,
+        topology,
         reframe_to,
         frame_map: lanes.frame_map,
         #[cfg(target_os = "linux")]

@@ -1,6 +1,7 @@
 // The host's sentences worded by id, replayed from `clients/shared/host-text-vectors.json` (the
 // vectors `crates/client/pf-client-core/src/host_text.rs` and the Kotlin `HostTextTest` run too).
 
+import PunktfunkCore
 import PunktfunkKit
 import XCTest
 @testable import PunktfunkShared
@@ -19,6 +20,34 @@ final class HostTextTests: XCTestCase {
             let english = try XCTUnwrap(c["english"] as? String)
             let sentence = try XCTUnwrap(c["sentence"] as? String)
             XCTAssertEqual(HostText.word(id, params: params, english: english), sentence, id)
+        }
+    }
+
+    /// Every `screen_wish` row: the preset's spelling and the echo's reason word as its
+    /// `sentence`, or as nothing. The reason codes are the C header's.
+    func testAScreenWishTheHostDidNotGiveWordsAsItsSentence() throws {
+        let file = try SharedVector.load("host-text-vectors.json")
+        let rows = try XCTUnwrap(file["screen_wish"] as? [[String: Any]])
+        XCTAssertGreaterThanOrEqual(rows.count, 4)
+        let reasons: [String: ScreenRoleReason] = [
+            "as_asked": .asAsked, "not_allowed": .notAllowed, "monitors_held": .monitorsHeld,
+            "unavailable": .unavailable, "no_monitors": .noMonitors,
+        ]
+        for row in rows {
+            let reason = try XCTUnwrap(reasons[row["reason"] as? String ?? ""], "\(row)")
+            XCTAssertEqual(
+                ScreenWish.line(wish: row["wish"] as? String ?? "", reason: reason),
+                row["sentence"] as? String, "\(row)")
+        }
+        let header: [(ScreenRoleReason, Int)] = [
+            (.asAsked, Int(PUNKTFUNK_SCREEN_ROLE_REASON_AS_ASKED)),
+            (.notAllowed, Int(PUNKTFUNK_SCREEN_ROLE_REASON_NOT_ALLOWED)),
+            (.monitorsHeld, Int(PUNKTFUNK_SCREEN_ROLE_REASON_MONITORS_HELD)),
+            (.unavailable, Int(PUNKTFUNK_SCREEN_ROLE_REASON_UNAVAILABLE)),
+            (.noMonitors, Int(PUNKTFUNK_SCREEN_ROLE_REASON_NO_MONITORS)),
+        ]
+        for (reason, code) in header {
+            XCTAssertEqual(Int(reason.rawValue), code, "\(reason)")
         }
     }
 

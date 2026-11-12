@@ -2,6 +2,7 @@ package io.unom.punktfunk
 
 import io.unom.punktfunk.console.ConsoleJson
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
@@ -93,5 +94,16 @@ class SettingsRoundTripTest {
     fun everySettingSurvivesTheConsoleBridge() {
         val got = ConsoleJson.applySettings(Settings(), ConsoleJson.settings(every, null))
         assertEquals(every, got)
+    }
+
+    /** A preset's host screen has no global value: neither the prefs nor the console's document hold one. */
+    @Test
+    fun theHostScreenIsNeverAGlobal() {
+        val store = SettingsStore(RuntimeEnvironment.getApplication())
+        store.save(every.copy(hostScreen = "second"))
+        assertEquals(every, store.load())
+        assertFalse(ConsoleJson.settings(every.copy(hostScreen = "second"), null).has("host_screen"))
+        val doc = ConsoleJson.settings(every, null).put("host_screen", "main")
+        assertEquals(every, ConsoleJson.applySettings(every, doc))
     }
 }

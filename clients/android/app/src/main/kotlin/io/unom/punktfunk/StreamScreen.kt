@@ -321,7 +321,7 @@ fun StreamScreen(
     var statsView by remember { mutableStateOf(CompanionMemory.statsView(context)) }
 
     // Host-gone watchdog and the live access level.
-    SessionWatchEffect(handle, initialAccess, ui, peripherals, wakeRedial, onSessionEnded)
+    SessionWatchEffect(handle, initialSettings.hostScreen, initialAccess, ui, peripherals, wakeRedial, onSessionEnded)
 
     // Everything this stream does to the window — wake/Wi-Fi locks, the refresh pin, ALLM, the
     // cutout and soft-keyboard modes — and the prior values it puts back.
@@ -722,7 +722,8 @@ fun StreamScreen(
                     val accessLevel = stringResource(SessionAccess.label(ui.accessGrants))
                     val accessChip = when {
                         ui.statsVerbosity == StatsVerbosity.OFF -> null
-                        ui.accessGrants and SessionAccess.ALL == SessionAccess.ALL && ui.accessRemaining == 0 -> null
+                        SessionAccess.normalizeLegacyFull(ui.accessGrants) and SessionAccess.ALL == SessionAccess.ALL &&
+                            ui.accessRemaining == 0 -> null
                         ui.accessRemaining > 0 ->
                             "$accessLevel · " + if (ui.accessRemaining < 60) {
                                 stringResource(R.string.grant_chip_ends_soon)
@@ -941,6 +942,7 @@ fun StreamScreen(
             launchHold?.let {
                 LaunchHoldOverlay(
                     it,
+                    handle,
                     // Retry is the shelf the launch came off: ending as `GAME_EXITED` puts a library
                     // launch back on it, one press from the same tile.
                     onRetry = { endAway(true, SessionEndReason.GAME_EXITED) },

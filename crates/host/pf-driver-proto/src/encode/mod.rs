@@ -625,6 +625,10 @@ pub const ENCODE_CTL_CLOSE: u32 = 8;
 /// before it in `arg1 >> 1`, while `arg1 & 1`; `arg1` 0 restores the chain. A driver without
 /// it answers `STATUS_INVALID_PARAMETER`.
 pub const ENCODE_CTL_SET_REFERENCE_FLOOR: u32 = 9;
+/// What the client confirmed it decoded clean, in [`ENCODE_CTL_SET_REFERENCE_FLOOR`]'s
+/// encoding, whatever the link: the backend keeps the newest confirmed picture resident as the
+/// next loss's anchor. A driver without it answers `STATUS_INVALID_PARAMETER`.
+pub const ENCODE_CTL_NOTE_CONFIRMED: u32 = 10;
 
 /// `SET_ENCODE` completed with fewer reply bytes than [`SetEncodeReply`]. The IOCTL itself
 /// succeeded, so the driver adopted the host's handles: the host must not close them too.
@@ -1013,9 +1017,10 @@ mod tests {
             ENCODE_CTL_FLUSH,
             ENCODE_CTL_CLOSE,
             ENCODE_CTL_SET_REFERENCE_FLOOR,
+            ENCODE_CTL_NOTE_CONFIRMED,
         ];
         println!("ENCODE_CTL ops: {ops:?}");
-        assert_eq!(ops, [1, 2, 3, 4, 5, 6, 7, 8, 9]);
+        assert_eq!(ops, [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
         // `0` stays unassigned: a zeroed request is not a silent keyframe.
         assert!(!ops.contains(&0));
     }

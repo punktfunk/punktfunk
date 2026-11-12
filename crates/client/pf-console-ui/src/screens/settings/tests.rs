@@ -18,6 +18,7 @@ fn a_bound_preset_marks_the_row_it_overrides() {
             name: "Living room".into(),
             accent: None,
             bitrate_kbps: None,
+            host_screen: None,
         }),
         ..crate::model::HostRow::fixture("bb", "Desk")
     };
@@ -118,6 +119,7 @@ fn a_preset_aspect_note_labels_against_the_devices_shapes() {
             name: "Living room".into(),
             accent: None,
             bitrate_kbps: None,
+            host_screen: None,
         }),
         ..crate::model::HostRow::fixture("bb", "Desk")
     }];
@@ -1593,6 +1595,7 @@ fn preset_rows_navigate_instead_of_editing() {
             name: "Work".into(),
             accent: None,
             bitrate_kbps: None,
+            host_screen: None,
         }),
         ..crate::model::HostRow::fixture("aa", "Tower")
     };
@@ -1642,7 +1645,7 @@ fn preset_rows_navigate_instead_of_editing() {
     assert!(fx.nav.is_none() && fx.cmds.is_empty());
 }
 
-/// With no presets the tab still offers New preset, which opens the name screen.
+/// With no presets the tab still offers New preset, which opens the starters.
 #[test]
 fn empty_catalog_offers_a_new_preset() {
     let mut settings = Settings::default();
@@ -1659,7 +1662,7 @@ fn empty_catalog_offers_a_new_preset() {
     let mut fx = Outbox::default();
     s.menu(MenuEvent::Confirm, &mut ctx, &mut fx);
     assert!(matches!(fx.nav, Some(crate::screens::Nav::Push(b))
-        if matches!(*b, Screen::PresetName(_))));
+        if matches!(*b, Screen::PresetStarter(_))));
 }
 
 #[test]

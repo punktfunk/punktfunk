@@ -50,6 +50,25 @@ class HostTextTest {
         }
     }
 
+    /**
+     * The file's `screen_wish` rows: the stream-start line for the preset's wish and the echo's
+     * reason, or nothing. A shared screen is the one line whatever the echo says.
+     */
+    @Test
+    fun aLostScreenWishWordsAsItsSentence() {
+        val reasons = listOf("as_asked", "not_allowed", "monitors_held", "unavailable", "no_monitors")
+        val rows = JSONObject(File("../../shared/host-text-vectors.json").readText()).getJSONArray("screen_wish")
+        assertTrue(rows.length() >= 4)
+        for (i in 0 until rows.length()) {
+            val row = rows.getJSONObject(i)
+            val wish = if (row.isNull("wish")) null else row.getString("wish")
+            val reason = reasons.indexOf(row.getString("reason"))
+            val want = if (row.isNull("sentence")) null else row.getString("sentence")
+            assertEquals(row.toString(), want, DisplayTargets.startLine(false, wish, reason, res))
+        }
+        assertEquals(res.getString(R.string.notice_shared_screen), DisplayTargets.startLine(true, "second", 1, res))
+    }
+
     /** A newer host may send more values than this build's message holds, or fewer. */
     @Test
     fun valuesThatDoNotFitTheMessageReadAsTheHostsEnglish() {
@@ -94,6 +113,23 @@ class HostTextTest {
         assertEquals("Signing in to the seat's Windows account (try 2 of 3)…", worded.detail!!.words(res))
         assertEquals("The host's English.", gate { put("detail_id", "seatline_from_a_newer_host") }.detail!!.words(res))
         assertEquals(Say.Text("The host's English."), gate {}.detail)
+    }
+
+    /** A launch the host did not start, as `nativeLaunchRefusal` hands it over, reads as its message. */
+    @Test
+    fun aLaunchRefusalIsWordedByItsId() {
+        fun launch(id: String, params: String) =
+            HostText.launch("""{"id":"$id","message":"The host's English.","params":$params}""")!!.words(res)
+        assertEquals(
+            "Couldn't start that game — it isn't in this host's library anymore.",
+            launch("launch_title_not_in_library", "{}"),
+        )
+        assertEquals(
+            "Couldn't start Quail — it closed again after 4 s.",
+            launch("launch_closed_at_once", """{"seconds":"4","title":"Quail"}"""),
+        )
+        assertEquals("The host's English.", launch("launch_from_a_newer_host", "{}"))
+        assertNull(HostText.launch(""))
     }
 
     /** An action's reason is worded by its code; the system's own words arrive without one. */

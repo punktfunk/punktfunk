@@ -426,6 +426,10 @@ pub struct StatsSnapshot {
     pub preset: Option<String>,
     /// The monitor this session mirrors, by connector. `None` on a screen of its own.
     pub screen: Option<String>,
+    /// The role this session got among the host's screens; `None` without one.
+    pub role: Option<crate::quic::v2::hello::Role>,
+    /// Why the role is not the one asked; `None` from a host that does not say.
+    pub role_reason: Option<crate::quic::v2::hello::RoleReason>,
     /// AUs received, and their payload bytes (goodput: no FEC, no headers).
     pub received: u32,
     pub bytes: u64,
@@ -651,12 +655,20 @@ pub fn player_label(slots: u16) -> Option<String> {
     }
 }
 
-/// `Screen HDMI-A-1` on a session that mirrors a monitor; nothing on a screen of its own.
+/// `Screen HDMI-A-1` on a session that mirrors a monitor, the role's name on a main or second
+/// screen of its own; nothing on the only screen.
 #[cfg(any(test, feature = "l10n"))]
 fn screen_field(s: &StatsSnapshot) -> Option<String> {
-    s.screen
-        .as_ref()
-        .map(|c| format!("{} {c}", m::overlay_screen()))
+    use crate::quic::v2::hello::Role as ScreenRole;
+    let role = match s.role {
+        Some(ScreenRole::Main) => Some(m::screen_role_main()),
+        Some(ScreenRole::Second) => Some(m::screen_role_second()),
+        Some(ScreenRole::Only) | None => None,
+    };
+    match &s.screen {
+        Some(c) => Some(format!("{} {c}", m::overlay_screen())),
+        None => role.map(String::from),
+    }
 }
 
 /// The codec as every overlay and client names it. Empty for a wire id this build does not
@@ -2420,9 +2432,15 @@ mod tests {
         s.screen = Some("HDMI-A-1".into());
         let json = serde_json::to_string(&s).unwrap();
         assert_eq!(serde_json::from_str::<StatsSnapshot>(&json).unwrap(), s);
+        s.role = Some(crate::quic::v2::hello::Role::Second);
+        s.role_reason = Some(crate::quic::v2::hello::RoleReason::MonitorsHeld);
+        let json = serde_json::to_string(&s).unwrap();
+        assert!(json.contains(r#""role":"second","role_reason":"monitors_held""#));
+        assert_eq!(serde_json::from_str::<StatsSnapshot>(&json).unwrap(), s);
         // A reader older than a field still parses a newer writer's line.
         let partial: StatsSnapshot = serde_json::from_str(r#"{"received":5,"future":1}"#).unwrap();
         assert_eq!((partial.received, partial.screen), (5, None));
+        assert_eq!((partial.role, partial.role_reason), (None, None));
     }
 
     /// A mirrored session names its monitor on the first line of every full tier; a session on
@@ -2446,6 +2464,13 @@ mod tests {
             }
             assert!(!all(&s, StatsVerbosity::Compact, advanced).contains("Screen"));
         }
+        // On its own screen the role is named, the only screen staying silent.
+        s.screen = None;
+        s.role = Some(crate::quic::v2::hello::Role::Second);
+        let head = &format(&s, StatsVerbosity::Normal, false)[0];
+        assert!(head.fields.contains(&"Second screen".to_string()));
+        s.role = Some(crate::quic::v2::hello::Role::Only);
+        assert!(!all(&s, StatsVerbosity::Normal, false).contains("screen"));
     }
 
     /// Slot 0 is Player 1, and the line leads the overlay so a co-op guest reads it

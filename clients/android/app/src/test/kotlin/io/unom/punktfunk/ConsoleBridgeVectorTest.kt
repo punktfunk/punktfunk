@@ -71,6 +71,16 @@ class ConsoleBridgeVectorTest {
         assertTrue(SkiaConsole.ignoredCommands.none { it in SkiaConsole.commands })
     }
 
+    /** `SetScreen` writes the pick it carries, a role's topology included. */
+    @Test
+    fun setScreenWritesItsTopology() {
+        val cmds = vectors.getJSONArray("commands")
+        val c = (0 until cmds.length()).firstNotNullOf { cmds.optJSONObject(it)?.optJSONObject("SetScreen") }
+        val pick = DisplayTargets.Pick.of(c)
+        assertEquals(DisplayTargets.Pick(DisplayTargets.DisplayTarget.Own, "extend"), pick)
+        assertEquals("extend", pick!!.json().getString("topology"))
+    }
+
     /** Each answer carries its command's `req` from the vectors, verbatim. */
     @Test
     fun pairAndWakeWriteTheSamples() {

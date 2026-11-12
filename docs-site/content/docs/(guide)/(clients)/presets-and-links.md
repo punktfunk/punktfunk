@@ -30,6 +30,9 @@ Apple and Android apps in their own storage.
 | Android | Row of chips | Tap the selected chip again |
 | Console | **Settings** → **Presets** → **New preset…** | Pick a preset: **Edit settings…**, **Rename…**, **Delete preset** |
 
+**Second screen**, offered beside an empty preset, starts one that sets only the
+[host screen](/docs/client-settings#host-screen-in-a-preset).
+
 Windows creates *Preset 1* and opens it; rename it there. Names are unique, ignoring case. In the
 console (the controller interface) a changed row shows a dot, and **X** puts it back on the global
 value.

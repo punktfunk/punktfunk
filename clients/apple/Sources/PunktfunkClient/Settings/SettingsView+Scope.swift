@@ -378,11 +378,7 @@ extension SettingsView {
         // Three actions, one sheet. A preset is a name and a colour; deciding them in separate
         // menu items — each raising its own bare alert — is how "make a Work preset" became four
         // trips through this menu.
-        Button {
-            presetDraft = .create()
-        } label: {
-            Label(L10n.presetNew, systemImage: "plus")
-        }
+        newPresetMenu
         if let active = activePreset {
             Button {
                 presetDraft = .edit(active)
@@ -411,6 +407,41 @@ extension SettingsView {
                         Image(systemName: "trash")
                     }
                 }
+            }
+        }
+    }
+
+    /// New preset ▸ Empty, which opens the editor for a name and colour, or Second screen, which
+    /// adds that starter under a free name and opens it.
+    var newPresetMenu: some View {
+        Menu {
+            Button(L10n.presetStarterEmpty) { presetDraft = .create() }
+            Button {
+                let starter = StreamPreset.secondScreen { presets.nameTaken($0) }
+                presets.add(starter)
+                scope = .preset(starter.id)
+            } label: {
+                Text(L10n.screenRoleSecond)
+                Text(L10n.screenRoleSecondHint)
+            }
+        } label: {
+            Label(L10n.presetNewTitle, systemImage: "plus")
+        }
+    }
+
+    // MARK: - Host screen
+
+    /// A preset's Host screen row: As on the host card, the roles, then the monitors the saved
+    /// hosts last listed. A preset's alone: a host's default is the pick on its card. Picking As
+    /// on the host card clears the override, as no pin means that.
+    func hostScreenRow(_ preset: StreamPreset) -> some View {
+        let pinned = preset.overrides.hostScreen
+        // The checked role's hint; none for the card's pick or a monitor.
+        let hint = HostScreenChoice.all(hosts: [], pinned: pinned).first(where: \.checked)?.hint
+        return described(hint ?? "", field: "host_screen") {
+            HostScreenPicker(pinned: pinned) { value in
+                guard let value else { return resetOverride("host_screen") }
+                presets.setOverride(preset.id, \.hostScreen, value)
             }
         }
     }
@@ -560,4 +591,47 @@ extension SettingsView {
         return base
     }
 
+}
+
+/// The Host screen picker over the paired hosts' last answers, each asked again when it shows.
+struct HostScreenPicker: View {
+    @ObservedObject private var screens = HostScreenStore.shared
+    @State private var hosts: [StoredHost] = []
+    /// The preset's `host_screen`; nil is the host card's pick.
+    let pinned: String?
+    /// The picked choice's value; nil clears the pin.
+    let pick: (String?) -> Void
+
+    var body: some View {
+        let choices = HostScreenChoice.all(
+            hosts: hosts.compactMap { host in
+                screens.targets(for: host).map { (name: host.displayName, targets: $0) }
+            },
+            pinned: pinned)
+        let selection = Binding(
+            get: { choices.first(where: \.checked)?.value ?? "" },
+            set: { pick($0.isEmpty ? nil : $0) })
+        Group {
+            #if os(tvOS)
+            TVSelectionRow(
+                title: String(localized: L10n.presetHostScreen),
+                options: choices.map { (label: $0.label, tag: $0.value ?? "") },
+                selection: selection)
+            #else
+            let split = choices.firstIndex { $0.header != nil } ?? choices.endIndex
+            Picker(String(localized: L10n.presetHostScreen), selection: selection) {
+                ForEach(choices[..<split], id: \.self) { Text($0.label).tag($0.value ?? "") }
+                if split < choices.endIndex {
+                    Section(choices[split].header ?? "") {
+                        ForEach(choices[split...], id: \.self) { Text($0.label).tag($0.value ?? "") }
+                    }
+                }
+            }
+            #endif
+        }
+        .onAppear {
+            hosts = PresetStore.savedHosts().filter { $0.pinnedSHA256 != nil }
+            hosts.forEach { screens.refresh($0) }
+        }
+    }
 }

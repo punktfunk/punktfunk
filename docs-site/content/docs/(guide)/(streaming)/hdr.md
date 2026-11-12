@@ -4,8 +4,9 @@ description: What an HDR10 stream needs from the host, the codec and your client
 ---
 
 You get a 10-bit HDR10 (BT.2020 PQ) stream when every link below holds; otherwise the session
-streams 8-bit SDR. The host settles this before the first frame, so reconnect after changing
-anything on this page.
+streams 8-bit SDR. The host reads the settings on this page when you connect, so reconnect after
+changing one. During a session the stream follows the host's picture between HDR and SDR — see
+[Per host](#per-host).
 
 ## The chain
 
@@ -48,13 +49,24 @@ The Linux route to HDR on KDE and GNOME, and in Game Mode everywhere.
 4. For Steam's own HDR setting to be available, the build must be `+pfhdr14` or newer. Check with
    `punktfunk-gamescope --version`.
 
-SDR content in an HDR session (the desktop, the Steam UI, SDR games) starts at **Host → Game Mode
-→ SDR brightness** (advanced, `PUNKTFUNK_GAMESCOPE_SDR_NITS`): 203 nits, the level the
-clients expect. Steam's SDR brightness setting moves it during the session. Builds older than
-`+pfhdr16` ignore both and show SDR content oversaturated.
+The stream is HDR while a game shows HDR and SDR the rest of the time: the Steam UI and SDR
+games stream as SDR, and the picture pauses for a moment when a game turns HDR on or off. The
+Steam UI over a running HDR game stays HDR.
+
+Two kinds of session stay HDR from connect to disconnect instead: one from a client that can't
+switch during a session, and every session on a host that lets devices
+[share one screen](/docs/play-together).
+
+SDR content in an HDR picture (the Steam overlay, or everything in a session that stays HDR)
+starts at **Host → Game Mode → SDR brightness** (advanced, `PUNKTFUNK_GAMESCOPE_SDR_NITS`):
+203 nits, the level the clients expect. Steam's SDR brightness setting moves it during the
+session. Builds older than `+pfhdr16` ignore both and show SDR content oversaturated.
 
 **Game Mode HDR** (`PUNKTFUNK_GAMESCOPE_HDR`) on the same page, turned off, keeps gamescope
 sessions SDR.
+
+A session that follows the switch between Game Mode and the desktop streams SDR on the desktop
+and HDR in Game Mode again, whichever of the two it started in.
 
 ### Linux + GNOME
 
@@ -157,10 +169,11 @@ HDR colour conversion instead.
 
 ### The stream is SDR
 
-The host logs an `encode bit depth` line per session. The first `false` among
-`host_wants_10bit`, `capture_supports_hdr`, `client_wants_hdr` and `gpu_can_10bit` names the
-missing link of [the chain](#the-chain): the host setting, the source, the client, or the codec
-and GPU.
+The host logs an `encode bit depth` line per session, and again each time the stream switches.
+`display_hdr=true` with `content_hdr=Some(false)` is a gamescope session with no game showing
+HDR: nothing is missing. Otherwise the first `false` among `host_wants_10bit`,
+`capture_supports_hdr`, `client_wants_hdr` and `gpu_can_10bit` names the missing link of
+[the chain](#the-chain): the host setting, the source, the client, or the codec and GPU.
 
 ### HDR stopped working on a Linux host
 
