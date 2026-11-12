@@ -707,6 +707,7 @@ impl Shell {
         self.collect_profiles();
         self.collect_pictures();
         self.home_shelf();
+        self.games_follow_pick();
         self.tick_launch();
         self.tick_downloads();
         self.settle_focus();
@@ -886,9 +887,12 @@ impl Shell {
         }
     }
 
-    /// Fetch the games under the Hosts row once it rests on a host. Lives here: a screen
-    /// cannot send while it draws.
+    /// Fetch the games under the Hosts row once it rests on a host and no connect is up.
+    /// Lives here: a screen cannot send while it draws.
     fn home_shelf(&mut self) {
+        if self.dialing() {
+            return;
+        }
         let Some(Screen::Home(home)) = self.stack.last_mut() else {
             return;
         };
@@ -899,6 +903,29 @@ impl Shell {
         home.set_shelf(crate::screens::library::LibraryScreen::embedded(&host));
         self.send_cmd(ConsoleCmd::fetch_library(&host));
         self.ask_profiles(&host);
+    }
+
+    /// A Games root whose card now remembers another profile is that profile's shelf.
+    fn games_follow_pick(&mut self) {
+        if self.dialing() {
+            return;
+        }
+        let [Screen::Library(l)] = self.stack.as_slice() else {
+            return;
+        };
+        let Some(host) = self.hosts.iter().find(|h| h.key == l.host_key()) else {
+            return;
+        };
+        if !l.shelf_of(host) {
+            let host = host.clone();
+            let root = self.shelf_root(&host);
+            self.stack[0] = root;
+        }
+    }
+
+    /// A connect or a stream is up: the shelf under it stays the one the hold flies from.
+    fn dialing(&self) -> bool {
+        self.in_stream || self.connect.takeover().is_some()
     }
 
     /// This pairing is what turned its host into the default one. False for a second or
@@ -1023,11 +1050,12 @@ impl Shell {
                     self.parked[tab.index()] = parked;
                     return None;
                 };
-                // The shared list is one host's: a root whose host is not the last fetched
-                // would show another host's games.
-                let mine = self.library.req().host == host.fp_hex;
+                // The shared list is one host's: a root whose host is not the last fetched,
+                // or whose card now remembers another profile, would show other games.
+                let mine = self.library.req().host == host.fp_hex
+                    && self.games_key.as_deref() == Some(host.key.as_str());
                 match parked {
-                    Some(root) if mine && self.games_key.as_deref() == Some(host.key.as_str()) => {
+                    Some(root) if mine && root.shelf().is_none_or(|l| l.shelf_of(&host)) => {
                         Some(root)
                     }
                     _ => Some(self.shelf_root(&host)),
