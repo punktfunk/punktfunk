@@ -501,6 +501,7 @@ async fn a_knock_shows_the_profile_it_named() {
 #[tokio::test]
 async fn locking_keeps_the_devices_it_is_given() {
     use crate::profiles::Opens;
+    let _serial = crate::session_status::tests::REGISTRY.lock().await;
     let np = Arc::new(
         crate::native_pairing::NativePairing::load_with(
             Some(crate::test_support::scratch().join("pf-mgmt-lock-keep.json")),
