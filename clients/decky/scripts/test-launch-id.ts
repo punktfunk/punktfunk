@@ -120,19 +120,18 @@ assert.equal(
 );
 assert.equal(
   launchOptions(host, runner, "/usr/bin/punktfunk-client", {
-    requestAccess: true,
     profileId: "0a1b2c3d4e5f",
     gameId: "steam:570",
     presetId: "f5e4d3c2b1a0",
   }),
   `PF_REF=${host} PF_CLIENT_BIN=/usr/bin/punktfunk-client PF_PRESET=f5e4d3c2b1a0 ` +
-    `PF_GAME=steam:570 PF_AS=0a1b2c3d4e5f PF_REQUEST_ACCESS=1 ${tail}`,
+    `PF_GAME=steam:570 PF_AS=0a1b2c3d4e5f ${tail}`,
   "every extra, in the wrapper's order",
 );
 assert.equal(
-  launchOptions("192.168.1.50:9777", runner, "", { requestAccess: false }),
+  launchOptions("192.168.1.50:9777", runner, "", {}),
   `PF_REF=192.168.1.50:9777 ${tail}`,
-  "request access off adds nothing",
+  "an unsaved host by address",
 );
 for (const bin of ["/home/deck/my apps/client", "/a;id", "relative/client"]) {
   assert.throws(() => launchOptions(host, runner, bin, {}), /client path/, `unsafe path ${bin}`);

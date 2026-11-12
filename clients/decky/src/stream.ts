@@ -9,8 +9,8 @@ import { launchGameStream, launchStream } from "./steam/launch";
 import type { LaunchOpts } from "./steam/launch-options";
 
 /**
- * Stream this host. `opts.presetId` streams one of its pinned cards; `opts.requestAccess`
- * runs the supervised launch that waits for the host's operator to approve this Deck.
+ * Stream this host. `opts.presetId` streams one of its pinned cards, `opts.profileId` plays as
+ * one of its profiles for this stream.
  *
  * The host is named by REFERENCE (`v.ref`), never by value — no resolution, bitrate or codec
  * ever rides the launch path, which is the same rule the deep-link grammar enforces.

@@ -33,7 +33,7 @@ export function rowMenu(presets: number, profiles: number): { profiles: boolean;
 
 /**
  * Is a stream up? The control socket shows a running client; our running shortcut covers a
- * connect parked for approval, which has no socket yet and still needs Stop.
+ * launch still waking its host or connecting, which has no socket yet and still needs Stop.
  */
 export function streamIsUp(socket: boolean, shortcut: boolean): boolean {
   return socket || shortcut;

@@ -32,12 +32,6 @@ export interface LaunchOpts {
   gameId?: string;
   /** Play as this profile, for this stream only (PF_AS → `--as`), by its id. */
   profileId?: string;
-  /**
-   * Ask the host's operator to admit this Deck rather than typing a PIN (PF_REQUEST_ACCESS).
-   * The connect PARKS until somebody approves it, and the launch runs SUPERVISED — see the
-   * wrapper for why `--exec` is dropped on this path alone.
-   */
-  requestAccess?: boolean;
 }
 
 /**
@@ -90,9 +84,6 @@ export function launchOptions(
   }
   if (opts.profileId) {
     env.push(`PF_AS=${opts.profileId}`);
-  }
-  if (opts.requestAccess) {
-    env.push("PF_REQUEST_ACCESS=1");
   }
   // KEY=value ... %command% args — %command% expands to the shortcut exe (/bin/sh); the wrapper
   // script rides behind it as an argument and reads PF_* from the environment.

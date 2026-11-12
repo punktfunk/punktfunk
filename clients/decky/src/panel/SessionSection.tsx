@@ -1,6 +1,6 @@
 // While a stream is up: the host's own menus, End game after a game-page stream, and Stop. It
-// follows Steam's running feed, so it comes and goes with the panel open. A connect parked for
-// approval runs our shortcut before the client's control socket exists; Stop must reach it too.
+// follows Steam's running feed, so it comes and goes with the panel open. A launch still
+// waking its host runs our shortcut before the client's control socket exists; Stop reaches it too.
 import { ButtonItem, ConfirmModal, PanelSection, PanelSectionRow, showModal } from "@decky/ui";
 import { FC, useEffect, useState } from "react";
 import { FaGamepad, FaStopCircle } from "react-icons/fa";

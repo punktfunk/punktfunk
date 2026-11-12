@@ -54,7 +54,7 @@ export const TrustSheet: FC<{
   host: HostView;
   closeModal?: () => void;
   /** Stream this host, having just been let in. */
-  onStream: (opts: { requestAccess?: boolean }) => void;
+  onStream: () => void;
   /** Re-read the host list — the record changed underneath the panel. */
   onChanged: () => void;
 }> = ({ host, closeModal, onStream, onChanged }) => {
@@ -100,7 +100,7 @@ export const TrustSheet: FC<{
       }
       changed();
       if (!approval) {
-        stream({});
+        stream();
         closeModal?.();
         return;
       }

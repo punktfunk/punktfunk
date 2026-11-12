@@ -176,7 +176,7 @@ export const AccessRow: FC<{ host: HostView; showAddress: boolean; refresh: () =
       onOKActionDescription={t("decky_host_connect")}
       onClick={() =>
         showModal(
-          <TrustSheet host={host} onStream={(opts) => void startStream(host, opts)} onChanged={refresh} />,
+          <TrustSheet host={host} onStream={() => void startStream(host)} onChanged={refresh} />,
         )
       }
     >

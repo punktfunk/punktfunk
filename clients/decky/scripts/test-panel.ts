@@ -60,10 +60,10 @@ assert.deepEqual(rowMenu(0, 2), { profiles: true, presets: false });
 assert.deepEqual(rowMenu(1, 1), { profiles: false, presets: true });
 assert.deepEqual(rowMenu(2, 3), { profiles: true, presets: true });
 
-// Streaming is up on either arm: the socket, or our shortcut parked waiting for approval.
+// Streaming is up on either arm: the socket, or our shortcut still waking its host.
 assert.equal(streamIsUp(false, false), false);
 assert.equal(streamIsUp(true, false), true);
-assert.equal(streamIsUp(false, true), true, "a parked request-access connect still offers Stop");
+assert.equal(streamIsUp(false, true), true, "a launch still waking its host offers Stop");
 assert.equal(streamIsUp(true, true), true);
 
 const info = (o: Partial<UpdateInfo>): UpdateInfo => ({
