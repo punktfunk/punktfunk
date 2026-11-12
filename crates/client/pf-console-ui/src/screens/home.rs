@@ -1053,7 +1053,8 @@ fn no_games(slot: &Slot<'_>) -> Option<String> {
 
 /// A card's one status line and its ink: what the host is doing, whether OK will reach
 /// it, the preset a pinned or bound card connects with, and the screen it streams unless that
-/// is the default ([`pf_client_core::display_targets::Targets::card_line`]).
+/// is the default, the bound preset's when it decides
+/// ([`pf_client_core::display_targets::Targets::card_line_under`]).
 fn status(ui: &Frame, h: &HostRow) -> (String, Color4f) {
     if let Some(p) = &h.pin {
         return (p.name.clone(), accent_color(ui, p.accent.as_deref()));
@@ -1074,7 +1075,7 @@ fn status(ui: &Frame, h: &HostRow) -> (String, Color4f) {
     } else {
         (pf_l10n::client::hostcard_status_offline(), ui.fg(0.7))
     };
-    let screen = h.screens.as_ref().and_then(|s| s.card_line());
+    let screen = (h.screens.as_ref()).and_then(|s| s.card_line_under(h.screen_preset()));
     let parts: Vec<String> = std::iter::once(base.to_string())
         .chain(h.bound_preset.as_ref().map(|b| b.name.clone()))
         .chain(screen)
@@ -1512,6 +1513,7 @@ mod tests {
             name: "Work".into(),
             accent: None,
             bitrate_kbps: None,
+            host_screen: None,
         });
         let hosts = [pinned];
         let library = crate::library::LibraryShared::default();
@@ -1714,6 +1716,7 @@ mod tests {
             name: name.into(),
             accent: None,
             bitrate_kbps: None,
+            host_screen: None,
         };
         let row = || {
             let mut c = host("charlie", true, false, false);

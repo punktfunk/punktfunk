@@ -655,12 +655,20 @@ pub fn player_label(slots: u16) -> Option<String> {
     }
 }
 
-/// `Screen HDMI-A-1` on a session that mirrors a monitor; nothing on a screen of its own.
+/// `Screen HDMI-A-1` on a session that mirrors a monitor, the role's name on a main or second
+/// screen of its own; nothing on the only screen.
 #[cfg(any(test, feature = "l10n"))]
 fn screen_field(s: &StatsSnapshot) -> Option<String> {
-    s.screen
-        .as_ref()
-        .map(|c| format!("{} {c}", m::overlay_screen()))
+    use crate::quic::v2::hello::Role as ScreenRole;
+    let role = match s.role {
+        Some(ScreenRole::Main) => Some(m::screen_role_main()),
+        Some(ScreenRole::Second) => Some(m::screen_role_second()),
+        Some(ScreenRole::Only) | None => None,
+    };
+    match &s.screen {
+        Some(c) => Some(format!("{} {c}", m::overlay_screen())),
+        None => role.map(String::from),
+    }
 }
 
 /// The codec as every overlay and client names it. Empty for a wire id this build does not
@@ -2456,6 +2464,13 @@ mod tests {
             }
             assert!(!all(&s, StatsVerbosity::Compact, advanced).contains("Screen"));
         }
+        // On its own screen the role is named, the only screen staying silent.
+        s.screen = None;
+        s.role = Some(crate::quic::v2::hello::Role::Second);
+        let head = &format(&s, StatsVerbosity::Normal, false)[0];
+        assert!(head.fields.contains(&"Second screen".to_string()));
+        s.role = Some(crate::quic::v2::hello::Role::Only);
+        assert!(!all(&s, StatsVerbosity::Normal, false).contains("screen"));
     }
 
     /// Slot 0 is Player 1, and the line leads the overlay so a co-op guest reads it

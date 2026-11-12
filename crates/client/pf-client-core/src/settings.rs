@@ -165,6 +165,11 @@ pub struct Settings {
     /// on each of this computer's monitors, asked for again as monitors come and go.
     #[serde(default = "default_screens")]
     pub screens: String,
+    /// A preset's [`SettingsOverlay::host_screen`](crate::presets::SettingsOverlay::host_screen),
+    /// asked of the host as the Hello's screen wish. Empty, as no settings row writes it, is
+    /// the pick on the host's card.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub host_screen: String,
     pub gamepad: String,
     /// Forward this device's controllers. Default on.
     ///
@@ -779,6 +784,7 @@ impl Default for Settings {
             render_scale: 1.0,
             video_fit: default_video_fit(),
             screens: default_screens(),
+            host_screen: String::new(),
             gamepad: "auto".into(),
             gamepad_forwarding: true,
             forward_pad: String::new(),

@@ -1,5 +1,5 @@
-//! A preset's own screens, reached from the Presets tab: its menu, its name, and its
-//! settings. The console never writes the catalog itself; each change leaves as
+//! A preset's own screens, reached from the Presets tab: where a new one starts, its menu, its
+//! name, and its settings. The console never writes the catalog itself; each change leaves as
 //! [`ConsoleCmd::SavePreset`] or [`ConsoleCmd::DeletePreset`] and comes back as the host's
 //! next catalog push.
 //!
@@ -18,7 +18,7 @@ use crate::screens::{Ctx, EditField, Outbox, Screen, ScreenView, TextEntry};
 use crate::theme::Fonts;
 use crate::widgets::{blurb, field_key, type_text, Entry, ListMsg, MenuList, RowSpec};
 use pf_client_core::menu_nav::{MenuEvent, MenuPulse};
-use pf_client_core::presets::SettingsOverlay;
+use pf_client_core::presets::{SettingsOverlay, StreamPreset};
 use pf_client_core::trust::Settings;
 use pf_l10n::{client, common, console};
 use skia_safe::{Canvas, Rect};
@@ -246,6 +246,105 @@ impl ScreenView for PresetMenu {
             .collect();
         self.list
             .render(canvas, ui, rect, &rows, fonts, k, dt, true);
+    }
+
+    fn press(&mut self) {
+        self.list.dip();
+    }
+
+    fn pan(&mut self, p: Pointer) -> bool {
+        self.list.pan(p)
+    }
+}
+
+// --- the starter -----------------------------------------------------------------------------
+
+/// Where a new preset starts: Empty names it first; Second screen saves the starter under a
+/// free name and opens its settings, two presses from the Presets tab.
+pub(crate) struct PresetStarter {
+    list: MenuList,
+}
+
+/// Empty, then Second screen.
+const STARTERS: usize = 2;
+
+impl PresetStarter {
+    pub(crate) fn new() -> PresetStarter {
+        PresetStarter {
+            list: MenuList::new(),
+        }
+    }
+
+    fn run(&self, ctx: &Ctx, fx: &mut Outbox) -> Option<MenuPulse> {
+        if self.list.cursor == 0 {
+            fx.replace(Screen::PresetName(PresetName::new()));
+            return Some(MenuPulse::Confirm);
+        }
+        let presets = ctx.store.presets();
+        let p = StreamPreset::second_screen(|n| {
+            (presets.iter()).any(|(_, other)| other.eq_ignore_ascii_case(n))
+        });
+        fx.cmds.push(save(&p.id, &p.name, &p.overrides));
+        fx.replace(Screen::PresetEdit(PresetEdit::new(
+            p.id,
+            p.name,
+            p.overrides,
+        )));
+        Some(MenuPulse::Confirm)
+    }
+}
+
+impl ScreenView for PresetStarter {
+    fn title(&self) -> String {
+        client::preset_new_title().into()
+    }
+
+    fn menu(&mut self, ev: MenuEvent, ctx: &mut Ctx, fx: &mut Outbox) -> Option<MenuPulse> {
+        if ev == MenuEvent::Back {
+            fx.pop();
+            return None;
+        }
+        match self.list.menu(ev, STARTERS) {
+            (ListMsg::Activate, _) => self.run(ctx, fx),
+            (ListMsg::Adjust(_), _) => Some(MenuPulse::Boundary),
+            (ListMsg::None, pulse) => pulse,
+        }
+    }
+
+    fn pointer(&mut self, p: Pointer, ctx: &mut Ctx, fx: &mut Outbox) -> bool {
+        let (msg, pulse) = self.list.pointer(p, STARTERS);
+        if matches!(msg, ListMsg::None) && pulse.is_none() {
+            return false;
+        }
+        if matches!(msg, ListMsg::Activate) {
+            self.run(ctx, fx);
+        }
+        true
+    }
+
+    fn hints(&self, _ctx: &Ctx) -> Vec<Hint> {
+        vec![
+            Hint::new(HintKey::Confirm, common::common_select()),
+            Hint::new(HintKey::Back, common::common_back()),
+        ]
+    }
+
+    fn render(
+        &mut self,
+        canvas: &Canvas,
+        rect: Rect,
+        k: f64,
+        dt: f64,
+        fonts: &Fonts,
+        ctx: &mut Ctx,
+    ) {
+        let rows = [
+            RowSpec::action(client::preset_starter_empty(), true),
+            RowSpec::action(client::screen_role_second(), true)
+                .with_note(client::screen_role_second_hint()),
+        ];
+        self.list
+            .render(canvas, ctx.ui, rect, &rows, fonts, k, dt, true);
     }
 
     fn press(&mut self) {
@@ -797,6 +896,93 @@ mod tests {
         );
         assert!(
             matches!(fx.nav, Some(Nav::Replace(ref b)) if matches!(**b, Screen::PresetEdit(_)))
+        );
+    }
+
+    /// Second screen saves the starter and opens its settings in one press; Empty names first.
+    #[test]
+    fn the_second_screen_starter_saves_and_opens_its_settings() {
+        let mut s = PresetStarter::new();
+        let mut fx = Outbox::default();
+        with_ctx(|ctx| s.menu(MenuEvent::Confirm, ctx, &mut fx));
+        assert!(fx.cmds.is_empty());
+        assert!(
+            matches!(fx.nav, Some(Nav::Replace(ref b)) if matches!(**b, Screen::PresetName(_)))
+        );
+
+        let mut fx = Outbox::default();
+        with_ctx(|ctx| {
+            s.menu(MenuEvent::Move(MenuDir::Down), ctx, &mut fx);
+            s.menu(MenuEvent::Confirm, ctx, &mut fx)
+        });
+        let Some(ConsoleCmd::SavePreset { name, .. }) = fx.cmds.last() else {
+            panic!("no save: {:?}", fx.cmds);
+        };
+        assert_eq!(name, "Second screen");
+        let only_the_screen = SettingsOverlay {
+            host_screen: Some("second".into()),
+            ..Default::default()
+        };
+        assert_eq!(saved(&fx), only_the_screen);
+        assert!(
+            matches!(fx.nav, Some(Nav::Replace(ref b)) if matches!(**b, Screen::PresetEdit(_)))
+        );
+    }
+
+    /// The Host screen row steps from the host card's pick through the roles to each known
+    /// host's monitors; back on the first it pins nothing.
+    #[test]
+    fn the_host_screen_row_steps_through_the_roles_and_monitors() {
+        use pf_client_core::display_targets::{Target, Targets};
+        let mut s = PresetEdit::new("p1".into(), "Couch".into(), SettingsOverlay::default());
+        let tower = crate::model::HostRow {
+            screens: Some(Targets {
+                targets: vec![Target {
+                    id: "HDMI-A-1".into(),
+                    label: "LG TV".into(),
+                    ..Target::default()
+                }],
+                ..Targets::default()
+            }),
+            ..crate::model::HostRow::fixture("aa", "Tower")
+        };
+        let hosts = [tower];
+        let mut settings = Settings::default();
+        let library = crate::library::LibraryShared::default();
+        let mut ctx = Ctx {
+            hosts: &hosts,
+            ..Ctx::test(&mut settings, &library)
+        };
+        fn value(s: &PresetEdit, ctx: &mut Ctx) -> Option<String> {
+            let spec = s.in_preset(ctx, |ctx| {
+                row_spec(RowId::HostScreen, ctx, &[], &Default::default())
+            });
+            spec.value
+        }
+        let row = s
+            .rows(&mut ctx)
+            .iter()
+            .position(|(_, id)| *id == RowId::HostScreen);
+        s.list.cursor = row.expect("a preset row on the desktop");
+        assert_eq!(value(&s, &mut ctx).as_deref(), Some("As on the host card"));
+        let mut fx = Outbox::default();
+        let mut picks = Vec::new();
+        for _ in 0..4 {
+            s.menu(MenuEvent::Move(MenuDir::Right), &mut ctx, &mut fx);
+            picks.push(saved(&fx).host_screen.unwrap_or_default());
+        }
+        assert_eq!(picks, ["only", "main", "second", "monitor:HDMI-A-1"]);
+        assert_eq!(
+            value(&s, &mut ctx).as_deref(),
+            Some("LG TV \u{b7} HDMI-A-1 \u{2014} Tower")
+        );
+        for _ in 0..4 {
+            s.menu(MenuEvent::Move(MenuDir::Left), &mut ctx, &mut fx);
+        }
+        assert_eq!(
+            saved(&fx),
+            SettingsOverlay::default(),
+            "the card's pick is no pin"
         );
     }
 

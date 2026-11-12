@@ -1,11 +1,14 @@
 //! Which host screen this device streams, and how: the host's answer, the Screen section every
 //! shell draws from it ([`Targets::rows`]), and the write of this device's pick ([`set_pick`]).
+//! A preset's `host_screen` asks for one connect instead: its editor row
+//! ([`host_screen_choices`]), and the card under it ([`Targets::rows_under`]).
 //!
 //! Same mTLS lane as [`crate::host_actions`]: device identity, fingerprint pin, `mgmt_port`.
 //! The host names the monitors; this app words the roles. The pick is the device's own row on
 //! the host, so no client stores it. `clients/shared/screen-rows-vectors.json` pins the rows
 //! for the Swift and Kotlin copies.
 
+use punktfunk_core::quic::v2::hello::ScreenWish;
 use serde::{Deserialize, Deserializer, Serialize};
 
 /// The id `GET /display/targets` gives the own-screen row.
@@ -359,6 +362,142 @@ impl Targets {
             },
         }
     }
+
+    /// The row a connect with `preset` gets, checked and greyed, when the preset decides here:
+    /// the host offers roles, leaves the pick to this device, and has the role the preset
+    /// names or that monitor free now. Otherwise the wish counts as not made.
+    fn preset_row(&self, preset: BoundPreset) -> Option<ScreenRow> {
+        let role = self.role.as_ref().filter(|_| self.note().is_none())?;
+        let row = match ScreenWish::parse(preset.host_screen)? {
+            ScreenWish::Monitor(c) => {
+                let t = self.targets.iter().find(|t| t.id == c && t.id != OWN)?;
+                ScreenRow::target(t, &t.target())
+            }
+            ScreenWish::Only => ScreenRow::role(Role::Only, true),
+            ScreenWish::Main => ScreenRow::role(Role::Main, true),
+            ScreenWish::Second => ScreenRow::role(Role::Second, true),
+        };
+        let had = match row.kind {
+            RowKind::Role(r) => role.offered.contains(&r),
+            _ => row.pickable,
+        };
+        had.then_some(ScreenRow {
+            pickable: false,
+            pick: None,
+            ..row
+        })
+    }
+
+    /// [`Self::rows`] for a card that connects with `preset`: the preset's row alone when it
+    /// decides here.
+    pub fn rows_under(&self, preset: Option<BoundPreset>) -> Vec<ScreenRow> {
+        match preset.and_then(|p| self.preset_row(p)) {
+            Some(row) => vec![row],
+            None => self.rows(),
+        }
+    }
+
+    /// [`Self::note`] for a card that connects with `preset`: "Set by the preset Couch" when
+    /// it decides here.
+    pub fn note_under(&self, preset: Option<BoundPreset>) -> Option<String> {
+        match preset.filter(|p| self.preset_row(*p).is_some()) {
+            Some(p) => Some(pf_l10n::client::screen_preset_decides(p.name)),
+            None => self.note().map(String::from),
+        }
+    }
+
+    /// [`Self::card_line`] for a card that connects with `preset`, naming the preset's pick
+    /// when it decides here.
+    pub fn card_line_under(&self, preset: Option<BoundPreset>) -> Option<String> {
+        let row = preset.and_then(|p| self.preset_row(p));
+        match row.map(|r| (r.kind, r.label)) {
+            Some((RowKind::Monitor, label)) => Some(pf_l10n::client::screen_streams(&label)),
+            Some((RowKind::Role(Role::Only), _)) => None,
+            Some((_, label)) => Some(label),
+            None => self.card_line(),
+        }
+    }
+}
+
+/// The preset a card connects with, when it pins the host screen: its name for the note, and
+/// its [`SettingsOverlay::host_screen`](crate::presets::SettingsOverlay::host_screen).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct BoundPreset<'a> {
+    pub name: &'a str,
+    pub host_screen: &'a str,
+}
+
+/// One choice of a preset's Host screen row.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct HostScreenChoice {
+    /// What the overlay's `host_screen` holds once this is picked; `None` clears it.
+    pub value: Option<String>,
+    pub label: String,
+    pub hint: Option<&'static str>,
+    /// Heads a group from this choice on.
+    pub header: Option<&'static str>,
+    pub checked: bool,
+}
+
+/// A preset editor's Host screen row: As on the host card, the three roles, then under "Show
+/// a monitor" each connector the known hosts list, as `LG TV · HDMI-A-1 — Tower`. `hosts`
+/// pairs each host's name with its last targets answer. `pinned` is the overlay's value; a
+/// connector no host lists still shows, by itself, and a value that is no wish checks As on
+/// the host card, as a connect reads it.
+pub fn host_screen_choices(
+    hosts: &[(&str, &Targets)],
+    pinned: Option<&str>,
+) -> Vec<HostScreenChoice> {
+    let wish = pinned.and_then(ScreenWish::parse);
+    let current = wish.as_ref().map(ScreenWish::to_string);
+    let choice = |value: Option<String>, label: String, hint| HostScreenChoice {
+        checked: value == current,
+        value,
+        label,
+        hint,
+        header: None,
+    };
+    let mut out = vec![choice(
+        None,
+        pf_l10n::client::preset_host_screen_inherit().into(),
+        None,
+    )];
+    out.extend(
+        Role::ALL.map(|r| choice(Some(r.as_str().into()), r.label().into(), Some(r.hint()))),
+    );
+    // Connector, the first host's name for it, and every host that lists it.
+    let mut monitors: Vec<(&str, &str, Vec<&str>)> = Vec::new();
+    for &(host, t) in hosts {
+        for m in t.targets.iter().filter(|m| m.id != OWN) {
+            match monitors.iter_mut().find(|(c, ..)| *c == m.id) {
+                Some((.., on)) if !on.contains(&host) => on.push(host),
+                Some(_) => {}
+                None => monitors.push((m.id.as_str(), m.name(), vec![host])),
+            }
+        }
+    }
+    if let Some(ScreenWish::Monitor(c)) = &wish {
+        if !monitors.iter().any(|(m, ..)| *m == c.as_str()) {
+            monitors.push((c.as_str(), c.as_str(), Vec::new()));
+        }
+    }
+    for (i, (c, name, on)) in monitors.into_iter().enumerate() {
+        let what = if name == c {
+            c.to_string()
+        } else {
+            format!("{name} \u{b7} {c}")
+        };
+        let label = if on.is_empty() {
+            what
+        } else {
+            format!("{what} \u{2014} {}", on.join(", "))
+        };
+        out.push(HostScreenChoice {
+            header: (i == 0).then(pf_l10n::client::screen_show_monitor),
+            ..choice(Some(format!("monitor:{c}")), label, None)
+        });
+    }
+    out
 }
 
 /// `GET /api/v1/display/targets`. `None` on any miss, never an error — same contract as
@@ -563,46 +702,103 @@ mod tests {
         Some(m.format(&args))
     }
 
+    fn vectors() -> serde_json::Value {
+        let raw = include_str!("../../../../clients/shared/screen-rows-vectors.json");
+        serde_json::from_str(raw).unwrap()
+    }
+
+    /// `rows` as the vectors spell them.
+    fn rows_json(rows: &[ScreenRow]) -> Vec<serde_json::Value> {
+        let kind = |k: RowKind| match k {
+            RowKind::Role(_) => "role",
+            RowKind::Monitor => "monitor",
+            RowKind::Own => "own",
+        };
+        (rows.iter())
+            .map(|r| {
+                serde_json::json!({
+                    "kind": kind(r.kind), "id": r.id, "label": r.label, "hint": r.hint,
+                    "detail": r.detail, "header": r.header, "checked": r.checked,
+                    "pickable": r.pickable, "reason": r.reason, "put": r.pick,
+                })
+            })
+            .collect()
+    }
+
+    /// A case's list with its text `slots` worded as this build says them.
+    fn worded(want: &serde_json::Value, slots: &[&str]) -> Vec<serde_json::Value> {
+        (want.as_array().unwrap().iter())
+            .map(|w| {
+                let mut w = w.clone();
+                for slot in slots {
+                    w[*slot] = text(&w[*slot]).into();
+                }
+                w
+            })
+            .collect()
+    }
+
     /// `clients/shared/screen-rows-vectors.json`: each answer's rows, note and card line.
     #[test]
     fn shared_vectors() {
-        let raw = include_str!("../../../../clients/shared/screen-rows-vectors.json");
-        let file: serde_json::Value = serde_json::from_str(raw).unwrap();
-        for case in file["cases"].as_array().unwrap() {
+        for case in vectors()["cases"].as_array().unwrap() {
             let name = case["name"].as_str().unwrap();
             let t: Targets = serde_json::from_value(case["targets"].clone())
                 .unwrap_or_else(|e| panic!("{name}: {e}"));
-            let got: Vec<serde_json::Value> = t
-                .rows()
-                .iter()
-                .map(|r| {
-                    let kind = match r.kind {
-                        RowKind::Role(_) => "role",
-                        RowKind::Monitor => "monitor",
-                        RowKind::Own => "own",
-                    };
-                    serde_json::json!({
-                        "kind": kind, "id": r.id, "label": r.label, "hint": r.hint,
-                        "detail": r.detail, "header": r.header, "checked": r.checked,
-                        "pickable": r.pickable, "reason": r.reason, "put": r.pick,
-                    })
-                })
-                .collect();
-            let want: Vec<serde_json::Value> = case["rows"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .map(|w| {
-                    let mut w = w.clone();
-                    for slot in ["label", "hint", "header", "reason"] {
-                        w[slot] = text(&w[slot]).into();
-                    }
-                    w
-                })
-                .collect();
-            assert_eq!(got, want, "{name}");
+            let want = worded(&case["rows"], &["label", "hint", "header", "reason"]);
+            assert_eq!(rows_json(&t.rows()), want, "{name}");
             assert_eq!(t.note().map(String::from), text(&case["note"]), "{name}");
             assert_eq!(t.card_line(), text(&case["card"]), "{name}");
+        }
+    }
+
+    /// The same file's `preset_cases`: a card whose preset pins the screen.
+    #[test]
+    fn preset_vectors() {
+        let file = vectors();
+        let cases = file["preset_cases"].as_array().unwrap();
+        assert!(cases.len() >= 5);
+        for case in cases {
+            let name = case["name"].as_str().unwrap();
+            let t: Targets = serde_json::from_value(case["targets"].clone()).unwrap();
+            let preset = Some(BoundPreset {
+                name: case["preset"]["name"].as_str().unwrap(),
+                host_screen: case["preset"]["host_screen"].as_str().unwrap(),
+            });
+            let want = worded(&case["rows"], &["label", "hint", "header", "reason"]);
+            assert_eq!(rows_json(&t.rows_under(preset)), want, "{name}");
+            assert_eq!(t.note_under(preset), text(&case["note"]), "{name}");
+            assert_eq!(t.card_line_under(preset), text(&case["card"]), "{name}");
+            assert_eq!(t.rows_under(None), t.rows(), "{name}: no preset");
+        }
+    }
+
+    /// The same file's `host_screen_cases`: a preset editor's Host screen row.
+    #[test]
+    fn host_screen_vectors() {
+        let file = vectors();
+        let cases = file["host_screen_cases"].as_array().unwrap();
+        assert!(cases.len() >= 3);
+        for case in cases {
+            let name = case["name"].as_str().unwrap();
+            let hosts: Vec<(String, Targets)> = (case["hosts"].as_array().unwrap().iter())
+                .map(|h| {
+                    let t = serde_json::from_value(h["targets"].clone()).unwrap();
+                    (h["name"].as_str().unwrap().to_string(), t)
+                })
+                .collect();
+            let hosts: Vec<(&str, &Targets)> = hosts.iter().map(|(n, t)| (n.as_str(), t)).collect();
+            let got: Vec<serde_json::Value> =
+                (host_screen_choices(&hosts, case["pinned"].as_str()).iter())
+                    .map(|c| {
+                        serde_json::json!({
+                            "value": c.value, "label": c.label, "hint": c.hint,
+                            "header": c.header, "checked": c.checked,
+                        })
+                    })
+                    .collect();
+            let want = worded(&case["choices"], &["label", "hint", "header"]);
+            assert_eq!(got, want, "{name}");
         }
     }
 }

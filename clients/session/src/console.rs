@@ -1513,6 +1513,7 @@ fn build_rows(
         // Only the speed test reads this: a preset that PINS bitrate is the layer its
         // host streams at, so the console must not offer to write the global instead.
         bitrate_kbps: p.overrides.bitrate_kbps,
+        host_screen: p.overrides.host_screen.clone(),
     };
     let mut rows: Vec<HostRow> = known
         .hosts

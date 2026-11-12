@@ -50,11 +50,40 @@ hosts list monitors. A [seat](/docs/profiles#what-a-seat-can-do), or a host with
 no rows: the device gets a screen of its own. An older host offers **Own screen** in place of the
 three roles.
 
-The host keeps the pick for this device, so a preset can't change it. The web console shows it,
-and can change it, in the device's [display settings](/docs/virtual-displays#per-device-settings).
-Picking needs **Choose its screen** in this device's
-[access](/docs/access-levels#individual-grants). Without it the section shows what the host chose
-and says **This host decides the screen for this device.**
+The host keeps the pick for this device. The web console shows it, and can change it, in the
+device's [display settings](/docs/virtual-displays#per-device-settings). Picking needs **Choose
+its screen** in this device's [access](/docs/access-levels#individual-grants). Without it the
+section shows what the host chose and says **This host decides the screen for this device.**
+
+### Host screen in a preset
+
+A [preset](/docs/presets-and-links) can pick the screen for its own connects. **Host screen**, under
+**Display**, shows only while you edit a preset:
+
+| Pick | A connect with the preset |
+|---|---|
+| **As on the host card** | Takes the card's pick. The default. |
+| **Only screen**, **Main screen**, **Second screen** | Asks the host for that role |
+| A monitor, such as **LG TV · HDMI-A-1 — Tower** | Asks for the monitor with that connector, on any host. The hosts that listed it are named after the dash. |
+
+The preset's pick applies to that connect only and never changes the card: a plain click on the
+host still streams as the card says. A game bound to a preset launches with that preset's screen.
+A host without the picked role or monitor, or one that offers no roles, gives the card's pick.
+While a card's default preset picks the screen, the card's **Screen** section shows that pick,
+greyed, with **Set by the preset Couch**.
+
+**New preset…** offers **Empty** and **Second screen**. **Second screen** makes a preset that sets
+only **Host screen**, to **Second screen**: pin it to a host as a card, and a tablet beside the PC
+joins as one more screen.
+
+When the host doesn't give what was asked, the stream says why once, as it starts:
+
+| The stream says | Because |
+|---|---|
+| **Second screen wasn't applied: this host decides the screen for this device.** | This device lacks **Choose its screen**. It gets what the host chose. |
+| **The host's monitors stayed as they were: another device was streaming first.** | The [first session decides](/docs/virtual-displays#two-devices-at-once) what the monitors do. The rest of the pick applies. |
+| **HDMI-A-1 wasn't applied: that monitor can't be streamed now.** | The monitor is off, streamed by another device, or not on this host. This device gets a screen of its own. |
+| **Second screen wasn't applied: this desktop has no monitors.** | The session plays on a [seat](/docs/profiles#what-a-seat-can-do) or a desktop with no monitors. |
 
 ## Reset all settings
 

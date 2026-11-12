@@ -20,7 +20,7 @@ use crate::store::SettingsStore;
 use crate::theme::{Fonts, Frame, W};
 use crate::widgets::{blurb, ListMsg, MenuList, RowSpec, TabStrip, TAB_STRIP_H};
 use pf_client_core::console::OverlayAction;
-use pf_client_core::display_targets::{RowKind, ScreenRow, Targets};
+use pf_client_core::display_targets::{RowKind, ScreenRow};
 use pf_client_core::library::InstallAction;
 use pf_client_core::menu_nav::{MenuDir, MenuEvent, MenuPulse};
 use pf_client_core::start;
@@ -72,9 +72,11 @@ enum Action {
     MakeDefault,
     /// Indexed into [`HostRow::actions`]: this build renders labels it has never heard of.
     Host(usize),
-    /// Row `i` of the host's Screen section ([`Targets::rows`]), streamed from the next connect.
+    /// Row `i` of the host's Screen section under the card's preset (`Targets::rows_under`),
+    /// streamed from the next connect.
     Screen(usize),
-    /// Why the host decides the screen ([`Targets::note`]), under the pick it leaves.
+    /// Why the host or the card's preset decides the screen (`Targets::note_under`), under the
+    /// pick it leaves.
     ScreenNote,
     SendLogs,
     Forget,
@@ -345,8 +347,9 @@ impl CardMenu {
         a.push(Action::BindPreset);
         a.extend((0..store.presets().len()).map(Action::Pin));
         if let Some(s) = host.screens.as_ref().filter(|_| host.paired) {
-            a.extend((0..s.rows().len()).map(Action::Screen));
-            a.extend(s.note().map(|_| Action::ScreenNote));
+            let preset = host.screen_preset();
+            a.extend((0..s.rows_under(preset).len()).map(Action::Screen));
+            a.extend(s.note_under(preset).map(|_| Action::ScreenNote));
         }
         if host.paired && host.online {
             a.push(Action::SpeedTest);
@@ -431,14 +434,18 @@ impl CardMenu {
         }
     }
 
-    /// Row `i` of the host's Screen section, read from the host row the menu opened on.
+    /// Row `i` of the host's Screen section, read from the host row the menu opened on, under
+    /// the preset its card connects with.
     fn screen(&self, i: usize) -> Option<ScreenRow> {
-        self.host().screens.as_ref()?.rows().into_iter().nth(i)
+        let h = self.host();
+        let rows = h.screens.as_ref()?.rows_under(h.screen_preset());
+        rows.into_iter().nth(i)
     }
 
-    /// Why the host decides the screen, when it does.
-    fn screen_note(&self) -> Option<&'static str> {
-        self.host().screens.as_ref().and_then(Targets::note)
+    /// Why the host, or the card's preset, decides the screen, when one does.
+    fn screen_note(&self) -> Option<String> {
+        let h = self.host();
+        h.screens.as_ref()?.note_under(h.screen_preset())
     }
 
     /// `default` (`Settings::default_host`) names this row. A derived default reads as unset.
@@ -527,7 +534,7 @@ impl CardMenu {
                 None => String::new(),
             },
             Action::Screen(i) => self.screen(i).map(|r| r.label).unwrap_or_default(),
-            Action::ScreenNote => self.screen_note().unwrap_or_default().into(),
+            Action::ScreenNote => self.screen_note().unwrap_or_default(),
             Action::SendLogs => pf_l10n::client::hostcard_send_logs().into(),
             Action::Forget if self.armed == Some(Action::Forget) => {
                 pf_l10n::console::console_card_remove_armed().into()
@@ -886,7 +893,7 @@ impl CardMenu {
                 };
                 let Some(pick) = row.pick else {
                     let note = self.screen_note().filter(|_| !row.pickable);
-                    fx.toast = row.reason.or(note.map(String::from));
+                    fx.toast = row.reason.or(note);
                     return;
                 };
                 fx.toast = Some(match row.kind {
@@ -904,7 +911,7 @@ impl CardMenu {
                 fx.pop();
             }
             Action::ScreenNote => {
-                fx.toast = self.screen_note().map(String::from);
+                fx.toast = self.screen_note();
             }
             Action::Unpin => {
                 if let Some(p) = &self.host().pin {
@@ -1174,7 +1181,7 @@ mod tests {
     use crate::model::PresetChip;
     use crate::screens::settings::tests::fake_home;
     use crate::screens::Nav;
-    use pf_client_core::display_targets::{DisplayTarget, Role, RoleInfo, Target};
+    use pf_client_core::display_targets::{DisplayTarget, Role, RoleInfo, Target, Targets};
 
     fn with_ctx<R>(f: impl FnOnce(&mut Ctx) -> R) -> R {
         fake_home();
@@ -1324,6 +1331,7 @@ mod tests {
                 name: "4K".into(),
                 accent: None,
                 bitrate_kbps: None,
+                host_screen: None,
             }),
             ..host()
         }
@@ -2184,6 +2192,47 @@ mod tests {
                 assert_eq!(fx.toast.as_deref(), Some(why));
             }
         }
+    }
+
+    /// Under a default preset that pins the screen, the tab shows the preset's pick greyed with
+    /// whose it is, and the card's line names it. One the host can't give leaves the card's rows.
+    #[test]
+    fn a_preset_that_pins_the_screen_decides_the_tab() {
+        let bound = |host_screen: &str| HostRow {
+            bound_preset: Some(PresetChip {
+                id: "couch".into(),
+                name: "Couch".into(),
+                accent: None,
+                bitrate_kbps: None,
+                host_screen: Some(host_screen.into()),
+            }),
+            ..roled(true)
+        };
+        let (mut s, rows) = screen_tab(&bound("main"));
+        assert_eq!(rows, vec![Action::Screen(0), Action::ScreenNote]);
+        assert_eq!(label(&s, Action::Screen(0)), "Main screen");
+        assert_eq!(s.icon(Action::Screen(0)), "check");
+        assert_eq!(label(&s, Action::ScreenNote), "Set by the preset Couch");
+        assert!(!s.enabled(Action::Screen(0)));
+        let mut fx = Outbox::default();
+        run_action(&mut s, Action::Screen(0), &mut fx);
+        assert!(fx.cmds.is_empty(), "the card's own pick stays as it is");
+        assert_eq!(fx.toast.as_deref(), Some("Set by the preset Couch"));
+        let h = bound("main");
+        assert_eq!(
+            h.screens
+                .as_ref()
+                .unwrap()
+                .card_line_under(h.screen_preset()),
+            Some("Main screen".into())
+        );
+
+        let (_, taken) = screen_tab(&bound("monitor:DP-1"));
+        assert_eq!(
+            taken,
+            screen_tab(&roled(true)).1,
+            "a taken monitor is no wish now"
+        );
     }
 
     /// No answer from the host, or no pairing to ask with, is no Screen tab.
