@@ -3,15 +3,16 @@
 //! profile's seat copy. Pure: the caller passes the time.
 //!
 //! A profile with no entry, or one not `locked`, is open. A locked profile opens for the devices
-//! its list admits, by [`DeviceList::admitted`]'s rules; any other device needs its PIN, and with
-//! no PIN never opens it. A file that can't be read locks every profile. A seat's copy carries no
-//! PIN: a seat host never takes one.
+//! its list admits, by [`DeviceList::admitted`]'s rules. A device it lists with an unlock key
+//! needs that key's proof or the PIN; any other needs the PIN, and with no PIN never opens it. A
+//! file that can't be read locks every profile. A seat's copy carries no PIN: a seat host never
+//! takes a proof.
 //!
 //! A profile takes [`PIN_FAILURES`] wrong PINs in any [`PIN_WINDOW`], over all devices, counted
 //! in the file so a restart forgets none. A try counts before its hash runs and is taken back
 //! when right, so neither a crash nor tries at once get past the cap.
 
-use crate::ipc::Device;
+use crate::ipc::{Device, UnlockKey};
 use crate::unlock::{lower_hex, DeviceList};
 use aws_lc_rs::pbkdf2::{self, PBKDF2_HMAC_SHA256};
 use serde::{Deserialize, Serialize};
@@ -66,6 +67,8 @@ pub enum Opens {
     Yes,
     /// The profile's PIN.
     Pin,
+    /// A proof from the unlock key the list holds for the device, or the PIN when it has one.
+    Key,
     /// Nothing opens it from this device.
     No,
 }
@@ -98,6 +101,8 @@ impl Locks {
         };
         if lock.admitted(now).contains(&fp) {
             Opens::Yes
+        } else if lock.list.key_of(&fp).is_some() {
+            Opens::Key
         } else if lock.pin.is_some() {
             Opens::Pin
         } else {
@@ -146,11 +151,26 @@ impl Lock {
         list.admitted()
     }
 
-    /// `device` on the list from `now`: until signed out when `stay`, else while it plays and
-    /// for a grace after. `false`, changing nothing, when the list is full without it.
+    /// `device` on the list from `now`: until signed out when `stay`, which drops a key it held,
+    /// else while it plays and for a grace after. `false`, changing nothing, when the list is
+    /// full without it.
     pub fn admit(&mut self, device: &Device, now: i64, stay: bool) -> bool {
         self.list.expire(now);
-        self.list.grant(device, now, stay, None)
+        let granted = self.list.grant(device, now, stay, None);
+        if granted && stay {
+            let mut entries = self.list.devices.iter_mut();
+            if let Some(e) = entries.find(|e| e.fingerprint == device.fingerprint) {
+                e.key = None;
+            }
+        }
+        granted
+    }
+
+    /// `device` on the list from `now` with `key`: while it plays and for a grace after, then
+    /// with the key's proof. `false`, changing nothing, when the list is full without it.
+    pub fn enrol(&mut self, device: &Device, now: i64, key: UnlockKey) -> bool {
+        self.list.expire(now);
+        self.list.grant(device, now, false, Some(key))
     }
 
     /// Wrong PINs, and tries in flight, counted at `now`.
@@ -308,6 +328,33 @@ mod tests {
         let fp = Some(tv.fingerprint.as_str());
         assert_eq!(locks.opens("anna", fp, NOW + 609), Opens::Yes);
         assert_eq!(locks.opens("anna", fp, NOW + 610), Opens::Pin);
+    }
+
+    /// A device enrolled with a key opens while present, then with the key's proof, with or
+    /// without a PIN; kept signed in, it drops the key.
+    #[test]
+    fn a_device_with_a_key_needs_its_proof_once_it_left() {
+        use crate::ipc::KeyAlg;
+        let mut locks = locks();
+        let tv = device(2);
+        let fp = Some(tv.fingerprint.as_str());
+        let later = NOW + crate::unlock::GRACE_SECS + 10;
+        let key = UnlockKey {
+            alg: KeyAlg::P256,
+            public: "04".repeat(65),
+        };
+        let anna = locks.profiles.get_mut("anna").unwrap();
+        assert!(anna.enrol(&tv, NOW, key));
+        assert_eq!(locks.opens("anna", fp, NOW), Opens::Yes, "present");
+        let anna = locks.profiles.get_mut("anna").unwrap();
+        anna.list.left(&tv.fingerprint, NOW + 10);
+        assert_eq!(locks.opens("anna", fp, later), Opens::Key);
+        locks.profiles.get_mut("anna").unwrap().pin = None;
+        assert_eq!(locks.opens("anna", fp, later), Opens::Key, "no PIN");
+        let anna = locks.profiles.get_mut("anna").unwrap();
+        assert!(anna.admit(&tv, later, true));
+        assert!(anna.list.key_of(&tv.fingerprint).is_none());
+        assert_eq!(locks.opens("anna", fp, later + 1), Opens::Yes, "kept");
     }
 
     /// A seat admits every paired device while it plays an open profile, else the union of its

@@ -267,13 +267,20 @@ impl std::fmt::Display for AuditLine {
     }
 }
 
-/// One live challenge per seat and device, each answerable once within [`CHALLENGE_LIFE`].
-#[derive(Debug, Default)]
-pub(crate) struct Challenges(HashMap<(SeatId, String), ([u8; 32], Instant)>);
+/// One live challenge per seat, or profile, and device, each answerable once within
+/// [`CHALLENGE_LIFE`].
+#[derive(Debug)]
+pub struct Challenges<K = SeatId>(HashMap<(K, String), ([u8; 32], Instant)>);
 
-impl Challenges {
+impl<K> Default for Challenges<K> {
+    fn default() -> Self {
+        Challenges(HashMap::new())
+    }
+}
+
+impl<K: Clone + Eq + std::hash::Hash> Challenges<K> {
     /// `bytes` as `fingerprint`'s challenge on `seat` from `now`, in place of any before it.
-    pub(crate) fn mint(&mut self, seat: &SeatId, fingerprint: &str, bytes: [u8; 32], now: Instant) {
+    pub fn mint(&mut self, seat: &K, fingerprint: &str, bytes: [u8; 32], now: Instant) {
         self.0
             .retain(|_, (_, at)| now.saturating_duration_since(*at) < CHALLENGE_LIFE);
         let key = (seat.clone(), fingerprint.to_owned());
@@ -281,18 +288,13 @@ impl Challenges {
     }
 
     /// `fingerprint`'s challenge on `seat`, used up whether or not it is still live.
-    pub(crate) fn take(
-        &mut self,
-        seat: &SeatId,
-        fingerprint: &str,
-        now: Instant,
-    ) -> Option<[u8; 32]> {
+    pub fn take(&mut self, seat: &K, fingerprint: &str, now: Instant) -> Option<[u8; 32]> {
         let (bytes, at) = self.0.remove(&(seat.clone(), fingerprint.to_owned()))?;
         (now.saturating_duration_since(at) < CHALLENGE_LIFE).then_some(bytes)
     }
 
     /// Drops `seat`'s challenge for `fingerprint`, or all of `seat`'s for `None`.
-    pub(crate) fn forget(&mut self, seat: &SeatId, fingerprint: Option<&str>) {
+    pub fn forget(&mut self, seat: &K, fingerprint: Option<&str>) {
         self.0
             .retain(|(s, fp), _| s != seat || fingerprint.is_some_and(|f| f != fp));
     }
