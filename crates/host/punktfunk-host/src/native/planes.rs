@@ -342,7 +342,9 @@ pub(super) fn spawn_planes(
         counters,
         audio_epochs,
     );
-    if welcome.color.is_hdr() {
+    // Also for a stream that starts SDR on a display lit in HDR: a decoder rebuilt when its
+    // content turns HDR is configured before the capture's own metadata arrives.
+    if n.display_hdr {
         send_hdr_baseline(&conn, hello.display_hdr);
     }
     if source == Punktfunk1Source::Synthetic && who.knobs.test_feedback {
@@ -354,7 +356,7 @@ pub(super) fn spawn_planes(
             width: hello.mode.width,
             height: hello.mode.height,
             refresh_hz: hello.mode.refresh_hz,
-            hdr: welcome.color.is_hdr(),
+            hdr: n.display_hdr,
             client: wired.client_name.clone().unwrap_or_default(),
             fingerprint: who.fp_hex.clone(),
             launch: hello.launch.clone(),

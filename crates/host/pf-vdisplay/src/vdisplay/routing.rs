@@ -535,6 +535,10 @@ pub fn gamescope_xwayland_cursor_targets(seat: Option<&str>) -> Vec<(String, Opt
     gamescope::xwayland_cursor_targets(seat)
 }
 
+/// Whether a seat's gamescope shows HDR content now.
+#[cfg(target_os = "linux")]
+pub use gamescope::HdrContent as GamescopeHdrContent;
+
 /// This seat's gamescope is presenting Steam `appid`: its focused-app atom names it. Steam's own
 /// launch screen is its client's appid, so this turns true only once the game is up.
 #[cfg(target_os = "linux")]
