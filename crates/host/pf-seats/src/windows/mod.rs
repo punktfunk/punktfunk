@@ -31,9 +31,10 @@ use crate::secret::Secret;
 use accounts::AccountManager;
 pub use accounts::{seats_group_sid, SEATS_GROUP};
 use credentials::CredentialStore;
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 use supervisor::Supervisor;
 use util::{backend_error, io_error, require_local_system, WinResult};
@@ -64,8 +65,9 @@ pub struct WindowsBackend {
     host_path: PathBuf,
     accounts: AccountManager,
     supervisor: Supervisor,
-    /// Set by a stop, cleared by the next start: a start reads it between its steps.
-    stopped: Arc<AtomicBool>,
+    /// The seats a stop reached since their last start: a start reads its own seat's between
+    /// its steps.
+    stopped: Arc<Mutex<HashSet<String>>>,
 }
 
 /// The profile folder of the local account `account`, where its own emulator data lives. `None`
@@ -161,7 +163,7 @@ impl WindowsBackend {
             host_path,
             accounts,
             supervisor,
-            stopped: Arc::new(AtomicBool::new(false)),
+            stopped: Arc::default(),
         })
     }
 
@@ -195,10 +197,16 @@ impl WindowsBackend {
         }
     }
 
-    /// Ends the start in flight once a stop has reached it, between two of its steps. The
-    /// service tells the start's caller the seat was stopped.
-    fn unless_stopped(&self) -> WinResult<()> {
-        if self.stopped.load(Ordering::SeqCst) {
+    fn stopped(&self) -> MutexGuard<'_, HashSet<String>> {
+        self.stopped
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+    }
+
+    /// Ends `seat`'s start in flight once a stop of that seat has reached it, between two of its
+    /// steps. The service tells the start's caller the seat was stopped.
+    fn unless_stopped(&self, seat: &Seat) -> WinResult<()> {
+        if self.stopped().contains(seat.id.as_str()) {
             return Err(backend_error(
                 "seat_stopped",
                 "the seat was stopped while it started",
@@ -232,18 +240,18 @@ impl PlatformBackend for WindowsBackend {
     }
 
     fn start(&self, seat: &Seat) -> Result<RuntimeStatus, BackendError> {
-        self.stopped.store(false, Ordering::SeqCst);
+        self.stopped().remove(seat.id.as_str());
         self.ensure_runtime_prerequisites()?;
         // An uninstall deletes the seat display driver and an upgrade only stages the new one:
         // without it the seat logs on to Microsoft's adapter and never streams.
         enable::ensure_driver(&self.host_path)?;
-        self.unless_stopped()?;
+        self.unless_stopped(seat)?;
         // An upgrade's new enumerator reaches the listener here. Without it the seat still
         // starts, on `RDP-Tcp`, with Remote Audio and no pad audio.
         if let Err(cause) = seat_listener::ensure(&self.host_path) {
             tracing::warn!(%cause, "seat listener not ready — seats start without pad audio");
         }
-        self.unless_stopped()?;
+        self.unless_stopped(seat)?;
         // The box's shared Steam shortcuts start a seat's own copy on a seat.
         match self.root.open_child_dir("temp") {
             Ok(temp) => steam::wrap_box_shortcuts(&self.host_path, temp.path()),
@@ -253,7 +261,7 @@ impl PlatformBackend for WindowsBackend {
     }
 
     fn stop(&self, seat: &Seat) -> Result<RuntimeStatus, BackendError> {
-        self.stopped.store(true, Ordering::SeqCst);
+        self.stopped().insert(seat.id.to_string());
         self.supervisor.stop(seat)
     }
 
@@ -540,17 +548,17 @@ mod tests {
         hkcu.delete_subkey(&path).unwrap();
     }
 
-    /// A stop ends the start in flight at its next step.
+    /// A stop ends its own seat's start in flight at its next step, and no other seat's.
     #[test]
     fn a_stop_ends_the_start_in_flight_between_its_steps() {
         let temp = tempfile::tempdir().unwrap();
         let backend =
             WindowsBackend::open(temp.path(), PathBuf::from(r"C:\Windows\System32\cmd.exe"))
                 .unwrap();
-        let seat = Seat {
+        let seat = |account: &str| Seat {
             id: SeatId::random(),
             name: "test".into(),
-            account: "pfs-absent".into(),
+            account: account.into(),
             display_slot: 12,
             native_port: 9779,
             mgmt_port: 47995,
@@ -562,9 +570,14 @@ mod tests {
             adopted_uid: None,
             rdp_granted: false,
         };
-        assert!(backend.unless_stopped().is_ok());
-        backend.stop(&seat).unwrap();
-        assert_eq!(backend.unless_stopped().unwrap_err().code, "seat_stopped");
+        let (stopped, starting) = (seat("pfs-absent"), seat("pfs-absent-2"));
+        assert!(backend.unless_stopped(&stopped).is_ok());
+        backend.stop(&stopped).unwrap();
+        assert_eq!(
+            backend.unless_stopped(&stopped).unwrap_err().code,
+            "seat_stopped"
+        );
+        assert!(backend.unless_stopped(&starting).is_ok());
     }
 
     #[test]
