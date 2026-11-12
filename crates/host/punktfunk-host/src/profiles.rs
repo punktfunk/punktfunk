@@ -788,9 +788,30 @@ impl Profiles {
         }
     }
 
-    /// The profile a connect from `fp` asking for `asked` lands in (`profiles-and-seats.md`
-    /// §6.2). `asked` is read before trust: it is only ever compared against stored ids.
+    /// The profile a connect from `fp` asking for `asked` lands in and plays now
+    /// (`profiles-and-seats.md` §6.2): [`Self::pick`], refused while its account can't play.
     pub fn resolve(&self, fp: Option<&str>, asked: Option<&str>) -> Result<Resolved, ProfileError> {
+        let resolved = self.pick(fp, asked)?;
+        // A take-turns profile plays here only once its account is the console. The client waits
+        // on the seat state (`mgmt`) until it is, so a dial that lands early is refused, not
+        // played under the wrong account. Linux's own-user kind is still unbuilt.
+        match &resolved.os_account {
+            OsAccount::Linux { .. } => return Err(ProfileError::SessionUnavailable),
+            OsAccount::Windows { account_name, .. } => {
+                let on_console = take_turns::console_account()
+                    .is_some_and(|user| user.eq_ignore_ascii_case(account_name));
+                if !on_console {
+                    return Err(ProfileError::SessionUnavailable);
+                }
+            }
+            OsAccount::Operator | OsAccount::Seat { .. } => {}
+        }
+        Ok(resolved)
+    }
+
+    /// The profile a connect from `fp` asking for `asked` lands in, whether or not its account
+    /// can play now. `asked` is read before trust: it is only ever compared against stored ids.
+    pub fn pick(&self, fp: Option<&str>, asked: Option<&str>) -> Result<Resolved, ProfileError> {
         let state = self.lock();
         let file = &state.file;
         let (profile, via) = match asked {
@@ -838,20 +859,6 @@ impl Profiles {
                 via,
             });
         };
-        // A take-turns profile plays here only once its account is the console. The client waits
-        // on the seat state (`mgmt`) until it is, so a dial that lands early is refused, not
-        // played under the wrong account. Linux's own-user kind is still unbuilt.
-        match &profile.os_account {
-            OsAccount::Linux { .. } => return Err(ProfileError::SessionUnavailable),
-            OsAccount::Windows { account_name, .. } => {
-                let on_console = take_turns::console_account()
-                    .is_some_and(|user| user.eq_ignore_ascii_case(account_name));
-                if !on_console {
-                    return Err(ProfileError::SessionUnavailable);
-                }
-            }
-            OsAccount::Operator | OsAccount::Seat { .. } => {}
-        }
         Ok(Resolved {
             id: profile.id.clone(),
             display_name: profile.display_name.clone(),

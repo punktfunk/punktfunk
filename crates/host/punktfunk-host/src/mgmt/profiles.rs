@@ -1119,13 +1119,13 @@ pub(crate) async fn wake_profile(
     Json(row).into_response()
 }
 
-/// A paired device wakes the profile it lands in when it names none, and another only while
-/// its live mask (expiry-aware) carries the launch grant.
+/// A paired device wakes the profile it lands in when it names none, one that can't play yet
+/// included, and another only while its live mask (expiry-aware) carries the launch grant.
 fn may_wake(st: &MgmtState, profiles: &Profiles, id: &str, fp: Option<&str>) -> bool {
     let Some(fp) = fp else {
         return false;
     };
-    let own = profiles.resolve(Some(fp), None).is_ok_and(|r| r.id == id);
+    let own = profiles.pick(Some(fp), None).is_ok_and(|r| r.id == id);
     own || st
         .native
         .as_ref()
