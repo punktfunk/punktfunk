@@ -641,6 +641,10 @@ impl Encoder for RemotePyroWave {
         // Intra-only: no frame references another.
     }
 
+    fn note_confirmed(&mut self, _acked: Option<crate::Acked>) {
+        // Intra-only: no reference to keep.
+    }
+
     fn set_pipelined(&mut self, _on: bool) -> bool {
         // Encode is synchronous; no pipelined-retrieve mode.
         false

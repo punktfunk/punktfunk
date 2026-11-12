@@ -772,17 +772,20 @@ impl LossMode {
                 (self.frames, self.distance) = (0, 0);
             }
         }
-        if !on || acked == crate::native::wiring::NONE_ACKED {
-            return None;
-        }
-        let last = (acked >> 16) as u32;
+        let floor = confirmed(acked).filter(|_| on)?;
         self.frames += 1;
-        self.distance += u64::from(wire.wrapping_sub(last));
-        Some(crate::encode::Acked {
-            last: i64::from(last),
-            mask: acked as u16,
-        })
+        self.distance += u64::from(wire.wrapping_sub(floor.last as u32));
+        Some(floor)
     }
+}
+
+/// The client's confirmations as an encoder takes them: `last << 16 | mask`, `None` until the
+/// first ([`crate::native::wiring::NONE_ACKED`]).
+pub(super) fn confirmed(acked: u64) -> Option<crate::encode::Acked> {
+    (acked != crate::native::wiring::NONE_ACKED).then(|| crate::encode::Acked {
+        last: i64::from((acked >> 16) as u32),
+        mask: acked as u16,
+    })
 }
 
 /// Frames whose plaintext a NACK can still reach.
