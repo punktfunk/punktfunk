@@ -219,6 +219,11 @@ shoot_sim() {
   local app; app="$(find "$dd/Build/Products" -maxdepth 2 -name '*.app' -type d | head -1)"
   [ -n "$app" ] || die "$prefix: no .app built"
   if [ "$prefix" = ipad-13 ]; then
+    # The iPad set is landscape and the simulator boots upright. An app that only asks for a
+    # landscape scene leaves the status bar and safe area in portrait: turn the device.
+    xcodebuild test -project tools/sim-rotate/SimRotate.xcodeproj -scheme SimRotate \
+      -destination "id=$udid" -derivedDataPath "$dd/sim-rotate" >/dev/null 2>&1 \
+      || die "$prefix: the simulator did not rotate"
     /usr/libexec/PlistBuddy -c "Add :UIRequiresFullScreen bool true" "$app/Info.plist" 2>/dev/null \
       || /usr/libexec/PlistBuddy -c "Set :UIRequiresFullScreen true" "$app/Info.plist"
   fi
