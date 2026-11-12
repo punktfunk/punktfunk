@@ -195,6 +195,8 @@ pub enum Ctl {
     /// The newest wire index the client confirmed and the sixteen before it as bits; `None`
     /// restores the chain.
     SetReferenceFloor(Option<(u32, u16)>),
+    /// The same confirmations whatever the link, for the kept anchor.
+    NoteConfirmed(Option<(u32, u16)>),
 }
 
 impl Ctl {
@@ -209,6 +211,9 @@ impl Ctl {
             wire::ENCODE_CTL_SET_HDR_META => Self::SetHdrMeta(req.payload),
             wire::ENCODE_CTL_FLUSH => Self::Flush,
             wire::ENCODE_CTL_SET_REFERENCE_FLOOR => Self::SetReferenceFloor(
+                (req.arg1 & 1 != 0).then_some((req.arg0, (req.arg1 >> 1) as u16)),
+            ),
+            wire::ENCODE_CTL_NOTE_CONFIRMED => Self::NoteConfirmed(
                 (req.arg1 & 1 != 0).then_some((req.arg0, (req.arg1 >> 1) as u16)),
             ),
             _ => return None,

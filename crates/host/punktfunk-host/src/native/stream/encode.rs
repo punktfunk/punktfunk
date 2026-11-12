@@ -425,14 +425,19 @@ impl StreamState {
             t_submit + self.live.interval
         };
         let owed = crate::send_pacing::owed_aus(&self.live.frame, &mut *self.live.enc, au_wait);
-        // Every backend gets the floor, the pixel-less driver encoder too: without it the
-        // driver's AMF/QSV/NVENC keep referencing frames the client never confirmed.
+        // Every backend gets the floor and the confirmations, the pixel-less driver encoder
+        // too: without the floor the driver's AMF/QSV/NVENC keep referencing frames the client
+        // never confirmed, and without the confirmations a late loss report finds no anchor.
+        let acked = self.shared.acked.load(Ordering::Relaxed);
         let floor = self.loss_mode.floor(
             self.shared.lossy_window.swap(false, Ordering::Relaxed),
-            self.shared.acked.load(Ordering::Relaxed),
+            acked,
             wire_index,
             t_submit,
         );
+        self.live
+            .enc
+            .note_confirmed(super::recovery::confirmed(acked));
         self.live.enc.set_reference_floor(floor);
         let submitted = match owed {
             Some(_) => Ok(()),
