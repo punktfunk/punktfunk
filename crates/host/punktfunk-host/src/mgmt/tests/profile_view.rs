@@ -197,6 +197,51 @@ async fn with_no_profile_in_view_the_box_reads_as_today() {
     assert!(crate::library::resolve_launch(&crate::library::View::here(), "steam:70").is_some());
 }
 
+/// A box with no seats writes its custom entries where it always did, under its 12-hex ids, and
+/// a profile's published titles never reach its own view or the owner's.
+#[tokio::test]
+async fn the_box_s_own_library_reads_and_writes_as_today() {
+    let tmp = ConfigDirOverride::new();
+    write_fixture(tmp.path());
+    let titles = serde_json::json!({"titles": [{"id": "own:0123456789ab", "title": "Theirs"}]});
+    let layer = tmp.path().join(format!("library-profiles/{SEAT_P}"));
+    std::fs::write(layer.join("own-titles.json"), titles.to_string()).unwrap();
+    let app = test_app(profiles_state(tmp.path(), profiles()), None);
+    let (_, before) = send(&app, get_req("/api/v1/library")).await;
+    let (_, owner) = send(&app, get_req(&format!("/api/v1/library?as={OWNER}"))).await;
+    assert_eq!(owner, before);
+    assert!(!listed(&before).iter().any(|(t, _)| t == "Theirs"));
+
+    let entry =
+        serde_json::json!({"title": "Mine", "launch": {"kind": "command", "value": "true"}});
+    let (s, made) = send(
+        &app,
+        json_req(Method::POST, "/api/v1/library/custom", entry),
+    )
+    .await;
+    assert_eq!(s, StatusCode::CREATED, "{made}");
+    let id = made["id"].as_str().unwrap().to_string();
+    assert!(crate::library::is_profile_id(&id), "{id}");
+    let stored = std::fs::read_to_string(tmp.path().join("library.json")).unwrap();
+    assert!(stored.contains(&id), "{stored}");
+    let (_, after) = send(&app, get_req("/api/v1/library")).await;
+    let mine = row(&after, "Mine");
+    assert_eq!(mine["id"], format!("custom:{id}"));
+    assert!(mine.get("own").is_none(), "{mine}");
+    let path = format!("/api/v1/library/custom/{id}");
+    let (s, _) = send(
+        &app,
+        json_req(Method::PUT, &path, serde_json::json!({"title": "Ours"})),
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK);
+    let delete = axum::http::Request::delete(&path)
+        .body(Body::empty())
+        .unwrap();
+    assert_eq!(send(&app, delete).await.0, StatusCode::NO_CONTENT);
+    assert_eq!(send(&app, get_req("/api/v1/library")).await.1, before);
+}
+
 /// `GET` on the paired-cert lane, with its body.
 async fn get_cert(app: &Router, path: &str, fp: &str) -> (StatusCode, serde_json::Value) {
     let mut req = get_req(path);
@@ -722,26 +767,40 @@ async fn run_as_seat() {
     std::fs::write(&file, serde_json::Value::Object(answers).to_string()).unwrap();
 
     let seat = tempfile::tempdir().unwrap();
+    // With no seat service to ask, the box counts a Windows seat as a person's own.
+    let test = "a_seat_host_lists_what_the_box_lists_as_its_profile";
+    run_seat_child(test, tmp.path(), seat.path(), &file, cfg!(windows));
+}
+
+/// `test` of this module in a child of this test binary: [`SEAT_P`]'s seat host, on a person's
+/// own account when `own_account`, its own config in `config`, the box's library and trust files
+/// in `library`. The child finds `child` in [`CHILD`].
+fn run_seat_child(
+    test: &str,
+    library: &std::path::Path,
+    config: &std::path::Path,
+    child: &std::path::Path,
+    own_account: bool,
+) {
     let module = module_path!().split_once("::").expect("crate::module").1;
-    let test = format!("{module}::a_seat_host_lists_what_the_box_lists_as_its_profile");
-    let mut child = std::process::Command::new(std::env::current_exe().expect("this test binary"));
-    child.args(["--exact", &test, "--nocapture"]);
+    let test = format!("{module}::{test}");
+    let mut run = std::process::Command::new(std::env::current_exe().expect("this test binary"));
+    run.args(["--exact", &test, "--nocapture"]);
     for (key, _) in std::env::vars_os() {
         if key.to_string_lossy().starts_with("PUNKTFUNK_") {
-            child.env_remove(key);
+            run.env_remove(key);
         }
     }
-    // With no seat service to ask, the box counts a Windows seat as a person's own.
-    if cfg!(windows) {
-        child.env("PUNKTFUNK_SEAT_OWN_ACCOUNT", "1");
+    if own_account {
+        run.env("PUNKTFUNK_SEAT_OWN_ACCOUNT", "1");
     }
-    let out = child
-        .env(CHILD, &file)
-        .env("PUNKTFUNK_CONFIG_DIR", seat.path())
+    let out = run
+        .env(CHILD, child)
+        .env("PUNKTFUNK_CONFIG_DIR", config)
         .env("PUNKTFUNK_SEAT_SESSION", "1")
         .env("PUNKTFUNK_SEAT_ID", SEAT)
-        .env("PUNKTFUNK_TRUST_DIR", tmp.path())
-        .env("PUNKTFUNK_LIBRARY_DIR", tmp.path())
+        .env("PUNKTFUNK_TRUST_DIR", library)
+        .env("PUNKTFUNK_LIBRARY_DIR", library)
         .output()
         .expect("run the child");
     let stdout = String::from_utf8_lossy(&out.stdout);
@@ -751,4 +810,203 @@ async fn run_as_seat() {
         stdout.contains("1 passed"),
         "the child ran no test: {stdout}"
     );
+}
+
+/// The box's answer to [`SEAT_P`]'s seat for `?as=`, read the way a client reads it.
+async fn box_lists(app: &Router, profile: &str) -> serde_json::Value {
+    let (s, json) = send(app, get_req(&format!("/api/v1/library?as={profile}"))).await;
+    assert_eq!(s, StatusCode::OK, "{json}");
+    json
+}
+
+/// [`SEAT_P`]'s seat host keeps a game with a command of its own: it lists and starts it, and
+/// tells the box its name and picture alone. The box, handed that answer, lists the row for the
+/// profile and starts none of it. A person's own account takes no such game. The seat's half runs
+/// in a child, as the role is process environment.
+#[tokio::test]
+async fn a_seat_host_keeps_its_own_titles_and_the_box_lists_their_names() {
+    let Some(out) = std::env::var_os(CHILD) else {
+        return run_own_titles().await;
+    };
+    let out = std::path::PathBuf::from(out);
+    let app = test_app_on(test_state(), None, true);
+    let entry = serde_json::json!({
+        "title": "Doom", "platform": "PC",
+        "launch": {"kind": "command", "value": "gzdoom -iwad doom.wad"},
+        "prep": [{"do": "true", "undo": "true"}],
+        "art": {"hero": "https://cdn.example/doom.jpg"},
+    });
+    let post = || json_req(Method::POST, "/api/v1/library/custom", entry.clone());
+    if pf_paths::seat::own_account() {
+        let (s, refused) = send(&app, post()).await;
+        assert_eq!(s, StatusCode::FORBIDDEN, "{refused}");
+        assert_eq!(refused["code"], "library_own_account");
+        assert!(!crate::library::keeps_own_titles());
+        let titles = crate::library::published_own_titles();
+        std::fs::write(&out, serde_json::to_vec(&titles).unwrap()).unwrap();
+        return;
+    }
+    assert!(crate::library::keeps_own_titles());
+    let box_file = pf_paths::seat::library_dir().join("library.json");
+    let box_before = std::fs::read(&box_file).unwrap();
+
+    let (s, made) = send(&app, post()).await;
+    assert_eq!(s, StatusCode::CREATED, "{made}");
+    let id = made["id"].as_str().unwrap().to_string();
+    assert!(crate::library::is_own_id(&id), "{id}");
+    let mine = pf_paths::config_dir().join("library.json");
+    assert!(std::fs::read_to_string(&mine).unwrap().contains(&id));
+    assert_eq!(std::fs::read(&box_file).unwrap(), box_before);
+
+    // On top of its profile's view, whatever a seat lists of the box's.
+    let (_, json) = send(&app, get_req("/api/v1/library")).await;
+    let doom = row(&json, "Doom");
+    assert_eq!(
+        (&doom["id"], &doom["own"]),
+        (&id.clone().into(), &true.into())
+    );
+    assert_eq!(doom["launch"]["value"], "gzdoom -iwad doom.wad");
+    assert!(listed(&json).iter().any(|(t, _)| t == "Portal"));
+    let here = crate::library::View::here();
+    assert!(crate::library::resolve_launch(&here, &id).is_some());
+    assert_eq!(crate::library::prep_for(&id).len(), 1);
+
+    // Its own writes land; a row of the box's stays refused.
+    let path = format!("/api/v1/library/custom/{id}");
+    let renamed = serde_json::json!({"title": "Doom II", "platform": "PC",
+        "launch": {"kind": "command", "value": "gzdoom -iwad doom2.wad"},
+        "art": {"hero": "https://cdn.example/doom.jpg"}});
+    let (s, j) = send(&app, json_req(Method::PUT, &path, renamed)).await;
+    assert_eq!(s, StatusCode::OK, "{j}");
+    let (_, got) = send(&app, get_req(&path)).await;
+    assert_eq!(got["prep"][0]["do"], "true", "{got}");
+    for refused in [
+        "/api/v1/library/custom/c1",
+        "/api/v1/library/custom/custom:c1",
+    ] {
+        let put = json_req(Method::PUT, refused, serde_json::json!({"title": "Mine"}));
+        let (s, j) = send(&app, put).await;
+        assert_eq!(
+            (s, &j["code"]),
+            (StatusCode::CONFLICT, &"seat_library_read_only".into())
+        );
+        let delete = axum::http::Request::delete(refused)
+            .body(Body::empty())
+            .unwrap();
+        assert_eq!(send(&app, delete).await.0, StatusCode::CONFLICT);
+    }
+    let gone = "/api/v1/library/custom/own:000000000000";
+    let delete = axum::http::Request::delete(gone)
+        .body(Body::empty())
+        .unwrap();
+    assert_eq!(send(&app, delete).await.0, StatusCode::NOT_FOUND);
+    assert_eq!(std::fs::read(&box_file).unwrap(), box_before);
+
+    // What the box may see: no recipe.
+    let (s, own) = send(&app, get_req("/api/v1/library/own")).await;
+    assert_eq!(s, StatusCode::OK, "{own}");
+    let want = serde_json::json!([{"id": id, "title": "Doom II", "platform": "PC",
+        "art": {"hero": "https://cdn.example/doom.jpg"}}]);
+    assert_eq!(own, want);
+    std::fs::write(&out, own.to_string()).unwrap();
+}
+
+/// The box's half of `a_seat_host_keeps_its_own_titles_and_the_box_lists_their_names`.
+async fn run_own_titles() {
+    let tmp = ConfigDirOverride::new();
+    write_fixture(tmp.path());
+    let out = tmp.path().join("own.json");
+    let seat = tempfile::tempdir().unwrap();
+    let test = "a_seat_host_keeps_its_own_titles_and_the_box_lists_their_names";
+    run_seat_child(test, tmp.path(), seat.path(), &out, true);
+    assert_eq!(std::fs::read_to_string(&out).unwrap(), "[]");
+    let seat = tempfile::tempdir().unwrap();
+    run_seat_child(test, tmp.path(), seat.path(), &out, false);
+    let answer = std::fs::read(&out).unwrap();
+
+    let app = test_app(profiles_state(tmp.path(), profiles()), None);
+    let store = |profile: &str, body: Vec<u8>| {
+        axum::http::Request::put(format!("/api/v1/library/own?as={profile}"))
+            .header(axum::http::header::CONTENT_TYPE, "application/json")
+            .body(Body::from(body))
+            .unwrap()
+    };
+    let (s, j) = send(&app, store(SEAT_P, answer.clone())).await;
+    assert_eq!(s, StatusCode::NO_CONTENT, "{j}");
+    let own: serde_json::Value = serde_json::from_slice(&answer).unwrap();
+    let id = own[0]["id"].as_str().unwrap().to_string();
+
+    let json = box_lists(&app, SEAT_P).await;
+    let doom = row(&json, "Doom II");
+    assert_eq!(doom["id"], id);
+    assert_eq!(doom["own"], true);
+    assert!(doom.get("launch").is_none(), "{doom}");
+    let art = doom["art"]["hero"].as_str().unwrap_or_default();
+    assert!(art.ends_with(&format!("&as={SEAT_P}")), "{art}");
+    let view = crate::library::View::of(SEAT_P, false, crate::library::Reach::seat(false));
+    assert!(crate::library::resolve_launch(&view, &id).is_none());
+    let why = crate::library::launch_refusal(&view, &id).0;
+    assert_eq!(why, "launch_title_not_on_desktop");
+    for other in [OWNER, SHARER] {
+        let json = box_lists(&app, other).await;
+        assert!(
+            !listed(&json).iter().any(|(t, _)| t == "Doom II"),
+            "{other}"
+        );
+    }
+    let (_, plain) = send(&app, get_req("/api/v1/library")).await;
+    assert!(!listed(&plain).iter().any(|(t, _)| t == "Doom II"));
+
+    // A paired device naming the profile sees the row, as the door answers it.
+    let np = Arc::new(
+        crate::native_pairing::NativePairing::load_with(
+            Some(crate::test_support::scratch().join("pf-own-titles-cert.json")),
+            None,
+            false,
+        )
+        .unwrap(),
+    );
+    np.add("couch", "deadbeefcafe").unwrap();
+    let device = test_app_native(profiles_state(tmp.path(), profiles()), np);
+    let path = format!("/api/v1/library?as={SEAT_P}");
+    let (s, json) = get_cert(&device, &path, "deadbeefcafe").await;
+    assert_eq!(s, StatusCode::OK, "{json}");
+    assert_eq!(row(&json, "Doom II")["own"], true);
+
+    // Garbage, and a profile with no seat of its own, leave the stored titles as they were.
+    let file = tmp
+        .path()
+        .join(format!("library-profiles/{SEAT_P}/own-titles.json"));
+    let stored = std::fs::read(&file).unwrap();
+    for (profile, body, status) in [
+        (SEAT_P, b"{\"titles\": 1}".to_vec(), StatusCode::BAD_REQUEST),
+        (SEAT_P, b"not json".to_vec(), StatusCode::BAD_REQUEST),
+        (OWNER, answer.clone(), StatusCode::CONFLICT),
+        (SHARER, answer.clone(), StatusCode::CONFLICT),
+        ("0123456789ab", answer.clone(), StatusCode::NOT_FOUND),
+    ] {
+        let (s, j) = send(&app, store(profile, body)).await;
+        assert_eq!(s, status, "{profile}: {j}");
+    }
+    assert_eq!(std::fs::read(&file).unwrap(), stored);
+    assert!(!tmp
+        .path()
+        .join(format!("library-profiles/{SHARER}"))
+        .exists());
+    let req = with_bearer(store(SEAT_P, answer.clone()), "plugin-secret");
+    assert_eq!(send(&app, req).await.0, StatusCode::FORBIDDEN);
+
+    // A seat that lists none takes the row off the shelf; a removed profile takes the file.
+    let (s, _) = send(&app, store(SEAT_P, b"[]".to_vec())).await;
+    assert_eq!(s, StatusCode::NO_CONTENT);
+    assert!(!file.exists());
+    assert!(!listed(&box_lists(&app, SEAT_P).await)
+        .iter()
+        .any(|(t, _)| t == "Doom II"));
+    assert_eq!(
+        send(&app, store(SEAT_P, answer)).await.0,
+        StatusCode::NO_CONTENT
+    );
+    crate::library::forget_profile(SEAT_P);
+    assert!(!file.exists());
 }

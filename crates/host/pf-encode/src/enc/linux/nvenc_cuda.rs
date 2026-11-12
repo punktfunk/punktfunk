@@ -2040,6 +2040,10 @@ impl Encoder for NvencCudaEncoder {
         self.s.reference_floor = acked;
     }
 
+    fn note_confirmed(&mut self, acked: Option<crate::Acked>) {
+        self.s.confirmed = acked;
+    }
+
     fn invalidate_ref_frames(&mut self, first: i64, last: i64) -> bool {
         self.s.invalidate_ref_frames(first, last)
     }

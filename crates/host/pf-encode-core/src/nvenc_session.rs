@@ -411,6 +411,11 @@ pub struct Live {
     /// Wire index each long-term slot holds; an IDR or an invalidation empties it.
     ltr_slots: Vec<Option<i64>>,
     ltr_next: usize,
+    /// The two long-term pictures kept for a late loss ([`crate::rfi::Kept`]).
+    kept: crate::rfi::Kept,
+    /// The long-term slot the next frame predicts from alone: the anchor of a loss the DPB no
+    /// longer reaches ([`NvSession::force_kept`]).
+    ltr_force: Option<usize>,
 }
 
 impl Default for Live {
@@ -435,6 +440,8 @@ impl Default for Live {
             distrusted: false,
             ltr_slots: Vec::new(),
             ltr_next: 0,
+            kept: crate::rfi::Kept::default(),
+            ltr_force: None,
         }
     }
 }
@@ -510,6 +517,8 @@ pub struct NvSession {
     pub ltr_frames: u32,
     /// The newest frame the client confirmed, while the host holds confirmed references.
     pub reference_floor: Option<crate::codec::Acked>,
+    /// What the client confirmed it decoded clean, whatever the link.
+    pub confirmed: Option<crate::codec::Acked>,
 }
 
 impl std::ops::Deref for NvSession {
@@ -574,6 +583,7 @@ impl NvSession {
             slice_offsets: Vec::new(),
             ltr_frames: 0,
             reference_floor: None,
+            confirmed: None,
         }
     }
 
@@ -1347,34 +1357,102 @@ impl NvSession {
         self.ltr_mark(ts, idr, ltr);
     }
 
-    /// The long-term step frame `ts` would take while the host holds confirmed references:
-    /// the slot it marks and the newest confirmed one it forces
-    /// ([`crate::rfi::ltr_acked_step`]). `None` without a floor or without long-term slots.
+    /// The long-term step frame `ts` would take: the slot it marks and the one it forces.
+    /// Under confirmed references, the newest confirmed slot ([`crate::rfi::ltr_acked_step`]);
+    /// otherwise the kept candidate's mark ([`crate::rfi::Kept`]) and a late loss's anchor.
+    /// `None` without long-term slots.
     fn ltr_peek(&mut self, ts: i64) -> Option<LtrStep> {
         let n = self.ltr_frames as usize;
         if self.ltr_slots.len() != n {
             self.ltr_slots = vec![None; n];
             self.ltr_next = 0;
         }
-        let acked = self.reference_floor.filter(|_| n > 0)?;
-        Some(crate::rfi::ltr_acked_step(
-            &self.ltr_slots,
-            &acked,
-            ts,
-            self.ltr_next,
-        ))
+        if n == 0 {
+            return None;
+        }
+        let slots = &self.live.ltr_slots;
+        let force = self.live.ltr_force.and_then(|f| slots[f].map(|w| (f, w)));
+        if let Some(acked) = self.reference_floor {
+            // A kept anchor outranks the newest confirmed slot, which reaches back less far.
+            let (mark, confirmed) = crate::rfi::ltr_acked_step(slots, &acked, ts, self.ltr_next);
+            let mark = mark.filter(|&m| force.is_none_or(|(f, _)| f != m));
+            return Some((mark, force.or(confirmed)));
+        }
+        let mut kept = self.live.kept;
+        let keep = kept.step(ts, true, self.confirmed.as_ref(), |w| {
+            slots.contains(&Some(w))
+        });
+        let free =
+            |s: usize| slots[s].is_none_or(|w| !kept.holds(w)) && force.is_none_or(|(f, _)| f != s);
+        let mark = keep
+            .then(|| {
+                (0..n)
+                    .map(|k| (self.live.ltr_next + k) % n)
+                    .find(|&s| free(s))
+            })
+            .flatten();
+        Some((mark, force))
     }
 
-    /// Record frame `ts` in the slot table: an IDR empties it, a step's mark fills its slot.
+    /// Record frame `ts` in the slot table: an IDR empties it, a step's mark fills its slot,
+    /// and the kept pair follows what the slots hold.
     fn ltr_mark(&mut self, ts: i64, idr: bool, step: Option<LtrStep>) {
+        let live = &mut self.live;
         if idr {
-            self.ltr_slots.fill(None);
-            self.ltr_next = 0;
+            live.ltr_slots.fill(None);
+            live.ltr_next = 0;
         }
+        live.ltr_force = None;
+        let marked = matches!(step, Some((Some(_), _)));
         if let Some((Some(m), _)) = step {
-            self.ltr_slots[m] = Some(ts);
-            self.ltr_next = (m + 1) % self.ltr_slots.len();
+            live.ltr_slots[m] = Some(ts);
+            live.ltr_next = (m + 1) % live.ltr_slots.len();
         }
+        if self.reference_floor.is_none() {
+            let slots = &live.ltr_slots;
+            live.kept.step(ts, marked, self.confirmed.as_ref(), |w| {
+                slots.contains(&Some(w))
+            });
+        }
+    }
+
+    /// Empty every long-term slot a loss from `first` reached. Outside confirmed references
+    /// each later picture chains from the lost one; under them the floor's own acks decide.
+    fn taint_ltr_from(&mut self, first: i64) {
+        if self.reference_floor.is_none() {
+            for w in &mut self.live.ltr_slots {
+                if w.is_some_and(|w| w >= first) {
+                    *w = None;
+                }
+            }
+        }
+    }
+
+    /// A loss the short-term window no longer reaches: the newest long-term picture before it
+    /// becomes the next frame's only reference, which the client holds however late the report
+    /// came. Under confirmed references only a confirmed one qualifies. `None` when none
+    /// predates the loss, or `first` is not yet coded.
+    fn force_kept(&mut self, first: i64) -> Option<bool> {
+        if first < 0 || first >= self.frame_idx {
+            return None;
+        }
+        let floor = self.reference_floor;
+        let clean = |w: i64| w < first && floor.is_none_or(|a| a.contains(w));
+        let (slot, wire) = self
+            .ltr_slots
+            .iter()
+            .enumerate()
+            .filter_map(|(s, w)| w.filter(|&w| clean(w)).map(|w| (s, w)))
+            .max_by_key(|&(_, w)| w)?;
+        self.live.ltr_force = Some(slot);
+        self.pending_anchor = true;
+        tracing::debug!(
+            first,
+            slot,
+            wire,
+            "nvenc RFI: the DPB is past the loss — anchoring on a kept long-term picture"
+        );
+        Some(true)
     }
 
     /// Unmap one retired input.
@@ -1651,25 +1729,31 @@ impl NvSession {
         if self.encoder.is_null() || !self.rfi_supported || self.distrusted {
             return false;
         }
+        self.taint_ltr_from(first);
         // A sweep in flight answers every ask until it closes. The driver neither honours an
         // invalidation mid-sweep nor keeps sweeping after one, and an anchor tagged there
         // lifts the client onto damage that only the next IDR clears.
         if self.wave.is_some() || super::nvenc_core::wave_always() {
             return self.start_wave(first, last);
         }
-        match plan_range_recovery(first, last, self.frame_idx, self.last_rfi_range) {
+        let short_term = super::nvenc_core::RFI_DPB.saturating_sub(self.ltr_frames);
+        match plan_range_recovery(first, last, self.frame_idx, self.last_rfi_range, short_term) {
             // Already invalidated. Re-arm the anchor: the previous recovery AU may itself have
             // been lost, and the next frame is equally clean.
             RangePlan::Covered => {
                 self.pending_anchor = true;
                 true
             }
-            RangePlan::Decline => self.start_wave(first, last),
+            RangePlan::Decline => self
+                .force_kept(first)
+                .unwrap_or_else(|| self.start_wave(first, last)),
             RangePlan::Invalidate { first, last } => {
                 // The driver would anchor on `first - 1`; a part-dirty wave picture there would
-                // lift the client onto damage, so wave again instead.
+                // lift the client onto damage, so a kept picture or a wave answers instead.
                 if self.wave_dirty(first - 1) {
-                    return self.start_wave(first, last);
+                    return self
+                        .force_kept(first)
+                        .unwrap_or_else(|| self.start_wave(first, last));
                 }
                 // `inputTimeStamp` is the wire index, so the lost range maps 1:1 onto NVENC
                 // timestamps across rebuilds.
@@ -2151,6 +2235,31 @@ mod recovery_tests {
             s.ltr_slots,
             [None, None],
             "no slot holds a picture that was never queued"
+        );
+    }
+
+    /// Confirmations trail by six frames, and a loss is reported past the short-term window:
+    /// the kept long-term picture the client confirmed anchors the next frame, not a wave.
+    #[test]
+    fn a_late_loss_anchors_on_the_kept_picture() {
+        let mut s = stub_session(Codec::H265, 128);
+        for _ in 0..40 {
+            s.confirmed = Some(Acked {
+                last: s.frame_idx - 6,
+                mask: u16::MAX,
+            });
+            encode(&mut s).expect("the stub driver accepts every picture");
+        }
+        let lost = s.frame_idx - 4;
+        assert!(s.invalidate_ref_frames(lost, lost));
+        assert!(s.wave.is_none(), "a kept picture answers, not a wave");
+        assert!(encode(&mut s).expect("the anchor").anchor);
+        assert!(
+            s.ltr_slots
+                .iter()
+                .flatten()
+                .all(|&w| w < lost || w == s.frame_idx - 1),
+            "no slot holds a picture that chained from the loss"
         );
     }
 

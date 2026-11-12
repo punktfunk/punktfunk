@@ -119,6 +119,7 @@
 		}
 	],
 	"decky_host_asleep": "asleep",
+	"decky_host_awake": "{host} is awake",
 	"decky_play_stream": "Stream",
 	"decky_play_stop": "Stop",
 	"decky_update_server_unreachable": "Couldn’t reach the update server — are you online?",

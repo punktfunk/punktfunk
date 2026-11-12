@@ -46,14 +46,7 @@ impl ActionInfo {
 
     /// Local wording for known ids; [`Self::title`] for anything else so a new host action still shows.
     pub fn label(&self) -> &str {
-        match self.id.as_str() {
-            "power.sleep" => pf_l10n::host::host_power_sleep(),
-            "power.reboot" => pf_l10n::host::host_power_reboot(),
-            "power.shutdown" => pf_l10n::host::host_power_shutdown(),
-            "host.restart" => pf_l10n::host::host_power_restart_service(),
-            "display.next" => pf_l10n::host::hostaction_display_next(),
-            _ => &self.title,
-        }
+        known_label(&self.id).unwrap_or(&self.title)
     }
 
     /// The row with its unavailable reason in this app's language when the host named the
@@ -66,6 +59,18 @@ impl ActionInfo {
         }
         self
     }
+}
+
+/// This app's wording of a built-in action id; `None` for an id this build does not know.
+pub fn known_label(id: &str) -> Option<&'static str> {
+    Some(match id {
+        "power.sleep" => pf_l10n::host::host_power_sleep(),
+        "power.reboot" => pf_l10n::host::host_power_reboot(),
+        "power.shutdown" => pf_l10n::host::host_power_shutdown(),
+        "host.restart" => pf_l10n::host::host_power_restart_service(),
+        "display.next" => pf_l10n::host::hostaction_display_next(),
+        _ => return None,
+    })
 }
 
 #[cfg(desktop)]

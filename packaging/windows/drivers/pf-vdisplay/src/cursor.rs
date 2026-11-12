@@ -443,6 +443,9 @@ fn run_worker(monitor_v: usize, view_v: usize, data_v: isize, stop: HANDLE, cell
     let shape_dst = (view_v + CURSOR_SHAPE_OFFSET) as *mut u8;
     let mut shape_buf = vec![0u8; CURSOR_SHAPE_BYTES];
     let mut last_shape_id: u32 = 0;
+    // `last_shape_id` holds still while the pointer is hidden, so the OS reports that shape on
+    // every poll. The log line keys on its own id.
+    let mut logged_shape_id: u32 = 0;
     // Consecutive failed queries: ~100 ms at the poll rate before the blend drops the pointer.
     const QUERY_FAILS_HIDE: u32 = 3;
     let mut query_fails: u32 = 0;
@@ -506,10 +509,10 @@ fn run_worker(monitor_v: usize, view_v: usize, data_v: isize, stop: HANDLE, cell
                 out.PositionValid
             );
         }
-        // Log each distinct SHAPE (human-paced): type (1=masked_color, 2=alpha), dims,
-        // visibility. Shows which cursors reach us (does VSCode's hand arrive?) and their
-        // type (masked ⇒ the OS may still software-composite it → the double-cursor report).
-        if out.IsCursorShapeUpdated != 0 {
+        // One line per distinct shape: type (1 = masked color, 2 = alpha), size, visibility.
+        // A masked shape is one the OS may still composite in software.
+        if out.IsCursorShapeUpdated != 0 && out.CursorShapeInfo.ShapeId != logged_shape_id {
+            logged_shape_id = out.CursorShapeInfo.ShapeId;
             dbglog!(
                 "[pf-vd] cursor SHAPE id={} type={} {}x{} vis={} posvalid={}",
                 out.CursorShapeInfo.ShapeId,
