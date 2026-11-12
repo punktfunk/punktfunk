@@ -96,6 +96,23 @@ class HostTextTest {
         assertEquals(Say.Text("The host's English."), gate {}.detail)
     }
 
+    /** A launch the host did not start, as `nativeLaunchRefusal` hands it over, reads as its message. */
+    @Test
+    fun aLaunchRefusalIsWordedByItsId() {
+        fun launch(id: String, params: String) =
+            HostText.launch("""{"id":"$id","message":"The host's English.","params":$params}""")!!.words(res)
+        assertEquals(
+            "Couldn't start that game — it isn't in this host's library anymore.",
+            launch("launch_title_not_in_library", "{}"),
+        )
+        assertEquals(
+            "Couldn't start Quail — it closed again after 4 s.",
+            launch("launch_closed_at_once", """{"seconds":"4","title":"Quail"}"""),
+        )
+        assertEquals("The host's English.", launch("launch_from_a_newer_host", "{}"))
+        assertNull(HostText.launch(""))
+    }
+
     /** An action's reason is worded by its code; the system's own words arrive without one. */
     @Test
     fun anActionReasonIsWordedByItsCode() {

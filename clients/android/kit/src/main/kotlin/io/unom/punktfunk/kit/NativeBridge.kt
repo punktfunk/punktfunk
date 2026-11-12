@@ -123,6 +123,13 @@ object NativeBridge {
     external fun nativeAccessState(handle: Long): IntArray?
 
     /**
+     * The host's sentence when it did not start this session's game (refused it, or it closed
+     * again at once), as `{"id", "message", "params"}` for [HostText.launch]; "" otherwise. The
+     * latest verdict wins, so poll it. Cheap; safe on the UI thread.
+     */
+    external fun nativeLaunchRefusal(handle: Long): String
+
+    /**
      * Run the SPAKE2 PIN ceremony, presenting [certPem]/[keyPem]. Returns the host's verified
      * fingerprint (64-hex) to persist + pin, or `""` on failure (wrong PIN / MITM / unreachable).
      * Blocking — call off the main thread.
