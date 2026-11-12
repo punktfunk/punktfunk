@@ -279,14 +279,10 @@ pub(crate) async fn add_profile_device(
         Ok(profiles) => profiles,
         Err(resp) => return resp,
     };
-    let Some(label) = paired_label(&st, &fp) else {
-        return api_error_coded(
-            StatusCode::NOT_FOUND,
-            "profile_device_not_paired",
-            "That device isn't paired with this host.",
-        );
+    let device = match paired_devices(&st, std::slice::from_ref(&fp)).await {
+        Ok(mut found) => found.remove(0),
+        Err(resp) => return resp,
     };
-    let device = crate::native::unlock::device(&fp, label.as_deref());
     match profiles
         .locks()
         .edit(&id, |lock, now| lock.admit(&device, now, true))
@@ -299,6 +295,56 @@ pub(crate) async fn add_profile_device(
         ),
         Err(e) => edit_error(e),
     }
+}
+
+/// Each of `fps`, lowercase, as the device it names, under the name it paired with: natively
+/// here, with Moonlight here, or on a door with Moonlight on the owner's host, which holds that
+/// list. Any one that isn't paired refuses them all.
+async fn paired_devices(
+    st: &MgmtState,
+    fps: &[String],
+) -> Result<Vec<pf_seats::ipc::Device>, Response> {
+    let mut owner: Option<std::collections::BTreeMap<String, Option<String>>> = None;
+    let mut found = Vec::with_capacity(fps.len());
+    for fp in fps {
+        let label = match paired_label(st, fp) {
+            Some(label) => Some(label),
+            None if st.door.is_some() => {
+                if owner.is_none() {
+                    owner = Some(owner_moonlight(st).await?);
+                }
+                owner.as_ref().and_then(|list| list.get(fp).cloned())
+            }
+            None => None,
+        };
+        let Some(label) = label else {
+            return Err(api_error_coded(
+                StatusCode::NOT_FOUND,
+                "profile_device_not_paired",
+                "That device isn't paired with this host.",
+            ));
+        };
+        found.push(crate::native::unlock::device(fp, label.as_deref()));
+    }
+    Ok(found)
+}
+
+/// The Moonlight devices paired with the owner's host, by fingerprint, with their labels: on a
+/// door that list is the owner's row's, never the door's.
+async fn owner_moonlight(
+    st: &MgmtState,
+) -> Result<std::collections::BTreeMap<String, Option<String>>, Response> {
+    let body = match st.owner_call("GET", "clients", None, true).await {
+        super::owner::Answer::Reply(200, _, body) => body,
+        other => return Err(other.into_response()),
+    };
+    let clients: Vec<serde_json::Value> = serde_json::from_slice(&body)
+        .map_err(|e| host_error("owner's Moonlight list unreadable", &e))?;
+    let entry = |c: &serde_json::Value| {
+        let fp = c["fingerprint"].as_str()?.to_ascii_lowercase();
+        Some((fp, c["label"].as_str().map(str::to_owned)))
+    };
+    Ok(clients.iter().filter_map(entry).collect())
 }
 
 /// The name device `fp` paired with here, when it is paired: natively, else with Moonlight.

@@ -335,8 +335,9 @@ with the owner's lock, list and PIN. A take-turns profile keeps its own.
   has one. Every host asks it after a connect resolves its profile and before the profile is
   placed or played, the door and a seat host alike. A wake, the picker (`enumerate`), the door's
   forwarding of a device's own play, and a GameStream launch or resume (as the owner) ask it too.
-  A Punktfunk session whose device stops being admitted ends within a second; a GameStream
-  session runs on until it ends.
+  A session, Punktfunk or GameStream, whose device stops being admitted ends within a second.
+  On a door a Moonlight device is paired with the owner's host: adding one to a list asks that
+  host's `GET /clients`.
 - **A file that doesn't read.** Every profile is refused to every device, every edit is refused,
   and the host logs it. A missing file locks nothing.
 - **The PIN.** Only the box's own host checks it, sent as `ProfileUnlock` kind 1. A device waits
