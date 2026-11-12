@@ -82,13 +82,13 @@ test("a row's handler and condition are its own file's", async () => {
 
 test("a row with no seat gate is a path the seat's host refuses", () => {
 	const rust = readFileSync(
-		join(repo, "crates/host/punktfunk-host/src/mgmt/profiles.rs"),
+		join(repo, "crates/host/punktfunk-host/src/mgmt/seat_proxy.rs"),
 		"utf8",
 	);
 	const list = /fn proxy_refuses[^}]*matches!\(\s*first,([^)]*)\)/.exec(
 		rust,
 	)?.[1];
-	expect(list, "proxy_refuses in mgmt/profiles.rs").toBeDefined();
+	expect(list, "proxy_refuses in mgmt/seat_proxy.rs").toBeDefined();
 	const refused = [...(list ?? "").matchAll(/"([^"]+)"/g)].map((m) => m[1]);
 	const relayed = GATES.filter(
 		(r) => !r.open && !r.seat && !refused.includes(r.pattern.split("/")[0]),

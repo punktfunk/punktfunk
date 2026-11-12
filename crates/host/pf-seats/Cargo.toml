@@ -25,8 +25,9 @@ tracing-subscriber = { version = "0.3", default-features = false, features = ["f
 zeroize = "1"
 
 # `net` reads a socket peer's credentials (SO_PEERCRED), `fs` opens a file without following a
-# link, `process` names the uid the state directory must belong to and `thread` drops the login
-# helper's child to its person, all through safe wrappers, so this half denies unsafe code except
+# link, `process` names the uid the state directory must belong to, `thread` drops the login
+# helper's child to its person and `mount` clones a checked folder onto a seat's stage, all
+# through safe wrappers, so this half denies unsafe code except
 # in `linux::pam`, `linux::login`, one call of `linux::handover` and `linux::loopback`'s `bpf(2)`.
 # `pam` loads libpam at run time,
 # since this crate is linked into `punktfunk-host` too and only the seat daemon may need the
@@ -35,7 +36,7 @@ zeroize = "1"
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
 libloading = "0.9"
-rustix = { version = "1", features = ["fs", "net", "process", "thread"] }
+rustix = { version = "1", features = ["fs", "mount", "net", "process", "thread"] }
 
 [target.'cfg(windows)'.dependencies]
 pf-paths-win = { path = "../pf-paths-win" }

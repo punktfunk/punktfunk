@@ -48,18 +48,32 @@ Say "seats INF : $(if ($haveSeats) { 'installed' } else { 'not installed by that
 # --- 2b. the tie-break, checked BEFORE it costs anyone a seat -----------------------------------
 # Equal rank goes to the newer DriverVer date, so a seats package stamped older than the inbox
 # driver loses the id and nothing says so. Read inbox's date rather than hardcoding 06/21/2006:
-# the whole point of this check is that Microsoft could move it.
+# the whole point of this check is that Microsoft could move it. Both dates come from the INF
+# files, never from pnputil's translated text, and an INF date is always month/day/year.
+function Get-DriverDate([string]$inf) {
+    $line = (Select-String -Path $inf -Pattern '^\s*DriverVer\s*=' | Select-Object -First 1).Line
+    if (-not $line) { return $null }
+    $text = ($line -split '[=,;]')[1].Trim()
+    $date = [datetime]::MinValue
+    if ([datetime]::TryParseExact($text, 'M/d/yyyy', [cultureinfo]::InvariantCulture,
+            [Globalization.DateTimeStyles]::None, [ref]$date)) { return $date }
+    return $null
+}
+function Show-Date($date) { if ($date) { $date.ToString('yyyy-MM-dd') } else { 'unreadable' } }
+
 $inboxInf = Join-Path $env:SystemRoot 'INF\rdpidd.inf'
+$store = Join-Path $env:SystemRoot 'System32\DriverStore\FileRepository'
+$ourInfs = @(Get-ChildItem (Join-Path $store 'pf_vdisplay_seats.inf_*\pf_vdisplay_seats.inf') -ErrorAction SilentlyContinue)
 if (Test-Path $inboxInf) {
-    $inboxDate = ((Select-String -Path $inboxInf -Pattern '^\s*DriverVer\s*=' | Select-Object -First 1).Line -split '[=,]')[1].Trim()
-    $ourDates = [regex]::Matches($drivers, 'pf_vdisplay(?:_seats)?\.inf[\s\S]{0,400}?Driver Version:\s*(\d{2}/\d{2}/\d{4})') |
-        ForEach-Object { $_.Groups[1].Value }
-    Say "inbox rdpidd DriverVer date : $inboxDate"
-    foreach ($d in $ourDates) {
-        Say "our package DriverVer date  : $d"
-        if ([datetime]::Parse($d) -le [datetime]::Parse($inboxDate)) {
-            Write-Warning ("our driver is dated $d, inbox rdpidd is $inboxDate - equal rank goes " +
-                'to the NEWER date, so this package will lose RdpIdd_IndirectDisplay. Rebuild it.')
+    $inboxDate = Get-DriverDate $inboxInf
+    Say "inbox rdpidd DriverVer date : $(Show-Date $inboxDate)"
+    foreach ($inf in $ourInfs) {
+        $ourDate = Get-DriverDate $inf.FullName
+        Say "our package DriverVer date  : $(Show-Date $ourDate) ($($inf.Directory.Name))"
+        if ($ourDate -and $inboxDate -and $ourDate -le $inboxDate) {
+            Write-Warning ("our driver is dated $(Show-Date $ourDate), inbox rdpidd is " +
+                "$(Show-Date $inboxDate) - equal rank goes to the NEWER date, so this package " +
+                'will lose RdpIdd_IndirectDisplay. Rebuild it.')
         }
     }
 }

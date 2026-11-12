@@ -11,9 +11,10 @@
 //! release takes back only what adopt gave.
 //! Administrator membership and remote-interactive denial make a seat unusable;
 //! deletion requires the same exact identity and an explicit caller action. A made account
-//! goes with its profile; an adopted one is never deleted.
+//! goes with its profile, at the next service start if the profile won't go at once; an
+//! adopted one is never deleted.
 
-use crate::backend::BackendError;
+use crate::backend::{Adopted, BackendError};
 use crate::doctor::AccountInspection;
 use crate::model::{Seat, SeatId};
 use crate::secret::Secret;
@@ -27,9 +28,10 @@ use std::time::{Duration, Instant};
 use windows::core::{PCWSTR, PWSTR};
 use windows::Win32::Foundation::{
     CloseHandle, LocalFree, ERROR_ACCOUNT_LOCKED_OUT, ERROR_ALIAS_EXISTS, ERROR_FILE_NOT_FOUND,
-    ERROR_LOGON_FAILURE, ERROR_MEMBER_IN_ALIAS, ERROR_MEMBER_NOT_IN_ALIAS, ERROR_NO_SUCH_ALIAS,
-    ERROR_NO_SUCH_MEMBER, ERROR_PASSWORD_EXPIRED, ERROR_PASSWORD_MUST_CHANGE, HANDLE, HLOCAL,
-    NTSTATUS, STATUS_OBJECT_NAME_NOT_FOUND, WIN32_ERROR,
+    ERROR_LOGON_FAILURE, ERROR_LOGON_TYPE_NOT_GRANTED, ERROR_MEMBER_IN_ALIAS,
+    ERROR_MEMBER_NOT_IN_ALIAS, ERROR_NO_SUCH_ALIAS, ERROR_NO_SUCH_MEMBER, ERROR_PASSWORD_EXPIRED,
+    ERROR_PASSWORD_MUST_CHANGE, HANDLE, HLOCAL, NTSTATUS, STATUS_OBJECT_NAME_NOT_FOUND,
+    WIN32_ERROR,
 };
 use windows::Win32::NetworkManagement::NetManagement::{
     NERR_GroupExists, NERR_GroupNotFound, NERR_Success, NERR_UserExists, NERR_UserInGroup,
@@ -51,6 +53,8 @@ use windows::Win32::Security::{
     LOGON32_PROVIDER_DEFAULT, PSID, SID_NAME_USE,
 };
 use windows::Win32::UI::Shell::DeleteProfileW;
+use winreg::enums::{HKEY_LOCAL_MACHINE, KEY_READ, KEY_SET_VALUE, KEY_WOW64_64KEY};
+use winreg::RegKey;
 use zeroize::Zeroizing;
 
 /// The local group every seat account joins, so an ACL can refuse seat accounts by one name.
@@ -147,7 +151,7 @@ impl AccountManager {
 
     /// Removes a made account with its profile and blob, or releases an adopted one by its SID.
     /// A made account that is gone leaves only its blob to delete; one that isn't the row's is
-    /// refused.
+    /// refused. The SID outlives the account, so a profile still loaded goes after it.
     pub(super) fn delete(&self, seat: &Seat) -> WinResult<()> {
         require_local_system()?;
         if let Some(sid) = &seat.adopted_sid {
@@ -156,10 +160,11 @@ impl AccountManager {
         match account_comment(&seat.account)? {
             None => self.credentials.delete(&seat.id),
             Some(comment) if comment == marker(&seat.id) => {
-                if let Some(sid) = sid_string(&seat.account) {
-                    delete_profile(&seat.account, &sid);
-                }
+                let kept = sid_string(&seat.account).filter(|sid| !delete_profile(sid));
                 delete_account(&seat.account)?;
+                if let Some(sid) = kept {
+                    delete_profile_later(&sid);
+                }
                 self.credentials.delete(&seat.id)
             }
             Some(_) => Err(not_ours(seat)),
@@ -193,9 +198,9 @@ impl AccountManager {
     /// Makes `seat`'s account, a person's own standard account, ready to run as a seat with
     /// `password`: its blob, Remote Desktop Users, [`SEATS_GROUP`] and the console deny, each
     /// step idempotent. Sets no account flag and writes no comment. A refusal's message is the
-    /// console's sentence; a failed step undoes what this call added. `true`: this call put the
-    /// account in Remote Desktop Users.
-    pub(super) fn adopt(&self, seat: &Seat, password: &Secret) -> WinResult<bool> {
+    /// console's sentence; a failed step undoes what this call added. The answer says whether
+    /// this call put the account in Remote Desktop Users and whether the deny was there before.
+    pub(super) fn adopt(&self, seat: &Seat, password: &Secret) -> WinResult<Adopted> {
         require_local_system()?;
         let account = seat.account.as_str();
         let Some(sid) = seat
@@ -241,6 +246,7 @@ impl AccountManager {
         })?;
 
         let had_blob = self.credentials.exists(&seat.id)?;
+        let console_deny_kept = has_account_right(account, DENY_CONSOLE)?;
         let (mut rdp_added, mut seats_added) = (false, false);
         let result = (|| {
             self.credentials.store(&seat.id, &credential)?;
@@ -249,7 +255,10 @@ impl AccountManager {
             add_account_right(account, DENY_CONSOLE)
         })();
         let Err(error) = result else {
-            return Ok(rdp_added);
+            return Ok(Adopted {
+                rdp_granted: rdp_added,
+                console_deny_kept,
+            });
         };
         // The console deny is the last step, so a failure never added it.
         let undone = with_sid(sid, |sid| {
@@ -282,18 +291,20 @@ impl AccountManager {
     }
 
     /// Gives an adopted `seat`'s account back by `sid`, the row's SID, so a renamed account gets
-    /// it back too: the console deny off, out of [`SEATS_GROUP`], out of Remote Desktop Users
-    /// when adopt put it there, the blob gone, the Steam launchers undone. Never deletes the
-    /// account or its profile, and never acts by name. Every step runs and treats "already gone"
-    /// as done; the first failure is the answer, so Remove can run again. When the name is gone
-    /// or holds another account, the SID's steps only warn.
+    /// it back too: the console deny off unless the account held it before adopt, out of
+    /// [`SEATS_GROUP`], out of Remote Desktop Users when adopt put it there, the blob gone, the
+    /// Steam launchers undone. Never deletes the account or its profile, and never acts by name.
+    /// Every step runs and treats "already gone" as done; the first failure is the answer, so
+    /// Remove can run again. When the name is gone or holds another account, the SID's steps
+    /// only warn.
     fn release(&self, seat: &Seat, sid: &str) -> WinResult<()> {
         let present = sid_string(&seat.account).is_some_and(|found| found == sid);
         let mut results = with_sid(sid, |sid| {
-            let mut results = vec![
-                remove_account_right(sid, DENY_CONSOLE),
-                remove_member(SEATS_GROUP, sid),
-            ];
+            let mut results = Vec::new();
+            if seat.releases_console_deny() {
+                results.push(remove_account_right(sid, DENY_CONSOLE));
+            }
+            results.push(remove_member(SEATS_GROUP, sid));
             if seat.rdp_granted {
                 let rdp = localized_alias(RDP_USERS_SID);
                 results.push(rdp.and_then(|group| remove_member(&group, sid)));
@@ -614,6 +625,8 @@ fn typed_credential(password: &Secret) -> WinResult<Credential> {
 
 /// Signs `account` in over the network with `credential` and closes the token: proof the
 /// password is the account's. Each refusal counts toward the account's lockout; `fault` words it.
+/// A policy that denies the account network sign-ins is [`network_logon_denied`] instead, which
+/// neither counts as a wrong password nor retries.
 fn verify_password(
     account: &str,
     credential: &Credential,
@@ -634,12 +647,30 @@ fn verify_password(
             &mut token,
         )
     }
-    .map_err(fault)?;
+    .map_err(|error| match WIN32_ERROR::from_error(&error) {
+        Some(ERROR_LOGON_TYPE_NOT_GRANTED) => network_logon_denied(account),
+        _ => fault(error),
+    })?;
     // SAFETY: LogonUserW returned this owned token and no later operation uses it.
     unsafe {
         let _ = CloseHandle(token);
     }
     Ok(())
+}
+
+/// The sentence for an account local policy keeps from network sign-ins, which the password
+/// check needs and Remote Desktop doesn't.
+fn network_logon_denied(account: &str) -> BackendError {
+    backend_error(
+        "account_policy",
+        format!(
+            "Couldn't check {account}'s password — this PC's security policy denies it sign-in \
+             from the network. In Local Security Policy, remove the entry that covers it from \
+             Deny access to this computer from the network, then try again."
+        ),
+    )
+    .said("account_network_denied")
+    .param("account", account)
 }
 
 /// Puts `account` in Remote Desktop Users. `true`: this call added it.
@@ -671,13 +702,15 @@ fn join_seats_group(account: &str) -> WinResult<bool> {
 
 /// How long a profile gets to unload its hive after the logoff before its delete gives up.
 const PROFILE_UNLOAD: Duration = Duration::from_secs(5);
+/// The SIDs of made seat accounts deleted with their profile still on disk, one value each.
+/// Only [`delete_profile_later`] adds one, once the account is gone.
+const OWED_PROFILES: &str = r"SOFTWARE\Punktfunk\SeatProfiles";
 
-/// Removes the profile of `account`, which `sid` names, and the seat's Steam copy inside it, as
-/// `userdel -r` takes a Linux seat's home. The delete retries while the hive unloads. A failure
-/// is logged and the account goes regardless.
-fn delete_profile(account: &str, sid: &str) {
+/// Removes the profile `sid` names and the seat's Steam copy inside it, as `userdel -r` takes a
+/// Linux seat's home. The delete retries while the hive unloads. `true` once no profile is left.
+fn delete_profile(sid: &str) -> bool {
     let Ok(sid_w) = wide(sid, "account sid") else {
-        return;
+        return false;
     };
     let give_up = Instant::now() + PROFILE_UNLOAD;
     loop {
@@ -685,14 +718,48 @@ fn delete_profile(account: &str, sid: &str) {
         let deleted =
             unsafe { DeleteProfileW(PCWSTR(sid_w.as_ptr()), PCWSTR::null(), PCWSTR::null()) };
         match deleted {
-            Ok(()) => return,
+            Ok(()) => return true,
             // An account that never logged on has no profile.
-            Err(error) if error.code() == ERROR_FILE_NOT_FOUND.to_hresult() => return,
+            Err(error) if error.code() == ERROR_FILE_NOT_FOUND.to_hresult() => return true,
             Err(error) if Instant::now() >= give_up => {
-                tracing::warn!(%error, account, "seat profile not deleted");
-                return;
+                tracing::warn!(%error, sid, "seat profile not deleted");
+                return false;
             }
             Err(_) => std::thread::sleep(Duration::from_millis(250)),
+        }
+    }
+}
+
+/// Tries the profile of a deleted made account once more, then notes its SID under
+/// [`OWED_PROFILES`] for [`delete_owed_profiles`].
+fn delete_profile_later(sid: &str) {
+    if delete_profile(sid) {
+        return;
+    }
+    let noted = RegKey::predef(HKEY_LOCAL_MACHINE)
+        .create_subkey_with_flags(OWED_PROFILES, KEY_SET_VALUE | KEY_WOW64_64KEY)
+        .and_then(|(owed, _)| owed.set_value(sid, &1_u32));
+    match noted {
+        Ok(()) => tracing::warn!(sid, "seat profile left for the next service start"),
+        Err(error) => tracing::warn!(%error, sid, "seat profile left behind"),
+    }
+}
+
+/// Deletes the profiles [`delete_profile_later`] noted; each that goes leaves the note. For the
+/// service's start, when no seat holds a hive.
+pub(super) fn delete_owed_profiles() {
+    let Ok(owed) = RegKey::predef(HKEY_LOCAL_MACHINE)
+        .open_subkey_with_flags(OWED_PROFILES, KEY_READ | KEY_SET_VALUE | KEY_WOW64_64KEY)
+    else {
+        return;
+    };
+    let sids: Vec<String> = owed.enum_values().flatten().map(|(sid, _)| sid).collect();
+    for sid in sids {
+        if delete_profile(&sid) {
+            tracing::info!(sid, "seat profile deleted");
+            if let Err(error) = owed.delete_value(&sid) {
+                tracing::warn!(%error, sid, "seat profile note not removed");
+            }
         }
     }
 }
@@ -1168,5 +1235,20 @@ mod tests {
                 fault.message
             );
         }
+    }
+
+    /// A policy refusal is no wrong password: the attempt limits and the seat's retry rule read
+    /// `account_policy` as neither.
+    #[test]
+    fn a_denied_network_sign_in_is_a_policy_refusal() {
+        let refused = network_logon_denied("Bärbel");
+        assert_eq!(refused.code, "account_policy");
+        assert!(
+            refused
+                .message
+                .starts_with("Couldn't check Bärbel's password"),
+            "{}",
+            refused.message
+        );
     }
 }

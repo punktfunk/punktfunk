@@ -13,7 +13,8 @@
 //! never signed in.
 //!
 //! A [`BackendError`]'s code is a string on the wire. [`Fault::from`] is the one place it is
-//! compared: the retry rule and the console's sentence match on [`Code`].
+//! compared: the retry rule and the console's sentence match on [`Code`]. [`marked_session`]
+//! decides which leftover session of a person's own account a cycle of ours signed in.
 
 // Off Windows only the tests read this module.
 #![cfg_attr(not(windows), allow(dead_code))]
@@ -808,6 +809,35 @@ fn starting(detail: String) -> RuntimeStatus {
         detail: Some(detail),
         ..RuntimeStatus::default()
     }
+}
+
+/// One session of a seat's account as a start finds it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct Logon {
+    pub(crate) id: u32,
+    /// When it signed in, in 100 ns units. A later session given the same id has its own.
+    pub(crate) time: i64,
+    /// A client holds it.
+    pub(crate) connected: bool,
+}
+
+/// What a cycle records once its session is active: the seat, the session's id and logon time.
+pub(crate) fn session_mark(seat: &str, id: u32, time: i64) -> String {
+    format!("{seat} {id} {time}")
+}
+
+/// The session in `sessions` that `mark` names, when the mark is `seat`'s and the session is that
+/// exact one, left with no client. A session someone reconnected to is theirs.
+pub(crate) fn marked_session(mark: Option<&str>, seat: &str, sessions: &[Logon]) -> Option<u32> {
+    let mut fields = mark?.split(' ');
+    let (Some(owner), Some(id), Some(time), None) =
+        (fields.next(), fields.next(), fields.next(), fields.next())
+    else {
+        return None;
+    };
+    let (id, time) = (id.parse::<u32>().ok()?, time.parse::<i64>().ok()?);
+    let ours = |logon: &Logon| logon.id == id && logon.time == time && !logon.connected;
+    (owner == seat && sessions.iter().any(ours)).then_some(id)
 }
 
 #[cfg(test)]
@@ -1633,6 +1663,44 @@ mod tests {
         let before = bench.state.clone();
         bench.state.abandon();
         assert_eq!(bench.state, before);
+    }
+
+    /// Only the exact session a cycle of this seat marked, left with no client, is the seat's.
+    #[test]
+    fn a_mark_names_only_the_exact_session_its_cycle_left() {
+        const SEAT: &str = "0123456789abcdef0123456789abcdef";
+        const OTHER: &str = "fedcba9876543210fedcba9876543210";
+        let left = Logon {
+            id: 3,
+            time: 133_000_000_000_000_000,
+            connected: false,
+        };
+        let mark = session_mark(SEAT, left.id, left.time);
+        let reused = Logon {
+            time: left.time + 1,
+            ..left
+        };
+        let reconnected = Logon {
+            connected: true,
+            ..left
+        };
+        let elsewhere = Logon { id: 4, ..left };
+        let other_seat = session_mark(OTHER, left.id, left.time);
+        let rows: [(Option<&str>, &[Logon], Option<u32>); 9] = [
+            (Some(&mark), &[left], Some(3)),
+            (Some(&mark), &[elsewhere, left], Some(3)),
+            (None, &[left], None),
+            (Some(&mark), &[reused], None),
+            (Some(&mark), &[reconnected], None),
+            (Some(&mark), &[elsewhere], None),
+            (Some(&mark), &[], None),
+            (Some(&other_seat), &[left], None),
+            (Some("3 133000000000000000"), &[left], None),
+        ];
+        for (mark, sessions, ours) in rows {
+            let found = marked_session(mark, SEAT, sessions);
+            assert_eq!(found, ours, "{mark:?} {sessions:?}");
+        }
     }
 
     #[test]

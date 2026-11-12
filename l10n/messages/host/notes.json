@@ -29,6 +29,7 @@
 	"apierr_account_locked_windows": "{account} is an account name.",
 	"apierr_account_missing": "{account} is an account name.",
 	"apierr_account_missing_windows": "{account} is an account name.",
+	"apierr_account_network_denied": "{account} is an account name. The policy name is Windows' own, shown as Windows shows it.",
 	"apierr_account_not_ordinary": "{account} is an account name.",
 	"apierr_account_policy": "{account} is an account name.",
 	"apierr_account_signed_in": "{account} is an account name.",

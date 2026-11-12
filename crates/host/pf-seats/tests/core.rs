@@ -1,4 +1,4 @@
-use pf_seats::backend::{BackendError, PlatformBackend};
+use pf_seats::backend::{Adopted, BackendError, PlatformBackend};
 use pf_seats::ipc::{Command, CommandResult, Diagnostic, ErrorCode, SeatingStatus};
 use pf_seats::model::{CreateSeat, Ledger, RuntimeState, RuntimeStatus, Seat};
 use pf_seats::persistence::{LedgerStore, LEDGER_FILE};
@@ -17,6 +17,8 @@ struct FakeState {
     calls: Mutex<Vec<String>>,
     statuses: Mutex<HashMap<String, RuntimeStatus>>,
     config_dir: Mutex<Option<std::path::PathBuf>>,
+    /// The uid of the owner the fake last adopted.
+    owner: Mutex<Option<u32>>,
 }
 
 impl FakeBackend {
@@ -114,7 +116,18 @@ impl PlatformBackend for FakeBackend {
                 "not the recorded owner",
             ));
         }
+        // A directory service's spelling of the user `jdoe` names.
+        let uid = if seat.account == "jdoe@corp.example.com" {
+            1500
+        } else {
+            1000
+        };
+        *self.state.owner.lock().unwrap() = Some(uid);
         Ok(())
+    }
+
+    fn owner_uid(&self) -> Option<u32> {
+        *self.state.owner.lock().unwrap()
     }
 
     fn account_uid(&self, account: &str, ledger: &Ledger) -> Result<u32, BackendError> {
@@ -135,7 +148,8 @@ impl PlatformBackend for FakeBackend {
         }
     }
 
-    fn adopt_account(&self, seat: &Seat, password: &Secret) -> Result<bool, BackendError> {
+    /// A Windows account joins Remote Desktop Users; `Bärbel Ott` held the console deny already.
+    fn adopt_account(&self, seat: &Seat, password: &Secret) -> Result<Adopted, BackendError> {
         self.record("adopt_account", seat);
         if seat.account == "Administrator" {
             return Err(BackendError::new(
@@ -144,7 +158,10 @@ impl PlatformBackend for FakeBackend {
             ));
         }
         refuse_wrong(&seat.account, password)?;
-        Ok(seat.adopted_uid.is_none())
+        Ok(Adopted {
+            rdp_granted: seat.adopted_uid.is_none(),
+            console_deny_kept: seat.account == "Bärbel Ott",
+        })
     }
 
     fn check_password(&self, seat: &Seat, password: &Secret) -> Result<(), BackendError> {
@@ -529,8 +546,8 @@ fn adopt_existing(account: &str, sid: &str) -> Command {
     }
 }
 
-/// An adopted row carries its SID and the Remote Desktop grant the backend reports; a refused
-/// adopt leaves no row. Only an adopted row's password is resealed, and delete releases it
+/// An adopted row carries its SID, the Remote Desktop grant and the console deny the backend
+/// reports; a refused adopt leaves no row. Only an adopted row's password is resealed, and delete releases it
 /// through `remove` once.
 #[test]
 fn an_adopted_account_is_resealed_and_released_through_the_backend() {
@@ -556,7 +573,7 @@ fn an_adopted_account_is_resealed_and_released_through_the_backend() {
     let sid = "S-1-5-21-1-2-3-1001";
     let adopted = created(adopt_existing("Bärbel Ott", sid));
     assert_eq!(adopted.adopted_sid.as_deref(), Some(sid));
-    assert!(adopted.rdp_granted);
+    assert!(adopted.rdp_granted && adopted.console_deny_kept);
     assert_eq!(service.ledger().seats, std::slice::from_ref(&adopted));
     let made = created(create("Kid", "pf-kid", false));
     backend.clear_calls();
@@ -728,6 +745,60 @@ fn a_person_s_account_is_adopted_by_the_uid_the_backend_names() {
         .unwrap();
     assert_eq!(backend.calls(), [format!("remove:{}", seat.id)]);
     assert!(service.ledger().seats.is_empty());
+}
+
+/// The owner and a person's row never share a uid, whichever came first and however the account
+/// is spelled. A refused owner leaves the person's row, and what adopt prepared is taken back.
+#[test]
+fn the_owner_and_a_person_never_share_a_uid() {
+    let created = |service: &SeatService<FakeBackend>, command| match service.dispatch(command) {
+        Ok(CommandResult::Created { seat }) => seat,
+        other => panic!("unexpected result: {other:?}"),
+    };
+    let temp = tempfile::tempdir().unwrap();
+    let backend = FakeBackend::default();
+    let service = SeatService::open(temp.path(), backend.clone()).unwrap();
+    let person = created(&service, adopt_user("jdoe", "pw"));
+    backend.clear_calls();
+    let refused = service
+        .dispatch(adopt("jdoe@corp.example.com"))
+        .unwrap_err();
+    assert_eq!(refused.code, ErrorCode::Conflict, "{}", refused.message);
+    assert_eq!(service.ledger().seats, [person]);
+    assert!(backend.calls().iter().any(|c| c.starts_with("remove:")));
+
+    let temp = tempfile::tempdir().unwrap();
+    let service = SeatService::open(temp.path(), FakeBackend::default()).unwrap();
+    let owner = created(&service, adopt("jdoe@corp.example.com"));
+    assert_eq!(owner.owner_uid, Some(1500));
+    let refused = service.dispatch(adopt_user("jdoe", "pw")).unwrap_err();
+    assert_eq!(refused.code, ErrorCode::Conflict, "{}", refused.message);
+    assert_eq!(service.ledger().seats, [owner]);
+}
+
+/// An owner row saved without its uid gains the one the backend prepared it for at start. A uid
+/// a person's row holds stays off, and the start runs all the same.
+#[test]
+fn startup_records_the_owner_s_uid_unless_a_person_holds_it() {
+    for (prepared, recorded) in [(1000, Some(1000)), (1500, None)] {
+        let temp = tempfile::tempdir().unwrap();
+        let mut ledger = Ledger::new();
+        ledger.allocate_owner("enrico").unwrap();
+        let jdoe = CreateSeat {
+            name: "jdoe".into(),
+            account: "jdoe".into(),
+            autostart: false,
+        };
+        ledger.allocate_adopted_user(jdoe, 1500).unwrap();
+        let store = LedgerStore::open(temp.path()).unwrap();
+        store.save(&ledger).unwrap();
+        let backend = FakeBackend::default();
+        *backend.state.owner.lock().unwrap() = Some(prepared);
+        let service = SeatService::open(temp.path(), backend).unwrap();
+        service.reconcile_startup().unwrap();
+        let owner = service.ledger().owner().unwrap().owner_uid;
+        assert_eq!(owner, recorded, "prepared as {prepared}");
+    }
 }
 
 #[test]

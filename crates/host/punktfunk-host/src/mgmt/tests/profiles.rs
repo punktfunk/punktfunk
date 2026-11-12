@@ -137,6 +137,54 @@ async fn waking_another_profiles_seat_needs_the_launch_grant() {
     assert_eq!(send(&app, wake(&kid)).await.0, StatusCode::OK);
 }
 
+/// A device's own take-turns profile is off the console exactly when it needs a wake: the device
+/// wakes it without the launch grant, and still not the owner's.
+#[tokio::test]
+async fn a_device_wakes_its_own_take_turns_profile_off_the_console() {
+    const OWNER: &str = "4f1c3a9b0e27";
+    const BEN: &str = "7a77e7a77e01";
+    let path = crate::test_support::scratch().join("pf-mgmt-wake-turns.json");
+    let file = serde_json::json!({"version": 1, "default_profile_id": BEN, "profiles": [
+        {"id": OWNER, "display_name": "Enrico", "os_account": {"kind": "operator"}},
+        {"id": BEN, "display_name": "Ben", "os_account": {"kind": "windows",
+            "account_name": "Ben", "credential": {"source": "none"}}},
+    ]});
+    std::fs::write(&path, file.to_string()).unwrap();
+    let state = test_state();
+    let _ = state
+        .profiles
+        .set(Arc::new(crate::profiles::Profiles::load_with(
+            Some(path),
+            None,
+        )));
+    let np = Arc::new(
+        crate::native_pairing::NativePairing::load_with(
+            Some(crate::test_support::scratch().join("pf-mgmt-wake-turns-np.json")),
+            None,
+            false,
+        )
+        .unwrap(),
+    );
+    let guest = "aaaa00000050";
+    let access = crate::native_pairing::Access {
+        grants: punktfunk_core::quic::GRANT_GAMEPAD,
+        expires_unix: None,
+        until_disconnect: false,
+    };
+    np.add_with_access("guest", guest, Some(access)).unwrap();
+    let app = test_app_native(state, np);
+    let wake = |id: &str| {
+        axum::http::Request::post(format!("/api/v1/profiles/{id}/wake"))
+            .body(Body::empty())
+            .unwrap()
+    };
+    assert_eq!(send_cert(&app, wake(BEN), guest).await, StatusCode::OK);
+    assert_eq!(
+        send_cert(&app, wake(OWNER), guest).await,
+        StatusCode::FORBIDDEN
+    );
+}
+
 /// Where there are no seats the read says so and a change is a plain 409. The lanes are
 /// pinned by `every_route_is_classified_for_the_plugin_and_cert_lanes`.
 #[cfg(not(windows))]

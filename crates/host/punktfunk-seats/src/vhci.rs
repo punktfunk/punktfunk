@@ -16,8 +16,11 @@ use std::sync::{Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
 pub const MAP: &str = "/run/punktfunk/pads/vhci";
-/// Ports one seat may hold: four of a 16-port controller leaves the box and the others theirs.
+/// Ports one seat may hold: four players' pads.
 pub const MAX_PER_SEAT: usize = 4;
+/// Free ports a seat's attach leaves for the owner's own pads and the other seats. `vhci_hcd`
+/// has eight high-speed ports, and every emulated pad takes one of them.
+const RESERVE: usize = 2;
 
 /// Port choice and the map change together.
 static LOCK: Mutex<()> = Mutex::new(());
@@ -74,13 +77,15 @@ fn set_gate(gated: bool) {
     }
 }
 
-/// Attach `sock` as `devid` at `speed` for `account`: the port it took, `None` once the seat
-/// holds [`MAX_PER_SEAT`]. The row is written before `attach`, so the fence always finds it.
+/// Attach `sock` as `devid` at `speed` for `account`: the port it took, `None` when [`grants`]
+/// refuses. The row is written before `attach`, so the fence always finds it.
 pub fn attach(account: &str, sock: BorrowedFd<'_>, devid: u32, speed: u32) -> Result<Option<u16>> {
     let _held = lock();
     let dir = Path::new(MAP);
     prune(dir, &usbip::vhci_used_rows());
-    if held_in(dir, account) >= MAX_PER_SEAT {
+    let (held, free) = (held_in(dir, account), usbip::vhci_free_ports(speed)?);
+    if !grants(held, free) {
+        tracing::warn!(account, held, free, "seat refused a vhci port");
         return Ok(None);
     }
     let port = usbip::vhci_find_free_port(speed)?;
@@ -287,6 +292,12 @@ fn prune(dir: &Path, used: &[(u16, RawFd, String)]) {
     }
 }
 
+/// Whether a seat holding `held` ports may take one of the `free` its device could: within
+/// [`MAX_PER_SEAT`], and [`RESERVE`] still free after.
+fn grants(held: usize, free: usize) -> bool {
+    held < MAX_PER_SEAT && free > RESERVE
+}
+
 fn held_in(dir: &Path, account: &str) -> usize {
     std::fs::read_dir(dir).map_or(0, |entries| {
         entries
@@ -401,6 +412,23 @@ mod tests {
         write_row(&dir, 2, "pf-seat-2", 9).unwrap();
         assert_eq!(held_in(&dir, "pf-seat-1"), 1);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Of the eight high-speed ports, a seat alone gets its four and a second seat leaves the
+    /// reserve for the owner's own pads and a third seat.
+    #[test]
+    fn a_seat_leaves_the_others_their_ports() {
+        let fill = |held: &mut usize, free: &mut usize| {
+            while grants(*held, *free) {
+                *held += 1;
+                *free -= 1;
+            }
+        };
+        let (mut a, mut b, mut free) = (0, 0, 8);
+        fill(&mut a, &mut free);
+        assert_eq!((a, free), (MAX_PER_SEAT, 4), "a seat alone");
+        fill(&mut b, &mut free);
+        assert_eq!((b, free), (2, RESERVE), "a second seat");
     }
 
     /// An ended connection's row goes once the kernel lets go of its socket, so the next attach
