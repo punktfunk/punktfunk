@@ -167,9 +167,9 @@ pub(super) unsafe fn probe_rgb_direct(
         vrgb::CHROMA_OFFSET_COSITED_EVEN,
         vrgb::CHROMA_OFFSET_MIDPOINT,
     );
-    let want_model = rgb_model_for(hdr);
-    if rgb_caps.rgb_models & want_model == 0 || rgb_caps.rgb_ranges & rgb_range_for(full_range) == 0
-    {
+    let offered = (rgb_caps.rgb_models, rgb_caps.rgb_ranges);
+    let want = (rgb_model_for(hdr), rgb_range_for(full_range));
+    if !efc_serves(offered, want, is_radv(instance, pd)) {
         return Err(match (hdr, full_range) {
             (true, true) => "no-2020-full",
             (true, false) => "no-2020-narrow",
@@ -334,6 +334,26 @@ mod direct_planes_tests {
             "the usage the direct picture is created with"
         );
     }
+}
+
+/// Whether an EFC offering `(models, ranges)` converts the `(model, range)` a session wants.
+///
+/// RADV offers 709 narrow alone for VCN firmware that converts 709 narrow and 2020 full and
+/// nothing else: two masks cannot name two pairs. It hands the session's pair to the firmware
+/// unchecked, so 2020 full is served there too.
+pub(super) fn efc_serves(offered: (u32, u32), want: (u32, u32), radv: bool) -> bool {
+    use crate::vk_valve_rgb as vrgb;
+    let two_pairs = radv && offered == (vrgb::MODEL_YCBCR_709, vrgb::RANGE_NARROW);
+    (offered.0 & want.0 != 0 && offered.1 & want.1 != 0)
+        || (two_pairs && want == (vrgb::MODEL_YCBCR_2020, vrgb::RANGE_FULL))
+}
+
+/// Whether Mesa RADV drives `pd`.
+unsafe fn is_radv(instance: &ash::Instance, pd: vk::PhysicalDevice) -> bool {
+    let mut driver = vk::PhysicalDeviceDriverProperties::default();
+    let mut props = vk::PhysicalDeviceProperties2::default().push_next(&mut driver);
+    instance.get_physical_device_properties2(pd, &mut props);
+    driver.driver_id == vk::DriverId::MESA_RADV
 }
 
 /// EFC colour model for this session (2020 HDR / 709 SDR, at either depth) — the same matrices the
@@ -1391,6 +1411,26 @@ mod tests {
         assert_eq!(h265_vui(false, true).flags.video_full_range_flag(), 1);
         assert_eq!(h265_vui(true, false).flags.video_full_range_flag(), 0);
         assert_eq!(h265_vui(true, true).matrix_coeffs, 9);
+    }
+
+    /// A VCN that converts two pairs reports one. Only RADV's report is read that way.
+    #[test]
+    fn an_efc_reporting_709_narrow_alone_serves_2020_full_on_radv() {
+        use crate::vk_valve_rgb::{
+            MODEL_YCBCR_2020 as M2020, MODEL_YCBCR_709 as M709, RANGE_FULL as FULL,
+            RANGE_NARROW as NARROW,
+        };
+        let two_pairs = (M709, NARROW);
+        assert!(efc_serves(two_pairs, (M709, NARROW), true));
+        assert!(efc_serves(two_pairs, (M2020, FULL), true));
+        assert!(!efc_serves(two_pairs, (M2020, FULL), false));
+        assert!(!efc_serves(two_pairs, (M709, FULL), true));
+        assert!(!efc_serves(two_pairs, (M2020, NARROW), true));
+        let all = (M709 | M2020, FULL | NARROW);
+        for want in [(M709, FULL), (M709, NARROW), (M2020, FULL), (M2020, NARROW)] {
+            assert!(efc_serves(all, want, false));
+        }
+        assert!(!efc_serves((M709 | M2020, NARROW), (M2020, FULL), true));
     }
 
     /// The EFC is asked for the range the bitstream signals.
