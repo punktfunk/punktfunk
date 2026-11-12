@@ -277,7 +277,7 @@
 	"pairing_pending_new_page_hint": "Tooltip of 'Arm PIN' for a request from a page new to this host.",
 	"pairing_pending_name_prompt": "Label of the device-name field in the approve dialog; placeholder of the optional name field in the Moonlight step.",
 	"pairing_pending_name_title": "Title of the dialog for approving a waiting device.",
-	"pairing_pending_name_desc": "First sentence of the approve dialog's description, followed by 'Choose what this device may do…'. name: the device's name; fp: start of its fingerprint.",
+	"pairing_pending_name_desc": "First sentence of the approve dialog's description, followed by 'Choose what this device may do…'. name: the device's name.",
 	"pairing_pending_age_just_now": "How long ago a pairing request arrived, in a waiting device's detail line: under ten seconds.",
 	"pairing_pending_age_secs": "Age of a pairing request in the detail line, joined with · to other parts. s: whole seconds, 10 to 59.",
 	"pairing_pending_age_mins": "Age of a pairing request in the detail line. min: whole minutes, 1 or more.",
