@@ -153,7 +153,12 @@ async function main() {
 			await page.waitForTimeout(SETTLE);
 			const suffix = GLOBALS ? `--${GLOBALS.replace(/[^a-z0-9]+/gi, "-")}` : "";
 			const file = join(OUT, `${story.id}${suffix}.png`);
-			await page.screenshot({ path: file, fullPage: FULL });
+			// A full-page shot resizes the window, which closes an open menu mid-shot: a story
+			// that opened one is shot at the window's size.
+			const menu = await page.evaluate(
+				() => !!document.querySelector('[role="listbox"], [role="menu"]'),
+			);
+			await page.screenshot({ path: file, fullPage: FULL && !menu });
 			console.log(`✓ ${story.id} → ${file}`);
 			ok++;
 		} catch (e) {
