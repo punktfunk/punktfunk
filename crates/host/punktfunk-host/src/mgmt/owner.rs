@@ -340,8 +340,9 @@ impl Answer {
 /// axum's default request limit: a policy, a hook list, a PIN, a plugin page's form.
 const BODY_LIMIT: usize = 2 * 1024 * 1024;
 
-/// The seat a device plays on: where its host lists it now, else its own profile's row. A
-/// person's own Linux account is only ever the first: a device reaches it by unlocking.
+/// The seat a device plays on: where its host lists it now, else its own profile's row while
+/// it opens that profile with nothing asked. A person's own Linux account is only ever the
+/// first: a device reaches it by unlocking.
 fn device_seat(st: &MgmtState, seats: &crate::seats::Snapshot, fp: &str) -> Option<String> {
     let seen = seats.occupants.iter().find(|(_, who)| {
         who.iter()
@@ -350,8 +351,11 @@ fn device_seat(st: &MgmtState, seats: &crate::seats::Snapshot, fp: &str) -> Opti
     if let Some((id, _)) = seen {
         return Some(id.clone());
     }
-    let profile = st.app.profiles.get()?.resolve(Some(fp), None).ok()?;
-    if seats.person_row(&profile.os_account).is_some() {
+    let profiles = st.app.profiles.get()?;
+    let profile = profiles.resolve(Some(fp), None).ok()?;
+    if seats.person_row(&profile.os_account).is_some()
+        || profiles.opens(&profile.id, Some(fp)) != crate::profiles::Opens::Yes
+    {
         return None;
     }
     seats.row_of(&profile.os_account).map(str::to_string)

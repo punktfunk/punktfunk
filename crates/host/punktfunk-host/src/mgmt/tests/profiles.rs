@@ -654,6 +654,16 @@ mod person {
     /// A door asking `sup`, with the owner, a profile on each row of [`ledger`], `default` the
     /// profile a device lands in, and `fps` paired with full control.
     fn door(tag: &str, sup: Arc<Fake>, fps: &[&str], default: &str) -> Router {
+        door_with(tag, sup, fps, default).0
+    }
+
+    /// [`door`], and its profile store.
+    fn door_with(
+        tag: &str,
+        sup: Arc<Fake>,
+        fps: &[&str],
+        default: &str,
+    ) -> (Router, Arc<crate::profiles::Profiles>) {
         let path = crate::test_support::scratch().join(format!("pf-mgmt-person-{tag}.json"));
         let seat = |id: &str, name: &str, row: &str| {
             serde_json::json!({"id": id, "display_name": name,
@@ -666,8 +676,8 @@ mod person {
         ]});
         std::fs::write(&path, file.to_string()).unwrap();
         let state = test_state();
-        let profiles = crate::profiles::Profiles::load_with(Some(path), None);
-        let _ = state.profiles.set(Arc::new(profiles));
+        let profiles = Arc::new(crate::profiles::Profiles::load_with(Some(path), None));
+        let _ = state.profiles.set(profiles.clone());
         let np = crate::native_pairing::NativePairing::load_with(
             Some(crate::test_support::scratch().join(format!("pf-mgmt-person-np-{tag}.json"))),
             None,
@@ -677,7 +687,7 @@ mod person {
         for fp in fps {
             np.add("Jane's phone", fp).unwrap();
         }
-        test_app_door(state, Some(Arc::new(np)), sup)
+        (test_app_door(state, Some(Arc::new(np)), sup), profiles)
     }
 
     /// [`send_cert`] with the answer's body.
@@ -871,6 +881,33 @@ mod person {
         assert_eq!(status, StatusCode::OK, "{body}");
         assert!(sup.asked().is_empty(), "{:?}", sup.asked());
         assert!(sup.called().is_empty(), "{:?}", sup.called());
+    }
+
+    /// A device's own play goes to its default profile's seat only while it may open that
+    /// profile; off a locked profile's list it stays on the door.
+    #[tokio::test]
+    async fn a_device_s_own_play_reaches_a_locked_profile_s_seat_only_from_its_list() {
+        let (listed, other) = ("ab".repeat(32), "cd".repeat(32));
+        let sup = Arc::new(Fake::new(ledger(), |_| Err(refused("x", "y"))));
+        let (app, profiles) = door_with("own-play-lock", sup.clone(), &[&listed, &other], WINDOWS);
+        let end_game = || json_req(Method::POST, "/api/v1/game/end", serde_json::json!({}));
+        let (status, _) = as_device(&app, end_game(), &other).await;
+        assert_eq!(status, StatusCode::BAD_GATEWAY, "open: sent to its seat");
+        let device = pf_seats::ipc::Device {
+            fingerprint: listed.clone(),
+            name: "listed".into(),
+        };
+        let locked = profiles.locks().edit(WINDOWS, |lock, now| {
+            lock.locked = true;
+            lock.admit(&device, now, true)
+        });
+        assert!(locked.unwrap());
+        let (status, _) = as_device(&app, end_game(), &other).await;
+        assert_ne!(status, StatusCode::BAD_GATEWAY, "answered on the door");
+        let (status, _) = as_device(&app, end_game(), &listed).await;
+        assert_eq!(status, StatusCode::BAD_GATEWAY, "sent to its seat");
+        let seat = crate::mgmt::owner::Target::Seat(WINDOWS_SEAT.into());
+        assert_eq!(sup.called(), [seat.clone(), seat]);
     }
 }
 
