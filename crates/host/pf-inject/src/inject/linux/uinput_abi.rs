@@ -331,6 +331,16 @@ impl UinputDevice {
         Ok(())
     }
 
+    /// `UI_GET_SYSNAME` once created: the device's name in sysfs, `inputN`.
+    pub(crate) fn sysname(&self) -> Result<String> {
+        let fd = self.kernel("UI_GET_SYSNAME")?;
+        let mut buf = [0u8; 64];
+        uapi::ioctl_with(fd.as_fd(), UI_GET_SYSNAME_0 | (64 << 16), &mut buf)
+            .context("UI_GET_SYSNAME")?;
+        let len = buf.iter().position(|&b| b == 0).unwrap_or(buf.len());
+        Ok(String::from_utf8_lossy(&buf[..len]).into_owned())
+    }
+
     /// `UI_DEV_SETUP` then `UI_DEV_CREATE`. `name` is truncated to the 79 bytes the setup holds.
     pub(crate) fn create(&self, id: InputId, name: &[u8], ff_effects_max: u32) -> Result<()> {
         let fd = self.kernel("UI_DEV_SETUP")?;

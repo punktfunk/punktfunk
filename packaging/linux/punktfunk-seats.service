@@ -38,8 +38,9 @@ CapabilityBoundingSet=CAP_CHOWN CAP_DAC_OVERRIDE CAP_DAC_READ_SEARCH CAP_FOWNER 
 NoNewPrivileges=yes
 PrivateTmp=yes
 ProtectKernelTunables=yes
-# The pad broker attaches a seat's USB devices and gates the vhci hubs.
-ReadWritePaths=-/sys/devices/platform/vhci_hcd.0 -/sys/devices/platform/vhci_hcd
+# The pad broker attaches a seat's USB devices and gates the vhci hubs, and has udev re-apply
+# its rules to the nodes of each uinput device it records for the fence.
+ReadWritePaths=-/sys/devices/platform/vhci_hcd.0 -/sys/devices/platform/vhci_hcd -/sys/devices/virtual/input
 # Each seat's /dev/uinput is a CUSE device made here: no PrivateDevices= or DeviceAllow=. The
 # first open of /dev/cuse still autoloads cuse; the kernel runs that modprobe, not this unit.
 ProtectKernelModules=yes

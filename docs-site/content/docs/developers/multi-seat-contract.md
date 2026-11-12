@@ -488,10 +488,14 @@ system-range user, `pf-seat-<n>`, with a logind session of its own, a headless c
   back; a uhid pad's carries the same `uhid_event`s the seat would write and read, minus
   `CREATE2` and `DESTROY`, which stay the daemon's. The pad lives until the seat hangs up. The
   socket admits a running seat's user only (the owner's row included), eight pads per seat. The
-  daemon stamps each pad's `phys` as `punktfunk-seat:<account>/…`, and
+  daemon stamps each pad's `phys` `punktfunk-seat:…` and records the device in
+  `/run/punktfunk/pads/vouched`, root's alone: a uinput pad by the name the kernel gave it, a
+  uhid pad by a random token in its stamp, bound to the first HID device that carries it.
   `65-punktfunk-seats.rules` runs `punktfunk-seats fence` on every `input` and `hidraw` node
-  that carries it, on each event but `remove`: the node becomes that user's, `0600`, on a seat
-  of its own, so neither the box's own Steam nor another seat sees it. A box without the daemon
+  that carries a stamp, on each event but `remove`: a recorded device's node becomes that seat
+  user's, `0600`, on a seat of its own, so neither the box's own Steam nor another seat sees it.
+  Anyone who can open `/dev/uinput` or `/dev/uhid` can write a stamp, so any other stamped node
+  is root's, `0600`, on a seat no session uses. A box without the daemon
   gives a seat no pad; the seat host says so. The daemon parks each relayed pad's fds in
   systemd's fd store, so a restart of the daemon keeps a seat's pads; `punktfunk-seats list`
   shows what each seat holds. While the daemon runs, every other hidraw node is the box's: it
@@ -507,7 +511,8 @@ system-range user, `pf-seat-<n>`, with a logind session of its own, a headless c
   `EV_FF` and the accelerometer property. Any other bit is refused with `EPERM`, and the daemon
   logs each refused code once, so a seat never makes a keyboard or a mouse, which would reach
   the console's SysRq and `/dev/input/mice`. The daemon stamps each device's `phys` as
-  `punktfunk-seat:<account>/steam/<n>`, whatever the seat asked, so the fence takes it. A 32-bit
+  `punktfunk-seat:<account>/steam/<n>`, whatever the seat asked, and records it by the name the
+  kernel gave it, so the fence takes it. A 32-bit
   Steam's events and FF uploads are translated. The CUSE fd and each device's fd wait in the fd
   store, so a restart of the daemon keeps the bound node and the devices on it; a stop of the
   daemon ends them until the seat restarts. Before it stops, the unit's `ExecStop=` has the
