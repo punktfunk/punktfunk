@@ -111,7 +111,8 @@ pub enum OsAccount {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         uid: Option<u32>,
     },
-    /// Reserved for the OS-user increment: resolves to [`ProfileError::SessionUnavailable`].
+    /// A take-turns profile: a local Windows account that takes the console in turn. It plays
+    /// on that account's SID when one is stored, else on the name alone.
     Windows {
         account_name: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -797,9 +798,17 @@ impl Profiles {
         // played under the wrong account. Linux's own-user kind is still unbuilt.
         match &resolved.os_account {
             OsAccount::Linux { .. } => return Err(ProfileError::SessionUnavailable),
-            OsAccount::Windows { account_name, .. } => {
-                let on_console = take_turns::console_account()
-                    .is_some_and(|user| user.eq_ignore_ascii_case(account_name));
+            OsAccount::Windows {
+                account_name, sid, ..
+            } => {
+                let on_console = take_turns::holds_console(
+                    account_name,
+                    sid.as_deref(),
+                    take_turns::console_account().as_deref(),
+                    sid.as_ref()
+                        .and_then(|_| take_turns::session_sid())
+                        .as_deref(),
+                );
                 if !on_console {
                     return Err(ProfileError::SessionUnavailable);
                 }

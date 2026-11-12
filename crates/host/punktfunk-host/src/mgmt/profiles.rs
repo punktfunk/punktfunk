@@ -1229,9 +1229,8 @@ pub(crate) async fn create_profile(
             Err(e) => return edit_error(e),
         };
         let (sup, store) = (seats_of(&st), profiles.clone());
-        let bound = take_turns_bound(&profiles);
         let made = blocking("seat_supervisor", move || {
-            seat_profile(&*sup, &store, input, &name, &bound)
+            seat_profile(&*sup, &store, input, &name)
         });
         match made.await {
             Ok(made) => made.map_err(|resp| *resp),
@@ -1251,16 +1250,21 @@ pub(crate) async fn create_profile(
     }
 }
 
+/// Held from the check that no profile or seat holds an account to the write that takes it, so
+/// a second create for that account sees the first.
+static BINDING: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 /// Makes the seat a new profile plays on, then the profile; a profile the store refuses takes
-/// the seat back. Blocking, and one task: a caller that stops waiting still leaves the two
-/// together or neither.
+/// the seat back. Blocking, and one task under [`BINDING`]: a caller that stops waiting still
+/// leaves the two together or neither.
 fn seat_profile(
     sup: &dyn Seats,
     profiles: &Profiles,
     input: ProfileCreate,
     name: &str,
-    bound: &[String],
 ) -> Result<Profile, Box<Response>> {
+    let _binding = BINDING.lock().unwrap_or_else(|e| e.into_inner());
+    let bound = take_turns_bound(profiles);
     let ledger = sup.ledger();
     if !ledger.on {
         return Err(refused(seats_off()).into());
@@ -1275,7 +1279,7 @@ fn seat_profile(
     }
     let seat = match input.seat_account.clone().zip(input.seat_password.clone()) {
         Some((account, password)) => {
-            adopt_seat(sup, &ledger.seats, name, &account, password, bound)
+            adopt_seat(sup, &ledger.seats, name, &account, password, &bound)
         }
         None => new_seat(sup, &ledger.seats, name),
     }
@@ -1318,12 +1322,13 @@ fn adopt_refusal(input: &ProfileCreate) -> Option<Refusal> {
     Some((status, ApiError::coded(code, why)))
 }
 
-/// Make a take-turns profile bound to the local Windows account `account`. Windows only; the
-/// account must exist and no other profile or seat may hold it. No seat is created — the profile
-/// rides the one console (`design/windows-take-turns.md`).
+/// Make a take-turns profile bound to the local Windows account `account`, by its SID. Windows
+/// only; the account must exist and no other profile or seat may hold it, checked and taken
+/// under [`BINDING`]. No seat is created — the profile rides the one console
+/// (`design/windows-take-turns.md`).
 async fn create_take_turns(
     st: &MgmtState,
-    profiles: &Profiles,
+    profiles: &Arc<Profiles>,
     input: ProfileCreate,
     account: String,
 ) -> Response {
@@ -1334,27 +1339,28 @@ async fn create_take_turns(
             "Take-turns profiles are only on Windows.",
         );
     }
-    let bound = take_turns_bound(profiles);
-    let vetted = blocking("windows_accounts", move || {
+    let store = profiles.clone();
+    let made = blocking("windows_accounts", move || {
+        let _binding = BINDING.lock().unwrap_or_else(|e| e.into_inner());
         let ledger = crate::seats::list().unwrap_or_default();
-        bindable_account(&account, &ledger, &bound)
+        let account = bindable_account(&account, &ledger, &take_turns_bound(&store))
+            .map_err(|refusal| Box::new(refused(refusal)))?;
+        let os_account = OsAccount::Windows {
+            account_name: account.name,
+            sid: Some(account.sid),
+            credential: crate::profiles::CredentialRef::None,
+        };
+        store
+            .create(input, os_account)
+            .map_err(|e| Box::new(edit_error(e)))
     });
-    let account = match vetted.await {
-        Ok(Ok(account)) => account,
-        Ok(Err(refusal)) => return refused(refusal),
-        Err(resp) => return resp,
-    };
-    let os_account = OsAccount::Windows {
-        account_name: account.name,
-        sid: None,
-        credential: crate::profiles::CredentialRef::None,
-    };
-    match profiles.create(input, os_account) {
-        Ok(p) => {
+    match made.await {
+        Ok(Ok(p)) => {
             let seats = seats_now(st).await;
             (StatusCode::CREATED, Json(admin(st, profiles, &p, &seats))).into_response()
         }
-        Err(e) => edit_error(e),
+        Ok(Err(resp)) => *resp,
+        Err(resp) => resp,
     }
 }
 
