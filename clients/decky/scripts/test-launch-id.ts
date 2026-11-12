@@ -2,7 +2,7 @@
 // shell metacharacter, space, flag lead and over-long value is refused. Run by `pnpm test`.
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { isSafeClientBin, isSafeLaunchId } from "../src/launch-id.ts";
+import { isSafeClientBin, isSafeLaunchId } from "../src/steam/launch-options.ts";
 
 const shared = (name: string) =>
   JSON.parse(readFileSync(new URL(`../../shared/${name}`, import.meta.url), "utf8"));

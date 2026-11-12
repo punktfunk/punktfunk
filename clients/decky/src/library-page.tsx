@@ -22,7 +22,7 @@ import { diag, verbose } from "./lib/diag";
 import { read, write } from "./lib/storage";
 import { collectElements, createRenderPatcher, describe } from "./patch";
 import { patchPlayGroup, resetPlayFrom } from "./play-from";
-import { steamAppIdForShortcut } from "./steam";
+import { steamAppIdForShortcut } from "./steam/keys";
 
 const ROUTE = "/library/app/:appid";
 const STYLE_KEY = "punktfunk-style";

@@ -58,15 +58,10 @@ import {
   setGamePageStreamEnabled,
 } from "./library-page";
 import { OsMark } from "./os-icon";
-import {
-  ensureGamepadUiShortcut,
-  lastGameStream,
-  launchGamepadUi,
-  recreateShortcuts,
-  removeGameShortcuts,
-  stopStream,
-  watchRunningStreams,
-} from "./steam";
+import { removeGameShortcuts } from "./steam/game-shortcuts";
+import { lastGameStream, launchGamepadUi, stopStream } from "./steam/launch";
+import { watchRunningStreams } from "./steam/running";
+import { ensureGamepadUiShortcut, recreateShortcuts } from "./steam/shortcuts";
 import { TrustSheet } from "./trust";
 
 // Recovery action for "the Punktfunk library entry vanished" — recreates the visible shortcut

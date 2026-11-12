@@ -22,7 +22,8 @@ import { t } from "./i18n";
 import { diag } from "./lib/diag";
 import { read, write } from "./lib/storage";
 import { collectElements, createRenderPatcher, describe } from "./patch";
-import { isGameStreaming, stopGameStream, subscribeRunning } from "./steam";
+import { stopGameStream } from "./steam/launch";
+import { isGameStreaming, subscribeRunning } from "./steam/running";
 
 declare const SteamClient: {
   Apps: { SetStreamingClientForApp(appId: number, clientId: string): void };

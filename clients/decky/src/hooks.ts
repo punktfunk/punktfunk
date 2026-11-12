@@ -14,7 +14,8 @@ import { t } from "./i18n";
 import { diag } from "./lib/diag";
 import { signal, useSignal } from "./lib/signal";
 import { toast } from "./lib/toast";
-import { LaunchOpts, launchGameStream, launchStream } from "./steam";
+import { launchGameStream, launchStream } from "./steam/launch";
+import type { LaunchOpts } from "./steam/launch-options";
 
 export const DOCS_URL = "https://docs.punktfunk.unom.io/docs/steam-deck";
 
