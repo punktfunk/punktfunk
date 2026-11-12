@@ -1014,6 +1014,8 @@ export type SetLibraryEntryHidden400 = ApiError
 export const SetLibraryEntryHidden400 = ApiError
 export type SetLibraryEntryHidden401 = ApiError
 export const SetLibraryEntryHidden401 = ApiError
+export type SetLibraryEntryHidden403 = ApiError
+export const SetLibraryEntryHidden403 = ApiError
 export type SetLibraryEntryHidden404 = ApiError
 export const SetLibraryEntryHidden404 = ApiError
 export type SetLibraryEntryHidden500 = ApiError
@@ -1110,6 +1112,8 @@ export type SetGameOverrides400 = ApiError
 export const SetGameOverrides400 = ApiError
 export type SetGameOverrides401 = ApiError
 export const SetGameOverrides401 = ApiError
+export type SetGameOverrides403 = ApiError
+export const SetGameOverrides403 = ApiError
 export type SetGameOverrides404 = ApiError
 export const SetGameOverrides404 = ApiError
 export type SetGameOverrides500 = ApiError
@@ -2730,6 +2734,7 @@ export const make = (
       "2xx": decodeSuccess(SetLibraryEntryHidden200),
       "400": decodeError("SetLibraryEntryHidden400", SetLibraryEntryHidden400),
       "401": decodeError("SetLibraryEntryHidden401", SetLibraryEntryHidden401),
+      "403": decodeError("SetLibraryEntryHidden403", SetLibraryEntryHidden403),
       "404": decodeError("SetLibraryEntryHidden404", SetLibraryEntryHidden404),
       "500": decodeError("SetLibraryEntryHidden500", SetLibraryEntryHidden500),
       orElse: unexpectedStatus
@@ -2845,6 +2850,7 @@ export const make = (
       "2xx": decodeSuccess(SetGameOverrides200),
       "400": decodeError("SetGameOverrides400", SetGameOverrides400),
       "401": decodeError("SetGameOverrides401", SetGameOverrides401),
+      "403": decodeError("SetGameOverrides403", SetGameOverrides403),
       "404": decodeError("SetGameOverrides404", SetGameOverrides404),
       "500": decodeError("SetGameOverrides500", SetGameOverrides500),
       orElse: unexpectedStatus
@@ -4481,11 +4487,13 @@ readonly "getCustomGame": {
 * but is not deleted. The operator console still lists it (`hidden: true`) so it can return.
 * The id is not required to exist now — a plugin mid-sync or an unmounted drive would
 * otherwise refuse a choice that should stick. With `as`, the hide is that profile's own; it
-* cannot bring back a title the box hides. Emits `library.changed` only on a real change.
+* cannot bring back a title the box hides. A paired device that is that locked profile's person
+* may set it too, hiding only a title the profile's library lists. Emits `library.changed` only
+* on a real change.
 */
 readonly "setLibraryEntryHidden": {
-    <Config extends OperationConfig | undefined = undefined>(id: string, options: { readonly params?: typeof SetLibraryEntryHiddenParams.Encoded | undefined; readonly payload: typeof SetLibraryEntryHiddenRequestJson.Encoded; readonly config: Config }): Effect.Effect<WithOptionalResponse<typeof SetLibraryEntryHidden200.Type, Config>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"SetLibraryEntryHidden400", typeof SetLibraryEntryHidden400.Type> | PunktfunkError<"SetLibraryEntryHidden401", typeof SetLibraryEntryHidden401.Type> | PunktfunkError<"SetLibraryEntryHidden404", typeof SetLibraryEntryHidden404.Type> | PunktfunkError<"SetLibraryEntryHidden500", typeof SetLibraryEntryHidden500.Type>>;
-    <Config extends OperationConfig | undefined = undefined>(id: string, options: { readonly params?: typeof SetLibraryEntryHiddenParams.Encoded | undefined; readonly payload: typeof SetLibraryEntryHiddenRequestJson.Encoded; readonly config?: Config | undefined }): Effect.Effect<WithOptionalResponse<typeof SetLibraryEntryHidden200.Type, Config | undefined>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"SetLibraryEntryHidden400", typeof SetLibraryEntryHidden400.Type> | PunktfunkError<"SetLibraryEntryHidden401", typeof SetLibraryEntryHidden401.Type> | PunktfunkError<"SetLibraryEntryHidden404", typeof SetLibraryEntryHidden404.Type> | PunktfunkError<"SetLibraryEntryHidden500", typeof SetLibraryEntryHidden500.Type>>;
+    <Config extends OperationConfig | undefined = undefined>(id: string, options: { readonly params?: typeof SetLibraryEntryHiddenParams.Encoded | undefined; readonly payload: typeof SetLibraryEntryHiddenRequestJson.Encoded; readonly config: Config }): Effect.Effect<WithOptionalResponse<typeof SetLibraryEntryHidden200.Type, Config>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"SetLibraryEntryHidden400", typeof SetLibraryEntryHidden400.Type> | PunktfunkError<"SetLibraryEntryHidden401", typeof SetLibraryEntryHidden401.Type> | PunktfunkError<"SetLibraryEntryHidden403", typeof SetLibraryEntryHidden403.Type> | PunktfunkError<"SetLibraryEntryHidden404", typeof SetLibraryEntryHidden404.Type> | PunktfunkError<"SetLibraryEntryHidden500", typeof SetLibraryEntryHidden500.Type>>;
+    <Config extends OperationConfig | undefined = undefined>(id: string, options: { readonly params?: typeof SetLibraryEntryHiddenParams.Encoded | undefined; readonly payload: typeof SetLibraryEntryHiddenRequestJson.Encoded; readonly config?: Config | undefined }): Effect.Effect<WithOptionalResponse<typeof SetLibraryEntryHidden200.Type, Config | undefined>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"SetLibraryEntryHidden400", typeof SetLibraryEntryHidden400.Type> | PunktfunkError<"SetLibraryEntryHidden401", typeof SetLibraryEntryHidden401.Type> | PunktfunkError<"SetLibraryEntryHidden403", typeof SetLibraryEntryHidden403.Type> | PunktfunkError<"SetLibraryEntryHidden404", typeof SetLibraryEntryHidden404.Type> | PunktfunkError<"SetLibraryEntryHidden500", typeof SetLibraryEntryHidden500.Type>>;
   }
   /**
 * Asks the plugin that lists the title to download it, or to resume a paused download. The
@@ -4569,11 +4577,13 @@ readonly "getLibraryOverrides": {
 * `{ "none": true }` leaves it to the device, whatever the source sets; `{}` clears its entry,
 * and the game takes its source's. The id is not required to exist now, as with hiding.
 * With `as`, the entry is that profile's own and `set` may name the box's shared override or
-* the profile's; `{}` hands the game back to the box's entry. Emits `library.changed`.
+* the profile's; `{}` hands the game back to the box's entry. A paired device that is that
+* locked profile's person may set it too, for a title the profile's library lists. Emits
+* `library.changed`.
 */
 readonly "setGameOverrides": {
-    <Config extends OperationConfig | undefined = undefined>(id: string, options: { readonly params?: typeof SetGameOverridesParams.Encoded | undefined; readonly payload: typeof SetGameOverridesRequestJson.Encoded; readonly config: Config }): Effect.Effect<WithOptionalResponse<typeof SetGameOverrides200.Type, Config>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"SetGameOverrides400", typeof SetGameOverrides400.Type> | PunktfunkError<"SetGameOverrides401", typeof SetGameOverrides401.Type> | PunktfunkError<"SetGameOverrides404", typeof SetGameOverrides404.Type> | PunktfunkError<"SetGameOverrides500", typeof SetGameOverrides500.Type>>;
-    <Config extends OperationConfig | undefined = undefined>(id: string, options: { readonly params?: typeof SetGameOverridesParams.Encoded | undefined; readonly payload: typeof SetGameOverridesRequestJson.Encoded; readonly config?: Config | undefined }): Effect.Effect<WithOptionalResponse<typeof SetGameOverrides200.Type, Config | undefined>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"SetGameOverrides400", typeof SetGameOverrides400.Type> | PunktfunkError<"SetGameOverrides401", typeof SetGameOverrides401.Type> | PunktfunkError<"SetGameOverrides404", typeof SetGameOverrides404.Type> | PunktfunkError<"SetGameOverrides500", typeof SetGameOverrides500.Type>>;
+    <Config extends OperationConfig | undefined = undefined>(id: string, options: { readonly params?: typeof SetGameOverridesParams.Encoded | undefined; readonly payload: typeof SetGameOverridesRequestJson.Encoded; readonly config: Config }): Effect.Effect<WithOptionalResponse<typeof SetGameOverrides200.Type, Config>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"SetGameOverrides400", typeof SetGameOverrides400.Type> | PunktfunkError<"SetGameOverrides401", typeof SetGameOverrides401.Type> | PunktfunkError<"SetGameOverrides403", typeof SetGameOverrides403.Type> | PunktfunkError<"SetGameOverrides404", typeof SetGameOverrides404.Type> | PunktfunkError<"SetGameOverrides500", typeof SetGameOverrides500.Type>>;
+    <Config extends OperationConfig | undefined = undefined>(id: string, options: { readonly params?: typeof SetGameOverridesParams.Encoded | undefined; readonly payload: typeof SetGameOverridesRequestJson.Encoded; readonly config?: Config | undefined }): Effect.Effect<WithOptionalResponse<typeof SetGameOverrides200.Type, Config | undefined>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"SetGameOverrides400", typeof SetGameOverrides400.Type> | PunktfunkError<"SetGameOverrides401", typeof SetGameOverrides401.Type> | PunktfunkError<"SetGameOverrides403", typeof SetGameOverrides403.Type> | PunktfunkError<"SetGameOverrides404", typeof SetGameOverrides404.Type> | PunktfunkError<"SetGameOverrides500", typeof SetGameOverrides500.Type>>;
   }
   /**
 * A named set of stream settings that games and sources point at. The host assigns its id.
@@ -4712,8 +4722,9 @@ readonly "listLibraryScanners": {
   /**
 * Takes effect on the next library read. Disabling hides titles; the plugin may keep
 * reconciling while off. Nothing is deleted. With `as`, the switch is that profile's own: it
-* turns a source off for the profile, and cannot turn on one the box turned off. Emits
-* `library.changed` when the state changes.
+* turns a source off for the profile, and cannot turn on one the box turned off. A paired device
+* that is that locked profile's person may set it too. Emits `library.changed` when the state
+* changes.
 */
 readonly "setLibraryScanner": {
     <Config extends OperationConfig | undefined = undefined>(id: string, options: { readonly params?: typeof SetLibraryScannerParams.Encoded | undefined; readonly payload: typeof SetLibraryScannerRequestJson.Encoded; readonly config: Config }): Effect.Effect<WithOptionalResponse<typeof SetLibraryScanner200.Type, Config>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"SetLibraryScanner401", typeof SetLibraryScanner401.Type> | PunktfunkError<"SetLibraryScanner403", typeof SetLibraryScanner403.Type> | PunktfunkError<"SetLibraryScanner404", typeof SetLibraryScanner404.Type> | PunktfunkError<"SetLibraryScanner500", typeof SetLibraryScanner500.Type>>;
@@ -5201,7 +5212,8 @@ readonly "getRecentSessions": {
   /**
 * Persisted clamped. Takes effect on the next decision, including a session
 * already streaming — policy is read at session end, not start. With `as`, the settings of
-* that profile's own seat; a profile on the host's own desktop has none of its own.
+* that profile's own seat; a profile on the host's own desktop has none of its own. A paired
+* device that is that locked profile's person may set them too.
 */
 readonly "setSessionSettings": {
     <Config extends OperationConfig | undefined = undefined>(options: { readonly params?: typeof SetSessionSettingsParams.Encoded | undefined; readonly payload: typeof SetSessionSettingsRequestJson.Encoded; readonly config: Config }): Effect.Effect<WithOptionalResponse<typeof SetSessionSettings200.Type, Config>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"SetSessionSettings400", typeof SetSessionSettings400.Type> | PunktfunkError<"SetSessionSettings401", typeof SetSessionSettings401.Type> | PunktfunkError<"SetSessionSettings403", typeof SetSessionSettings403.Type> | PunktfunkError<"SetSessionSettings404", typeof SetSessionSettings404.Type> | PunktfunkError<"SetSessionSettings409", typeof SetSessionSettings409.Type> | PunktfunkError<"SetSessionSettings500", typeof SetSessionSettings500.Type>>;
@@ -5210,7 +5222,8 @@ readonly "setSessionSettings": {
   /**
 * Its seat plays with the box's Seat defaults again; the answer is what `GET` with the same
 * `as` answers, `configured: false`. Dropping settings a profile never had is the same answer.
-* `as` is required: the host's own settings are changed with `PUT`, never dropped.
+* `as` is required: the host's own settings are changed with `PUT`, never dropped. A paired
+* device that is that locked profile's person may drop them too.
 */
 readonly "clearSessionSettings": {
     <Config extends OperationConfig | undefined = undefined>(options: { readonly params: typeof ClearSessionSettingsParams.Encoded; readonly config: Config }): Effect.Effect<WithOptionalResponse<typeof ClearSessionSettings200.Type, Config>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"ClearSessionSettings400", typeof ClearSessionSettings400.Type> | PunktfunkError<"ClearSessionSettings401", typeof ClearSessionSettings401.Type> | PunktfunkError<"ClearSessionSettings403", typeof ClearSessionSettings403.Type> | PunktfunkError<"ClearSessionSettings404", typeof ClearSessionSettings404.Type> | PunktfunkError<"ClearSessionSettings409", typeof ClearSessionSettings409.Type> | PunktfunkError<"ClearSessionSettings500", typeof ClearSessionSettings500.Type>>;
