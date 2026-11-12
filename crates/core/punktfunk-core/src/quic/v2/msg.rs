@@ -1488,6 +1488,47 @@ mod tests {
         }
     }
 
+    /// `clients/shared/profile-unlock-vectors.json`, which every client replays.
+    #[test]
+    fn the_unlock_messages_match_the_shared_vectors() {
+        use sha2::Digest;
+        let raw = include_str!("../../../../../../clients/shared/profile-unlock-vectors.json");
+        let v: serde_json::Value = serde_json::from_str(raw).unwrap();
+        let bytes = |s: &serde_json::Value| -> Vec<u8> {
+            let s = s.as_str().unwrap();
+            (0..s.len())
+                .step_by(2)
+                .map(|i| u8::from_str_radix(&s[i..i + 2], 16).unwrap())
+                .collect()
+        };
+        let b32 = |s: &serde_json::Value| -> [u8; 32] { bytes(s).try_into().unwrap() };
+        let build = |form: &str, c: &[u8; 32], id: &str, d: &[u8; 32], b: &[u8; 32]| match form {
+            "seat" => unlock_signed_message(c, id, d, b).map(|m| m.to_vec()),
+            form => panic!("form {form}"),
+        };
+        for case in v["messages"].as_array().unwrap() {
+            let (name, form) = (&case["name"], case["form"].as_str().unwrap());
+            let id = case[form].as_str().unwrap();
+            let (c, d, b) = (
+                b32(&case["challenge"]),
+                b32(&case["device"]),
+                b32(&case["box"]),
+            );
+            let m = build(form, &c, id, &d, &b).unwrap();
+            if !case["message"].is_null() {
+                assert_eq!(m, bytes(&case["message"]), "{name}");
+            }
+            let digest = crate::fp::hex(&sha2::Sha256::digest(&m).into());
+            assert_eq!(digest, case["sha256"].as_str().unwrap(), "{name}");
+        }
+        for case in v["refused"].as_array().unwrap() {
+            let form = case["form"].as_str().unwrap();
+            let id = case["id"].as_str().unwrap();
+            let built = build(form, &[1; 32], id, &[2; 32], &[3; 32]);
+            assert!(built.is_err(), "{}", case["name"]);
+        }
+    }
+
     #[test]
     fn input_edges_carry_the_event_encoding() {
         let ev = crate::input::InputEvent {

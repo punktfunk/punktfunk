@@ -1,0 +1,19 @@
+{
+  "$comment": "What a device's unlock key signs to open a profile, with SHA-256 as the digest. Every implementation replays these: punktfunk-core msg.rs, pf-client-core unlock.rs, Swift, Kotlin. `seat` form: a profile on a person's own Linux account, `\"punktfunk-seat-unlock-v1\" ‖ challenge ‖ seat id (32 lowercase hex characters) ‖ device ‖ box`, 152 bytes. `challenge` is the 32 bytes `unlock-challenge` answered, `device` the SHA-256 of this device's certificate, `box` the SHA-256 of the host certificate this device pinned. `refused` lists ids no message is built for.",
+  "messages": [
+    {
+      "name": "seat form: the own-account contract vector",
+      "form": "seat",
+      "challenge": "0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20",
+      "seat": "0123456789abcdef0123456789abcdef",
+      "device": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "box": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "sha256": "31de46821f3058729b14c3585ad13159085ecb0d18c87194a34b1bddc8ddc31a"
+    }
+  ],
+  "refused": [
+    {"name": "seat id in capitals", "form": "seat", "id": "0123456789ABCDEF0123456789abcdef"},
+    {"name": "seat id one short", "form": "seat", "id": "0123456789abcdef0123456789abcde"},
+    {"name": "seat id not hex", "form": "seat", "id": "0123456789abcdef0123456789abcdeg"}
+  ]
+}
