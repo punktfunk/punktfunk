@@ -490,6 +490,40 @@ pub fn unlock_signed_message(
     Ok(m)
 }
 
+/// Length of [`profile_unlock_signed_message`].
+pub const PROFILE_UNLOCK_SIGNED_LEN: usize = 187;
+/// First bytes of [`profile_unlock_signed_message`].
+pub const PROFILE_UNLOCK_SIGNED_LABEL: &[u8; 27] = b"punktfunk-profile-unlock-v1";
+
+/// What a locked profile's unlock key signs, with SHA-256 as the digest:
+/// `"punktfunk-profile-unlock-v1" ‖ challenge ‖ profile id ‖ device fingerprint ‖ box
+/// fingerprint`. The id is its ASCII, zero bytes after it to [`PROFILE_ID_MAX`]; the rest is
+/// [`unlock_signed_message`]'s. `InvalidArg` for an id that is not 1 to 64 of `[A-Za-z0-9_-]`.
+pub fn profile_unlock_signed_message(
+    challenge: &[u8; 32],
+    profile_id: &str,
+    device_fp: &[u8; 32],
+    box_fp: &[u8; 32],
+) -> Result<[u8; PROFILE_UNLOCK_SIGNED_LEN]> {
+    let ok = |b: u8| b.is_ascii_alphanumeric() || b == b'-' || b == b'_';
+    if !(1..=PROFILE_ID_MAX).contains(&profile_id.len()) || !profile_id.bytes().all(ok) {
+        return Err(PunktfunkError::InvalidArg(
+            "profile id is not 1 to 64 of [A-Za-z0-9_-]",
+        ));
+    }
+    let mut m = [0u8; PROFILE_UNLOCK_SIGNED_LEN];
+    for (at, part) in [
+        (0, &PROFILE_UNLOCK_SIGNED_LABEL[..]),
+        (27, &challenge[..]),
+        (59, profile_id.as_bytes()),
+        (123, &device_fp[..]),
+        (155, &box_fp[..]),
+    ] {
+        m[at..at + part.len()].copy_from_slice(part);
+    }
+    Ok(m)
+}
+
 v2_message!(ClipControl = reg::MSG_CLIP_CONTROL, { 1 => enabled, 2 => flags });
 v2_message!(ClipState = reg::MSG_CLIP_STATE, { 1 => enabled, 2 => policy, 3 => reason });
 v2_message!(ClipFetch = reg::MSG_CLIP_FETCH, { 1 => seq, 2 => file_index, 3 => mime },
@@ -1504,6 +1538,7 @@ mod tests {
         let b32 = |s: &serde_json::Value| -> [u8; 32] { bytes(s).try_into().unwrap() };
         let build = |form: &str, c: &[u8; 32], id: &str, d: &[u8; 32], b: &[u8; 32]| match form {
             "seat" => unlock_signed_message(c, id, d, b).map(|m| m.to_vec()),
+            "profile" => profile_unlock_signed_message(c, id, d, b).map(|m| m.to_vec()),
             form => panic!("form {form}"),
         };
         for case in v["messages"].as_array().unwrap() {
