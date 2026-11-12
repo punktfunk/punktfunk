@@ -201,10 +201,11 @@ export const GameCard: FC<GameCardProps> = ({
 							) : (
 								<Badge
 									variant="secondary"
-									className="max-w-full truncate bg-background/90 px-1.5 text-[10px] backdrop-blur"
+									className="max-w-full min-w-0 bg-background/90 px-1.5 text-[10px] backdrop-blur"
 									title={stream}
 								>
-									{stream}
+									{/* A flex box draws no ellipsis; its text's own box does. */}
+									<span className="truncate">{stream}</span>
 								</Badge>
 							))}
 					</div>

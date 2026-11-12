@@ -100,10 +100,10 @@ export const GameRow: FC<GameCardProps> = ({
 							) : (
 								<Badge
 									variant="secondary"
-									className="max-w-full truncate"
+									className="max-w-full min-w-0"
 									title={stream}
 								>
-									{stream}
+									<span className="truncate">{stream}</span>
 								</Badge>
 							))}
 						<InstallBadge
