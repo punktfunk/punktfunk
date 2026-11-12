@@ -53,18 +53,21 @@ function sweep(now: number): void {
 	}
 }
 
-/** Call BEFORE checking the password. If the IP (or the global floor) is currently locked out,
- * returns the number of ms the caller should tell the client to wait; otherwise 0 (proceed). */
-export function throttleRetryAfterMs(ip: string, now = Date.now()): number {
+/** Call before the first await of a password check. If the IP (or the global floor) is locked
+ * out, returns the ms the caller should tell the client to wait. Otherwise counts this attempt as
+ * a failure and returns 0, so parallel guesses arm the lockout as sequential ones do. A match
+ * then clears the IP's count with `recordLoginSuccess`; the global floor keeps it. */
+export function takeAttempt(ip: string, now = Date.now()): number {
 	const e = byIp.get(ip);
 	if (e && now < e.lockedUntil) return e.lockedUntil - now;
 	globalFails = globalFails.filter((t) => now - t < GLOBAL_WINDOW_MS);
 	if (globalFails.length >= GLOBAL_FAIL_THRESHOLD) return GLOBAL_LOCK_MS;
+	recordLoginFailure(ip, now);
 	return 0;
 }
 
 /** Record a failed attempt and arm/extend this IP's lockout with exponential backoff. */
-export function recordLoginFailure(ip: string, now = Date.now()): void {
+function recordLoginFailure(ip: string, now: number): void {
 	sweep(now);
 	const e = byIp.get(ip) ?? { fails: 0, lockedUntil: 0, seen: now };
 	e.fails += 1;

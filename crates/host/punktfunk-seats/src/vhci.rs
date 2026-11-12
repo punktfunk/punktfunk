@@ -13,6 +13,7 @@ use rustix::event::{poll, PollFd, PollFlags};
 use std::os::fd::{AsRawFd, BorrowedFd, OwnedFd, RawFd};
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard};
+use std::time::{Duration, Instant};
 
 pub const MAP: &str = "/run/punktfunk/pads/vhci";
 /// Ports one seat may hold: four of a 16-port controller leaves the box and the others theirs.
@@ -92,10 +93,9 @@ pub fn attach(account: &str, sock: BorrowedFd<'_>, devid: u32, speed: u32) -> Re
     Ok(Some(port))
 }
 
-/// Holds `sock` until its connection ends, then takes it out of systemd's fd store. `recorded`
-/// is the number `attach` took; after a restart `sock` has another. The port's row stays for
-/// [`prune`], which drops it once the kernel has freed the port: until then a udev event from
-/// the device's teardown still reads it as the seat's.
+/// Holds `sock` until its connection ends, then takes it out of systemd's fd store and drops the
+/// port's row ([`release_row`]). `recorded` is the number `attach` took; after a restart `sock`
+/// has another.
 pub fn watch(port: u16, recorded: RawFd, sock: OwnedFd) {
     loop {
         let mut fds = [PollFd::new(&sock, PollFlags::RDHUP)];
@@ -107,22 +107,35 @@ pub fn watch(port: u16, recorded: RawFd, sock: OwnedFd) {
     }
     // Before `sock` closes: its number, once free, can name a new attach on this port.
     pf_inject::pad_broker::forget_usb(port, recorded);
+    release_row(Path::new(MAP), port, recorded, || {
+        usbip::vhci_port_holds(port, recorded)
+    });
+}
+
+/// How long the kernel may take to let go of an ended connection's socket.
+const RELEASE_WAIT: Duration = Duration::from_secs(5);
+
+/// Drops `port`'s row once `holds` says the kernel let go of socket `recorded`, so a later
+/// attach that reuses the number never reads as the seat's. Until then an event on the port
+/// still does. A row the port took for another socket stays; past [`RELEASE_WAIT`], [`prune`]'s.
+fn release_row(dir: &Path, port: u16, recorded: RawFd, holds: impl Fn() -> bool) {
+    let deadline = Instant::now() + RELEASE_WAIT;
+    while holds() {
+        if Instant::now() >= deadline {
+            tracing::debug!(port, "vhci port still held: row left for the next prune");
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    let _held = lock();
+    if read_row(dir, port).is_some_and(|(_, fd)| fd == recorded) && !holds() {
+        let _ = std::fs::remove_file(dir.join(port.to_string()));
+    }
 }
 
 /// The seat whose row names `port`.
 pub fn account_at(port: u16) -> Option<String> {
     read_row(Path::new(MAP), port).map(|(account, _)| account)
-}
-
-/// Detaches `port` while it still holds socket `recorded`: a device an older supervisor
-/// attached for a seat that served it itself. Its row goes at the next prune.
-pub fn drop_unserved(port: u16, recorded: RawFd) {
-    let _held = lock();
-    if usbip::vhci_port_holds(port, recorded)
-        && let Err(error) = usbip::vhci_detach(port)
-    {
-        tracing::warn!(error = %format!("{error:#}"), port, "seat USB device not detached");
-    }
 }
 
 /// udev's program for a device under a vhci hub; `false` when `devpath` is not one. Prints the
@@ -298,6 +311,7 @@ mod tests {
                 kind,
                 index: 0,
                 slot: 0,
+                seat: 0,
                 identity: Vec::new(),
             };
             let dev = served(&hello, Outputs::new(&relay).unwrap())
@@ -386,6 +400,26 @@ mod tests {
         write_row(&dir, 1, "pf-seat-1", 9).unwrap();
         write_row(&dir, 2, "pf-seat-2", 9).unwrap();
         assert_eq!(held_in(&dir, "pf-seat-1"), 1);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// An ended connection's row goes once the kernel lets go of its socket, so the next attach
+    /// on the port with the same number is nobody's. Another socket's row stays.
+    #[test]
+    fn an_ended_connection_drops_its_row() {
+        use std::cell::Cell;
+        let dir = std::env::temp_dir().join(format!("pf-vhci-release-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        write_row(&dir, 2, "pf-seat-1", 23).unwrap();
+        let polls = Cell::new(0);
+        release_row(&dir, 2, 23, || {
+            polls.set(polls.get() + 1);
+            polls.get() <= 2
+        });
+        assert_eq!(read_row(&dir, 2), None, "the kernel let go after two polls");
+        write_row(&dir, 2, "pf-seat-2", 24).unwrap();
+        release_row(&dir, 2, 23, || false);
+        assert_eq!(read_row(&dir, 2), Some(("pf-seat-2".into(), 24)));
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

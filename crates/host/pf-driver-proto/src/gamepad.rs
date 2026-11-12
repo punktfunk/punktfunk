@@ -645,15 +645,25 @@ pub fn stamp_report_clock(
 }
 
 /// Low octet of a PlayStation pad's MAC: byte 1 of its pairing reply (feature 0x09 / 0x12)
-/// and the last two hex digits of its USB serial. Each identity has its own base, so no
-/// index of one identity lands on another's octet.
+/// and the last two hex digits of its USB serial. Each identity owns the 32 octets from its
+/// base and `index` wraps inside them, so no index of one identity lands on another's octet.
 pub const fn ps_mac_low(device_type: u8, index: u8) -> u8 {
     let base: u8 = match device_type {
         DEVTYPE_DUALSHOCK4 => 0x01,
         DEVTYPE_DUALSENSE_EDGE => 0x94,
         _ => 0x74,
     };
-    base.wrapping_add(index)
+    base + index % 32
+}
+
+/// Marks a PlayStation pairing reply (feature 0x09 / 0x12) as seat `seat`'s pad: `seat` is
+/// XORed into the two MAC octets above [`ps_mac_low`]. `hid-playstation` keeps one MAC list
+/// for the whole box, so two seats' pads at one index must differ there. Seat 0, the box's own
+/// host, keeps the reply as it is.
+pub fn mark_ps_seat(reply: &mut [u8], seat: u16) {
+    let [low, high] = seat.to_le_bytes();
+    reply[2] ^= low;
+    reply[3] ^= high;
 }
 
 /// USB serial string of pad `index` presented as `device_type`. SDL and Steam dedup pads by
@@ -1119,5 +1129,58 @@ mod tests {
             dualsense::FEATURE_PAIRING
         );
         assert_eq!(dualshock4::pairing_reply(0), dualshock4::FEATURE_PAIRING);
+    }
+
+    /// No index of one PlayStation identity lands on another's MAC octet, however large.
+    #[test]
+    fn no_index_wraps_into_another_identity() {
+        let mut owner = std::collections::HashMap::new();
+        for devtype in [
+            DEVTYPE_DUALSENSE,
+            DEVTYPE_DUALSENSE_EDGE,
+            DEVTYPE_DUALSHOCK4,
+        ] {
+            for index in 0..=255u8 {
+                let low = ps_mac_low(devtype, index);
+                let first = *owner.entry(low).or_insert(devtype);
+                assert_eq!(first, devtype, "{low:#04x} at index {index}");
+            }
+        }
+    }
+
+    /// `hid-playstation` refuses a pad whose MAC another holds, box-wide: a seat's pads differ
+    /// from the box's own and from another seat's at every index. Seat 0 keeps today's bytes.
+    #[test]
+    fn a_seat_marks_its_pads_apart() {
+        let mac = |devtype: u8, index: u8, seat: u16| {
+            let mut r = if devtype == DEVTYPE_DUALSHOCK4 {
+                dualshock4::pairing_reply(index).to_vec()
+            } else {
+                dualsense::pairing_reply(devtype, index).to_vec()
+            };
+            mark_ps_seat(&mut r, seat);
+            r[1..7].to_vec()
+        };
+        let mut seen = std::collections::HashMap::new();
+        for seat in [0, 1, 0xBEEF] {
+            for devtype in [
+                DEVTYPE_DUALSENSE,
+                DEVTYPE_DUALSENSE_EDGE,
+                DEVTYPE_DUALSHOCK4,
+            ] {
+                for index in 0..16u8 {
+                    let key = (seat, devtype, index);
+                    if let Some(prev) = seen.insert(mac(devtype, index, seat), key) {
+                        panic!("{prev:?} and {key:?} share a MAC");
+                    }
+                }
+            }
+        }
+        let mut plain = dualsense::pairing_reply(DEVTYPE_DUALSENSE, 0);
+        mark_ps_seat(&mut plain, 0);
+        assert_eq!(plain, dualsense::FEATURE_PAIRING);
+        let mut plain = dualshock4::pairing_reply(0);
+        mark_ps_seat(&mut plain, 0);
+        assert_eq!(plain, dualshock4::FEATURE_PAIRING);
     }
 }

@@ -266,6 +266,8 @@ impl LedgerStore {
         Ok(ledger)
     }
 
+    /// A save that fails takes its temporary with it: [`Self::load`] would promote it as the
+    /// newer generation, though the caller was told the change failed.
     pub fn save(&self, ledger: &Ledger) -> Result<(), StoreError> {
         ledger.validate()?;
         let mut bytes = serde_json::to_vec_pretty(ledger)?;
@@ -275,7 +277,10 @@ impl LedgerStore {
                 "serialized ledger exceeds {MAX_LEDGER_BYTES} bytes"
             )));
         }
-        self.root.write_atomic(LEDGER_FILE, &bytes)?;
+        if let Err(error) = self.root.write_atomic(LEDGER_FILE, &bytes) {
+            let _ = self.root.cleanup_temporary(LEDGER_FILE);
+            return Err(error.into());
+        }
         Ok(())
     }
 }

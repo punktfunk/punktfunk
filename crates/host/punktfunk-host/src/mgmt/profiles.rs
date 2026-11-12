@@ -9,6 +9,7 @@
 //! starts it.
 
 use super::auth::{AuthLane, PairedDevice};
+use super::owner::{LiveSeats, Seats};
 use super::shared::*;
 use crate::profiles::take_turns::{self, LocalAccount};
 use crate::profiles::{
@@ -665,19 +666,16 @@ fn seat_account(n: usize) -> String {
     }
 }
 
-/// A seat of its own for a new profile, on an account made for it.
-fn new_seat(name: &str) -> Result<String, Refusal> {
-    if !crate::seats::enabled() {
-        return Err(seats_off());
-    }
-    let taken: Vec<String> = crate::seats::list()
-        .map_err(seat_error)?
-        .into_iter()
-        .map(|s| s.account)
-        .collect();
+/// The seat supervisor: the door's, or this host's own.
+fn seats_of(st: &MgmtState) -> Arc<dyn Seats> {
+    st.door.clone().unwrap_or_else(|| Arc::new(LiveSeats))
+}
+
+/// A seat of its own for a new profile, on an account made for it that no row in `ledger` holds.
+fn new_seat(sup: &dyn Seats, ledger: &[pf_seats::Seat], name: &str) -> Result<String, Refusal> {
     let account = (1..=4)
         .map(seat_account)
-        .find(|a| !taken.contains(a))
+        .find(|a| !ledger.iter().any(|s| s.account == *a))
         .ok_or_else(|| {
             (
                 StatusCode::UNPROCESSABLE_ENTITY,
@@ -687,7 +685,7 @@ fn new_seat(name: &str) -> Result<String, Refusal> {
                 ),
             )
         })?;
-    created(crate::seats::call(Command::Create(pf_seats::CreateSeat {
+    created(sup.ask(Command::Create(pf_seats::CreateSeat {
         name: name.trim().to_string(),
         account,
         autostart: false,
@@ -695,23 +693,22 @@ fn new_seat(name: &str) -> Result<String, Refusal> {
 }
 
 /// A seat for a new profile on `account`, an existing account no other profile holds. On
-/// Windows a local account (`bound`: the take-turns ones) which it signs in to with `password`;
-/// on Linux a person's login, whose `password` the supervisor checks once and forgets.
+/// Windows a local account no row in `ledger` and no take-turns profile (`bound`) holds, which
+/// it signs in to with `password`; on Linux a person's login, whose `password` the supervisor
+/// checks once and forgets.
 fn adopt_seat(
+    sup: &dyn Seats,
+    ledger: &[pf_seats::Seat],
     name: &str,
     account: &str,
     password: Secret,
     bound: &[String],
 ) -> Result<String, Refusal> {
-    if !crate::seats::enabled() {
-        return Err(seats_off());
-    }
     if !cfg!(windows) {
-        return adopt_user(name, account, password);
+        return adopt_user(sup, name, account, password);
     }
-    let ledger = crate::seats::list().map_err(seat_error)?;
-    let account = bindable_account(account, &ledger, bound)?;
-    created(crate::seats::call(Command::Adopt {
+    let account = bindable_account(account, ledger, bound)?;
+    created(sup.ask(Command::Adopt {
         seat: pf_seats::CreateSeat {
             name: name.trim().to_string(),
             account: account.name,
@@ -725,7 +722,12 @@ fn adopt_seat(
 /// A seat for a new profile on the Linux login `account`. The supervisor reads its uid and
 /// refuses the owner, a system account and one a row holds; the host only keeps a name the
 /// supervisor can pass to the system.
-fn adopt_user(name: &str, account: &str, password: Secret) -> Result<String, Refusal> {
+fn adopt_user(
+    sup: &dyn Seats,
+    name: &str,
+    account: &str,
+    password: Secret,
+) -> Result<String, Refusal> {
     let account = account.trim();
     if !pf_seats::model::valid_owner_account(account) {
         return Err((
@@ -736,7 +738,7 @@ fn adopt_user(name: &str, account: &str, password: Secret) -> Result<String, Ref
             ),
         ));
     }
-    created(crate::seats::call(Command::AdoptUser {
+    created(sup.ask(Command::AdoptUser {
         seat: pf_seats::CreateSeat {
             name: name.trim().to_string(),
             account: account.to_string(),
@@ -825,13 +827,13 @@ fn reseal_refusal() -> Refusal {
 }
 
 /// Stops a seat and removes it: an account made for it goes too, an existing one is released.
-/// A seat already gone is no error.
-fn drop_seat(id: &str) -> Result<(), Refusal> {
+/// A seat already gone is no error. Blocking.
+fn drop_seat(sup: &dyn Seats, id: &str) -> Result<(), Refusal> {
     let Ok(id) = pf_seats::SeatId::parse(id) else {
         return Ok(());
     };
-    let _ = crate::seats::call(Command::Stop { id: id.clone() });
-    let removed = crate::seats::call(Command::Delete { id });
+    let _ = sup.ask(Command::Stop { id: id.clone() });
+    let removed = sup.ask(Command::Delete { id });
     crate::seats::invalidate();
     match removed {
         Ok(_) => Ok(()),
@@ -1205,63 +1207,91 @@ pub(crate) async fn create_profile(
     State(st): State<Arc<MgmtState>>,
     ApiJson(input): ApiJson<ProfileCreate>,
 ) -> Response {
-    let Some(profiles) = st.app.profiles.get() else {
+    let Some(profiles) = st.app.profiles.get().cloned() else {
         return no_profiles();
     };
     // A take-turns profile binds to an existing Windows account; no seat is made.
     if let Some(account) = input.windows_account.clone() {
-        return create_take_turns(&st, profiles, input, account).await;
+        return create_take_turns(&st, &profiles, input, account).await;
     }
     if let Some(refusal) = adopt_refusal(&input) {
         return refused(refusal);
     }
-    // A Linux seat is the door's; elsewhere `new_seat` asks whether seats are on.
-    if input.seat && cfg!(target_os = "linux") && !pf_paths::seat::role().is_door() {
+    // A Linux seat is the door's; elsewhere the ledger says whether seats are on.
+    if input.seat && cfg!(target_os = "linux") && st.door.is_none() {
         return api_error_coded(
             StatusCode::CONFLICT,
             "profile_seat_needs_door",
             "Turn on Reachable without logging in before adding a profile with a desktop of its own.",
         );
     }
-    // Vetted before the seat's account exists: a refused profile must leave none behind.
-    let seat = if input.seat {
+    let made = if input.seat {
+        // Vetted before the seat's account exists: a refused profile must leave none behind.
         let name = match profiles.vet_create(&input) {
             Ok(name) => name,
             Err(e) => return edit_error(e),
         };
-        let adopt = input.seat_account.clone().zip(input.seat_password.clone());
-        let bound = take_turns_bound(profiles);
-        let made = blocking("seat_supervisor", move || match adopt {
-            Some((account, password)) => adopt_seat(&name, &account, password, &bound),
-            None => new_seat(&name),
+        let (sup, store) = (seats_of(&st), profiles.clone());
+        let bound = take_turns_bound(&profiles);
+        let made = blocking("seat_supervisor", move || {
+            seat_profile(&*sup, &store, input, &name, &bound)
         });
         match made.await {
-            Ok(Ok(id)) => Some(id),
-            Ok(Err(refusal)) => return refused(refusal),
+            Ok(made) => made.map_err(|resp| *resp),
             Err(resp) => return resp,
         }
     } else {
-        None
+        profiles
+            .create(input, OsAccount::Operator)
+            .map_err(edit_error)
     };
-    let os_account = match &seat {
-        Some(row) => OsAccount::Seat {
-            seat: Some(row.clone()),
-        },
-        None => OsAccount::Operator,
-    };
-    match profiles.create(input, os_account) {
+    match made {
         Ok(p) => {
             let seats = seats_now(&st).await;
-            (StatusCode::CREATED, Json(admin(&st, profiles, &p, &seats))).into_response()
+            (StatusCode::CREATED, Json(admin(&st, &profiles, &p, &seats))).into_response()
         }
-        Err(e) => {
-            // No profile names the seat just made: take it back with its account.
-            if let Some(id) = seat {
-                let _ = tokio::task::spawn_blocking(move || drop_seat(&id)).await;
-            }
-            edit_error(e)
-        }
+        Err(resp) => resp,
     }
+}
+
+/// Makes the seat a new profile plays on, then the profile; a profile the store refuses takes
+/// the seat back. Blocking, and one task: a caller that stops waiting still leaves the two
+/// together or neither.
+fn seat_profile(
+    sup: &dyn Seats,
+    profiles: &Profiles,
+    input: ProfileCreate,
+    name: &str,
+    bound: &[String],
+) -> Result<Profile, Box<Response>> {
+    let ledger = sup.ledger();
+    if !ledger.on {
+        return Err(refused(seats_off()).into());
+    }
+    // A row keeps the name it was made with through a rename, and the ledger takes no second.
+    if ledger
+        .seats
+        .iter()
+        .any(|s| !s.owner && crate::profiles::same_name(&s.name, name))
+    {
+        return Err(edit_error(EditError::NameTaken).into());
+    }
+    let seat = match input.seat_account.clone().zip(input.seat_password.clone()) {
+        Some((account, password)) => {
+            adopt_seat(sup, &ledger.seats, name, &account, password, bound)
+        }
+        None => new_seat(sup, &ledger.seats, name),
+    }
+    .map_err(refused)?;
+    let os_account = OsAccount::Seat {
+        seat: Some(seat.clone()),
+    };
+    profiles.create(input, os_account).map_err(|e| {
+        if let Err((_, why)) = drop_seat(sup, &seat) {
+            tracing::error!(%seat, error = %why.error, "seat of a refused profile not removed");
+        }
+        edit_error(e).into()
+    })
 }
 
 /// Why a seat can't sign in to the existing account the input names, if it names one.
@@ -1437,39 +1467,74 @@ pub(crate) async fn delete_profile(
     Path(id): Path<String>,
     Query(q): Query<DeleteQuery>,
 ) -> Response {
-    let Some(profiles) = st.app.profiles.get() else {
+    let Some(profiles) = st.app.profiles.get().cloned() else {
         return no_profiles();
     };
-    if let Some(OsAccount::Seat {
+    let Some(OsAccount::Seat {
         seat: Some(seat), ..
     }) = profiles.get(&id).map(|p| p.os_account)
-    {
-        if !q.erase {
-            let adopted = seats_now(&st)
-                .await
-                .seat(&seat)
-                .is_some_and(|(row, _)| row.adopted());
-            return api_error(
-                StatusCode::CONFLICT,
-                if adopted {
-                    "Removing this profile releases its account; the account and its files stay. Confirm with erase."
-                } else if cfg!(windows) {
-                    "Removing this profile also removes its Windows account. Confirm with erase."
-                } else {
-                    "Removing this profile also removes its user account and files. Confirm with erase."
-                },
-            );
-        }
-        match blocking("seat_supervisor", move || drop_seat(&seat)).await {
-            Ok(Ok(())) => {}
-            Ok(Err(refusal)) => return refused(refusal),
-            Err(resp) => return resp,
-        }
+    else {
+        // `erase` can remove a Steam home of hundreds of GB.
+        return match blocking("profile_store", move || profiles.delete(&id, q.erase)).await {
+            Ok(Ok(_)) => StatusCode::NO_CONTENT.into_response(),
+            Ok(Err(e)) => edit_error(e),
+            Err(resp) => resp,
+        };
+    };
+    if !q.erase {
+        let adopted = seats_now(&st)
+            .await
+            .seat(&seat)
+            .is_some_and(|(row, _)| row.adopted());
+        return api_error(
+            StatusCode::CONFLICT,
+            if adopted {
+                "Removing this profile releases its account; the account and its files stay. Confirm with erase."
+            } else if cfg!(windows) {
+                "Removing this profile also removes its Windows account. Confirm with erase."
+            } else {
+                "Removing this profile also removes its user account and files. Confirm with erase."
+            },
+        );
     }
-    match profiles.delete(&id, q.erase) {
-        Ok(_) => StatusCode::NO_CONTENT.into_response(),
-        Err(e) => edit_error(e),
+    let sup = seats_of(&st);
+    let removed = blocking("seat_supervisor", move || {
+        remove_seat_profile(&*sup, &profiles, &id, &seat)
+    });
+    match removed.await {
+        Ok(resp) | Err(resp) => resp,
     }
+}
+
+/// How long a seat's sessions get to close as removed: its host reads the box's profiles once a
+/// second, on Linux from a copy the supervisor refreshes every 2 s.
+const CLOSE_GRACE: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// Takes `id` out of the store before its seat stops, so the seat's host closes each session as
+/// removed. A seat that won't go puts the profile back for another try; its home and picture go
+/// only once the seat has. Blocking.
+fn remove_seat_profile(sup: &dyn Seats, profiles: &Profiles, id: &str, seat: &str) -> Response {
+    let default = profiles.default_profile_id().as_deref() == Some(id);
+    let gone = match profiles.delete(id, false) {
+        Ok(gone) => gone,
+        Err(e) => return edit_error(e),
+    };
+    let by = std::time::Instant::now() + CLOSE_GRACE;
+    while std::time::Instant::now() < by {
+        crate::seats::invalidate();
+        if sup.snapshot().occupants.get(seat).is_none_or(Vec::is_empty) {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(500));
+    }
+    if let Err(refusal) = drop_seat(sup, seat) {
+        if let Err(e) = profiles.restore(gone, default) {
+            tracing::error!(%seat, error = %e, "seat left with no profile");
+        }
+        return refused(refusal);
+    }
+    profiles.erase(id);
+    StatusCode::NO_CONTENT.into_response()
 }
 
 /// Set a profile's picture
@@ -2452,10 +2517,13 @@ mod tests {
         } else {
             assert_eq!(refusal.0, StatusCode::CONFLICT);
         }
+        let sup =
+            crate::native::unlock::fake::Fake::new(Vec::new(), |_| Ok(CommandResult::SignedOut));
         for bad in ["", "Jdoe", "a b", "../root", "-r", "j\ndoe", "corp\\jdoe"] {
-            let refusal = adopt_user("Kid", bad, Secret::new("pw".into())).unwrap_err();
+            let refusal = adopt_user(&sup, "Kid", bad, Secret::new("pw".into())).unwrap_err();
             assert_eq!(refusal.0, StatusCode::BAD_REQUEST, "{bad:?}");
         }
+        assert!(sup.asked().is_empty(), "{:?}", sup.asked());
     }
 
     #[test]

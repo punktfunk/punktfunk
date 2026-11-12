@@ -23,7 +23,7 @@ pub const DS_FEATURE_PAIRING: &[u8] = &pf_driver_proto::dualsense::FEATURE_PAIRI
 /// [`parse_ds_output`] accepts alongside flag0.
 pub const DS_FEATURE_FIRMWARE: &[u8] = &pf_driver_proto::dualsense::FEATURE_FIRMWARE;
 pub use pf_driver_proto::dualsense::pairing_reply as ds_pairing_reply;
-pub use pf_driver_proto::gamepad::{DEVTYPE_DUALSENSE, DEVTYPE_DUALSENSE_EDGE};
+pub use pf_driver_proto::gamepad::{mark_ps_seat, DEVTYPE_DUALSENSE, DEVTYPE_DUALSENSE_EDGE};
 
 /// USB DualSense HID report descriptor (273 bytes). `hid-playstation` / `hidclass` bind on this.
 pub const DUALSENSE_RDESC: &[u8] = &pf_driver_proto::dualsense::RDESC;

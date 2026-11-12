@@ -398,6 +398,9 @@ pub(crate) async fn patch_host_settings(
         .0
         .into_iter()
         .partition(|(id, _)| !door || door_row(id));
+    if let Some(refused) = refused(&patch) {
+        return refused;
+    }
     if !owner.is_empty() {
         let body = Value::Object(owner.clone()).to_string().into_bytes();
         match st
@@ -414,19 +417,31 @@ pub(crate) async fn patch_host_settings(
     save(&st, patch).await
 }
 
-/// Store `patch` in this host's own file, then answer with the state.
+/// Why this host won't store `patch`: a row that doesn't apply here, or a value its row doesn't
+/// take. On a door it runs before the owner's host stores any row of the same patch.
+fn refused(patch: &serde_json::Map<String, Value>) -> Option<Response> {
+    let find = pf_host_config::registry::find;
+    if let Some(id) = patch
+        .keys()
+        .find(|id| find(id).is_some_and(|s| !s.available()))
+    {
+        return Some(api_error(
+            StatusCode::BAD_REQUEST,
+            &format!("{id} does not apply on this host"),
+        ));
+    }
+    let (id, reason) = patch.iter().find_map(|(id, v)| {
+        let reason = find(id)?.validate(v).err().filter(|_| !v.is_null())?;
+        Some((id.clone(), reason))
+    })?;
+    let invalid = pf_host_config::SaveError::Invalid { id, reason };
+    Some(api_error(StatusCode::BAD_REQUEST, &invalid.to_string()))
+}
+
+/// Store `patch`, which [`refused`] passed, in this host's own file, then answer with the state.
 async fn save(st: &MgmtState, patch: serde_json::Map<String, Value>) -> Response {
     if patch.is_empty() {
         return answer(st).await;
-    }
-    if let Some(id) = patch
-        .keys()
-        .find(|id| pf_host_config::registry::find(id).is_some_and(|s| !s.available()))
-    {
-        return api_error(
-            StatusCode::BAD_REQUEST,
-            &format!("{id} does not apply on this host"),
-        );
     }
     match pf_host_config::save(&patch) {
         Ok(()) => {}

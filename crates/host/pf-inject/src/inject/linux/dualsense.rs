@@ -19,6 +19,7 @@ use crate::pad_broker::PadKind;
 use crate::uhid_abi::{Identity, UhidDevice, UhidEvent};
 use crate::uhid_manager::{PadFeedback, PadProto, UhidManager};
 use anyhow::Result;
+use pf_driver_proto::gamepad::mark_ps_seat;
 use punktfunk_core::quic::RichInput;
 
 /// CREATE2 identity: DualSense vs Edge. Same codec; Edge is PID, descriptor, and `buttons[2]`.
@@ -109,8 +110,10 @@ impl DualSensePad {
         self.dev.poll(|dev, ev| match ev {
             UhidEvent::Output(data) => parse_ds_output(pad, data, &mut fb),
             UhidEvent::GetReport { id, rnum } => {
-                // Per-pad MAC becomes HID uniq; SDL/Steam dedup on it (`ds_pairing_reply`).
-                let pairing = ds_pairing_reply(device_type, pad);
+                // The MAC becomes HID uniq: SDL and Steam dedup on it, and `hid-playstation`
+                // refuses a second pad with one it holds, across seats too.
+                let mut pairing = ds_pairing_reply(device_type, pad);
+                mark_ps_seat(&mut pairing, crate::pad_broker::own_ps_seat());
                 let data: Option<&[u8]> = match rnum {
                     0x05 => Some(DS_FEATURE_CALIBRATION),
                     0x09 => Some(&pairing),

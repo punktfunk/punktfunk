@@ -23,12 +23,13 @@ Environment=PUNKTFUNK_UI_TLS_KEY=/var/lib/punktfunk/key.pem
 Environment=PUNKTFUNK_UI_SECURE=1
 # The door writes these on its first start; the console can't serve without them, so wait.
 ExecStartPre=/bin/sh -c 'until [ -s /var/lib/punktfunk/mgmt-token ] && [ -s /var/lib/punktfunk/native-key.pem ]; do sleep 1; done'
-# The owner's console bind, which door-helper copies with the ports. First, so the files below
-# win any key they share. Without it the console answers on every interface.
+# The owner's console bind, which door-helper copies with the ports. Without it the console
+# answers on every interface.
 EnvironmentFile=-/var/lib/punktfunk-seats/host.env
-EnvironmentFile=-/var/lib/punktfunk/mgmt-token
-EnvironmentFile=-/var/lib/punktfunk/web-password
-EnvironmentFile=-/var/lib/punktfunk/mgmt-endpoint
+# The door's own files, which the console reads itself and which win any key they share with the
+# file above. Never EnvironmentFile=: systemd reads that as root and follows a link, and the
+# door's account owns this folder.
+Environment=PUNKTFUNK_ENV_FILES=/var/lib/punktfunk/mgmt-token:/var/lib/punktfunk/web-password:/var/lib/punktfunk/mgmt-endpoint
 ExecStart=/usr/bin/punktfunk-web-server
 Restart=always
 RestartSec=2

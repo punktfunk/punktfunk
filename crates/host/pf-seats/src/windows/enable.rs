@@ -2,10 +2,10 @@
 //! Desktop listener and its firewall scope, the seat listener, and the pinned RDP certificate.
 //!
 //! [`checks`] only reads. [`turn_on`] creates the Seats key and records there what it changed
-//! (`ListenerWasOff`, `AllowRdpFromNetwork`, `RdpRulesOpened`, `RdpRuleScopes`); [`turn_off`]
-//! undoes exactly that and deletes the key last, so a failed restore can be retried. A refusal
-//! carries one plain sentence for the operator; its cause goes to the log. The seat display
-//! driver stays in the driver store when seats go off.
+//! (`ListenerWasOff`, `AllowRdpFromNetwork`, `RdpRulesOpened`, `RdpRuleScopes`,
+//! `RdpRulesNarrowed`); [`turn_off`] undoes exactly that and deletes the key last, so a failed
+//! restore can be retried. A refusal carries one plain sentence for the operator; its cause
+//! goes to the log. The seat display driver stays in the driver store when seats go off.
 
 use super::util::{backend_error, WinResult};
 use super::{keeper, seats_enabled, server_edition, session_wrapper, ENABLING, SEATS_KEY};
@@ -33,6 +33,8 @@ const RDP_RULES_OPENED: &str = "RdpRulesOpened";
 /// Each `Remote Desktop` rule's `RemoteAddress` before [`turn_on`] narrowed it, `name|address`
 /// per line, for [`turn_off`] to write back.
 const RDP_RULE_SCOPES: &str = "RdpRuleScopes";
+/// Set before [`turn_on`] narrows the rules, deleted once [`restore_scopes`] put them back.
+const RDP_RULES_NARROWED: &str = "RdpRulesNarrowed";
 /// The `Remote Desktop` firewall group by the resource id every Windows language shares.
 const RDP_RULE_GROUP: &str = "@FirewallAPI.dll,-28752";
 /// `Remote Desktop Services`, the Session Host role's group, and its two rules on the
@@ -237,16 +239,15 @@ pub(super) fn turn_on(host_path: &Path, allow_rdp_from_network: bool) -> WinResu
 }
 
 /// Restore the listener and the firewall scope `turn_on` changed, then remove the Seats key.
-/// Nothing to do without the key.
+/// Nothing to do without the key. The listener goes off before the firewall widens. Each
+/// restore forgets its value as it finishes, so the key is opened for writing.
 pub(super) fn turn_off() -> WinResult<()> {
     let hklm = RegKey::predef(HKEY_LOCAL_MACHINE);
-    let Ok(seats) = hklm.open_subkey_with_flags(SEATS_KEY, KEY_READ | KEY_WOW64_64KEY) else {
+    let Ok(seats) =
+        hklm.open_subkey_with_flags(SEATS_KEY, KEY_READ | KEY_SET_VALUE | KEY_WOW64_64KEY)
+    else {
         return Ok(());
     };
-    close_rdp_rules(&seats)?;
-    if narrowed(&seats) {
-        restore_scopes(&seats)?;
-    }
     if seats.get_value::<u32, _>(LISTENER_WAS_OFF).ok() == Some(1) {
         deny_listener(true).map_err(|cause| {
             refuse(
@@ -257,14 +258,16 @@ pub(super) fn turn_off() -> WinResult<()> {
             .said("rdp_listener_off")
         })?;
     }
-    super::seat_listener::remove();
-    // The box's Steam shortcuts go back first: they name the Seats key's record of them.
-    match crate::persistence::SecretRoot::open(crate::persistence::default_root())
-        .and_then(|root| root.open_child_dir("temp"))
-    {
-        Ok(temp) => super::steam::unwrap_box_shortcuts(temp.path()),
-        Err(error) => tracing::warn!(%error, "box steam shortcuts not restored"),
+    close_rdp_rules(&seats)?;
+    if narrowed(&seats) {
+        restore_scopes(&seats)?;
     }
+    super::seat_listener::remove();
+    // The Seats key holds the only record of the box's Steam shortcuts: it stays until they
+    // are back.
+    super::steam::unwrap_box_shortcuts().map_err(|cause| {
+        refuse("steam_shortcuts", "Couldn't turn seats off.", cause).said("seats_key_off")
+    })?;
     super::steam::restore_registration();
     drop(seats);
     hklm.delete_subkey_with_flags(SEATS_KEY, KEY_WOW64_64KEY)
@@ -461,19 +464,22 @@ fn apply(host_path: &Path, allow_rdp_from_network: bool) -> WinResult<()> {
         })?;
     }
     install_driver(&dir, true)?;
-    allow_listener(&seats)?;
     // A choice made earlier narrowed the rules; allowing the network now puts them back.
     let was_narrowed = narrowed(&seats);
     record_scopes(&seats)?;
     if !allow_rdp_from_network {
-        firewall_scope(LOOPBACK).map_err(|cause| {
+        let limit = |cause: String| {
             refuse(
                 "rdp_firewall",
                 "Couldn't limit Remote Desktop to this machine.",
                 cause,
             )
             .said("rdp_firewall_limit")
-        })?;
+        };
+        seats
+            .set_value(RDP_RULES_NARROWED, &1_u32)
+            .map_err(|cause| limit(cause.to_string()))?;
+        firewall_scope(LOOPBACK).map_err(limit)?;
     } else if was_narrowed {
         restore_scopes(&seats)?;
     }
@@ -487,6 +493,8 @@ fn apply(host_path: &Path, allow_rdp_from_network: bool) -> WinResult<()> {
         .map_err(|cause| {
             refuse("seats_key", "Couldn't turn seats on.", cause).said("seats_key_on")
         })?;
+    // Listen last: the firewall has its final scope by now.
+    allow_listener(&seats)?;
     if let Err(cause) = super::seat_listener::ensure(host_path) {
         tracing::warn!(%cause, "seat listener not ready — seats start without pad audio");
     }
@@ -705,18 +713,20 @@ fn record_scopes(seats: &RegKey) -> WinResult<()> {
         .map_err(|cause| fail(cause.to_string()))
 }
 
-/// The rules may be narrowed to this PC: the operator chose so, or a turn-on was cut off after
-/// noting their scopes and before noting the choice. Restoring a rule that was not narrowed
-/// writes back the scope it has.
+/// The rules may be narrowed to this PC: a turn-on noted that it narrows them, the operator
+/// chose so, or a turn-on was cut off after noting their scopes and before noting the choice.
+/// A key from a build without the note falls back on the last two. Restoring a rule that was
+/// not narrowed writes back the scope it has.
 fn narrowed(seats: &RegKey) -> bool {
     narrowed_by(
+        seats.get_value::<u32, _>(RDP_RULES_NARROWED).is_ok(),
         seats.get_value::<u32, _>(RDP_FROM_NETWORK).ok(),
         seats.get_value::<String, _>(RDP_RULE_SCOPES).is_ok(),
     )
 }
 
-fn narrowed_by(choice: Option<u32>, scopes_noted: bool) -> bool {
-    choice.map_or(scopes_noted, |choice| choice == 0)
+fn narrowed_by(noted: bool, choice: Option<u32>, scopes_noted: bool) -> bool {
+    noted || choice.map_or(scopes_noted, |choice| choice == 0)
 }
 
 /// The `(rule, addresses)` pairs [`record_scopes`] wrote. A line with no address is dropped.
@@ -728,24 +738,28 @@ fn parse_scopes(text: &str) -> Vec<(String, String)> {
         .collect()
 }
 
-/// Set each recorded rule back to its scope. A rule the record lacks, one Windows added since,
-/// opens to `Any` as Windows creates it; with no record, which an older key lacks, every rule does.
+/// Set each recorded rule back to its scope, then drop the note that they are narrowed. A rule
+/// the record lacks, one Windows added since, opens to `Any` as Windows creates it; with no
+/// record, which an older key lacks, every rule does.
 fn restore_scopes(seats: &RegKey) -> WinResult<()> {
+    let fail = |cause: String| {
+        refuse(
+            "rdp_firewall",
+            "Couldn't restore Remote Desktop's firewall rules.",
+            cause,
+        )
+        .said("rdp_firewall_restore")
+    };
     let kept = parse_scopes(
         &seats
             .get_value::<String, _>(RDP_RULE_SCOPES)
             .unwrap_or_default(),
     );
-    powershell_lines(&restore_script(&kept), QUERY_LIMIT)
-        .map(drop)
-        .map_err(|cause| {
-            refuse(
-                "rdp_firewall",
-                "Couldn't restore Remote Desktop's firewall rules.",
-                cause,
-            )
-            .said("rdp_firewall_restore")
-        })
+    powershell_lines(&restore_script(&kept), QUERY_LIMIT).map_err(fail)?;
+    match seats.delete_value(RDP_RULES_NARROWED) {
+        Err(cause) if cause.kind() != std::io::ErrorKind::NotFound => Err(fail(cause.to_string())),
+        _ => Ok(()),
+    }
 }
 
 fn restore_script(kept: &[(String, String)]) -> String {
@@ -1162,11 +1176,15 @@ mod tests {
 
     #[test]
     fn a_cut_off_turn_on_that_noted_the_scopes_may_have_narrowed_them() {
-        assert!(narrowed_by(Some(0), false));
-        assert!(!narrowed_by(Some(1), true));
-        assert!(narrowed_by(None, true));
+        // A switch to this PC only that failed after narrowing still holds the old choice.
+        assert!(narrowed_by(true, Some(1), true));
+        assert!(narrowed_by(true, None, true));
+        // Without the note, as an older build leaves the key, the choice decides.
+        assert!(narrowed_by(false, Some(0), false));
+        assert!(!narrowed_by(false, Some(1), true));
+        assert!(narrowed_by(false, None, true));
         // An older key has no record and always has the choice; a bare key has neither.
-        assert!(!narrowed_by(None, false));
+        assert!(!narrowed_by(false, None, false));
     }
 
     #[test]

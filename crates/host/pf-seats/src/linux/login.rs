@@ -102,24 +102,35 @@ pub fn run(account: &str) -> u8 {
     run_in(account, SERVICE, socket, &program)
 }
 
+/// Turns core dumps off in this process before it holds a password, and answers the core limit
+/// it replaced. The soft limit is the one a dump obeys; the hard one stays, so a child gets the
+/// old one back without a capability.
+#[cfg(target_os = "linux")]
+pub(super) fn no_core_dumps() -> rustix::io::Result<rustix::process::Rlimit> {
+    use rustix::process::{getrlimit, setrlimit, DumpableBehavior, Resource, Rlimit};
+    let core = getrlimit(Resource::Core);
+    rustix::process::set_dumpable_behavior(DumpableBehavior::NotDumpable)?;
+    setrlimit(
+        Resource::Core,
+        Rlimit {
+            current: Some(0),
+            ..core
+        },
+    )?;
+    Ok(core)
+}
+
 /// [`run`] on the PAM service `service`, asking `socket`, starting `program`.
 #[cfg(target_os = "linux")]
 fn run_in(account: &str, service: &str, socket: &Path, program: &Path) -> u8 {
-    use rustix::process::{getrlimit, setrlimit, Resource, Rlimit};
-    let core = getrlimit(Resource::Core);
-    // The soft limit is the one a dump obeys; the hard one stays, so the session gets its own
-    // back without a capability.
-    let none = Rlimit {
-        current: Some(0),
-        maximum: core.maximum,
+    use rustix::process::{getrlimit, Resource, Rlimit};
+    let core = match no_core_dumps() {
+        Ok(core) => core,
+        Err(error) => {
+            tracing::error!(%error, "core dumps not turned off");
+            return NO_SESSION;
+        }
     };
-    let hardened =
-        rustix::process::set_dumpable_behavior(rustix::process::DumpableBehavior::NotDumpable)
-            .and_then(|()| setrlimit(Resource::Core, none));
-    if let Err(error) = hardened {
-        tracing::error!(%error, "core dumps not turned off");
-        return NO_SESSION;
-    }
     // Before any PAM step: a session with nothing to run in it would fail the start.
     use std::os::unix::fs::PermissionsExt as _;
     let runnable = std::fs::metadata(program)
@@ -176,6 +187,10 @@ fn run_in(account: &str, service: &str, socket: &Path, program: &Path) -> u8 {
         tracing::error!(account, %cause, "PAM opened no session");
         return NO_SESSION;
     }
+    let none = Rlimit {
+        current: Some(0),
+        ..core
+    };
     let core = (getrlimit(Resource::Core) == none).then_some(core);
     let mut child = match person.spawn(program, login.env(), core) {
         Ok(child) => child,

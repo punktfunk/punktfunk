@@ -13,12 +13,13 @@ use super::shared::{
 use super::{accounts, LinuxBackend};
 use crate::ipc::{ApiError, Command, CommandResult, ErrorCode, Request, Response};
 use crate::service::SeatService;
+use std::io::{Read, Write};
 use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 /// Where the daemon listens and the box host connects.
 pub const SOCKET_PATH: &str = "/run/punktfunk/seats.sock";
@@ -29,7 +30,7 @@ pub const DOOR_GROUP: &str = "punktfunk-door";
 
 /// Requests served at once. A connection past it is closed unanswered.
 const MAX_CONNECTIONS: usize = 8;
-/// A client sends its frame at once; one that doesn't is not a client.
+/// A client sends its whole frame at once; one that doesn't within this is not a client.
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
 /// A start takes up to 90 s on the server, so a client waits longer than that.
 const ANSWER_TIMEOUT: Duration = Duration::from_secs(180);
@@ -171,7 +172,6 @@ fn handle(service: &SeatService<LinuxBackend>, mut stream: UnixStream) {
             return;
         }
     };
-    let _ = stream.set_read_timeout(Some(REQUEST_TIMEOUT));
     let _ = stream.set_write_timeout(Some(REQUEST_TIMEOUT));
     let admit = |command: &Command| {
         let allowed = command_allowed(uid, punktfunk, owner, command);
@@ -180,8 +180,40 @@ fn handle(service: &SeatService<LinuxBackend>, mut stream: UnixStream) {
         }
         allowed
     };
-    if let Err(error) = crate::ipc::answer_if(service, &mut stream, admit) {
+    let mut request = Deadline {
+        stream: &mut stream,
+        until: Instant::now() + REQUEST_TIMEOUT,
+    };
+    if let Err(error) = crate::ipc::answer_if(service, &mut request, admit) {
         tracing::debug!(%error, "seats socket request");
+    }
+}
+
+/// A connection whose reads share one deadline: a peer that trickles its frame a byte at a time
+/// keeps its slot no longer than one that sends nothing.
+struct Deadline<'a> {
+    stream: &'a mut UnixStream,
+    until: Instant,
+}
+
+impl Read for Deadline<'_> {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        let left = self.until.saturating_duration_since(Instant::now());
+        if left.is_zero() {
+            return Err(std::io::ErrorKind::TimedOut.into());
+        }
+        self.stream.set_read_timeout(Some(left))?;
+        self.stream.read(buf)
+    }
+}
+
+impl Write for Deadline<'_> {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.stream.write(buf)
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.stream.flush()
     }
 }
 
@@ -379,6 +411,30 @@ mod tests {
         assert!(rustix::fs::getxattr(&path, ACL_ACCESS, &mut buf[..]).is_err());
         let after = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
         assert_eq!(after, mode);
+    }
+
+    /// A peer that sends a byte every 50 ms never trips a per-read timeout, but loses the
+    /// request at its one deadline.
+    #[test]
+    fn a_trickling_peer_is_cut_off_at_the_deadline() {
+        let (mut peer, mut served) = UnixStream::pair().unwrap();
+        let trickle = std::thread::spawn(move || {
+            let _ = peer.write_all(&100_u32.to_be_bytes());
+            for _ in 0..100 {
+                std::thread::sleep(Duration::from_millis(50));
+                if peer.write_all(b"x").is_err() {
+                    break;
+                }
+            }
+        });
+        let mut request = Deadline {
+            stream: &mut served,
+            until: Instant::now() + Duration::from_millis(300),
+        };
+        let read = crate::ipc::read_frame_bytes(&mut request);
+        drop(served);
+        trickle.join().unwrap();
+        assert!(read.is_err(), "the trickled frame was read whole");
     }
 
     /// A Flatpak change waits longest; an unlock waits for its password check and a start.

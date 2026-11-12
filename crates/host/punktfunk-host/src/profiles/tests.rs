@@ -74,10 +74,9 @@ fn box_file() -> ProfilesFile {
     }
 }
 
-#[test]
-fn a_profile_create_would_refuse_is_vetted_before_its_seat_is_made() {
-    let (p, _) = store("vet", &box_file(), None);
-    let new = |name: &str| ProfileCreate {
+/// A seat profile called `name`, as the console asks for one.
+fn new(name: &str) -> ProfileCreate {
+    ProfileCreate {
         display_name: name.into(),
         accent: None,
         home: None,
@@ -85,7 +84,12 @@ fn a_profile_create_would_refuse_is_vetted_before_its_seat_is_made() {
         windows_account: None,
         seat_account: None,
         seat_password: None,
-    };
+    }
+}
+
+#[test]
+fn a_profile_create_would_refuse_is_vetted_before_its_seat_is_made() {
+    let (p, _) = store("vet", &box_file(), None);
     assert_eq!(p.vet_create(&new("  New\u{7}Kid  ")).unwrap(), "NewKid");
     assert_eq!(
         p.vet_create(&new(&"x".repeat(80))).unwrap().len(),
@@ -111,6 +115,26 @@ fn a_profile_create_would_refuse_is_vetted_before_its_seat_is_made() {
         .collect();
     let (p, _) = store("vet-full", &full, None);
     assert!(matches!(p.vet_create(&new("Fresh")), Err(EditError::Full)));
+}
+
+/// A store that can't save refuses a create before its seat is made: a file that didn't parse,
+/// and a seat host's copy of the box's.
+#[test]
+fn a_store_that_cannot_save_refuses_a_create_up_front() {
+    let path = temp_dir("vet-unparsed").join("profiles.json");
+    std::fs::write(&path, b"{ not json").unwrap();
+    let unparsed = Profiles::load_with(Some(path), None);
+    assert!(matches!(
+        unparsed.vet_create(&new("Fresh")),
+        Err(EditError::Store(_))
+    ));
+    let path = temp_dir("vet-copy").join("profiles.json");
+    std::fs::write(&path, serde_json::to_vec(&box_file()).unwrap()).unwrap();
+    let copy = Profiles::load_box(path, Some("seat-a".into()));
+    assert!(matches!(
+        copy.vet_create(&new("Fresh")),
+        Err(EditError::Store(_))
+    ));
 }
 
 #[test]
@@ -464,6 +488,20 @@ fn names_are_trimmed_capped_and_unique() {
     );
     let taken = [profile("a", "Enrico", OsAccount::Operator)];
     assert_eq!(unique_name(&taken, "enrico"), "enrico 2");
+}
+
+/// Names are one whatever their case, past ASCII too, as the seat ledger compares its rows.
+#[test]
+fn names_fold_case_as_the_seat_ledger_does() {
+    let mut file = box_file();
+    file.profiles
+        .push(profile("dddddddddddd", "Émile", OsAccount::Operator));
+    let (p, _) = store("fold", &file, None);
+    assert!(matches!(
+        p.vet_create(&new("émile")),
+        Err(EditError::NameTaken)
+    ));
+    assert_eq!(unique_name(&file.profiles, "ÉMILE"), "ÉMILE 2");
 }
 
 /// A light seat shares the owner's desktop and keeps what makes it the player's. A profile with

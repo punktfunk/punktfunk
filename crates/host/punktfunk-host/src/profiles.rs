@@ -395,9 +395,11 @@ impl Profiles {
         default_profile(&self.lock().file).map(|p| p.id.clone())
     }
 
-    /// The name [`create`](Self::create) would take `input` under, or what it would refuse. The
-    /// caller asks before it makes a seat's account for the profile.
+    /// The name [`create`](Self::create) would take `input` under, or what it would refuse, a
+    /// store it can't write included. The caller asks before it makes a seat's account for the
+    /// profile.
     pub fn vet_create(&self, input: &ProfileCreate) -> Result<String, EditError> {
+        self.writable().map_err(EditError::Store)?;
         let name = clean_name(&input.display_name).ok_or(EditError::NameMissing)?;
         if let Some(accent) = &input.accent {
             valid_accent(accent.clone())?;
@@ -486,8 +488,8 @@ impl Profiles {
         out.ok_or(EditError::NotFound)
     }
 
-    /// Removes `id`. `erase` also deletes its Steam home and picture; without it the home stays
-    /// for the console to list. Sessions playing as it hear [`removed`].
+    /// Removes `id`. `erase` also deletes its Steam home and picture ([`Self::erase`]); without it
+    /// the home stays for the console to list. Sessions playing as it hear [`removed`].
     pub fn delete(&self, id: &str, erase: bool) -> Result<Profile, EditError> {
         let mut gone = None;
         self.edit(|file| {
@@ -512,18 +514,39 @@ impl Profiles {
             Ok(())
         })?;
         let gone = gone.ok_or(EditError::NotFound)?;
-        if erase && safe_id(id) {
-            let state = self.lock();
-            remove_avatar_files(&state.path.with_file_name("profiles"), id, None);
-            drop(state);
-            #[cfg(target_os = "linux")]
-            {
-                let _ = std::fs::remove_dir_all(pf_paths::seat_home(id));
-                let _ = std::fs::remove_file(pf_paths::seat_record(id));
-            }
+        if erase {
+            self.erase(id);
         }
         announce_removed(id);
         Ok(gone)
+    }
+
+    /// Deletes the Steam home and picture of `id`, which the store no longer holds.
+    pub fn erase(&self, id: &str) {
+        if !safe_id(id) {
+            return;
+        }
+        let state = self.lock();
+        remove_avatar_files(&state.path.with_file_name("profiles"), id, None);
+        drop(state);
+        #[cfg(target_os = "linux")]
+        {
+            let _ = std::fs::remove_dir_all(pf_paths::seat_home(id));
+            let _ = std::fs::remove_file(pf_paths::seat_record(id));
+        }
+    }
+
+    /// Puts back `p`, which [`Self::delete`] took out, when what had to follow failed. `default`
+    /// makes it the default again.
+    pub fn restore(&self, p: Profile, default: bool) -> Result<(), EditError> {
+        self.edit(|file| {
+            refuse_new(file, &p.display_name)?;
+            if default {
+                file.default_profile_id = Some(p.id.clone());
+            }
+            file.profiles.push(p);
+            Ok(())
+        })
     }
 
     /// A seat host's copy follows the box's file, so a profile the box deletes never runs
@@ -917,12 +940,6 @@ impl Profiles {
     fn mutate(&self, change: impl FnOnce(&mut ProfilesFile) -> Result<()>) -> Result<()> {
         self.writable()?;
         let mut state = self.lock();
-        if state.unparsed.is_some() {
-            bail!(
-                "{} did not parse; fix or remove it before changing profiles",
-                state.path.display()
-            );
-        }
         let mut next = state.file.clone();
         change(&mut next)?;
         next.version = PROFILES_SCHEMA_VERSION;
@@ -934,10 +951,17 @@ impl Profiles {
         Ok(())
     }
 
-    /// The box's own host writes profiles; a seat's copy is read only.
+    /// The box's own host writes profiles while its file parses; a seat's copy is read only.
     fn writable(&self) -> Result<()> {
-        if self.lock().read_only {
+        let state = self.lock();
+        if state.read_only {
             bail!("profiles are the box's; a seat host never edits them");
+        }
+        if state.unparsed.is_some() {
+            bail!(
+                "{} did not parse; fix or remove it before changing profiles",
+                state.path.display()
+            );
         }
         Ok(())
     }
@@ -1049,7 +1073,12 @@ fn refuse_new(file: &ProfilesFile, name: &str) -> Result<(), EditError> {
 fn name_taken(profiles: &[Profile], name: &str, except: Option<&str>) -> bool {
     profiles
         .iter()
-        .any(|p| Some(p.id.as_str()) != except && p.display_name.eq_ignore_ascii_case(name))
+        .any(|p| Some(p.id.as_str()) != except && same_name(&p.display_name, name))
+}
+
+/// Whether two names are one, case folded as the seat ledger folds its rows' names.
+pub fn same_name(a: &str, b: &str) -> bool {
+    a.to_lowercase() == b.to_lowercase()
 }
 
 /// `#RRGGBB`, lowercased.
@@ -1064,11 +1093,7 @@ fn valid_accent(accent: String) -> Result<String, EditError> {
 
 /// `name`, or `name 2`, `name 3`…: display names are unique ignoring case.
 fn unique_name(profiles: &[Profile], name: &str) -> String {
-    let taken = |n: &str| {
-        profiles
-            .iter()
-            .any(|p| p.display_name.eq_ignore_ascii_case(n))
-    };
+    let taken = |n: &str| name_taken(profiles, n, None);
     if !taken(name) {
         return name.to_string();
     }

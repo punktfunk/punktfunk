@@ -247,20 +247,19 @@ impl PlatformBackend for WindowsBackend {
 
     fn stop(&self, seat: &Seat) -> Result<RuntimeStatus, BackendError> {
         self.stopped.store(true, Ordering::SeqCst);
-        self.supervisor.stop(seat, true)
+        self.supervisor.stop(seat)
     }
 
     /// The seat host's own directories go with the seat: its identity key, token and logs, as a
     /// Linux seat's directory does. A directory that won't go is logged; the seat is gone anyway.
     /// An account that isn't the seat's is refused before the stop logs anything off, except an
-    /// adopted row whose name the person gave to a new account: its sessions are left alone and
-    /// its release works by the row's SID alone.
+    /// adopted row whose name the person gave to a new account: its release works by the row's
+    /// SID alone.
     fn remove(&self, seat: &Seat) -> Result<(), BackendError> {
-        let reassigned = self.accounts.name_reassigned(seat);
-        if !reassigned {
+        if !self.accounts.name_reassigned(seat) {
             self.accounts.ensure_owned_or_absent(seat)?;
         }
-        let _ = self.supervisor.stop(seat, !reassigned)?;
+        let _ = self.supervisor.stop(seat)?;
         self.accounts.delete(seat)?;
         for parent in ["hosts", "temp"] {
             let dir = self

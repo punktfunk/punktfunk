@@ -221,6 +221,8 @@ impl<B: PlatformBackend> SeatService<B> {
         }
     }
 
+    /// Every seat as its backend reads it now. A state dir that can't take the refreshed states
+    /// still answers them: they are kept in memory, logged once, and saved with the next write.
     fn list(&self) -> Result<CommandResult, ApiError> {
         let mut current = self.lock();
         // Read under the ledger lock: a change marks its seat under it, before its backend runs.
@@ -245,8 +247,11 @@ impl<B: PlatformBackend> SeatService<B> {
             seat.runtime = self.observe(seat);
             self.learn_pin(seat);
         }
-        if next != *current {
-            self.commit(&mut current, next)?;
+        if next != *current
+            && let Err(error) = self.commit(&mut current, next.clone())
+        {
+            tracing::warn!(error = %error.message, "seat states not saved");
+            *current = next;
         }
         Ok(CommandResult::List {
             seats: current.seats.clone(),
@@ -636,8 +641,9 @@ impl<B: PlatformBackend> SeatService<B> {
     }
 
     /// Stops every seat before the backend turns seats off, so none runs without its display
-    /// driver. Only Windows turns seats off; elsewhere the backend's refusal answers before any
-    /// seat stops.
+    /// driver. `ops` is held from the first stop to the end, so no start lands in between; a
+    /// start in flight is interrupted first. Only Windows turns seats off; elsewhere the
+    /// backend's refusal answers before any seat stops.
     fn disable(&self, keep_accounts: bool) -> Result<CommandResult, ApiError> {
         if !keep_accounts {
             return Err(ApiError::new(
@@ -648,11 +654,14 @@ impl<B: PlatformBackend> SeatService<B> {
         if !cfg!(windows) {
             return self.seating(|backend| backend.disable(keep_accounts));
         }
-        let ids: Vec<SeatId> = self.lock().seats.iter().map(|s| s.id.clone()).collect();
-        for id in &ids {
-            self.change_runtime(id, false)?;
+        let ids = || -> Vec<SeatId> { self.lock().seats.iter().map(|s| s.id.clone()).collect() };
+        for id in &ids() {
+            self.interrupt_start(id);
         }
         let _op = self.op();
+        for id in &ids() {
+            self.change_locked(id, false, None)?;
+        }
         self.seating(|backend| backend.disable(keep_accounts))
     }
 

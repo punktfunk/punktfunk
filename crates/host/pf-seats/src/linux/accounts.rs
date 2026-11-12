@@ -243,8 +243,7 @@ fn present_groups() -> Result<Vec<&'static str>, BackendError> {
 
 /// Adds the seat user `account` to each of [`GROUPS`] it is missing. Run at each start: a group
 /// made after the account, or made again, has no members, and the games folder admits only them.
-/// `true` when it added one.
-pub(super) fn join_groups(account: &str) -> Result<bool, BackendError> {
+pub(super) fn join_groups(account: &str) -> Result<(), BackendError> {
     let mut missing = Vec::new();
     for group in present_groups()? {
         let line = getent("group", group)?.unwrap_or_default();
@@ -253,11 +252,10 @@ pub(super) fn join_groups(account: &str) -> Result<bool, BackendError> {
         }
     }
     if missing.is_empty() {
-        return Ok(false);
+        return Ok(());
     }
     let groups = missing.join(",");
-    run("usermod_failed", "usermod", &["-a", "-G", &groups, account])?;
-    Ok(true)
+    run("usermod_failed", "usermod", &["-a", "-G", &groups, account]).map(drop)
 }
 
 /// The members `line`, a group as `getent group` prints it, lists.
@@ -583,11 +581,13 @@ pub(super) fn delete(account: &str, id: &SeatId) -> Result<(), BackendError> {
 /// Ends everything the user still runs: at its seat's stop, and before its account is deleted or
 /// rehomed. Its user manager outlives the seat's unit by seconds, and `userdel` or `usermod`
 /// refuse a busy user. Done when no process runs as the user: logind keeps an empty user's
-/// record for `UserStopDelaySec` (10 s by default), as long as this whole wait.
+/// record for `UserStopDelaySec` (10 s by default), as long as this whole wait. A linger the user
+/// set goes first: it would start their manager at boot, before the seat's drop-in exists.
 pub(super) fn quiesce(account: &str) -> Result<(), BackendError> {
     let Some(user) = lookup(account)? else {
         return Ok(());
     };
+    let _ = run("loginctl_failed", "loginctl", &["disable-linger", account]);
     if run("loginctl_failed", "loginctl", &["show-user", account]).is_ok() {
         let _ = run("loginctl_failed", "loginctl", &["terminate-user", account]);
     }

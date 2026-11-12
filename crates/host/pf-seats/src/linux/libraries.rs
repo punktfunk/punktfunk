@@ -30,7 +30,7 @@ use crate::steam;
 use std::collections::HashSet;
 use std::io::Write as _;
 use std::os::fd::OwnedFd;
-use std::os::unix::fs::{MetadataExt as _, OpenOptionsExt as _, PermissionsExt as _};
+use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
 use std::path::{Path, PathBuf};
 
 /// What a seat keeps its own of in each library. Steam stages updates in `temp`.
@@ -56,7 +56,8 @@ const DEFAULTS: &str = "seat-defaults.json";
 
 const LIST: &str = "libraryfolders.vdf";
 const LIST_TEMP: &str = "libraryfolders.vdf.punktfunk";
-const MAX_LIST_BYTES: u64 = 8 * 1024 * 1024;
+/// A real list is a few kilobytes. Root tokenises a seat's whole, at about 40 bytes a byte.
+const MAX_LIST_BYTES: u64 = 1024 * 1024;
 
 /// One of the owner's libraries a seat sees.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -270,9 +271,9 @@ fn folders(dir: &Path) -> Vec<String> {
 }
 
 /// What a game still writes in a read-only `steamapps`, as found there: each Steam Linux
-/// Runtime's `var` and each of its platforms' `files/.ref`, which pressure-vessel opens before a
-/// native game starts, and each Proton's `dist.lock`. Read-only, either fails the launch with
-/// EROFS. Links are never followed; a file that isn't there yet stays read-only.
+/// Runtime's `var` and each of its `*_platform_*` folders' `files/.ref`, which pressure-vessel
+/// opens before a native game starts, and each Proton's `dist.lock`. Read-only, either fails the
+/// launch with EROFS. Links are never followed; a file that isn't there yet stays read-only.
 fn spots(steamapps: &Path) -> Vec<Spot> {
     let found = |spot: &Spot| {
         let meta = std::fs::symlink_metadata(steamapps.join(&spot.path));
@@ -284,7 +285,8 @@ fn spots(steamapps: &Path) -> Vec<Spot> {
         let tool = Path::new("common").join(&name);
         if name.starts_with("SteamLinuxRuntime_") {
             out.push(spot(tool.join("var"), true));
-            for platform in folders(&steamapps.join(&tool)) {
+            let platforms = folders(&steamapps.join(&tool));
+            for platform in platforms.iter().filter(|p| p.contains("_platform_")) {
                 let files = spot(tool.join(platform).join("files"), true);
                 if found(&files) {
                     out.push(spot(files.path.join(".ref"), false));
@@ -813,24 +815,39 @@ fn make_stage(id: &SeatId, key: &str) -> std::io::Result<()> {
     std::fs::create_dir_all(stage_dir(id, key))
 }
 
-/// The seat's own copy of each spot under `private`, empty and the seat user's. Root makes the
-/// folders on the way; a copy already there is kept.
+/// The seat's own copy of each spot under `private`, empty and the seat user's; a copy already
+/// there is kept. Root makes the folders on the way, each through the one above it: a link there
+/// is replaced, never followed, and a FIFO in a file's place answers at once.
 fn make_spots(private: &Path, spots: &[Spot], seat: &Passwd) -> std::io::Result<()> {
+    use rustix::fs::{fchmod, Mode, OFlags};
     for spot in spots {
-        let path = private.join(&spot.path);
-        if spot.dir {
-            make_dir(&path, 0o700)?;
-            std::os::unix::fs::chown(&path, Some(seat.uid), Some(seat.gid))?;
-        } else {
-            std::fs::create_dir_all(path.parent().unwrap_or(private))?;
-            let file = std::fs::OpenOptions::new()
-                .write(true)
-                .create(true)
-                .custom_flags(rustix::fs::OFlags::NOFOLLOW.bits() as i32)
-                .mode(0o644)
-                .open(&path)?;
-            std::os::unix::fs::fchown(&file, Some(seat.uid), Some(seat.gid))?;
+        let names: Vec<&str> = spot
+            .path
+            .to_str()
+            .into_iter()
+            .flat_map(|p| p.split('/'))
+            .collect();
+        let Some((last, parents)) = names.split_last() else {
+            continue;
+        };
+        let mut at = safe_open::dir(private)?;
+        for name in parents {
+            at = shared::dir_in(&at, name, true)?;
+            fchmod(&at, Mode::from_raw_mode(0o755))?;
         }
+        let copy = if spot.dir {
+            let dir = shared::dir_in(&at, last, true)?;
+            fchmod(&dir, Mode::from_raw_mode(0o700))?;
+            dir
+        } else {
+            let flags = OFlags::WRONLY
+                | OFlags::CREATE
+                | OFlags::NOFOLLOW
+                | OFlags::NONBLOCK
+                | OFlags::CLOEXEC;
+            rustix::fs::openat(&at, *last, flags, Mode::from_raw_mode(0o644))?
+        };
+        std::os::unix::fs::fchown(&copy, Some(seat.uid), Some(seat.gid))?;
     }
     Ok(())
 }
@@ -1498,18 +1515,19 @@ mod tests {
     }
 
     /// Each runtime's `var` and platform `.ref`, and each Proton's `dist.lock`, as they exist;
-    /// no link is followed. The seat's copies are its own and keep what it wrote.
+    /// no link is followed and `var` is no platform. The seat's copies are its own and keep what
+    /// it wrote.
     #[test]
     fn the_spots_are_what_a_game_writes_in_a_library() {
         let temp = tempfile::tempdir().unwrap();
         let steamapps = temp.path().join("steamapps");
         let common = steamapps.join("common");
         for dir in [
-            "SteamLinuxRuntime_sniper/var",
+            "SteamLinuxRuntime_sniper/var/files",
             "SteamLinuxRuntime_sniper/sniper_platform_1/files",
             "SteamLinuxRuntime_sniper/sniper_platform_2/files",
             "SteamLinuxRuntime_soldier/soldier_platform_1/files",
-            "SteamLinuxRuntime_linkedfiles/platform",
+            "SteamLinuxRuntime_linkedfiles/linked_platform_1",
             "Proton 10.0",
             "Proton - Experimental",
             "Proton linked lock",
@@ -1518,6 +1536,7 @@ mod tests {
             std::fs::create_dir_all(common.join(dir)).unwrap();
         }
         for file in [
+            "SteamLinuxRuntime_sniper/var/files/.ref",
             "SteamLinuxRuntime_sniper/sniper_platform_1/files/.ref",
             "SteamLinuxRuntime_soldier/soldier_platform_1/files/.ref",
             "Proton 10.0/dist.lock",
@@ -1531,7 +1550,7 @@ mod tests {
         link("Proton 10.0", "Proton linked");
         link(
             "SteamLinuxRuntime_sniper/sniper_platform_1/files",
-            "SteamLinuxRuntime_linkedfiles/platform/files",
+            "SteamLinuxRuntime_linkedfiles/linked_platform_1/files",
         );
         link("Proton 10.0/dist.lock", "Proton linked lock/dist.lock");
 
@@ -1555,6 +1574,7 @@ mod tests {
         assert_eq!(found, want);
 
         let private = temp.path().join("private");
+        std::fs::create_dir(&private).unwrap();
         let seat = me(temp.path());
         make_spots(&private, &found, &seat).unwrap();
         let lock = private.join("common/Proton 10.0/dist.lock");
@@ -1563,6 +1583,36 @@ mod tests {
         std::fs::write(&lock, "held").unwrap();
         make_spots(&private, &found, &seat).unwrap();
         assert_eq!(std::fs::read_to_string(&lock).unwrap(), "held");
+    }
+
+    /// A link where a spot's folder belongs is replaced, not followed, and a FIFO where its file
+    /// belongs fails at once.
+    #[test]
+    fn a_spot_s_copy_is_made_through_handles() {
+        use super::super::safe_open::tests::{fifo, within};
+        let temp = tempfile::tempdir().unwrap();
+        let (private, elsewhere) = (temp.path().join("private"), temp.path().join("elsewhere"));
+        let platform = private.join("common/SteamLinuxRuntime_sniper/sniper_platform_1");
+        std::fs::create_dir_all(&platform).unwrap();
+        std::fs::create_dir(&elsewhere).unwrap();
+        std::os::unix::fs::symlink(&elsewhere, platform.join("files")).unwrap();
+        let seat = me(temp.path());
+        let file = |path: &str| Spot {
+            path: PathBuf::from(path),
+            dir: false,
+        };
+        let spots = [file(
+            "common/SteamLinuxRuntime_sniper/sniper_platform_1/files/.ref",
+        )];
+        make_spots(&private, &spots, &seat).unwrap();
+        assert!(!elsewhere.join(".ref").exists());
+        assert!(platform.join("files").is_dir() && !platform.join("files").is_symlink());
+        assert!(platform.join("files/.ref").is_file());
+
+        fifo(&private.join("dist.lock"));
+        let p = private.clone();
+        let made = within(move || make_spots(&p, &[file("dist.lock")], &seat).is_ok());
+        assert_eq!(made, Some(false), "a FIFO is refused at once");
     }
 
     /// The box's Seat default decides; without one the libraries stay writable, and a file that
@@ -1661,6 +1711,28 @@ mod tests {
         register(Path::new("/b"), &id(), &seat, &[]);
         let text = std::fs::read_to_string(steam_file(&home, "steamapps")).unwrap();
         assert_eq!(steam::library_paths(&text), [own.as_str(), games]);
+    }
+
+    /// A list past the cap is left as it is, and the seat's other list still follows.
+    #[test]
+    fn an_oversized_seat_list_is_skipped() {
+        let temp = tempfile::tempdir().unwrap();
+        let home = temp.path().to_path_buf();
+        let own = home
+            .join(".local/share/Steam")
+            .to_string_lossy()
+            .into_owned();
+        let list = steam::library_folders_vdf(std::slice::from_ref(&own));
+        let padded = format!("{list}{}", " ".repeat(1024 * 1024));
+        for (dir, text) in [("steamapps", &padded), ("config", &list)] {
+            std::fs::create_dir_all(steam_file(&home, dir).parent().unwrap()).unwrap();
+            std::fs::write(steam_file(&home, dir), text).unwrap();
+        }
+        register(Path::new("/b"), &id(), &me(&home), &[]);
+        let read = |dir: &str| std::fs::read_to_string(steam_file(&home, dir)).unwrap();
+        assert_eq!(read("steamapps"), padded);
+        let games = "/run/media/punktfunk/games";
+        assert_eq!(steam::library_paths(&read("config")), [own.as_str(), games]);
     }
 
     /// Root never follows a link the seat planted on the way to its lists.

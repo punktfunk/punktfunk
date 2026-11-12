@@ -258,6 +258,30 @@ async fn a_device_s_own_play_reaches_its_seat_as_that_device() {
     assert_eq!(calls[0].1.target, "game/end");
 }
 
+/// Its screen picker reads the screens of the seat it plays on, as that device, and wakes no
+/// seat: the door has no screens of its own.
+#[tokio::test]
+async fn a_device_s_screen_picker_reads_its_seat() {
+    let fp = "aa11bb22cc33dd44ee55ff6600112233445566778899aabbccddeeff00112233";
+    let np = paired(&[fp]);
+    let seats = FakeSeats::new(box_snapshot(Some(fp))).answering(
+        "display/targets",
+        200,
+        serde_json::json!({"targets": []}),
+    );
+    let app = test_app_door(test_state(), Some(np), seats.clone());
+    let mut req = get_req("/api/v1/display/targets");
+    req.extensions_mut()
+        .insert(PeerCertFingerprint(Some(fp.to_string())));
+    let resp = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let calls = seats.calls();
+    assert_eq!(calls.len(), 1);
+    assert_eq!(calls[0].0, Target::Seat(KID_SEAT.into()));
+    assert_eq!(calls[0].1.device.as_deref(), Some(fp));
+    assert!(!calls[0].1.start, "a device's read wakes no seat");
+}
+
 /// The seats' sessions, games and downloads are on the door's `/status`; a device sees the
 /// others' rows without their identity.
 #[tokio::test]
@@ -364,6 +388,25 @@ async fn host_settings_show_the_owner_s_rows_beside_the_door_s() {
         .iter()
         .any(|r| r["id"] == "idle_timeout_ms" && r["title"] == "owner"));
     assert_eq!(body["env_file"], "/home/me/.config/punktfunk/host.env");
+}
+
+/// A door row the door won't take refuses the whole patch before the owner's host stores any.
+#[tokio::test]
+async fn a_bad_door_row_stores_none_of_the_owner_s() {
+    let seats = FakeSeats::new(box_snapshot(None)).answering(
+        "host/settings",
+        200,
+        serde_json::json!({"settings": [], "restart_pending": []}),
+    );
+    let app = admin_door(seats.clone());
+    let patch = json_req(
+        Method::PATCH,
+        "/api/v1/host/settings",
+        serde_json::json!({"encoder": "nvenc", "mdns": "bogus"}),
+    );
+    let (status, _) = send(&app, patch).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert!(seats.calls().is_empty(), "the owner's host was not asked");
 }
 
 /// A tail from the owner's host reaches the console as it arrives, not as one buffered answer.

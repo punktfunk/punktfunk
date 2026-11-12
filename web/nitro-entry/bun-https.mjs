@@ -23,6 +23,9 @@
 //                                  BOTH set ⇒ HTTPS. Unset ⇒ plain HTTP (local dev only).
 //   PORT / HOST                    standard Nitro bind (3000 / 0.0.0.0).
 //   PUNKTFUNK_UI_PLUGIN_PORT       the plugin-UI origin's port (default: console port + 1).
+//   PUNKTFUNK_ENV_FILES            env files the console reads itself (env-files.mjs). First
+//                                  import, so every setting below may come from one.
+import "./env-files.mjs";
 import "#nitro-internal-pollyfills";
 import wsAdapter from "crossws/adapters/bun";
 import { useNitroApp } from "nitropack/runtime";

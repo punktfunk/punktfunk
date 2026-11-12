@@ -149,6 +149,83 @@ fn stopping_or_deleting_a_person_row_touches_only_its_own_unit_and_files() {
     assert_eq!(tree(&rig.home), before, "their home is as they left it");
 }
 
+/// A unit whose state can't be read while the start waits is stopped, and the start fails with
+/// the read's error.
+#[test]
+fn a_start_that_loses_the_unit_s_state_stops_the_unit() {
+    let rig = rig();
+    let shows = std::cell::Cell::new(0);
+    let base = machine(&rig.home, 1500, "activating", false);
+    let _machine = fake::install(move |program, args| match (program, args) {
+        ("systemctl", ["show", ..]) if shows.replace(shows.get() + 1) == 0 => (1, String::new()),
+        _ => base(program, args),
+    });
+    let asked = rig.backend.inner.stops.load(Ordering::SeqCst);
+    let failed = rig.backend.wait_ready(&rig.seat, asked, false).unwrap_err();
+    assert_eq!(failed.code, "systemctl_failed");
+    assert_eq!(fake::calls(), [SHOW, SHOW, STOP, RESET]);
+}
+
+/// A person's and the owner's linger and user manager are theirs: no stop or delete of their row
+/// touches either.
+#[test]
+fn only_a_made_seat_s_linger_and_manager_are_ours() {
+    let rig = rig();
+    let _machine = fake::install(machine(&rig.home, 1500, "active", false));
+    let owner = Seat {
+        owner: true,
+        adopted_uid: None,
+        ..person()
+    };
+    rig.backend.stop(&owner).unwrap();
+    rig.backend.stop(&rig.seat).unwrap();
+    rig.backend.remove(&rig.seat).unwrap();
+    let calls = fake::calls();
+    assert!(
+        !calls
+            .iter()
+            .any(|c| c.contains("linger") || c.contains("user@")),
+        "{calls:?}"
+    );
+}
+
+/// A made seat's stop clears a linger its user set before it ends the user. `/proc` decides
+/// when the user is gone, so this runs where Linux does.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_made_seat_s_stop_clears_its_user_s_linger() {
+    let rig = rig();
+    let request = CreateSeat {
+        name: "Desk".into(),
+        account: "pf-seat-1".into(),
+        autostart: false,
+    };
+    let made = Ledger::new().allocate(request).unwrap();
+    // No process runs as this uid, so the user reads as ended at once.
+    let row = format!(
+        "pf-seat-1:x:3999999999:3999999999:{}:/nonexistent:/bin/sh\n",
+        accounts::marker(&made.id)
+    );
+    let _machine = fake::install(move |program, args| match (program, args) {
+        ("getent", ["passwd", "pf-seat-1"]) => (0, row.clone()),
+        ("systemctl", ["show", ..]) => (0, "ActiveState=inactive\n".into()),
+        _ => (0, String::new()),
+    });
+    rig.backend.stop(&made).unwrap();
+    let loginctl: Vec<_> = fake::calls()
+        .into_iter()
+        .filter(|c| c.starts_with("loginctl "))
+        .collect();
+    assert_eq!(
+        loginctl,
+        [
+            "loginctl disable-linger pf-seat-1",
+            "loginctl show-user pf-seat-1",
+            "loginctl terminate-user pf-seat-1",
+        ]
+    );
+}
+
 /// With them at the machine a start is refused before anything is made, with a sentence for
 /// the console.
 #[test]

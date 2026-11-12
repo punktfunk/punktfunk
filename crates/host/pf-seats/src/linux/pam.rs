@@ -314,8 +314,14 @@ fn read_code(stdout: std::process::ChildStdout) -> String {
 /// `punktfunk-seats pam-check <account>`: reads the password from stdin, at most
 /// [`MAX_PASSWORD`] bytes and one more to see a longer one, checks it and prints the code. stdin
 /// is read through its own descriptor, past std's buffer, so the password is in one wiped buffer.
+/// Core dumps are off before it is read.
 pub fn run_check(account: &str) {
     crate::logging::to_stderr();
+    #[cfg(target_os = "linux")]
+    if let Err(error) = super::login::no_core_dumps() {
+        println!("{}", unavailable(&format!("turn core dumps off: {error}")));
+        return;
+    }
     let mut password = Zeroizing::new([0_u8; MAX_PASSWORD + 1]);
     let code = match read_password(&mut password[..]) {
         Ok(length) => judge(account, &password[..length]),

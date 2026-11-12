@@ -162,23 +162,15 @@ pub fn revoke(account: &str) {
 }
 
 /// Relays again every pad systemd kept across a supervisor restart, and watches again every
-/// served USB socket. A USB device an older supervisor attached for a seat that served it
-/// itself is detached. The other kept fds are the caller's. First thing at start: until then
+/// served USB socket. The other kept fds are the caller's. First thing at start: until then
 /// the kept fds would leak into a child.
 pub fn resume() -> Vec<(String, OwnedFd)> {
     let _ = std::fs::remove_dir_all(RELAYED);
     let pad_broker::Kept {
         pads,
         usb: sockets,
-        unserved,
         other,
     } = pad_broker::kept();
-    for (port, recorded, sock) in unserved {
-        tracing::warn!(port, "seat USB device the seat served itself, detached");
-        vhci::drop_unserved(port, recorded);
-        pad_broker::forget_usb(port, recorded);
-        drop(sock);
-    }
     for kept in pads {
         let Some(slot) = Slot::take(&HELD, &kept.account, MAX_PER_SEAT) else {
             pad_broker::forget(&kept.name);
@@ -368,7 +360,7 @@ fn handle(service: &SeatService<LinuxBackend>, stream: UnixStream, uid: u32, pen
     };
     let _ = stream.set_read_timeout(Some(REQUEST_TIMEOUT));
     let _ = stream.set_write_timeout(Some(REQUEST_TIMEOUT));
-    let (request, fd) = match pad_broker::read_request(&stream) {
+    let request = match pad_broker::read_request(&stream) {
         Ok(read) => read,
         Err(error) => {
             tracing::debug!(error = %format!("{error:#}"), account, "pads socket request");
@@ -394,6 +386,7 @@ fn handle(service: &SeatService<LinuxBackend>, stream: UnixStream, uid: u32, pen
                         kind,
                         index,
                         slot,
+                        seat: ps_seat(&service.ledger(), &account),
                         identity,
                     };
                     serve_usb(stream, &account, &hello);
@@ -403,17 +396,17 @@ fn handle(service: &SeatService<LinuxBackend>, stream: UnixStream, uid: u32, pen
                 }
             }
         }
-        // A seat host from before served USB pads hands over a device it serves itself, with
-        // descriptors it chose. Its socket closes unattached; the host falls back to uhid.
-        Request::Attach { .. } | Request::Detach { .. } => {
-            drop(fd);
-            tracing::warn!(
-                account,
-                "seat host predates served USB pads: its own USB device was refused"
-            );
-            answer(&stream, &account, Status::Refused);
-        }
     }
+}
+
+/// The seat `account`'s PlayStation pads carry in their MAC, as its own host marks them
+/// ([`pad_broker::own_ps_seat`]): the owner's row keeps the box's.
+fn ps_seat(ledger: &pf_seats::Ledger, account: &str) -> u16 {
+    ledger
+        .seats
+        .iter()
+        .find(|seat| seat.account == account && !seat.owner)
+        .map_or(0, |seat| pad_broker::ps_seat(seat.id.as_str()))
 }
 
 fn answer(stream: &UnixStream, account: &str, status: Status) {
