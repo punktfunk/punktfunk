@@ -41,6 +41,7 @@ mod safe_open;
 mod session;
 mod shared;
 pub mod socket;
+pub mod stage;
 #[cfg(test)]
 mod start_tests;
 #[cfg(test)]
