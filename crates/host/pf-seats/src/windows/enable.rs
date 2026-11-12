@@ -4,14 +4,17 @@
 //! [`checks`] only reads. [`turn_on`] creates the Seats key and records there what it changed
 //! (`ListenerWasOff`, `AllowRdpFromNetwork`, `RdpRulesOpened`, `RdpRuleScopes`,
 //! `RdpRulesNarrowed`); [`turn_off`] undoes exactly that and deletes the key last, so a failed
-//! restore can be retried. A refusal carries one plain sentence for the operator; its cause
-//! goes to the log. The seat display driver stays in the driver store when seats go off.
+//! restore can be retried. Both read the key into [`Recorded`], take their steps from
+//! [`crate::seat_switch`] and [`perform`] them in order. A refusal carries one plain sentence for
+//! the operator; its cause goes to the log. The seat display driver stays in the driver store
+//! when seats go off.
 
 use super::util::{backend_error, WinResult};
 use super::{keeper, seats_enabled, server_edition, session_wrapper, ENABLING, SEATS_KEY};
 use crate::backend::BackendError;
 use crate::doctor::DriverState;
 use crate::ipc::Diagnostic;
+use crate::seat_switch::{self, Recorded, Step};
 use pf_paths::POWERSHELL;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -238,39 +241,109 @@ pub(super) fn turn_on(host_path: &Path, allow_rdp_from_network: bool) -> WinResu
     done
 }
 
-/// Restore the listener and the firewall scope `turn_on` changed, then remove the Seats key.
-/// Nothing to do without the key. The listener goes off before the firewall widens. Each
-/// restore forgets its value as it finishes, so the key is opened for writing.
+/// Undo what `turn_on` recorded ([`seat_switch::off`]), then remove the Seats key. Nothing to
+/// do without the key. Each restore forgets its value as it finishes, so the key is opened for
+/// writing.
 pub(super) fn turn_off() -> WinResult<()> {
-    let hklm = RegKey::predef(HKEY_LOCAL_MACHINE);
-    let Ok(seats) =
-        hklm.open_subkey_with_flags(SEATS_KEY, KEY_READ | KEY_SET_VALUE | KEY_WOW64_64KEY)
+    let Ok(seats) = RegKey::predef(HKEY_LOCAL_MACHINE)
+        .open_subkey_with_flags(SEATS_KEY, KEY_READ | KEY_SET_VALUE | KEY_WOW64_64KEY)
     else {
         return Ok(());
     };
-    if seats.get_value::<u32, _>(LISTENER_WAS_OFF).ok() == Some(1) {
-        deny_listener(true).map_err(|cause| {
+    // No step of seats off reads the host path.
+    perform_all(&seat_switch::off(&recorded(&seats)), seats, Path::new(""))
+}
+
+/// What the Seats key records of the changes a turn-on made.
+fn recorded(seats: &RegKey) -> Recorded {
+    Recorded {
+        enabling: seats.get_value::<u32, _>(ENABLING).is_ok(),
+        listener_was_off: seats.get_value::<u32, _>(LISTENER_WAS_OFF).ok() == Some(1),
+        choice: seats.get_value::<u32, _>(RDP_FROM_NETWORK).ok(),
+        rules_opened: !rules_opened(seats).is_empty(),
+        scopes_noted: seats.get_value::<String, _>(RDP_RULE_SCOPES).is_ok(),
+        narrowed_noted: seats.get_value::<u32, _>(RDP_RULES_NARROWED).is_ok(),
+    }
+}
+
+/// [`perform`] each of `steps` in order and stop at the first refusal. The key is closed before
+/// [`Step::DeleteKey`] deletes it.
+fn perform_all(steps: &[Step], seats: RegKey, host_path: &Path) -> WinResult<()> {
+    for &step in steps {
+        if step == Step::DeleteKey {
+            drop(seats);
+            return delete_key();
+        }
+        perform(step, &seats, host_path)?;
+    }
+    Ok(())
+}
+
+/// One step of a switch, against the open Seats key. A refusal names what didn't happen.
+fn perform(step: Step, seats: &RegKey, host_path: &Path) -> WinResult<()> {
+    let key_on = |cause: std::io::Error| {
+        refuse("seats_key", "Couldn't turn seats on.", cause).said("seats_key_on")
+    };
+    let limit = |cause: String| {
+        refuse(
+            "rdp_firewall",
+            "Couldn't limit Remote Desktop to this machine.",
+            cause,
+        )
+        .said("rdp_firewall_limit")
+    };
+    match step {
+        Step::MarkEnabling => seats.set_value(ENABLING, &1_u32).map_err(key_on),
+        Step::InstallDriver => install_driver(&package_dir(host_path), true),
+        Step::RecordScopes => record_scopes(seats),
+        Step::NoteNarrowed => seats
+            .set_value(RDP_RULES_NARROWED, &1_u32)
+            .map_err(|cause| limit(cause.to_string())),
+        Step::NarrowScopes => firewall_scope(LOOPBACK).map_err(limit),
+        Step::RestoreScopes => restore_scopes(seats),
+        Step::OpenRules => open_rdp_rules(seats),
+        Step::CloseRules => close_rdp_rules(seats),
+        Step::WriteChoice(allow) => seats
+            .set_value(RDP_FROM_NETWORK, &u32::from(allow))
+            .map_err(key_on),
+        Step::AllowListener => allow_listener(seats),
+        Step::EnsureSeatListener => {
+            if let Err(cause) = super::seat_listener::ensure(host_path) {
+                tracing::warn!(%cause, "seat listener not ready — seats start without pad audio");
+            }
+            Ok(())
+        }
+        Step::TrustCertificate => trust_rdp_certificate(host_path),
+        Step::Finish => match seats.delete_value(ENABLING) {
+            Err(cause) if cause.kind() != std::io::ErrorKind::NotFound => Err(key_on(cause)),
+            _ => Ok(()),
+        },
+        Step::DenyListener => deny_listener(true).map_err(|cause| {
             refuse(
                 "rdp_listener",
                 "Couldn't turn Remote Desktop back off.",
                 cause,
             )
             .said("rdp_listener_off")
-        })?;
+        }),
+        Step::RemoveSeatListener => {
+            super::seat_listener::remove();
+            Ok(())
+        }
+        Step::RestoreShortcuts => super::steam::unwrap_box_shortcuts().map_err(|cause| {
+            refuse("steam_shortcuts", "Couldn't turn seats off.", cause).said("seats_key_off")
+        }),
+        Step::RestoreRegistration => {
+            super::steam::restore_registration();
+            Ok(())
+        }
+        Step::DeleteKey => delete_key(),
     }
-    close_rdp_rules(&seats)?;
-    if narrowed(&seats) {
-        restore_scopes(&seats)?;
-    }
-    super::seat_listener::remove();
-    // The Seats key holds the only record of the box's Steam shortcuts: it stays until they
-    // are back.
-    super::steam::unwrap_box_shortcuts().map_err(|cause| {
-        refuse("steam_shortcuts", "Couldn't turn seats off.", cause).said("seats_key_off")
-    })?;
-    super::steam::restore_registration();
-    drop(seats);
-    hklm.delete_subkey_with_flags(SEATS_KEY, KEY_WOW64_64KEY)
+}
+
+fn delete_key() -> WinResult<()> {
+    RegKey::predef(HKEY_LOCAL_MACHINE)
+        .delete_subkey_with_flags(SEATS_KEY, KEY_WOW64_64KEY)
         .map_err(|cause| {
             refuse("seats_key", "Couldn't turn seats off.", cause).said("seats_key_off")
         })
@@ -442,6 +515,8 @@ pub(super) fn refusal(error: BackendError) -> Diagnostic {
     row
 }
 
+/// Create or open the Seats key and perform [`seat_switch::on`] for what it records. A new key
+/// reads as off until the last step; a finished one stays on while it is redone.
 fn apply(host_path: &Path, allow_rdp_from_network: bool) -> WinResult<()> {
     let dir = package_dir(host_path);
     if PACKAGE.iter().any(|name| !dir.join(name).is_file()) {
@@ -457,54 +532,12 @@ fn apply(host_path: &Path, allow_rdp_from_network: bool) -> WinResult<()> {
         .map_err(|cause| {
             refuse("seats_key", "Couldn't turn seats on.", cause).said("seats_key_on")
         })?;
-    // A new key reads as off until the last step; a finished one stays on while it is redone.
-    if disposition == RegDisposition::REG_CREATED_NEW_KEY {
-        seats.set_value(ENABLING, &1_u32).map_err(|cause| {
-            refuse("seats_key", "Couldn't turn seats on.", cause).said("seats_key_on")
-        })?;
-    }
-    install_driver(&dir, true)?;
-    // A choice made earlier narrowed the rules; allowing the network now puts them back.
-    let was_narrowed = narrowed(&seats);
-    record_scopes(&seats)?;
-    if !allow_rdp_from_network {
-        let limit = |cause: String| {
-            refuse(
-                "rdp_firewall",
-                "Couldn't limit Remote Desktop to this machine.",
-                cause,
-            )
-            .said("rdp_firewall_limit")
-        };
-        seats
-            .set_value(RDP_RULES_NARROWED, &1_u32)
-            .map_err(|cause| limit(cause.to_string()))?;
-        firewall_scope(LOOPBACK).map_err(limit)?;
-    } else if was_narrowed {
-        restore_scopes(&seats)?;
-    }
-    if allow_rdp_from_network {
-        open_rdp_rules(&seats)?;
-    } else {
-        close_rdp_rules(&seats)?;
-    }
-    seats
-        .set_value(RDP_FROM_NETWORK, &u32::from(allow_rdp_from_network))
-        .map_err(|cause| {
-            refuse("seats_key", "Couldn't turn seats on.", cause).said("seats_key_on")
-        })?;
-    // Listen last: the firewall has its final scope by now.
-    allow_listener(&seats)?;
-    if let Err(cause) = super::seat_listener::ensure(host_path) {
-        tracing::warn!(%cause, "seat listener not ready — seats start without pad audio");
-    }
-    trust_rdp_certificate(host_path)?;
-    match seats.delete_value(ENABLING) {
-        Err(cause) if cause.kind() != std::io::ErrorKind::NotFound => {
-            Err(refuse("seats_key", "Couldn't turn seats on.", cause).said("seats_key_on"))
-        }
-        _ => Ok(()),
-    }
+    let recorded = (disposition != RegDisposition::REG_CREATED_NEW_KEY).then(|| recorded(&seats));
+    perform_all(
+        &seat_switch::on(recorded, allow_rdp_from_network),
+        seats,
+        host_path,
+    )
 }
 
 /// `{app}\staging\pfvdisplay`: the packages setup leaves beside the host for the console.
@@ -690,15 +723,9 @@ fn scopes_script() -> String {
     )
 }
 
-/// Note each rule's scope before the first change, so [`restore_scopes`] writes back what the
-/// operator had, even when they narrow the rules in a later turn-on. Only a key this build
-/// created notes them: on an older one the rules may be narrowed already.
+/// Note each rule's scope, so [`restore_scopes`] writes back what the operator had, even when
+/// they narrow the rules in a later turn-on.
 fn record_scopes(seats: &RegKey) -> WinResult<()> {
-    if seats.get_value::<u32, _>(ENABLING).is_err()
-        || seats.get_value::<String, _>(RDP_RULE_SCOPES).is_ok()
-    {
-        return Ok(());
-    }
     let fail = |cause: String| {
         refuse(
             "rdp_firewall",
@@ -711,22 +738,6 @@ fn record_scopes(seats: &RegKey) -> WinResult<()> {
     seats
         .set_value(RDP_RULE_SCOPES, &scopes.join("\n"))
         .map_err(|cause| fail(cause.to_string()))
-}
-
-/// The rules may be narrowed to this PC: a turn-on noted that it narrows them, the operator
-/// chose so, or a turn-on was cut off after noting their scopes and before noting the choice.
-/// A key from a build without the note falls back on the last two. Restoring a rule that was
-/// not narrowed writes back the scope it has.
-fn narrowed(seats: &RegKey) -> bool {
-    narrowed_by(
-        seats.get_value::<u32, _>(RDP_RULES_NARROWED).is_ok(),
-        seats.get_value::<u32, _>(RDP_FROM_NETWORK).ok(),
-        seats.get_value::<String, _>(RDP_RULE_SCOPES).is_ok(),
-    )
-}
-
-fn narrowed_by(noted: bool, choice: Option<u32>, scopes_noted: bool) -> bool {
-    noted || choice.map_or(scopes_noted, |choice| choice == 0)
 }
 
 /// The `(rule, addresses)` pairs [`record_scopes`] wrote. A line with no address is dropped.
@@ -1172,19 +1183,6 @@ mod tests {
         assert!(script.contains("@('RemoteDesktop-UserMode-In-TCP','{guid-1}') -notcontains"));
         // With no record every rule opens, as before the scopes were kept.
         assert!(restore_script(&[]).contains("@() -notcontains $_.Name"));
-    }
-
-    #[test]
-    fn a_cut_off_turn_on_that_noted_the_scopes_may_have_narrowed_them() {
-        // A switch to this PC only that failed after narrowing still holds the old choice.
-        assert!(narrowed_by(true, Some(1), true));
-        assert!(narrowed_by(true, None, true));
-        // Without the note, as an older build leaves the key, the choice decides.
-        assert!(narrowed_by(false, Some(0), false));
-        assert!(!narrowed_by(false, Some(1), true));
-        assert!(narrowed_by(false, None, true));
-        // An older key has no record and always has the choice; a bare key has neither.
-        assert!(!narrowed_by(false, None, false));
     }
 
     #[test]
