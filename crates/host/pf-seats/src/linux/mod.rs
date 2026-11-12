@@ -162,7 +162,7 @@ struct Inner {
     hook: OnceLock<UnitHook>,
     /// The prerequisite checks `Seating` last answered with, and when they ran.
     checks: Mutex<Option<(Instant, Vec<Diagnostic>)>>,
-    /// Held by a removal throughout and by [`keep_level`] for each seat it refreshes, so a
+    /// Held by a removal throughout and by [`level_seat`] for each seat it refreshes, so a
     /// refresh never writes a removed seat's trust copy or environment file back.
     level: Mutex<()>,
     /// Each person's row's device list, loaded on first use. Held across each change, its save
@@ -1531,15 +1531,11 @@ impl LinuxBackend {
     }
 }
 
-/// While a seat runs: refreshes its trust copy when the box's files change, the environment file
-/// of a row on a person's own account, and, for a seat other than the owner's, the box's library,
-/// which follows the owner's own first. A person's pairing list follows who its row admits, as
-/// presence runs out. Ends a person's headless session when they sit down at the machine, and
-/// repairs the games folder's ACL mask after a made seat stops and every [`ACL_EVERY`]. Logs,
-/// once per library load of the unit's run, why a made seat's Steam couldn't open a library
-/// folder; a load the log keeps from the last run is passed over. The owner's
-/// row stays listed while its host is the owner's own, which reads the same copy. Ends when the
-/// backend is dropped.
+/// Keeps every running seat level with the box, every [`TRUST_TICK`], one job after another: the
+/// box's library, each seat's copies and the desk yield of a row on a person's own account, a made
+/// seat's missed libraries every [`REACH_EVERY`], the games folder's ACL mask. Each job's memory
+/// is a local here, handed to it. The owner's row stays listed while its host is the owner's own,
+/// which reads the same copy. Ends when the backend is dropped.
 fn keep_level(inner: Weak<Inner>) {
     let mut acl_at = Instant::now();
     let mut reach_at = Instant::now();
@@ -1549,15 +1545,7 @@ fn keep_level(inner: Weak<Inner>) {
     loop {
         std::thread::sleep(TRUST_TICK);
         let Some(inner) = inner.upgrade() else { return };
-        // Logged once per outage, like a trust copy below.
-        match refresh_box_library(&inner) {
-            Ok(_) => library_failing = false,
-            Err(error) if !library_failing => {
-                library_failing = true;
-                tracing::warn!(%error, "box library not copied");
-            }
-            Err(_) => {}
-        }
+        level_box_library(&inner, &mut library_failing);
         let seats: Vec<(SeatId, Tracked)> = inner
             .running
             .lock()
@@ -1566,38 +1554,8 @@ fn keep_level(inner: Weak<Inner>) {
             .map(|(id, tracked)| (id.clone(), tracked.clone()))
             .collect();
         for (id, tracked) in &seats {
-            let level = inner.level.lock().unwrap_or_else(|e| e.into_inner());
-            // Removed since the list was taken: its files are gone and stay gone.
-            let tracked_now = inner.running.lock().unwrap_or_else(|e| e.into_inner());
-            if !tracked_now.contains_key(id) {
+            if !level_seat(&inner, id, tracked, &mut failing) {
                 continue;
-            }
-            drop(tracked_now);
-            let trust = match tracked.kind {
-                Own::Person => person_trust(&inner, id, tracked.reader),
-                _ => shared::refresh_trust(&inner.box_dir, &inner.state, id, tracked.reader),
-            };
-            let refreshed = trust
-                .and_then(|_| match &tracked.guest {
-                    Some((seat, passwd)) => {
-                        rewrite_env(&inner, seat, tracked.kind, passwd).map(|_| ())
-                    }
-                    None => Ok(()),
-                })
-                .and_then(|()| match tracked.kind {
-                    Own::Owner => Ok(false),
-                    _ => shared::refresh_seat_library(&inner.state, id, tracked.reader),
-                });
-            drop(level);
-            match refreshed {
-                Ok(_) => {
-                    failing.remove(id);
-                }
-                // Logged once per outage, not every tick.
-                Err(error) if failing.insert(id.clone()) => {
-                    tracing::warn!(seat = %id, %error, "trust copy not refreshed");
-                }
-                Err(_) => {}
             }
             if let Some((seat, _)) = &tracked.guest {
                 yield_to_the_desk(&inner, seat);
@@ -1605,31 +1563,110 @@ fn keep_level(inner: Weak<Inner>) {
         }
         if reach_at.elapsed() >= REACH_EVERY {
             reach_at = Instant::now();
-            for (id, tracked) in seats.iter().filter(|(_, tracked)| tracked.guest.is_none()) {
-                let Ok(Some(passwd)) = accounts::lookup(&tracked.account) else {
-                    continue;
-                };
-                let Some(missed) = reach::missed(&passwd.home) else {
-                    continue;
-                };
-                if explained.get(id) == Some(&missed.stamp) {
-                    continue;
-                }
-                if reach::this_run(&missed, &session::unit(&tracked.account)) {
-                    reach::explain(id, &passwd, &missed);
-                }
-                explained.insert(id.clone(), missed.stamp);
-            }
+            explain_reach(&seats, &mut explained);
         }
-        let seat_up = seats.iter().any(|(_, tracked)| tracked.guest.is_none());
-        let due = seat_up && acl_at.elapsed() >= ACL_EVERY;
-        if inner.acl_dirty.swap(false, Ordering::SeqCst) || due {
-            acl_at = Instant::now();
-            if let Err(error) = shared::fix_acl(&inner.state) {
-                tracing::warn!(%error, "games ACL mask not repaired");
-            }
+        repair_acl(&inner, &seats, &mut acl_at);
+    }
+}
+
+/// Brings the box's library level with the owner's own. A failure is logged once per outage:
+/// `failing` says whether the last one failed.
+fn level_box_library(inner: &Inner, failing: &mut bool) {
+    match refresh_box_library(inner) {
+        Ok(_) => *failing = false,
+        Err(error) if !*failing => {
+            *failing = true;
+            tracing::warn!(%error, "box library not copied");
+        }
+        Err(_) => {}
+    }
+}
+
+/// Refreshes `id`'s copies ([`refresh_copies`]) under the level lock, so a removal never sees
+/// them written back. A seat removed since `tracked` was read is left alone, and this returns
+/// `false`: its files are gone and stay gone. A failure is logged once per outage: `failing` holds
+/// the seats whose last refresh failed.
+fn level_seat(
+    inner: &Inner,
+    id: &SeatId,
+    tracked: &Tracked,
+    failing: &mut HashSet<SeatId>,
+) -> bool {
+    let level = inner.level.lock().unwrap_or_else(|e| e.into_inner());
+    let tracked_now = inner.running.lock().unwrap_or_else(|e| e.into_inner());
+    if !tracked_now.contains_key(id) {
+        return false;
+    }
+    drop(tracked_now);
+    let refreshed = refresh_copies(inner, id, tracked);
+    drop(level);
+    match refreshed {
+        Ok(()) => {
+            failing.remove(id);
+        }
+        Err(error) if failing.insert(id.clone()) => {
+            tracing::warn!(seat = %id, %error, "trust copy not refreshed");
+        }
+        Err(_) => {}
+    }
+    true
+}
+
+/// A running seat's trust copy, whose pairing list follows who a person's row admits as presence
+/// runs out; then the environment file of a row on a person's own account; then, for a seat other
+/// than the owner's, the box's library in its trust copy. The first failure ends it.
+fn refresh_copies(inner: &Inner, id: &SeatId, tracked: &Tracked) -> Result<(), BackendError> {
+    let (box_dir, state, reader) = (&inner.box_dir, &inner.state, tracked.reader);
+    match tracked.kind {
+        Own::Person => person_trust(inner, id, reader)?,
+        Own::Owner | Own::Seat => shared::refresh_trust(box_dir, state, id, reader)?,
+    };
+    if let Some((seat, passwd)) = &tracked.guest {
+        rewrite_env(inner, seat, tracked.kind, passwd)?;
+    }
+    if tracked.kind != Own::Owner {
+        shared::refresh_seat_library(state, id, reader)?;
+    }
+    Ok(())
+}
+
+/// Logs, once per library load of the unit's run, why a made seat's Steam couldn't open a library
+/// folder; a load the log keeps from the last run is passed over. `explained` holds the load each
+/// seat was last read at.
+fn explain_reach(seats: &[(SeatId, Tracked)], explained: &mut HashMap<SeatId, String>) {
+    for (id, tracked) in seats.iter().filter(|(_, tracked)| tracked.kind.ours()) {
+        let Ok(Some(passwd)) = accounts::lookup(&tracked.account) else {
+            continue;
+        };
+        let Some(missed) = reach::missed(&passwd.home) else {
+            continue;
+        };
+        if explained.get(id) == Some(&missed.stamp) {
+            continue;
+        }
+        if reach::this_run(&missed, &session::unit(&tracked.account)) {
+            reach::explain(id, &passwd, &missed);
+        }
+        explained.insert(id.clone(), missed.stamp);
+    }
+}
+
+/// Repairs the games folder's ACL mask when [`acl_due`]; `acl_at` is when it last did.
+fn repair_acl(inner: &Inner, seats: &[(SeatId, Tracked)], acl_at: &mut Instant) {
+    let seat_up = seats.iter().any(|(_, tracked)| tracked.kind.ours());
+    let dirty = inner.acl_dirty.swap(false, Ordering::SeqCst);
+    if acl_due(dirty, seat_up, acl_at.elapsed()) {
+        *acl_at = Instant::now();
+        if let Err(error) = shared::fix_acl(&inner.state) {
+            tracing::warn!(%error, "games ACL mask not repaired");
         }
     }
+}
+
+/// The ACL repair is due once a unit stopped since the last (`dirty`), and while a made seat is
+/// up once [`ACL_EVERY`] has passed `since` the last.
+fn acl_due(dirty: bool, seat_up: bool, since: Duration) -> bool {
+    dirty || (seat_up && since >= ACL_EVERY)
 }
 
 /// The one choice of how a person's cold start opens their session: through the login helper,
