@@ -1,9 +1,9 @@
 // What the game page knows about its title, and the brand pieces drawn for it.
 import { FC } from "react";
-import { startGameStream } from "./stream";
-import type { HostView } from "./hosts/model";
-import { t } from "./i18n";
-import { toast } from "./lib/toast";
+import type { HostView } from "../hosts/model";
+import { t } from "../i18n";
+import { toast } from "../lib/toast";
+import { startGameStream } from "../stream";
 
 /** What the game page knows about its title; what the per-game shortcut is dressed with. */
 export interface Game {

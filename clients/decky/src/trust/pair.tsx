@@ -3,10 +3,10 @@
 import { DialogButton, Focusable, ModalRoot, Spinner } from "@decky/ui";
 import { toaster } from "@decky/api";
 import { FC, useState } from "react";
-import { pair } from "./backend";
-import { diag } from "./lib/diag";
-import type { HostView } from "./hosts/model";
-import { rejectText, t } from "./i18n";
+import { pair } from "../backend";
+import { diag } from "../lib/diag";
+import type { HostView } from "../hosts/model";
+import { rejectText, t } from "../i18n";
 
 /**
  * User-facing copy for a failed ceremony. The CLI's stable exit codes say WHICH failure it was,

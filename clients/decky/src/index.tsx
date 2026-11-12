@@ -37,7 +37,7 @@ import {
   profiles as fetchProfiles,
   streamRunning,
 } from "./backend";
-import { PluginErrorBoundary } from "./boundary";
+import { PluginErrorBoundary } from "./ui/boundary";
 import { type HostView, needsPair, trustState } from "./hosts/model";
 import { refreshHosts, useHosts } from "./hosts/store";
 import { t } from "./i18n";
@@ -46,14 +46,14 @@ import {
   gamePageStreamEnabled,
   installGamePageStream,
   setGamePageStreamEnabled,
-} from "./library-page";
+} from "./game-page/library-page";
 import { OsMark } from "./os-icon";
 import { removeGameShortcuts } from "./steam/game-shortcuts";
 import { lastGameStream, launchGamepadUi, stopStream } from "./steam/launch";
 import { watchRunningStreams } from "./steam/running";
 import { ensureGamepadUiShortcut, recreateShortcuts } from "./steam/shortcuts";
 import { startStream } from "./stream";
-import { TrustSheet } from "./trust";
+import { TrustSheet } from "./trust/trust";
 import { applyUpdate, checkForUpdatesNow, useUpdate } from "./update/actions";
 import { clientUpdateIsManualOnly, clientUpdateIsOneTap, hasUpdate } from "./update/model";
 

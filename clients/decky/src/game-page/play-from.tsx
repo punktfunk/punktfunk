@@ -14,16 +14,16 @@
 import { findClassModule, Menu, MenuItem, MenuSeparator, showContextMenu } from "@decky/ui";
 import { cloneElement, createElement } from "react";
 import { FaCheck } from "react-icons/fa";
-import { hostsForApp, subscribeCatalog } from "./hosts/catalog";
+import { hostsForApp, subscribeCatalog } from "../hosts/catalog";
+import type { HostView } from "../hosts/model";
+import { getHostStore, subscribeHosts } from "../hosts/store";
+import { t } from "../i18n";
+import { diag } from "../lib/diag";
+import { read, write } from "../lib/storage";
+import { stopGameStream } from "../steam/launch";
+import { isGameStreaming, subscribeRunning } from "../steam/running";
 import { Game, PunktfunkMark, streamFrom } from "./game";
-import { getHostStore, subscribeHosts } from "./hosts/store";
-import type { HostView } from "./hosts/model";
-import { t } from "./i18n";
-import { diag } from "./lib/diag";
-import { read, write } from "./lib/storage";
 import { collectElements, createRenderPatcher, describe } from "./patch";
-import { stopGameStream } from "./steam/launch";
-import { isGameStreaming, subscribeRunning } from "./steam/running";
 
 declare const SteamClient: {
   Apps: { SetStreamingClientForApp(appId: number, clientId: string): void };
