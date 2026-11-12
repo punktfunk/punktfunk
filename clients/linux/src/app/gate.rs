@@ -367,7 +367,7 @@ fn request_access(
             &host,
             port,
             &identity,
-            Some(pin),
+            pin,
             &trust::device_name(),
             Some(asked),
         );

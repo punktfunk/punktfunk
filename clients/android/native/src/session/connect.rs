@@ -1127,7 +1127,7 @@ pub extern "system" fn Java_io_unom_punktfunk_kit_NativeBridge_nativeRequestAcce
         let out = if host.is_empty() || cert.is_empty() || key.is_empty() {
             log::error!("nativeRequestAccess: missing host/identity");
             String::new()
-        } else {
+        } else if let Some(pin) = pin {
             match NativeClient::request_access(
                 &host,
                 port as u16,
@@ -1144,6 +1144,10 @@ pub extern "system" fn Java_io_unom_punktfunk_kit_NativeBridge_nativeRequestAcce
                     String::new()
                 }
             }
+        } else {
+            // A host that advertised no fingerprint pairs by PIN; the app routes it there.
+            log::error!("nativeRequestAccess: no fingerprint to hold {host}:{port} to");
+            String::new()
         };
         env.new_string(out)
     })

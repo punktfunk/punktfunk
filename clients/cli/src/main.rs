@@ -108,11 +108,12 @@ punktfunk pair <host[:port]> [--json] — enrol this device with a host (PIN cer
                 and refuses (exit 6) when there is no terminal to ask on
   --request-access
                 no PIN: wait (up to ~185 s) for somebody to approve this device
-                in the host's console or web UI. Pins the fingerprint saved for
-                the host (`hosts add --fp`) if there is one. Never streams
+                in the host's console or web UI. Needs the host's fingerprint:
+                --fp, or the one saved for it (`hosts add --fp`). Never streams
   --fp HEX      with --request-access: the fingerprint the host must show.
                 Without it the one saved for this address is used — the newest
-                when the address names two hosts, as a dual-boot box does
+                when the address names two hosts, as a dual-boot box does. With
+                neither the command refuses (exit 5): pair with the PIN
   --name LABEL  the label the host files this device under
                 (default: this machine's name)
   --json        stdout is one object: {\"ok\":true,\"addr\",\"port\",\"fp\"}, or
@@ -695,7 +696,7 @@ from the config directory for a true factory reset."
 
     /// The pin `pair --request-access` holds the host to: `--fp` when given, else the one
     /// saved at this address, by [`KnownHosts::find_by_addr`] — the newest when the address
-    /// names two hosts, as a dual-boot box does. `None`: the first certificate shown is trusted.
+    /// names two hosts, as a dual-boot box does. `None`: nothing to hold the host to, so no request.
     fn access_pin(known: &KnownHosts, fp: Option<&str>, addr: &str, port: u16) -> Option<[u8; 32]> {
         match fp {
             Some(fp) => trust::parse_hex32(fp),
@@ -705,8 +706,8 @@ from the config directory for a true factory reset."
         }
     }
 
-    /// `pair --request-access`: wait for the host's operator, pinned by [`access_pin`]. A
-    /// `--fp` with no usable value refuses: it never degrades to trusting the first certificate.
+    /// `pair --request-access`: wait for the host's operator, pinned by [`access_pin`]. With no
+    /// usable `--fp` and no saved fingerprint it refuses: it never trusts the first certificate.
     fn request_access(args: &[String], addr: &str, port: u16) -> u8 {
         let fp = value(args, "--fp");
         if lacks_value(args, "--fp")
@@ -717,6 +718,13 @@ from the config directory for a true factory reset."
             eprintln!("--fp takes the host's 64-hex-digit fingerprint");
             return UNRESOLVED;
         }
+        let Some(pin) = access_pin(&KnownHosts::load(), fp.as_deref(), addr, port) else {
+            eprintln!(
+                "no fingerprint for {addr}: pass --fp HEX from the host's console, or pair \
+                 with its PIN — punktfunk pair {addr}"
+            );
+            return UNRESOLVED;
+        };
         let identity = match trust::load_or_create_identity() {
             Ok(i) => i,
             Err(e) => {
@@ -725,7 +733,6 @@ from the config directory for a true factory reset."
             }
         };
         let name = value(args, "--name").unwrap_or_else(trust::device_name);
-        let pin = access_pin(&KnownHosts::load(), fp.as_deref(), addr, port);
         eprintln!("waiting for {addr} to approve this device…");
         // The host's console shows the same code beside this request.
         if let Some(code) = trust::device_code(&identity) {
@@ -1890,7 +1897,7 @@ from the config directory for a true factory reset."
             assert_eq!(pin(Some(&windows)), trust::parse_hex32(&windows));
             assert_eq!(pin(Some(&linux)), trust::parse_hex32(&linux));
             assert_eq!(pin(None), trust::parse_hex32(&linux));
-            // Nothing saved there: the first certificate shown is trusted.
+            // Nothing saved there: no pin, and the request refuses.
             assert_eq!(access_pin(&known, None, "192.168.1.20", 9777), None);
         }
 

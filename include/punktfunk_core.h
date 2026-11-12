@@ -2860,8 +2860,8 @@ PunktfunkStatus punktfunk_pair(const char *host,
 //
 // # Safety
 // `host`/`client_cert_pem`/`client_key_pem`/`name` are NUL-terminated UTF-8; `pin_sha256`
-// is NULL (trust on first use) or valid for 32 bytes; `host_sha256_out` is writable for
-// 32 bytes.
+// is valid for 32 bytes, the fingerprint the host must show (NULL is refused: a host with
+// none pairs by PIN); `host_sha256_out` is writable for 32 bytes.
 PunktfunkStatus punktfunk_request_access(const char *host,
                                          uint16_t port,
                                          const char *client_cert_pem,

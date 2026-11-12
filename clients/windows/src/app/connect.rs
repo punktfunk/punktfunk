@@ -492,9 +492,15 @@ pub(crate) fn open_console(
 /// Approval saves the host as paired, so later connects are silent. It never starts a stream.
 pub(crate) fn request_access(props: &Svc, target: &Target) {
     let ctx = &props.ctx;
-    // Pin the advertised certificate for a discovered host (defence against a host impostor while
-    // we wait); a manually-typed host has no advertised fingerprint, so trust-on-first-use.
-    let pin = target.host.fp_hex.as_deref().and_then(trust::parse_hex32);
+    // The request names the advertised certificate, so an impostor cannot answer while we wait.
+    // A typed host has none and pairs by PIN; the pair page offers a request only with one.
+    let Some(pin) = target.host.fp_hex.as_deref().and_then(trust::parse_hex32) else {
+        props
+            .set_status
+            .call(desktop::desktop_pair_no_advert().to_string());
+        props.set_screen.call(Screen::Pair);
+        return;
+    };
     // A fresh cancel flag per request, where the waiting screen's Cancel button reads it.
     let cancel = Arc::new(AtomicBool::new(false));
     *ctx.shared.cancel.lock().unwrap() = Some(cancel.clone());

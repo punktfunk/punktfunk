@@ -377,8 +377,19 @@ fn hosts_add_reports_what_it_did() {
     std::fs::remove_dir_all(&store).ok();
 }
 
-/// A `--fp` with nothing after it refuses. Read as "no pin", `pair --request-access` would
-/// trust the first certificate the host shows.
+/// A request with no fingerprint to hold the host to refuses before it dials: no `--fp`, and
+/// nothing saved at the address.
+#[test]
+fn a_request_without_a_fingerprint_refuses() {
+    let store = scratch_store("no-fp-request", "");
+    let out = punktfunk_in(&store, &["pair", "127.0.0.1:1", "--request-access"]);
+    assert_eq!(out.status.code(), Some(5), "{}", stderr_of(&out));
+    assert!(stderr_of(&out).starts_with("no fingerprint for 127.0.0.1"));
+    assert!(!store.join("client-known-hosts.json").exists());
+    std::fs::remove_dir_all(&store).ok();
+}
+
+/// A `--fp` with nothing after it is a usage error, not a request without a pin.
 #[test]
 fn a_bare_fp_is_a_usage_error() {
     let store = scratch_store("bare-fp", "");
