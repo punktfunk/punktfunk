@@ -140,7 +140,7 @@ export const HostRow: FC<{ host: HostView; showAddress: boolean }> = ({ host, sh
     );
   return (
     <PanelSectionRow>
-      <Focusable style={{ display: "flex", gap: "0.4em" }} flow-children="horizontal">
+      <Focusable style={{ display: "flex", gap: "0.4em" }} flow-children="row">
         <DialogButton
           style={{ flex: 1, minWidth: 0 }}
           onClick={() => void startStream(host)}
