@@ -1601,6 +1601,7 @@ dependencies = [
 name = "pf-paths"
 version = "0.46.0"
 dependencies = [
+ "pf-paths-win",
  "tracing",
 ]
 

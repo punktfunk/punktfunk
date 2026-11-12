@@ -103,18 +103,19 @@ fn fresh_root() -> Result<PathBuf, String> {
     if elevated {
         // `%ProgramData%` lets any account create `punktfunk\setup` ahead of the first install,
         // own what it puts there and keep FILE_DELETE_CHILD over the extract root. The host
-        // trusts a file Administrators own, so the parent is locked and cleared, not re-owned.
+        // trusts a file Administrators own, so a folder another account owns goes aside whole,
+        // and one that was open is locked and cleared, never re-owned.
         let parent = base.parent().unwrap_or(&base);
-        let refused = |e: String| pf_l10n::tools::setup_win_data_dir_failed(parent.display(), e);
+        let refused = |e: std::io::Error| {
+            pf_l10n::tools::setup_win_data_dir_failed(parent.display(), e.to_string())
+        };
         if parent.symlink_metadata().is_ok() {
-            pf_paths_win::set_aside_if_planted(parent).map_err(|e| refused(e.to_string()))?;
+            pf_paths_win::set_aside_if_planted(parent).map_err(refused)?;
         }
-        if lock_dir(parent, ADMIN_ONLY, &ADMIN_ONLY_GRANTS).map_err(refused)? {
-            pf_paths_win::quarantine_planted_tree(parent).map_err(|e| refused(e.to_string()))?;
-        }
+        pf_paths::create_private_dir(parent).map_err(refused)?;
         pf_paths::create_private_dir(&base).map_err(|e| format!("{}: {e}", base.display()))?;
         // Hardening is not proof: the host's own check on what is actually there, so a
-        // grant the reset missed refuses the install instead of staging into it.
+        // grant the lock missed refuses the install instead of staging into it.
         pf_paths_win::ensure_admin_only_source(&base)
             .map_err(|e| format!("{} isn't admin-only after hardening: {e}", base.display()))?;
     } else {
@@ -122,7 +123,7 @@ fn fresh_root() -> Result<PathBuf, String> {
     }
     let root = base.join(format!("{}-{}", std::process::id(), sys::random_hex(4)?));
     if elevated {
-        protected_dir(&root, ADMIN_ONLY)?;
+        protected_dir(&root, pf_paths_win::ADMIN_ONLY)?;
     } else {
         std::fs::create_dir(&root).map_err(|e| format!("{}: {e}", root.display()))?;
     }
@@ -163,30 +164,10 @@ fn elevated() -> bool {
     }
 }
 
-/// Owner Administrators; SYSTEM and Administrators full control, inherited; nothing else, and
-/// protected from the parent's ACL: exactly what `ensure_admin_only_source` checks.
-const ADMIN_ONLY: &str = "O:BAG:BAD:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)";
-/// [`ADMIN_ONLY`]'s ACEs as icacls spells them.
-const ADMIN_ONLY_GRANTS: [&str; 2] = ["*S-1-5-18:(OI)(CI)(F)", "*S-1-5-32-544:(OI)(CI)(F)"];
-
 /// Create `path` with `sddl` as its descriptor from the first instant, so nothing lands in it
 /// under the parent's ACL. Fails if `path` exists.
-pub(crate) fn protected_dir(path: &Path, sddl: &str) -> Result<(), String> {
-    use windows::core::HSTRING;
-    use windows::Win32::fileapi::CreateDirectoryW;
-
-    let attributes = pf_paths_win::SecurityAttributes::new(sddl)
-        .map_err(|e| format!("security descriptor: {e}"))?;
-    // SAFETY: `attributes` outlives the call, which only reads it. The cast is between two
-    // versions of the `windows` crate that declare the same C struct.
-    unsafe {
-        CreateDirectoryW(
-            &HSTRING::from(path.as_os_str()),
-            Some(attributes.as_ptr().cast_mut().cast()),
-        )
-    }
-    .ok()
-    .map_err(|e| format!("create {}: {e}", path.display()))
+fn protected_dir(path: &Path, sddl: &str) -> Result<(), String> {
+    pf_paths_win::create_dir_with(path, sddl).map_err(|e| format!("create {}: {e}", path.display()))
 }
 
 /// Give `dir` the DACL `sddl` describes (`grants`: its ACEs as icacls spells them): a missing
