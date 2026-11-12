@@ -43,6 +43,7 @@
     { "key": "decoder", "category": "display", "advanced": true, "options": ["auto", "native-vulkan", "native-vaapi", "native-d3d11va", "software"], "default": "auto", "preset": false, "on": ["desktop"] },
     { "key": "low_latency", "category": "display", "advanced": true, "default": true, "preset": true, "on": ["android"] },
     { "key": "keep_awake", "category": "display", "advanced": true, "default": true, "preset": false, "on": ["desktop", "android", "apple"] },
+    { "key": "game_picture", "category": "display", "advanced": true, "default": true, "preset": false, "on": ["webos"] },
     { "key": "screen", "category": "display", "advanced": false, "options": ["flat", "4000r", "3000r", "2300r", "1800r", "1500r", "1000r", "800r"], "default": "flat", "preset": false, "on": ["apple"] },
 
     { "key": "audio_channels", "category": "audio", "advanced": false, "options": ["2", "6", "8"], "default": "2", "preset": true, "on": ["desktop", "android", "apple", "webos", "web", "tizen", "ps5"] },
