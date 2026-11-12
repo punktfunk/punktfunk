@@ -1000,7 +1000,8 @@ impl Tally {
 
 /// [`LIBRARY_PROFILES`] from `src` into `dst`: the folder of each profile id `keep` admits,
 /// holding [`PROFILE_FILES`] alone, and every other folder in `dst` emptied and removed. A name
-/// that is no profile id, or a link or file where a folder belongs, counts as absent.
+/// that is no profile id, or a link or file where a folder belongs, counts as absent. A folder
+/// on its way out loses the temp a cut-short copy left too.
 fn sync_profiles(
     src: Option<&OwnedFd>,
     dst: &OwnedFd,
@@ -1011,6 +1012,9 @@ fn sync_profiles(
         let mut tally = Tally::default();
         for name in PROFILE_FILES {
             tally.note(sync_file(src, copy, name, reader, MAX_LIBRARY_BYTES));
+            if src.is_none() {
+                tally.note(unlink(copy, &format!("{name}.tmp")));
+            }
         }
         tally.answer()
     };
@@ -2016,7 +2020,8 @@ mod tests {
         assert_eq!(mode(&trust.join(ANNA).join("library-hidden.json")), 0o600);
         assert!(!seat_copy(&box_dir).unwrap(), "unchanged is a no-op");
 
-        // The seat becomes Ben's: Anna's folder goes.
+        // The seat becomes Ben's: Anna's folder goes, with what a cut-short copy left.
+        std::fs::write(trust.join(ANNA).join("library-picks.json.tmp"), "{").unwrap();
         profiles_on(&box_dir, OTHER_SEAT, id().as_str());
         assert!(seat_copy(&box_dir).unwrap());
         assert_eq!(listing(&trust), [BEN]);
