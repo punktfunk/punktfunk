@@ -2,11 +2,11 @@
 //! `\\.\pipe\punktfunk-seats` pipe the console host reaches it through.
 //!
 //! Seat hosts run in the supervisor's own jobs, never the console host's, so a console relaunch
-//! leaves them running; the service stopping logs their accounts off. The pipe opens first;
-//! autostart seats then come up one at a time beside it, once TermService runs. Without
-//! `HKLM\SOFTWARE\Punktfunk\Seats` the ledger is still served and every start answers
-//! `seats_off`. A slot that cannot open logs the reason and stays inert: seats never stop the
-//! service.
+//! leaves them running; the service stopping logs their accounts off. Autostart seats come up
+//! one at a time once TermService runs, beside the pipe, which waits out a name another process
+//! holds. Without `HKLM\SOFTWARE\Punktfunk\Seats` the ledger is still served and every start
+//! answers `seats_off`. A slot that cannot open logs the reason and stays inert: seats never stop
+//! the service.
 
 use super::*;
 use pf_seats::windows::pipe::{wake, PipeServer};
@@ -81,20 +81,14 @@ impl SeatsSlot {
 }
 
 /// The pipe until the slot stops, with autostart seats, then the seats of recent players, coming
-/// up beside it: a start takes minutes, and the console reads the seats meanwhile. A start's
-/// first failure is logged here; the supervisor logs every failure after that.
+/// up beside it: a start takes minutes, and the console reads the seats meanwhile. They come up
+/// while the pipe waits for its name too. A start's first failure is logged here; the supervisor
+/// logs every failure after that.
 fn serve(
     service: Arc<SeatService<WindowsBackend>>,
     backend: &WindowsBackend,
     stop: &Arc<AtomicBool>,
 ) {
-    let server = match PipeServer::bind(pf_seats::ipc::PIPE_NAME, Arc::clone(&service)) {
-        Ok(server) => server,
-        Err(error) => {
-            tracing::error!("seats pipe did not open: {error}");
-            return;
-        }
-    };
     {
         let (service, backend, stop) = (Arc::clone(&service), backend.clone(), Arc::clone(stop));
         let spawned = std::thread::Builder::new()
@@ -104,6 +98,9 @@ fn serve(
             tracing::warn!("seat warm-up did not start: {error}");
         }
     }
+    let Some(server) = PipeServer::bind_until(pf_seats::ipc::PIPE_NAME, service, stop) else {
+        return;
+    };
     tracing::info!(pipe = pf_seats::ipc::PIPE_NAME, "seat supervisor serving");
     server.serve_until(stop);
 }

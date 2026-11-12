@@ -3,20 +3,22 @@
 //! One instance waits at a time. Each connection gets its own thread, answers one request
 //! ([`crate::ipc::answer`]) and closes. The first instance carries
 //! `FILE_FLAG_FIRST_PIPE_INSTANCE`, so a process that created the name first makes
-//! [`PipeServer::bind`] fail instead of answering clients in the supervisor's place. The pipe
-//! mode refuses remote clients. [`wake`] ends a wait so the loop can see its stop flag;
+//! [`PipeServer::bind`] fail instead of answering clients in the supervisor's place;
+//! [`PipeServer::bind_until`] tries again until the name is free. The pipe mode refuses remote
+//! clients. [`wake`] ends a wait so the loop can see its stop flag;
 //! [`request`] is the client the console host calls. It talks only to a server that runs as
 //! LocalSystem, since the name has no owner while the service is down, and it gives up on an
 //! answer that takes too long.
 
 use super::util::{io_error, process_is_local_system, wide, WinResult};
 use crate::backend::PlatformBackend;
+use crate::backoff::{Backoff, Curve, Reset};
 use crate::service::SeatService;
 use pf_paths_win::SecurityAttributes;
 use std::os::windows::io::{AsRawHandle as _, FromRawHandle as _, OwnedHandle};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use windows::core::{Owned, PCWSTR};
 use windows::Win32::Foundation::{ERROR_PIPE_CONNECTED, HANDLE};
 use windows::Win32::Storage::FileSystem::{
@@ -33,6 +35,15 @@ use windows::Win32::System::IO::CancelIoEx;
 const MAX_CONNECTIONS: usize = 8;
 /// A whole frame and its length prefix fit in the pipe's buffer.
 const BUFFER_BYTES: u32 = crate::ipc::MAX_FRAME_BYTES as u32 + 4;
+/// The wait before binding again a name another process holds: whoever made it first may hold
+/// it for as long as it runs.
+const BIND_RETRY: Backoff = Backoff::new(
+    Curve::Doubling {
+        first: Duration::from_secs(1),
+        cap: Duration::from_secs(30),
+    },
+    Reset::Never,
+);
 
 /// Serves [`crate::ipc`] requests on one pipe name until a stop flag is set.
 pub struct PipeServer<B> {
@@ -52,6 +63,31 @@ impl<B: PlatformBackend> PipeServer<B> {
             first: Some(first),
             active: Arc::new(AtomicUsize::new(0)),
         })
+    }
+
+    /// [`Self::bind`], tried again after [`BIND_RETRY`]'s wait while it fails, until it binds.
+    /// `None` once `stop` is set. An outage logs its first failure and its end.
+    pub fn bind_until(name: &str, service: Arc<SeatService<B>>, stop: &AtomicBool) -> Option<Self> {
+        let mut retry = BIND_RETRY;
+        while !stop.load(Ordering::SeqCst) {
+            let error = match Self::bind(name, Arc::clone(&service)) {
+                Ok(server) => {
+                    if retry.failures() > 0 {
+                        tracing::info!(pipe = name, "seats pipe open");
+                    }
+                    return Some(server);
+                }
+                Err(error) => error,
+            };
+            if retry.failures() == 0 {
+                tracing::error!(pipe = name, %error, "seats pipe did not open; trying again");
+            }
+            let until = Instant::now() + retry.failed(Instant::now());
+            while Instant::now() < until && !stop.load(Ordering::SeqCst) {
+                std::thread::sleep(Duration::from_millis(100));
+            }
+        }
+        None
     }
 
     /// Accepts until `stop` is set and [`wake`] has ended the wait in progress.
@@ -344,6 +380,25 @@ mod tests {
         stop.store(true, Ordering::SeqCst);
         wake(&name);
         serving.join().unwrap();
+    }
+
+    /// A name another process holds is bound once it is free, and a stop ends the tries.
+    #[test]
+    fn a_held_name_is_bound_once_it_is_free() {
+        let temp = tempfile::tempdir().unwrap();
+        let service = Arc::new(SeatService::open(temp.path(), crate::UnsupportedBackend).unwrap());
+        let name = name("held-name");
+        let squatter = create_instance(&name, true).unwrap();
+        let stopped = AtomicBool::new(true);
+        assert!(PipeServer::bind_until(&name, Arc::clone(&service), &stopped).is_none());
+        let stop = AtomicBool::new(false);
+        std::thread::scope(|scope| {
+            let binding = scope.spawn(|| PipeServer::bind_until(&name, service, &stop));
+            std::thread::sleep(Duration::from_millis(500));
+            assert!(!binding.is_finished(), "the name is still held");
+            drop(squatter);
+            assert!(binding.join().unwrap().is_some());
+        });
     }
 
     /// A backend whose Doctor holds until the test drops the sending end.
