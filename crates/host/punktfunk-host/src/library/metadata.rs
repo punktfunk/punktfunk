@@ -591,6 +591,7 @@ mod tests {
             ids: BTreeMap::new(),
             filled: BTreeMap::new(),
             install: None,
+            own: false,
             meta: GameMeta::default(),
         }
     }
