@@ -82,6 +82,23 @@ fn peer_grants(peer: &Option<Extension<PeerCertFingerprint>>, st: &AppState) -> 
     }
 }
 
+/// Whether this peer may play the owner's profile, which a GameStream session plays as. Moonlight
+/// has no profiles and no prompt: a locked owner opens only for a Moonlight device on its list.
+/// No profile store, as in a test that skips `serve`, locks nothing.
+fn opens_owner(peer: &Option<Extension<PeerCertFingerprint>>, st: &AppState) -> bool {
+    let Some(profiles) = st.profiles.get() else {
+        return true;
+    };
+    let owner = profiles
+        .owner_id()
+        .unwrap_or_else(|| crate::profiles::OPERATOR_PROFILE_ID.to_string());
+    let fp = match peer {
+        Some(Extension(PeerCertFingerprint(Some(fp)))) => Some(fp.as_str()),
+        _ => None,
+    };
+    profiles.opens(&owner, fp) == crate::profiles::Opens::Yes
+}
+
 /// Resume/cancel: true if there is no session, fingerprints match, or either side is unknown.
 /// Unknown fingerprints fail open so a same-client control is never locked out.
 fn peer_may_control_session(peer: &Option<Extension<PeerCertFingerprint>>, st: &AppState) -> bool {
@@ -257,6 +274,10 @@ async fn launch_under(
             return xml(error_xml(EXPIRED)).into_response();
         }
     }
+    if !opens_owner(&peer, &st) {
+        tracing::warn!("launch rejected — the owner's profile is locked to other devices");
+        return xml(error_xml(LOCKED)).into_response();
+    }
     let req_fp: Option<[u8; 32]> = peer_fp(&peer);
 
     // Snapshot owner + mode (Copy) so the launch lock is not held over admission.
@@ -423,6 +444,10 @@ async fn h_resume(
             tracing::warn!("resume rejected — this client's access has expired");
             return xml(error_xml(EXPIRED));
         }
+    }
+    if !opens_owner(&peer, &st) {
+        tracing::warn!("resume rejected — the owner's profile is locked to other devices");
+        return xml(error_xml(LOCKED));
     }
     if !peer_may_control_session(&peer, &st) {
         tracing::warn!("resume rejected — caller does not own the session");
@@ -784,6 +809,8 @@ const BUSY: &str = "Another device is streaming from this host. Try again when i
 const LAUNCH_FAILED: &str =
     "The host couldn't start this app. Refresh the app list, then try again.";
 const NOT_OWNER: &str = "This session belongs to another device";
+const LOCKED: &str =
+    "The host's owner locked their profile to the devices they chose. Ask them to add this one.";
 const NO_SESSION: &str = "There's no session to resume. Start the app again.";
 const RESUME_FAILED: &str = "The host couldn't resume this session. Start the app again.";
 
@@ -898,6 +925,47 @@ mod tests {
             !peer_is_paired(&other, &st),
             "a non-pinned cert stays rejected"
         );
+    }
+
+    /// A locked owner's profile refuses a Moonlight launch and resume from a device off its list,
+    /// with the sentence Moonlight shows, and lets one on it through to the launch itself.
+    #[tokio::test]
+    async fn a_locked_owner_refuses_moonlight_off_its_list() {
+        let st = test_state();
+        let (listed, other) = (b"listed-moonlight".to_vec(), b"other-moonlight".to_vec());
+        st.paired
+            .lock()
+            .unwrap()
+            .extend([listed.clone(), other.clone()]);
+        let path = crate::test_support::scratch().join("profiles.json");
+        let profiles = crate::profiles::Profiles::load_with(Some(path), None);
+        profiles.ensure_owner("box").unwrap();
+        let owner = profiles.owner_id().unwrap();
+        let profiles = Arc::new(profiles);
+        assert!(st.profiles.set(profiles.clone()).is_ok());
+        let launch = |der: &[u8]| {
+            let peer = PeerCertFingerprint(Some(fp_of(der)));
+            let st = st.clone();
+            async move { drive(&st, "/launch", Some(peer)).await.1 }
+        };
+        assert_eq!(launch(&other).await, error_xml(LAUNCH_FAILED), "open");
+        let device = pf_seats::ipc::Device {
+            fingerprint: fp_of(&listed),
+            name: "Moonlight".into(),
+        };
+        let locked = profiles.locks().edit(&owner, |lock, now| {
+            lock.locked = true;
+            lock.admit(&device, now, true)
+        });
+        assert!(locked.unwrap());
+        assert_eq!(launch(&other).await, error_xml(LOCKED));
+        assert_eq!(launch(&listed).await, error_xml(LAUNCH_FAILED));
+        let peer = Some(Extension(PeerCertFingerprint(Some(fp_of(&other)))));
+        let resumed = h_resume(State(st.clone()), peer, None, Query(HashMap::new())).await;
+        let body = axum::body::to_bytes(resumed.into_response().into_body(), 1 << 20)
+            .await
+            .unwrap();
+        assert_eq!(String::from_utf8_lossy(&body), error_xml(LOCKED));
     }
 
     #[test]
