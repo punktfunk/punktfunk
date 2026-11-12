@@ -520,6 +520,8 @@ extension ConsoleModel {
         Task { @MainActor [weak self] in
             let result = await Task.detached(priority: .userInitiated) {
                 Result {
+                    // The console offers a request only for a host that advertised one.
+                    guard let pin else { throw PunktfunkClientError.invalidPin }
                     let identity = try ClientIdentityStore.shared.loadForPairing()
                     return try PunktfunkKit.requestAccess(
                         host: addr, port: port, identity: identity, pinSHA256: pin, name: name)

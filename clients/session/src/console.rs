@@ -749,8 +749,12 @@ impl ServiceState {
                     port,
                     req,
                     trust::access_error_message,
-                    move |a, p, id| {
-                        trust::request_access_to_host(a, p, id, pin, &device_name, None)
+                    // The console offers a request only for a host that advertised a fingerprint.
+                    move |a, p, id| match pin {
+                        Some(pin) => {
+                            trust::request_access_to_host(a, p, id, pin, &device_name, None)
+                        }
+                        None => Err(punktfunk_core::PunktfunkError::InvalidArg("fingerprint")),
                     },
                 )
             }

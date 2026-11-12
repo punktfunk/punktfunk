@@ -1,6 +1,6 @@
 // What a plugin can reach is decided entirely by this argv, so it is worth pinning: an empty home,
 // its own state and token, the paths it declared — and nothing that was not asked for.
-import { describe, expect, test } from "bun:test";
+import { describe, expect, setDefaultTimeout, test } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -43,6 +43,9 @@ const binds = (argv: string[], flag: string): Array<[string, string]> => {
 	}
 	return out;
 };
+
+// The refusal tests resolve paths under `/home`, which macOS automounts: each lookup takes long.
+setDefaultTimeout(60_000);
 
 describe("refusedRoot", () => {
 	test("keeps the host's processes, sockets, keys and credentials out of every sandbox", () => {

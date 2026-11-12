@@ -128,9 +128,10 @@ fun FingerprintChangedPrompt(
 }
 
 /**
- * A fresh pair=required (or manual/unknown-policy) host: offer the two ways in. "Request access" is
+ * A fresh pair=required (or manual/unknown-policy) host: offer the ways in. "Request access" is
  * the no-PIN path — connect and wait for the operator to click Approve in the host's console;
- * "Use a PIN…" switches to the SPAKE2 ceremony.
+ * "Use a PIN…" switches to the SPAKE2 ceremony. A request names the fingerprint the host must
+ * show, so a typed host, which has none, is offered the PIN only.
  */
 @Composable
 fun RequestAccessPrompt(
@@ -139,17 +140,19 @@ fun RequestAccessPrompt(
     onUsePin: () -> Unit,
     onDismiss: () -> Unit,
 ) {
+    val canRequest = !pt.advertisedFp.isNullOrBlank()
     PunktfunkDialog(
         title = stringResource(R.string.pair_required_title),
         onDismiss = onDismiss,
-        actions = listOf(
-            DialogAction(stringResource(R.string.pair_request_access), primary = true, onClick = onRequestAccess),
-            DialogAction(stringResource(R.string.pair_use_pin), onClick = onUsePin),
+        actions = listOfNotNull(
+            DialogAction(stringResource(R.string.pair_request_access), primary = true, onClick = onRequestAccess)
+                .takeIf { canRequest },
+            DialogAction(stringResource(R.string.pair_use_pin), primary = !canRequest, onClick = onUsePin),
             DialogAction(stringResource(R.string.common_cancel), onClick = onDismiss),
         ),
     ) {
         PromptText(stringResource(R.string.pair_required_body, pt.host))
-        PromptText(stringResource(R.string.pair_intro))
+        PromptText(stringResource(if (canRequest) R.string.pair_intro else R.string.pair_intro_pin_only))
     }
 }
 

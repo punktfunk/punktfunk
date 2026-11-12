@@ -119,47 +119,61 @@ fn pair_page(props: &Svc, live_pin: &Rc<RefCell<String>>) -> View {
     };
 
     let live = live_pin.clone();
-    let content = card(
-        vstack((
-            Grid::new()
-                .children((
-                    // `Target` holds no OS chain, so the pairing card keeps the monogram.
-                    avatar(pal, &target.host.name, "")
-                        .grid_column(0)
-                        .vertical_alignment(VerticalAlignment::Center),
-                    vstack((
-                        text(client::pair_title(&target.host.name))
-                            .font_size(20.0)
-                            .font_weight(FontWeight::SEMI_BOLD),
-                        muted(pal, format!("{}:{}", target.host.addr, target.host.port))
-                            .font_size(12.0),
-                    ))
-                    .spacing(2.0)
-                    .grid_column(1)
-                    .vertical_alignment(VerticalAlignment::Center)
-                    .margin(edges(12.0, 0.0, 0.0, 0.0)),
+    let mut rows: Vec<View> = vec![
+        Grid::new()
+            .children((
+                // `Target` holds no OS chain, so the pairing card keeps the monogram.
+                avatar(pal, &target.host.name, "")
+                    .grid_column(0)
+                    .vertical_alignment(VerticalAlignment::Center),
+                vstack((
+                    text(client::pair_title(&target.host.name))
+                        .font_size(20.0)
+                        .font_weight(FontWeight::SEMI_BOLD),
+                    muted(pal, format!("{}:{}", target.host.addr, target.host.port))
+                        .font_size(12.0),
                 ))
-                .columns([GridLength::Auto, GridLength::STAR]),
-            InfoBar::new()
-                .title(desktop::desktop_pair_arm_title())
-                .message(client::pair_intro_pin_only())
-                .severity(InfoBarSeverity::Informational)
-                .is_open(true)
-                .is_closable(false),
-            TextBox::new()
-                .placeholder_text(client::pair_pin())
-                .on_text_changed(move |s: Rc<str>| *live.borrow_mut() = s.to_string()),
-            hstack((pair_btn, cancel_btn)).spacing(8.0),
+                .spacing(2.0)
+                .grid_column(1)
+                .vertical_alignment(VerticalAlignment::Center)
+                .margin(edges(12.0, 0.0, 0.0, 0.0)),
+            ))
+            .columns([GridLength::Auto, GridLength::STAR])
+            .into(),
+        InfoBar::new()
+            .title(desktop::desktop_pair_arm_title())
+            .message(client::pair_intro_pin_only())
+            .severity(InfoBarSeverity::Informational)
+            .is_open(true)
+            .is_closable(false)
+            .into(),
+        TextBox::new()
+            .placeholder_text(client::pair_pin())
+            .on_text_changed(move |s: Rc<str>| *live.borrow_mut() = s.to_string())
+            .into(),
+        hstack((pair_btn, cancel_btn)).spacing(8.0).into(),
+    ];
+    // A request names the fingerprint the host must show. A typed address has none, so it
+    // pairs by PIN, which proves the host.
+    if target
+        .host
+        .fp_hex
+        .as_deref()
+        .and_then(trust::parse_hex32)
+        .is_some()
+    {
+        rows.push(
             muted(pal, client::pair_no_pin_hint())
                 .font_size(12.0)
-                .text_wrapping(TextWrapping::Wrap),
-            request_btn,
-        ))
-        .spacing(16.0),
-    )
-    .max_width(480.0)
-    .horizontal_alignment(HorizontalAlignment::Center)
-    .margin(edges(0.0, 60.0, 0.0, 0.0));
+                .text_wrapping(TextWrapping::Wrap)
+                .into(),
+        );
+        rows.push(request_btn.into());
+    }
+    let content = card(vstack(rows).spacing(16.0))
+        .max_width(480.0)
+        .horizontal_alignment(HorizontalAlignment::Center)
+        .margin(edges(0.0, 60.0, 0.0, 0.0));
 
     page(vec![content.into()])
 }

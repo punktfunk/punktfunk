@@ -1631,8 +1631,8 @@ pub unsafe extern "C" fn punktfunk_pair(
 ///
 /// # Safety
 /// `host`/`client_cert_pem`/`client_key_pem`/`name` are NUL-terminated UTF-8; `pin_sha256`
-/// is NULL (trust on first use) or valid for 32 bytes; `host_sha256_out` is writable for
-/// 32 bytes.
+/// is valid for 32 bytes, the fingerprint the host must show (NULL is refused: a host with
+/// none pairs by PIN); `host_sha256_out` is writable for 32 bytes.
 #[cfg(feature = "quic")]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn punktfunk_request_access(
@@ -1658,15 +1658,12 @@ pub unsafe extern "C" fn punktfunk_request_access(
         ) else {
             return PunktfunkStatus::NullPointer;
         };
-        if host_sha256_out.is_null() {
+        if host_sha256_out.is_null() || pin_sha256.is_null() {
             return PunktfunkStatus::NullPointer;
         }
-        let pin = (!pin_sha256.is_null()).then(|| {
-            let mut p = [0u8; 32];
-            // SAFETY: a non-null pin is valid for 32 bytes (caller contract); copied out here.
-            p.copy_from_slice(unsafe { std::slice::from_raw_parts(pin_sha256, 32) });
-            p
-        });
+        let mut pin = [0u8; 32];
+        // SAFETY: a non-null pin is valid for 32 bytes (caller contract); copied out here.
+        pin.copy_from_slice(unsafe { std::slice::from_raw_parts(pin_sha256, 32) });
         match punktfunk_core::client::NativeClient::request_access(
             host,
             port,
