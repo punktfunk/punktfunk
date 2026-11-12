@@ -15,6 +15,10 @@ The [guided installer](/docs/install#guided-install-preview) does steps 1 and 2 
 pacman and the Bazzite sysext: `sh install.sh --uninstall` (fetch it with
 `curl -fsSLO https://punktfunk.unom.io/install.sh`).
 
+With [Reachable without logging in](/docs/profiles#on-linux) or seat profiles set up, open
+**Profiles** in the console before step 1: turn **Reachable without logging in** off and remove the
+seat profiles, which deletes their accounts.
+
 1. Stop the user services first. Package removal can't see the links `enable` wrote in your home,
    and the units then fail at every login:
 
@@ -28,7 +32,7 @@ pacman and the Bazzite sysext: `sh install.sh --uninstall` (fetch it with
 
    | How you installed | Remove |
    |---|---|
-   | Ubuntu (apt) | `sudo apt purge punktfunk-host punktfunk-web punktfunk-scripting punktfunk-client`, then `sudo rm -f /etc/apt/sources.list.d/punktfunk.list /etc/apt/keyrings/punktfunk.asc && sudo apt update` |
+   | Ubuntu (apt) | `sudo apt purge punktfunk-host punktfunk-web punktfunk-scripting punktfunk-seats punktfunk-gamescope punktfunk-bun punktfunk-client`, then `sudo rm -f /etc/apt/sources.list.d/punktfunk.list /etc/apt/keyrings/punktfunk.asc && sudo apt update` |
    | Fedora (dnf) | `sudo dnf remove punktfunk punktfunk-web punktfunk-scripting punktfunk-client`, then `sudo rm -f /etc/yum.repos.d/punktfunk.repo` |
    | Bazzite / Fedora Atomic, layered RPMs | `sudo rpm-ostree uninstall punktfunk punktfunk-web` (what `rpm-ostree status` lists), remove `/etc/yum.repos.d/punktfunk.repo`, then reboot |
    | Bazzite sysext | [See below](#bazzite--fedora-atomic-systemd-sysext) |
@@ -49,10 +53,10 @@ pacman and the Bazzite sysext: `sh install.sh --uninstall` (fetch it with
    sudo loginctl disable-linger "$USER"      # only if nothing else needs it
    ```
 
-   Drop the `punktfunk` group rather than keeping it: it can attach emulated USB devices. If you
-   set up [Reachable without logging in](/docs/profiles#on-linux), turn it off under **Profiles**
-   first and run `sudo userdel punktfunk`, or `groupdel punktfunk-door` refuses: the door's user
-   holds that group.
+   Drop the `punktfunk` group rather than keeping it: it can attach emulated USB devices. If
+   Reachable without logging in was on, run `sudo userdel punktfunk` first, or
+   `groupdel punktfunk-door` refuses: the door's user holds that group. Seats leave a
+   `punktfunk-games` group: `sudo groupdel punktfunk-games`.
 
 4. Close the firewall ports you opened:
 
@@ -123,7 +127,8 @@ hand, in this order.
    sudo rm -rf /opt/punktfunk /etc/systemd/system/punktfunk-seat@.service.d
    sudo rm -f /etc/systemd/system/punktfunk-{seats,seat@,door,web-door,door-on@,door-off@}.service \
      /etc/systemd/system/var-lib-punktfunk*.mount \
-     /etc/systemd/user/punktfunk-scripting.service \
+     /etc/systemd/system/user@.service.d/50-punktfunk-seats.conf \
+     /etc/systemd/user/punktfunk-scripting.service /etc/pam.d/punktfunk-seat \
      /etc/polkit-1/rules.d/49-punktfunk-door.rules \
      /etc/udev/rules.d/65-punktfunk-seats.rules /etc/tmpfiles.d/punktfunk-seats.conf
    sudo rm -rf /home/.steamos/offload/var/lib/punktfunk /home/.steamos/offload/var/lib/punktfunk-seats
@@ -141,6 +146,7 @@ hand, in this order.
               /etc/udev/rules.d/60-punktfunk.rules \
               /etc/modules-load.d/punktfunk.conf \
               /etc/sysctl.d/99-punktfunk-net.conf \
+              /etc/NetworkManager/dispatcher.d/90-punktfunk-frame-adapter \
               /etc/systemd/system/user@.service.d/50-punktfunk-nice.conf
    sudo udevadm control --reload-rules
    sudo systemctl daemon-reload
@@ -206,7 +212,7 @@ Removing a client doesn't unpair it: unpair the device in the host's
 | iPhone, iPad, Apple TV | Delete the app; if you joined the beta, stop testing in **TestFlight** | — |
 | Android, Android TV | Uninstall from Google Play or **Settings → Apps**; leave the testing program on the Play listing if you joined canary | — |
 | Steam Deck (Decky) | Uninstall **Punktfunk** from Decky's plugin list ([Steam Deck → Uninstalling](/docs/steam-deck#uninstalling)) | The Steam shortcuts, the Steam Input template, the client and its settings: `~/.var/app/io.unom.punktfunk` for the Flatpak, `~/.config/punktfunk` for a native client |
-| LG webOS TV | Remove it from the TV's launcher; the community [`pf-webos`](https://github.com/dyptan-io/pf-webos) project handles the rest | — |
+| LG webOS TV | Remove it from the TV's launcher | — |
 
 ## Plugins and the script runner
 

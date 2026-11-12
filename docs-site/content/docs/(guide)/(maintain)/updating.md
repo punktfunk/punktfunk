@@ -61,8 +61,7 @@ apt, dnf, a NixOS switch, **Update now**, the Windows installer, `punktfunk-syse
 Steam Deck script. A service you stopped stays stopped. A live stream drops when the host restarts.
 A layered rpm-ostree install moves at the reboot instead.
 
-The apt and dnf commands above update only the host; name `punktfunk-web` and `punktfunk-scripting`
-too to move all three. A source build restarts by hand, console first:
+A source build restarts by hand, console first:
 
 ```bash
 systemctl --user restart punktfunk-web
