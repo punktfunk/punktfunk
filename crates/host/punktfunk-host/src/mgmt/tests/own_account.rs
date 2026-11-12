@@ -128,9 +128,9 @@ fn on_own_account(name: &str, marker: &str) {
 }
 
 /// Runs the test at `path` (`module::name`, below the crate) again as a child on a seat host,
-/// made or on a person's own account (`own`), with its config and library dirs. `marker` names
-/// the child its library dir.
-pub(super) fn on_seat(path: &str, marker: &str, own: bool) {
+/// made or on a person's own account (`own`), with its config and library dirs, and returns
+/// what it printed. `marker` names the child its library dir.
+pub(super) fn on_seat(path: &str, marker: &str, own: bool) -> String {
     let config = tempfile::tempdir().unwrap();
     let library = tempfile::tempdir().unwrap();
     let mut child = std::process::Command::new(std::env::current_exe().expect("this test binary"));
@@ -158,6 +158,7 @@ pub(super) fn on_seat(path: &str, marker: &str, own: bool) {
         stdout.contains("1 passed"),
         "the child ran no test: {stdout}"
     );
+    stdout.into_owned()
 }
 
 /// What each lane that existed before the person's own got on a person's own account: hooks,

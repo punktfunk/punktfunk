@@ -242,15 +242,14 @@ impl Shelf {
     }
 
     /// Whether `e` may sit on this shelf. An own row claims no store, so it lists under its id
-    /// and never under one of the box's.
+    /// and never under one of the box's. A provider's own row names its title in that provider.
     fn holds(self, e: &CustomEntry) -> bool {
         match self {
             Shelf::Box => !is_own_id(&e.id),
             Shelf::Own => {
                 is_own_id(&e.id)
-                    && e.provider.is_none()
                     && e.store.is_none()
-                    && e.external_id.is_none()
+                    && e.provider.is_some() == e.external_id.is_some()
             }
         }
     }
@@ -837,10 +836,23 @@ fn entry_fault(
         .then(|| format!("`detect.env_marker.value` must be at most {MAX_ENV_VALUE} chars"))
 }
 
-/// Replace `provider`'s rows with `inputs`. Surviving titles keep their host id (keyed on
-/// `external_id`); orphans drop; manual rows and other providers are untouched. Returns the
-/// provider's resulting rows, payload order. Pure — no filesystem.
+/// [`reconcile_on`] the box's shelf.
+#[cfg(test)]
 fn reconcile_entries(
+    entries: &mut Vec<CustomEntry>,
+    provider: &str,
+    store: Option<&str>,
+    inputs: Vec<ProviderEntryInput>,
+) -> Vec<CustomEntry> {
+    reconcile_on(Shelf::Box, entries, provider, store, inputs)
+}
+
+/// Replace `provider`'s rows on `shelf` with `inputs`. Surviving titles keep their host id
+/// (keyed on `external_id`); a new one gets an id of `shelf`'s; orphans drop; manual rows and
+/// other providers are untouched. Returns the provider's resulting rows, payload order. Pure —
+/// no filesystem.
+fn reconcile_on(
+    shelf: Shelf,
     entries: &mut Vec<CustomEntry>,
     provider: &str,
     store: Option<&str>,
@@ -857,7 +869,7 @@ fn reconcile_entries(
         let id = existing
             .remove(&input.external_id)
             .map(|prev| prev.id) // keep the host id from last sync
-            .unwrap_or_else(|| new_id(&format!("{provider}:{}", input.external_id)));
+            .unwrap_or_else(|| new_id_on(shelf, &format!("{provider}:{}", input.external_id)));
         result.push(CustomEntry {
             id,
             title: input.title,
@@ -887,18 +899,45 @@ fn reconcile_entries(
     result
 }
 
+/// The shelf a provider's rows go on: a Linux seat host's own, as its runner is the seat
+/// account's ([`keeps_own_titles`]); else the box's. A Windows seat runs no runner of its own.
+fn provider_shelf() -> Shelf {
+    if cfg!(target_os = "linux") && keeps_own_titles() {
+        Shelf::Own
+    } else {
+        Shelf::Box
+    }
+}
+
+/// Whether this host keeps its plugins' rows on its own shelf ([`provider_shelf`]).
+pub(crate) fn keeps_provider_rows() -> bool {
+    provider_shelf() == Shelf::Own
+}
+
+/// `provider`'s rows, on the shelf it writes ([`provider_shelf`]).
+pub(crate) fn provider_rows(provider: &str) -> Vec<CustomEntry> {
+    let catalog = catalog_of(provider_shelf());
+    let rows = catalog.entries.iter();
+    rows.filter(|e| e.provider.as_deref() == Some(provider))
+        .cloned()
+        .collect()
+}
+
 /// Replace `provider`'s rows (`PUT /library/provider/{provider}`), optionally under a store
 /// claim (`?store=steam`). Caller validates name and payload. Saves and emits
 /// `library.changed` only when the provider's rows or claims change: plugins re-send their
 /// whole set on a timer. Claiming is idempotent for the holder and 409 for anyone else. A
-/// provider holds at most one store: claiming a new one releases the old.
+/// provider holds at most one store: claiming a new one releases the old. On a seat host's own
+/// shelf a claim is dropped: its rows keep `own:` ids, which never shadow a title of the box's.
 pub fn reconcile_provider(
     provider: &str,
     store: Option<&str>,
     inputs: Vec<ProviderEntryInput>,
 ) -> Result<MutateOutcome<Vec<CustomEntry>>> {
+    let shelf = provider_shelf();
+    let store = store.filter(|_| shelf == Shelf::Box);
     let _serial = catalog_lock();
-    let mut catalog = load_catalog(Shelf::Box);
+    let mut catalog = load_catalog(shelf);
     // The provider's rows in its own order: a reconcile moves them to the end of the list.
     let rows = |c: &Catalog| {
         serde_json::to_value(
@@ -937,20 +976,21 @@ pub fn reconcile_provider(
             tracing::info!(provider, store, "library: store claimed by a provider");
         }
     }
-    let result = reconcile_entries(&mut catalog.entries, provider, store, inputs);
+    let result = reconcile_on(shelf, &mut catalog.entries, provider, store, inputs);
     if (rows(&catalog), catalog.claims.clone()) != before {
-        save_catalog(Shelf::Box, &catalog)?;
+        save_catalog(shelf, &catalog)?;
         emit_changed(provider);
     }
     Ok(MutateOutcome::Done(result))
 }
 
-/// Releases the store claim as well (`DELETE /library/provider/{provider}`). No event when
-/// nothing changed. This is the only release path, so uninstalling a library plugin restores
-/// the built-in scanner without a restart.
+/// Releases the store claim as well (`DELETE /library/provider/{provider}`), on the shelf the
+/// provider writes. No event when nothing changed. This is the only release path, so
+/// uninstalling a library plugin restores the built-in scanner without a restart.
 pub fn delete_provider(provider: &str) -> Result<usize> {
+    let shelf = provider_shelf();
     let _serial = catalog_lock();
-    let mut catalog = load_catalog(Shelf::Box);
+    let mut catalog = load_catalog(shelf);
     let before = catalog.entries.len();
     catalog
         .entries
@@ -963,7 +1003,7 @@ pub fn delete_provider(provider: &str) -> Result<usize> {
         if released > 0 {
             tracing::info!(provider, released, "library: store claim released");
         }
-        save_catalog(Shelf::Box, &catalog)?;
+        save_catalog(shelf, &catalog)?;
         emit_changed(provider);
     }
     Ok(removed)

@@ -24,7 +24,8 @@ use sha2::{Digest, Sha256};
 
 /// A seat host reading the box's library ([`pf_paths::seat::box_library_dir`], `box_library`)
 /// changes none of it: every write under `/api/v1/library` answers 409, but the custom-entry
-/// writes, which land in its own titles ([`crate::library::keeps_own_titles`]). The box host is
+/// writes, which land in its own titles ([`crate::library::keeps_own_titles`]), and on Linux its
+/// own plugins' provider writes ([`crate::library::keeps_provider_rows`]). The box host is
 /// the library's one writer. On a person's own account only that person's lane writes them, and
 /// every other lane is told so where `person_lane` is open.
 pub(super) async fn box_library_is_read_only(
@@ -54,7 +55,9 @@ pub(super) async fn box_library_is_read_only(
         };
         return api_error_coded(StatusCode::FORBIDDEN, code, why);
     }
-    let own = custom && crate::library::keeps_own_titles();
+    let provider = path.starts_with("/api/v1/library/provider/");
+    let own = (custom && crate::library::keeps_own_titles())
+        || (provider && crate::library::keeps_provider_rows());
     if box_library && library && write && !own {
         return seat_library_read_only();
     }
@@ -1309,9 +1312,8 @@ pub(crate) async fn report_provider_running(
 ) -> Response {
     // Map the provider's `external_id`s to catalog library ids. Only published entries
     // resolve, so a report cannot name a title it does not own.
-    let mine: Vec<(String, String)> = crate::library::load_custom()
+    let mine: Vec<(String, String)> = crate::library::provider_rows(&provider)
         .into_iter()
-        .filter(|e| e.provider.as_deref() == Some(provider.as_str()))
         .filter_map(|e| {
             let external = e.external_id.clone()?;
             Some((external, crate::library::library_id_for(&e)))

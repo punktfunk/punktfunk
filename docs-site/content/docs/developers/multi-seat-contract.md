@@ -247,6 +247,13 @@ session by design, and display activation fails while its session is inactive.
   seat runs it with its own config and saves in `~/.var/app/<id>`; which emulators stay the
   owner's is in [Profiles](/docs/profiles#on-linux). At a launch the seat installs the RetroArch
   core the entry names into its own RetroArch and places the firmware from its library copy.
+- **Its own runner's titles, on Linux.** What a plugin of the seat account's own runner
+  publishes with `PUT library/provider/{provider}` lands in the seat host's own titles (below),
+  under `own:` ids. A `?store=` claim is dropped there, so
+  no row shadows a title of the box's. The provider's running and download reports read those
+  rows, and the box learns their names and pictures as it learns the others'. On a person's own
+  account every lane is refused (`plugins_own_account`), and a provider row found on their shelf
+  lists nothing.
 - **One profile.** The seat serves the profile whose seat it is. A connect that names any other
   profile, the owner's included, is refused as an unknown profile; one that names none plays as
   this seat's profile. The owner's row alone also serves the owner and the profiles that share the

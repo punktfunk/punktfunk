@@ -12,14 +12,17 @@ const TOKEN: &str = "5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5
 const MINE: &str = "a1b2c3d4e5f6";
 /// A paired device's fingerprint; a seat host pairs none.
 const DEVICE: &str = "d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4";
+/// The line a made seat's child prints its `GET /library/own` answer on.
+const ANSWER: &str = "own titles: ";
 
 /// Runs the test `name` of this module as a child on a made seat, then on a person's own
-/// account.
-fn on_both_seats(name: &str) {
+/// account, and returns what the first printed.
+fn on_both_seats(name: &str) -> String {
     let module = module_path!().split_once("::").expect("crate::module").1;
     let path = format!("{module}::{name}");
-    super::own_account::on_seat(&path, CHILD, false);
+    let made = super::own_account::on_seat(&path, CHILD, false);
     super::own_account::on_seat(&path, CHILD, true);
+    made
 }
 
 /// A person session on `app`, opened from a ticket its person token signed.
@@ -38,20 +41,66 @@ async fn person_session(app: &Router) -> String {
     grant["token"].as_str().unwrap().to_string()
 }
 
-/// What a seat host answers a provider's rows on each lane: the operator, the seat's person,
-/// the plugin under its own id and under another's, and a device.
+/// A Linux seat's plugins publish into its own titles. On a made seat the operator, the seat's
+/// person and the plugin under its own id write them, under `own:` ids with no store claim, and
+/// the box learns their names and pictures alone. On a person's own account every lane is
+/// refused until their own runner exists, and a provider row planted there lists nothing.
 #[tokio::test]
-async fn a_seat_s_plugins_publish_nothing_on_it() {
-    if std::env::var_os(CHILD).is_none() {
-        return on_both_seats("a_seat_s_plugins_publish_nothing_on_it");
+async fn a_seat_s_plugins_publish_on_its_own_shelf() {
+    if std::env::var_os(CHILD).is_some() {
+        return seat_half().await;
     }
+    let made = on_both_seats("a_seat_s_plugins_publish_on_its_own_shelf");
+    let answer = made
+        .lines()
+        .find_map(|l| l.strip_prefix(ANSWER))
+        .expect("the made seat printed its answer");
+    let own: serde_json::Value = serde_json::from_str(answer).unwrap();
+    if !cfg!(target_os = "linux") {
+        return assert_eq!(own, json!([]));
+    }
+    assert_eq!(own[0]["title"], "Quake", "{own}");
+    assert!(own[0].get("launch").is_none(), "{own}");
+
+    // The box keeps the names for the seat's profile, and starts none of them.
+    use super::profile_view::{profiles, profiles_state, write_fixture, SEAT_P};
+    let tmp = ConfigDirOverride::new();
+    write_fixture(tmp.path());
+    let app = test_app(profiles_state(tmp.path(), profiles()), None);
+    let store = axum::http::Request::put(format!("/api/v1/library/own?as={SEAT_P}"))
+        .header(axum::http::header::CONTENT_TYPE, "application/json")
+        .body(Body::from(answer.to_string()))
+        .unwrap();
+    assert_eq!(send(&app, store).await.0, StatusCode::NO_CONTENT);
+    let (_, json) = send(&app, get_req(&format!("/api/v1/library?as={SEAT_P}"))).await;
+    let rows = json.get("items").unwrap_or(&json).as_array().unwrap();
+    let quake = rows.iter().find(|g| g["title"] == "Quake").expect("listed");
+    assert_eq!((&quake["id"], &quake["own"]), (&own[0]["id"], &json!(true)));
+    assert!(quake.get("launch").is_none(), "{quake}");
+    let view = crate::library::View::of(SEAT_P, false, crate::library::Reach::seat(false));
+    let id = quake["id"].as_str().unwrap();
+    assert!(crate::library::resolve_launch(&view, id).is_none());
+}
+
+/// The seat host's half of [`a_seat_s_plugins_publish_on_its_own_shelf`].
+async fn seat_half() {
+    let library = std::path::PathBuf::from(std::env::var_os(CHILD).unwrap());
+    let own = pf_paths::seat::own_account();
+    let gated = own && cfg!(target_os = "linux");
+    let publishes = cfg!(target_os = "linux") && !own;
     let app = test_app_seat(test_state(), TOKEN, MINE);
     let person = person_session(&app).await;
     let rows = json!([{"external_id": "q1", "title": "Quake",
-        "launch": {"kind": "steam_appid", "value": "2310"}}]);
+        "launch": {"kind": "steam_appid", "value": "2310"},
+        "art": {"hero": "https://cdn.example/quake.jpg"}}]);
     let put = |provider: &str| {
-        let path = format!("/api/v1/library/provider/{provider}");
+        let path = format!("/api/v1/library/provider/{provider}?store=steam");
         json_req(Method::PUT, &path, rows.clone())
+    };
+    let refused = if gated {
+        (StatusCode::FORBIDDEN, json!("plugins_own_account"))
+    } else {
+        (StatusCode::CONFLICT, json!("seat_library_read_only"))
     };
     let lanes = [
         ("admin", send(&app, put("demo")).await),
@@ -63,19 +112,57 @@ async fn a_seat_s_plugins_publish_nothing_on_it() {
             "plugin",
             send(&app, with_bearer(put("demo"), "demo-secret")).await,
         ),
-        (
-            "another plugin",
-            send(&app, with_bearer(put("other"), "demo-secret")).await,
-        ),
     ];
     for (lane, (status, why)) in lanes {
-        assert_eq!(status, StatusCode::CONFLICT, "{lane}: {why}");
-        assert_eq!(why["code"], "seat_library_read_only", "{lane}");
+        if publishes {
+            assert_eq!(status, StatusCode::OK, "{lane}: {why}");
+        } else {
+            assert_eq!((status, &why["code"]), (refused.0, &refused.1), "{lane}");
+        }
     }
+    let (status, _) = send(&app, with_bearer(put("other"), "demo-secret")).await;
+    let other = if publishes {
+        StatusCode::FORBIDDEN
+    } else {
+        refused.0
+    };
+    assert_eq!(status, other, "another plugin's id");
     let device = send_cert(&app, put("demo"), DEVICE).await;
     assert_eq!(device, StatusCode::UNAUTHORIZED);
+    let box_file = std::fs::read_to_string(library.join("library.json"));
+    assert!(
+        !box_file.is_ok_and(|f| f.contains("Quake")),
+        "the box's file was written"
+    );
+
     let view = crate::library::View::here();
-    assert!(crate::library::all_games_for(&view)
+    if publishes {
+        let games = crate::library::all_games_for(&view);
+        let quake = games.iter().find(|g| g.title == "Quake").expect("listed");
+        assert!(crate::library::is_own_id(&quake.id), "{}", quake.id);
+        let running = json!({"running": [{"external_id": "q1"}]});
+        let report = json_req(
+            Method::PUT,
+            "/api/v1/library/provider/demo/running",
+            running,
+        );
+        let (_, accepted) = send(&app, with_bearer(report, "demo-secret")).await;
+        assert_eq!(accepted["matched"], 1, "{accepted}");
+    }
+    let (_, answer) = send(&app, get_req("/api/v1/library/own")).await;
+    println!("{ANSWER}{answer}");
+    if publishes {
+        return;
+    }
+
+    // A provider row planted on the seat's own shelf lists on a made seat alone.
+    let planted = json!({"entries": [{"id": "own:aaaaaaaaaaaa", "title": "Quake",
+        "provider": "demo", "external_id": "q1",
+        "launch": {"kind": "steam_appid", "value": "2310"}}]});
+    let shelf = pf_paths::config_dir().join("library.json");
+    std::fs::write(shelf, planted.to_string()).unwrap();
+    let listed = crate::library::all_games_for(&view)
         .iter()
-        .all(|g| g.title != "Quake"));
+        .any(|g| g.title == "Quake");
+    assert_eq!(listed, !own, "a planted row's listing");
 }
