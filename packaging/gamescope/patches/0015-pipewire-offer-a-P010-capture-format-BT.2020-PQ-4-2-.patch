@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: unom <packages@unom.io>
 Date: Wed, 16 Sep 2026 09:33:08 +0200
-Subject: [PATCH 15/33] pipewire: offer a P010 capture format (BT.2020 PQ,
+Subject: [PATCH 15/37] pipewire: offer a P010 capture format (BT.2020 PQ,
  4:2:0)
 
 An HDR consumer whose encoder takes 4:2:0 directly (VAAPI Main 10, Vulkan Video) had two 10-bit choices, both packed RGB, so it paid a colour conversion of its own on every frame after this compositor had already composited the picture once. The NV12 offer covers that for SDR; nothing covered it at ten bits.
@@ -13,28 +13,27 @@ Listed last, after the packed 10-bit formats: a consumer that prefers it names i
 Stamp pfhdr13 so a host can tell the format is there before it commits a session.
 ---
  src/meson.build                 |  4 +-
- src/pipewire.cpp                | 38 +++++++++++----
+ src/pipewire.cpp                | 38 ++++++++++++----
  src/rendervulkan.cpp            | 37 +++++++++++----
  src/rendervulkan.hpp            |  9 +++-
- src/shaders/cs_rgb_to_p010.comp | 82 +++++++++++++++++++++++++++++++++
- src/shaders/descriptor_set.h    |  7 +++
+ src/shaders/cs_rgb_to_p010.comp | 80 +++++++++++++++++++++++++++++++++
  src/steamcompmgr.cpp            |  9 ++--
- 7 files changed, 164 insertions(+), 22 deletions(-)
+ 6 files changed, 155 insertions(+), 22 deletions(-)
  create mode 100644 src/shaders/cs_rgb_to_p010.comp
 
 diff --git a/src/meson.build b/src/meson.build
-index b597938..8095ff8 100644
+index 16ef3ed8..2ea7b8b6 100644
 --- a/src/meson.build
 +++ b/src/meson.build
-@@ -71,6 +71,7 @@ shader_src = [
-   'shaders/cs_nis_fp16.comp',
+@@ -74,6 +74,7 @@ shader_src = [
+   'shaders/cs_nis_hdr_linear_fp16.comp',
    'shaders/cs_rgb_to_nv12.comp',
    'shaders/cs_sgsr.comp',
 +  'shaders/cs_rgb_to_p010.comp',
  ]
  
  spirv_shaders = glsl_generator.process(shader_src)
-@@ -194,7 +195,8 @@ vcs_tag = run_command(vcs_tag_cmd, check: false).stdout().strip()
+@@ -202,7 +203,8 @@ vcs_tag = run_command(vcs_tag_cmd, check: false).stdout().strip()
  #   +pfhdr10 — …and the CLI framerate limit persists across paints without switching refresh
  #   +pfhdr11 — …and the Steam overlay repaints the capture on its own commits (no new capability)
  #   +pfhdr12 — …and the capture push honours the consumer's maxFramerate
@@ -45,7 +44,7 @@ index b597938..8095ff8 100644
  gamescope_version_conf = configuration_data()
  gamescope_version_conf.set('VCS_TAG', version_tag)
 diff --git a/src/pipewire.cpp b/src/pipewire.cpp
-index 3c727e9..0ba573a 100644
+index 3c727e95..0ba573ad 100644
 --- a/src/pipewire.cpp
 +++ b/src/pipewire.cpp
 @@ -49,10 +49,17 @@ static constexpr uint32_t kSpaVideoColorPrimariesBt2020 = 7;
@@ -177,18 +176,18 @@ index 3c727e9..0ba573a 100644
  		}
  		if (ftruncate(fd, size) != 0) {
 diff --git a/src/rendervulkan.cpp b/src/rendervulkan.cpp
-index 79b75ac..af0f261 100644
+index 2e8ee547..976cbfa6 100644
 --- a/src/rendervulkan.cpp
 +++ b/src/rendervulkan.cpp
-@@ -50,6 +50,7 @@
- #include "cs_nis_fp16.h"
+@@ -52,6 +52,7 @@
+ #include "cs_nis_hdr_linear_fp16.h"
  #include "cs_rgb_to_nv12.h"
  #include "cs_sgsr.h"
 +#include "cs_rgb_to_p010.h"
  
  #define A_CPU
  #include "shaders/ffx_a.h"
-@@ -84,6 +85,14 @@ static constexpr mat3x4 g_rgb2yuv_srgb_to_bt709_full = {{
+@@ -86,6 +87,14 @@ static constexpr mat3x4 g_rgb2yuv_srgb_to_bt709_full = {{
    { 0.5000f, -0.4542f, -0.0458f, 0.5f },
  }};
  
@@ -203,7 +202,7 @@ index 79b75ac..af0f261 100644
  static const mat3x4& colorspace_to_conversion_from_srgb_matrix(EStreamColorspace colorspace) {
  	switch (colorspace) {
  		default:
-@@ -253,6 +262,7 @@ struct {
+@@ -255,6 +264,7 @@ struct {
  	{ DRM_FORMAT_XBGR8888, VK_FORMAT_R8G8B8A8_UNORM, VK_FORMAT_R8G8B8A8_SRGB, 4, false, false },
  	{ DRM_FORMAT_RGB565, VK_FORMAT_R5G6B5_UNORM_PACK16, VK_FORMAT_R5G6B5_UNORM_PACK16, 1, false, false },
  	{ DRM_FORMAT_NV12, VK_FORMAT_G8_B8R8_2PLANE_420_UNORM, VK_FORMAT_G8_B8R8_2PLANE_420_UNORM, 0, false, false },
@@ -211,7 +210,7 @@ index 79b75ac..af0f261 100644
  	{ DRM_FORMAT_ABGR16161616F, VK_FORMAT_R16G16B16A16_SFLOAT, VK_FORMAT_R16G16B16A16_SFLOAT, 8, true, false },
  	{ DRM_FORMAT_XBGR16161616F, VK_FORMAT_R16G16B16A16_SFLOAT, VK_FORMAT_R16G16B16A16_SFLOAT, 8, false, false },
  	{ DRM_FORMAT_ABGR16161616, VK_FORMAT_R16G16B16A16_UNORM, VK_FORMAT_R16G16B16A16_UNORM, 8, true, false },
-@@ -1015,6 +1025,7 @@ bool CVulkanDevice::createShaders()
+@@ -1021,6 +1031,7 @@ bool CVulkanDevice::createShaders()
  	}
  	SHADER(RGB_TO_NV12, cs_rgb_to_nv12);
  	SHADER(SGSR, cs_sgsr);
@@ -219,15 +218,15 @@ index 79b75ac..af0f261 100644
  #undef SHADER
  
  	for (uint32_t i = 0; i < shaderInfos.size(); i++)
-@@ -1246,6 +1257,7 @@ void CVulkanDevice::compileAllPipelines(std::stop_token st)
- 	SHADER(NIS, 1, 1, 1);
+@@ -1253,6 +1264,7 @@ void CVulkanDevice::compileAllPipelines(std::stop_token st)
+ 	SHADER(NIS_HDR_LINEAR, 1, 1, 1);
  	SHADER(RGB_TO_NV12, 1, 1, 1);
  	SHADER(SGSR, 1, 1, 1);
 +	SHADER(RGB_TO_P010, 1, 1, 1);
  #undef SHADER
  
  	for (auto& info : pipelineInfos) {
-@@ -2209,6 +2221,11 @@ bool CVulkanTexture::BInit( uint32_t width, uint32_t height, uint32_t depth, uin
+@@ -2246,6 +2258,11 @@ bool CVulkanTexture::BInit( uint32_t width, uint32_t height, uint32_t depth, uin
  		formatList.pNext = std::exchange(imageInfo.pNext, &formatList);
  		imageInfo.flags |= VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT;
  	}
@@ -239,7 +238,7 @@ index 79b75ac..af0f261 100644
  
  	if ( pDMA != nullptr )
  	{
-@@ -2637,7 +2654,7 @@ bool CVulkanTexture::BInit( uint32_t width, uint32_t height, uint32_t depth, uin
+@@ -2709,7 +2726,7 @@ bool CVulkanTexture::BInit( uint32_t width, uint32_t height, uint32_t depth, uin
  		if ( isYcbcr() )
  		{
  			createInfo.pNext = NULL;
@@ -248,7 +247,7 @@ index 79b75ac..af0f261 100644
  
  			createInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_PLANE_0_BIT;
  			res = g_device.vk.CreateImageView(g_device.device(), &createInfo, nullptr, &m_lumaView);
-@@ -2647,7 +2664,7 @@ bool CVulkanTexture::BInit( uint32_t width, uint32_t height, uint32_t depth, uin
+@@ -2719,7 +2736,7 @@ bool CVulkanTexture::BInit( uint32_t width, uint32_t height, uint32_t depth, uin
  			}
  
  			createInfo.pNext = NULL;
@@ -257,7 +256,7 @@ index 79b75ac..af0f261 100644
  			createInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_PLANE_1_BIT;
  			res = g_device.vk.CreateImageView(g_device.device(), &createInfo, nullptr, &m_chromaView);
  			if ( res != VK_SUCCESS ) {
-@@ -4128,7 +4145,10 @@ std::optional<uint64_t> vulkan_screenshot( const struct FrameInfo_t *frameInfo,
+@@ -4246,7 +4263,10 @@ std::optional<uint64_t> vulkan_screenshot( const struct FrameInfo_t *frameInfo,
  	{
  		float scale = (float)pScreenshotTexture->width() / pYUVOutTexture->width();
  
@@ -269,7 +268,7 @@ index 79b75ac..af0f261 100644
  		constants.halfExtent[0] = pYUVOutTexture->width() / 2.0f;
  		constants.halfExtent[1] = pYUVOutTexture->height() / 2.0f;
  		cmdBuffer->uploadConstants<CaptureConvertBlitData_t>(constants);
-@@ -4136,9 +4156,9 @@ std::optional<uint64_t> vulkan_screenshot( const struct FrameInfo_t *frameInfo,
+@@ -4254,9 +4274,9 @@ std::optional<uint64_t> vulkan_screenshot( const struct FrameInfo_t *frameInfo,
  		for (uint32_t i = 0; i < EOTF_Count; i++)
  			cmdBuffer->bindColorMgmtLuts(i, nullptr, nullptr);
  
@@ -281,7 +280,7 @@ index 79b75ac..af0f261 100644
  		cmdBuffer->setSamplerNearest(0, false);
  		cmdBuffer->setSamplerUnnormalized(0, true);
  		for (uint32_t i = 1; i < VKR_SAMPLER_SLOTS; i++)
-@@ -4539,11 +4559,12 @@ std::optional<uint64_t> vulkan_composite( struct FrameInfo_t *frameInfo, gamesco
+@@ -4678,11 +4698,12 @@ std::optional<uint64_t> vulkan_composite( struct FrameInfo_t *frameInfo, gamesco
  			cmdBuffer->copyImage(compositeImage, pPipewireTexture);
  		} else {
  			const bool ycbcr = pPipewireTexture->isYcbcr();
@@ -295,7 +294,7 @@ index 79b75ac..af0f261 100644
  				constants.halfExtent[0] = pPipewireTexture->width() / 2.0f;
  				constants.halfExtent[1] = pPipewireTexture->height() / 2.0f;
  				cmdBuffer->uploadConstants<CaptureConvertBlitData_t>(constants);
-@@ -4557,9 +4578,9 @@ std::optional<uint64_t> vulkan_composite( struct FrameInfo_t *frameInfo, gamesco
+@@ -4696,9 +4717,9 @@ std::optional<uint64_t> vulkan_composite( struct FrameInfo_t *frameInfo, gamesco
  			for (uint32_t i = 0; i < EOTF_Count; i++)
  				cmdBuffer->bindColorMgmtLuts(i, nullptr, nullptr);
  
@@ -308,10 +307,10 @@ index 79b75ac..af0f261 100644
  			cmdBuffer->setSamplerUnnormalized(0, true);
  			for (uint32_t i = 1; i < VKR_SAMPLER_SLOTS; i++)
 diff --git a/src/rendervulkan.hpp b/src/rendervulkan.hpp
-index b84f4fd..8cb2ac2 100644
+index 4ab7dcc8..d6c93921 100644
 --- a/src/rendervulkan.hpp
 +++ b/src/rendervulkan.hpp
-@@ -200,7 +200,13 @@ public:
+@@ -203,7 +203,13 @@ public:
  
  	inline bool isYcbcr() const
  	{
@@ -326,8 +325,8 @@ index b84f4fd..8cb2ac2 100644
  	}
  
  	int memoryFence();
-@@ -618,6 +624,7 @@ enum ShaderType {
- 	SHADER_TYPE_NIS,
+@@ -630,6 +636,7 @@ enum ShaderType {
+ 	SHADER_TYPE_NIS_HDR_LINEAR,
  	SHADER_TYPE_RGB_TO_NV12,
  	SHADER_TYPE_SGSR,
 +	SHADER_TYPE_RGB_TO_P010,
@@ -336,17 +335,15 @@ index b84f4fd..8cb2ac2 100644
  };
 diff --git a/src/shaders/cs_rgb_to_p010.comp b/src/shaders/cs_rgb_to_p010.comp
 new file mode 100644
-index 0000000..ed6ea1c
+index 00000000..3e7cacf4
 --- /dev/null
 +++ b/src/shaders/cs_rgb_to_p010.comp
-@@ -0,0 +1,82 @@
+@@ -0,0 +1,80 @@
 +#version 450
 +
 +#extension GL_GOOGLE_include_directive : require
 +#extension GL_EXT_scalar_block_layout : require
 +
-+#define DST_LUMA_FORMAT r16
-+#define DST_CHROMA_FORMAT rg16
 +#include "descriptor_set.h"
 +
 +layout(
@@ -422,33 +419,11 @@ index 0000000..ed6ea1c
 +    }
 +  }
 +}
-diff --git a/src/shaders/descriptor_set.h b/src/shaders/descriptor_set.h
-index f2b8527..db9941b 100644
---- a/src/shaders/descriptor_set.h
-+++ b/src/shaders/descriptor_set.h
-@@ -44,10 +44,17 @@ uint get_layer_colorspace(uint layerIdx) {
-     return bitfieldExtract(c_colorspaceMask, int(layerIdx) * colorspace_max_bits, colorspace_max_bits);
- }
- 
-+#ifndef DST_LUMA_FORMAT
- layout(binding = 1, rgba8) writeonly uniform image2D dst;
- // alias
- layout(binding = 1, rgba8) writeonly uniform image2D dst_luma;
- layout(binding = 2, rgba8) writeonly uniform image2D dst_chroma;
-+#else
-+// A 16-bit planar target (cs_rgb_to_p010) names its plane formats before the include.
-+layout(binding = 1, DST_LUMA_FORMAT) writeonly uniform image2D dst;
-+layout(binding = 1, DST_LUMA_FORMAT) writeonly uniform image2D dst_luma;
-+layout(binding = 2, DST_CHROMA_FORMAT) writeonly uniform image2D dst_chroma;
-+#endif
- 
- layout(binding = 3) uniform sampler2D s_samplers[VKR_SAMPLER_SLOTS];
- layout(binding = 4) uniform sampler2D s_ycbcr_samplers[VKR_SAMPLER_SLOTS];
 diff --git a/src/steamcompmgr.cpp b/src/steamcompmgr.cpp
-index 19ff04f..eeec1dc 100644
+index 0e0d643d..2524fa04 100644
 --- a/src/steamcompmgr.cpp
 +++ b/src/steamcompmgr.cpp
-@@ -2897,9 +2897,9 @@ static void paint_pipewire()
+@@ -3022,9 +3022,9 @@ static void paint_pipewire()
  		return;
  
  	// The negotiated stream format decides the composite's colorimetry. A 10-bit target (the
@@ -461,7 +436,7 @@ index 19ff04f..eeec1dc 100644
  	//
  	// Deliberately NOT conditional on the focused app being HDR, unlike bHDRScreenshot: the
  	// stream's colorimetry is fixed for the lifetime of the negotiation, so it must not follow
-@@ -2908,7 +2908,8 @@ static void paint_pipewire()
+@@ -3033,7 +3033,8 @@ static void paint_pipewire()
  	// --hdr-sdr-content-nits, HDR content passes through, and mixed scenes composite correctly.
  	const uint32_t uStreamDrmFormat = s_pPipewireBuffer->texture->drmFormat();
  	const bool bHDRStream = uStreamDrmFormat == DRM_FORMAT_XRGB2101010 ||

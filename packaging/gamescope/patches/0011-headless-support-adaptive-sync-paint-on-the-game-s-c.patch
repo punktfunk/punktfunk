@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: =?UTF-8?q?Enrico=20B=C3=BChler?= <enrico.buehler@unom.io>
 Date: Tue, 1 Sep 2026 16:23:41 +0200
-Subject: [PATCH 11/33] =?UTF-8?q?headless:=20support=20adaptive=20sync=20?=
+Subject: [PATCH 11/37] =?UTF-8?q?headless:=20support=20adaptive=20sync=20?=
  =?UTF-8?q?=E2=80=94=20paint=20on=20the=20game's=20commit?=
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
@@ -47,7 +47,7 @@ PipeWire — the moment it lands.
  4 files changed, 35 insertions(+), 2 deletions(-)
 
 diff --git a/src/Backends/HeadlessBackend.cpp b/src/Backends/HeadlessBackend.cpp
-index 3168c88..1de1540 100644
+index 3168c88f..1de15403 100644
 --- a/src/Backends/HeadlessBackend.cpp
 +++ b/src/Backends/HeadlessBackend.cpp
 @@ -10,6 +10,8 @@ extern int g_nPreferredOutputWidth;
@@ -94,7 +94,7 @@ index 3168c88..1de1540 100644
              return false;
          }
 diff --git a/src/backend.h b/src/backend.h
-index bd57c42..b7a7bfb 100644
+index d55fa8fb..c2190101 100644
 --- a/src/backend.h
 +++ b/src/backend.h
 @@ -187,6 +187,12 @@ namespace gamescope
@@ -111,10 +111,10 @@ index bd57c42..b7a7bfb 100644
          virtual std::span<const uint32_t> GetValidDynamicRefreshRates() const = 0;
  
 diff --git a/src/meson.build b/src/meson.build
-index a478ab0..22892af 100644
+index 23c9d9c1..d124c1bc 100644
 --- a/src/meson.build
 +++ b/src/meson.build
-@@ -190,7 +190,8 @@ vcs_tag = run_command(vcs_tag_cmd, check: false).stdout().strip()
+@@ -198,7 +198,8 @@ vcs_tag = run_command(vcs_tag_cmd, check: false).stdout().strip()
  #   +pfhdr6 — …and GAMESCOPE_NO_FOCUS windows are never focus candidates (no new capability)
  #   +pfhdr7 — …and PipeWire teardown cannot SIGSEGV a lingering compositor (no new capability)
  #   +pfhdr8 — …and the seat's keyboard carries the XKB_DEFAULT_* keymap (honours the box layout)
@@ -125,10 +125,10 @@ index a478ab0..22892af 100644
  gamescope_version_conf = configuration_data()
  gamescope_version_conf.set('VCS_TAG', version_tag)
 diff --git a/src/steamcompmgr.cpp b/src/steamcompmgr.cpp
-index 4e01613..edcb418 100644
+index 335d79d3..3c27f2f3 100644
 --- a/src/steamcompmgr.cpp
 +++ b/src/steamcompmgr.cpp
-@@ -6916,6 +6916,12 @@ static bool steamcompmgr_should_vblank_window( bool bShouldLimitFPS, uint64_t vb
+@@ -7155,6 +7155,12 @@ static bool steamcompmgr_should_vblank_window( bool bShouldLimitFPS, uint64_t vb
  	{
  		bool bCloseEnough = std::abs( g_nSteamCompMgrTargetFPS - nRefreshHz ) < 2;
  

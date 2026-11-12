@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: =?UTF-8?q?Enrico=20B=C3=BChler?= <enrico.buehler@unom.io>
 Date: Thu, 17 Sep 2026 22:48:30 +0200
-Subject: [PATCH 21/33] pipewire: recycle a pushed buffer the PipeWire thread
+Subject: [PATCH 21/37] pipewire: recycle a pushed buffer the PipeWire thread
  has not taken
 
 push_pipewire_buffer() hands a painted buffer to the PipeWire thread through
@@ -27,10 +27,10 @@ existing IsStale() check. Stamp pfhdr17: nothing for a caller to gate on.
  4 files changed, 12 insertions(+), 6 deletions(-)
 
 diff --git a/src/meson.build b/src/meson.build
-index 1e684dd..9c107b7 100644
+index 275dc9de..7d067bea 100644
 --- a/src/meson.build
 +++ b/src/meson.build
-@@ -199,7 +199,8 @@ vcs_tag = run_command(vcs_tag_cmd, check: false).stdout().strip()
+@@ -207,7 +207,8 @@ vcs_tag = run_command(vcs_tag_cmd, check: false).stdout().strip()
  #   +pfhdr14 — …and the headless connector reports HDR10 under --hdr-debug-force-support
  #   +pfhdr15 — …and the pointer reaches the whole window of a game whose swapchain is smaller
  #   +pfhdr16 — …and capture maps SDR into BT.2020 colorimetrically at the live SDR-on-HDR nits
@@ -41,7 +41,7 @@ index 1e684dd..9c107b7 100644
  gamescope_version_conf = configuration_data()
  gamescope_version_conf.set('VCS_TAG', version_tag)
 diff --git a/src/pipewire.cpp b/src/pipewire.cpp
-index 0ba573a..e3fffab 100644
+index 0ba573ad..e3fffabf 100644
 --- a/src/pipewire.cpp
 +++ b/src/pipewire.cpp
 @@ -911,14 +911,17 @@ struct pipewire_buffer *dequeue_pipewire_buffer(void)
@@ -65,7 +65,7 @@ index 0ba573a..e3fffab 100644
  
  void nudge_pipewire(void)
 diff --git a/src/pipewire.hpp b/src/pipewire.hpp
-index d0b510c..378b33a 100644
+index d0b510ca..378b33a7 100644
 --- a/src/pipewire.hpp
 +++ b/src/pipewire.hpp
 @@ -63,5 +63,7 @@ void pipewire_destroy_buffer(struct pipewire_buffer *buffer);
@@ -78,10 +78,10 @@ index d0b510c..378b33a 100644
 +struct pipewire_buffer *push_pipewire_buffer(struct pipewire_buffer *buffer);
  void nudge_pipewire(void);
 diff --git a/src/steamcompmgr.cpp b/src/steamcompmgr.cpp
-index 20f5e36..a947970 100644
+index 5e1a51fe..fa29ad43 100644
 --- a/src/steamcompmgr.cpp
 +++ b/src/steamcompmgr.cpp
-@@ -3204,8 +3204,8 @@ static void paint_pipewire()
+@@ -3331,8 +3331,8 @@ static void paint_pipewire()
  	{
  		vulkan_wait( *oPipewireSequence, true );
  

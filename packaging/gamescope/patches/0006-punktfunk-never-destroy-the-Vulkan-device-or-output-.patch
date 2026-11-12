@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: =?UTF-8?q?Enrico=20B=C3=BChler?= <enrico.buehler@unom.io>
 Date: Sat, 8 Aug 2026 19:17:25 +0200
-Subject: [PATCH 06/33] punktfunk: never destroy the Vulkan device or output at
+Subject: [PATCH 06/37] punktfunk: never destroy the Vulkan device or output at
  exit
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
@@ -50,10 +50,10 @@ Both are needed: pinning only the device relocated the fault into
  2 files changed, 35 insertions(+), 4 deletions(-)
 
 diff --git a/src/rendervulkan.cpp b/src/rendervulkan.cpp
-index 54e4efc..79b75ac 100644
+index d411417f..2e8ee547 100644
 --- a/src/rendervulkan.cpp
 +++ b/src/rendervulkan.cpp
-@@ -121,7 +121,37 @@ static VkResult vulkan_load_module()
+@@ -123,7 +123,37 @@ static VkResult vulkan_load_module()
  	return s_result;
  }
  
@@ -92,7 +92,7 @@ index 54e4efc..79b75ac 100644
  
  uint32_t g_uCompositeDebug = 0u;
  gamescope::ConVar<uint32_t> cv_composite_debug{ "composite_debug", 0, "Debug composition flags" };
-@@ -2000,7 +2030,8 @@ void CVulkanCmdBuffer::insertBarrier(bool flush)
+@@ -2037,7 +2067,8 @@ void CVulkanCmdBuffer::insertBarrier(bool flush)
  									0, 0, nullptr, 0, nullptr, barriers.size(), barriers.data());
  }
  
@@ -103,10 +103,10 @@ index 54e4efc..79b75ac 100644
  static bool allDMABUFsEqual( wlr_dmabuf_attributes *pDMA )
  {
 diff --git a/src/rendervulkan.hpp b/src/rendervulkan.hpp
-index fa519db..b84f4fd 100644
+index 13df0dc0..4ab7dcc8 100644
 --- a/src/rendervulkan.hpp
 +++ b/src/rendervulkan.hpp
-@@ -622,7 +622,7 @@ enum ShaderType {
+@@ -634,7 +634,7 @@ enum ShaderType {
  	SHADER_TYPE_COUNT
  };
  
@@ -115,7 +115,7 @@ index fa519db..b84f4fd 100644
  
  struct SamplerState
  {
-@@ -1071,4 +1071,4 @@ bool vulkan_has_drm_props();
+@@ -1088,4 +1088,4 @@ bool vulkan_has_drm_props();
  
  bool vulkan_format_supports_features(VkFormat format, VkFormatFeatureFlags features);
  

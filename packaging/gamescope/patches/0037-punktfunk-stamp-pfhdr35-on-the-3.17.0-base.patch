@@ -1,0 +1,27 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: unom <packages@unom.io>
+Date: Thu, 12 Nov 2026 16:21:46 +0100
+Subject: [PATCH 37/37] punktfunk: stamp pfhdr35 on the 3.17.0 base
+
+The stack moves to upstream 3.17.0. Upstream now aligns upload ring
+allocations to the device's uniform offset limit, so the patch that
+stamped pfhdr31 is gone. A new level lets a box tell the two bases
+apart from its banner. No new capability.
+---
+ src/meson.build | 3 ++-
+ 1 file changed, 2 insertions(+), 1 deletion(-)
+
+diff --git a/src/meson.build b/src/meson.build
+index 72f2019a..518b6e65 100644
+--- a/src/meson.build
++++ b/src/meson.build
+@@ -227,7 +227,8 @@ vcs_tag = run_command(vcs_tag_cmd, check: false).stdout().strip()
+ #   +pfhdr32 — …and a planar capture dmabuf on NVIDIA carries DRM_FORMAT_MOD_LINEAR's layout
+ #   +pfhdr33 — …written into a storage buffer, so its bytes sit where the export says
+ #   +pfhdr34 — …and a private reliable capture node beside the public one Steam reads
+-version_tag = vcs_tag + '+pfhdr34' + ' (' + compiler_name + ' ' + compiler_version + ')'
++#   +pfhdr35 — …on upstream 3.17.0 (31 is upstream there)
++version_tag = vcs_tag + '+pfhdr35' + ' (' + compiler_name + ' ' + compiler_version + ')'
+ 
+ gamescope_version_conf = configuration_data()
+ gamescope_version_conf.set('VCS_TAG', version_tag)

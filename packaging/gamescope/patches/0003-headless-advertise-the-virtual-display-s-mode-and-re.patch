@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: =?UTF-8?q?Enrico=20B=C3=BChler?= <enrico.buehler@unom.io>
 Date: Sat, 8 Aug 2026 13:13:09 +0000
-Subject: [PATCH 03/33] headless: advertise the virtual display's mode and
+Subject: [PATCH 03/37] headless: advertise the virtual display's mode and
  refresh rates
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
@@ -41,7 +41,7 @@ real connector and is untouched.
  2 files changed, 103 insertions(+), 4 deletions(-)
 
 diff --git a/src/Backends/HeadlessBackend.cpp b/src/Backends/HeadlessBackend.cpp
-index 8e45400..3168c88 100644
+index 8e454006..3168c88f 100644
 --- a/src/Backends/HeadlessBackend.cpp
 +++ b/src/Backends/HeadlessBackend.cpp
 @@ -3,8 +3,13 @@
@@ -166,7 +166,7 @@ index 8e45400..3168c88 100644
  
  			return nullptr;
 diff --git a/src/main.cpp b/src/main.cpp
-index 5e0bda2..6bd68af 100644
+index f74ad71a..c977b82d 100644
 --- a/src/main.cpp
 +++ b/src/main.cpp
 @@ -93,6 +93,7 @@ const struct option *gamescope_options = (struct option[]){
@@ -236,7 +236,7 @@ index 5e0bda2..6bd68af 100644
  static int parse_integer(const char *str, const char *optionName)
  {
  	auto result = gamescope::Parse<int>(str);
-@@ -817,6 +856,8 @@ int main(int argc, char **argv)
+@@ -821,6 +860,8 @@ int main(int argc, char **argv)
  					g_eGamescopeModeGeneration = parse_gamescope_mode_generation( optarg );
  				} else if (strcmp(opt_name, "force-composition-rotation") == 0) {
  					g_bForceCompositionRotation = true;

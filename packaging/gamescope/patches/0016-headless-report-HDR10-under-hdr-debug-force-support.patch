@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: =?UTF-8?q?Enrico=20B=C3=BChler?= <enrico.buehler@unom.io>
 Date: Thu, 17 Sep 2026 12:00:00 +0200
-Subject: [PATCH 16/33] headless: report HDR10 under --hdr-debug-force-support
+Subject: [PATCH 16/37] headless: report HDR10 under --hdr-debug-force-support
 
 Steam offers its HDR setting only on a display that says it has HDR:
 GAMESCOPE_DISPLAY_SUPPORTS_HDR, written from the connector's SupportsHDR(),
@@ -27,7 +27,7 @@ the WSI layer are told. Without the flag nothing changes.
  2 files changed, 14 insertions(+), 3 deletions(-)
 
 diff --git a/src/Backends/HeadlessBackend.cpp b/src/Backends/HeadlessBackend.cpp
-index 1de1540..48af2e9 100644
+index 1de15403..48af2e99 100644
 --- a/src/Backends/HeadlessBackend.cpp
 +++ b/src/Backends/HeadlessBackend.cpp
 @@ -12,6 +12,8 @@ extern int g_nPreferredOutputHeight;
@@ -82,10 +82,10 @@ index 1de1540..48af2e9 100644
          std::vector<uint32_t> m_ValidDynamicRefreshRates;
      };
 diff --git a/src/meson.build b/src/meson.build
-index 8095ff8..b918dcc 100644
+index 2ea7b8b6..7b339d2c 100644
 --- a/src/meson.build
 +++ b/src/meson.build
-@@ -196,7 +196,8 @@ vcs_tag = run_command(vcs_tag_cmd, check: false).stdout().strip()
+@@ -204,7 +204,8 @@ vcs_tag = run_command(vcs_tag_cmd, check: false).stdout().strip()
  #   +pfhdr11 — …and the Steam overlay repaints the capture on its own commits (no new capability)
  #   +pfhdr12 — …and the capture push honours the consumer's maxFramerate
  #   +pfhdr13 — …and a P010 capture format (BT.2020 PQ, 4:2:0)

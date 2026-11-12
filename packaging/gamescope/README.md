@@ -44,10 +44,10 @@ The patches here add the missing half, and nothing else. See
 | `0031-pipewire-offer-the-10-bit-capture-formats-as-SDR-too.patch` | Offer each 10-bit capture format (xBGR/xRGB 2:10:10:10, P010) a second time with BT.709 primaries and the sRGB-family transfer the SDR composite writes, after the PQ pod. `paint_pipewire` keys the PQ LUT set on the negotiated transfer function instead of the DRM format, and the P010 pass applies a 10-bit BT.709 matrix on the sRGB codes an SDR composite stores. Every YCbCr capture already composites through the 10-bit RGB intermediate, so a 10-bit SDR stream carries the composite's own precision | **Yes** — any consumer that wants 10-bit without PQ |
 | `0032-steamcompmgr-keep-framerate-limit-as-the-floor-under.patch` | A refresh-cycle request for 0 (Steam's "Framerate limit: Off", or the legacy `GAMESCOPE_FPS_LIMIT` atom at 0) falls back to the CLI `--framerate-limit` as a plain cap instead of clearing it. Steam's explicit values still win, and a request that only changes refresh (Steam's "Disable Frame Limiter") stays uncapped | **Yes** — on a headless output the limiter is the focused app's only pace; `0012` let Steam's default state remove it |
 | `0033-protocol-read-wayland-scanner-s-path-from-any-depend.patch` | `protocol/meson.build` reads `wayland_scanner` with the generic `get_variable`, as wlroots does, so a wayland built as a subproject configures (the pkg-config-only lookup fails on its internal dependency). Also stamps `+pfhdr30` | **Yes** — any build that takes wlroots' `wayland` fallback hits it |
-| `0034-rendervulkan-align-uploaded-constants-to-any-device-.patch` | Align each block `uploadBufferData` hands out to 256 bytes, the largest `minUniformBufferOffsetAlignment` Vulkan allows. A dispatch binds its constants as a uniform buffer at that offset. Since upstream's eight-layer bound, the 584-byte blit block leaves the NV12/P010 pass's constants off NVIDIA's and Intel's 64-byte boundary; the pass stores nothing and every planar frame is zeros (green). Also stamps `+pfhdr31` | **Yes** — upstream's own planar capture has the same fault |
-| `0035-pipewire-give-a-planar-capture-DRM-LINEAR-s-layout-o.patch` | On NVIDIA, allocate a planar capture dmabuf with `DRM_FORMAT_MOD_LINEAR`, external memory, and its plane views listed. The plain LINEAR image gave no layout promise, and a pre-Turing card's page kind moved bytes under the consumer's LINEAR import: a striped picture. A driver that refuses the shape does not get NV12/P010 offered, so the consumer takes packed RGB. Also stamps `+pfhdr32` | **Yes** — upstream's planar export has the same fault |
-| `0036-pipewire-write-NVIDIA-s-planar-capture-into-a-buffer.patch` | On NVIDIA, a planar capture is an exportable storage buffer, not an image: luma rows, then chroma rows at the same pitch, exported as a two-plane LINEAR dmabuf. The NV12/P010 pass writes it word by word, so every byte sits where the export says. A pre-Turing card still striped `0035`'s LINEAR image for every importer. A driver that cannot export such a buffer keeps `0035`'s image. Also stamps `+pfhdr33` | **Yes** — upstream's planar export has the same fault |
-| `0037-pipewire-give-a-streaming-host-a-private-capture-node.patch` | Publish a second capture node, `gamescope-capture`, that the `gamescope_pipewire` protocol never names. It is reliable and always shows the whole session. The announced node goes back to upstream's recycling. Steam's Game Recording links to that node when a game starts and sets its focus appid; PipeWire 1.6 hands a reliable frame to one link only, so a host sharing the node froze. Also stamps `+pfhdr34` | No — upstream has one node and one reader |
+| `0034-pipewire-give-a-planar-capture-DRM-LINEAR-s-layout-o.patch` | On NVIDIA, allocate a planar capture dmabuf with `DRM_FORMAT_MOD_LINEAR`, external memory, and its plane views listed. The plain LINEAR image gave no layout promise, and a pre-Turing card's page kind moved bytes under the consumer's LINEAR import: a striped picture. A driver that refuses the shape does not get NV12/P010 offered, so the consumer takes packed RGB. Also stamps `+pfhdr32` | **Yes** — upstream's planar export has the same fault |
+| `0035-pipewire-write-NVIDIA-s-planar-capture-into-a-buffer.patch` | On NVIDIA, a planar capture is an exportable storage buffer, not an image: luma rows, then chroma rows at the same pitch, exported as a two-plane LINEAR dmabuf. The NV12/P010 pass writes it word by word, so every byte sits where the export says. A pre-Turing card still striped `0035`'s LINEAR image for every importer. A driver that cannot export such a buffer keeps `0035`'s image. Also stamps `+pfhdr33` | **Yes** — upstream's planar export has the same fault |
+| `0036-pipewire-give-a-streaming-host-a-private-capture-node.patch` | Publish a second capture node, `gamescope-capture`, that the `gamescope_pipewire` protocol never names. It is reliable and always shows the whole session. The announced node goes back to upstream's recycling. Steam's Game Recording links to that node when a game starts and sets its focus appid; PipeWire 1.6 hands a reliable frame to one link only, so a host sharing the node froze. Also stamps `+pfhdr34` | No — upstream has one node and one reader |
+| `0037-punktfunk-stamp-pfhdr35-on-the-3.17.0-base.patch` | Stamp `+pfhdr35`, so a banner tells this base from 3.16.31 | **No** — ours only, as `0005` |
 
 ### Why the headless patch matters
 
@@ -158,10 +158,11 @@ The number is a **monotonic patch-set revision**, so one probe answers every cap
 | `+pfhdr32` | …and a planar capture dmabuf on NVIDIA carries `DRM_FORMAT_MOD_LINEAR`'s layout; `+pfhdr31` stripes the picture on pre-Turing cards (no new capability) |
 | `+pfhdr33` | …written into a storage buffer, so its bytes sit at that layout; `+pfhdr32` still stripes it on pre-Turing cards (no new capability) |
 | `+pfhdr34` | …and a private `gamescope-capture` node beside the one Steam reads; the host captures it when present |
+| `+pfhdr35` | …on upstream 3.17.0, which carries 31 itself (no new capability) |
 
 Require `+pfhdr10` for headless `--adaptive-sync` with a CLI cap: `+pfhdr9` clears that cap
 on the first paint unless Steam or a control command supplies an override. The Arch package is
-`3.16.31.pfhdr34-1`; its build checks the complete upstream version and capability level.
+`3.17.0.pfhdr35-1`; its build checks the complete upstream version and capability level.
 
 Bump it whenever a patch adds or changes something the host must know about before it spawns.
 
@@ -204,7 +205,7 @@ distro's `gamescope`.
 
 ## Building
 
-Pinned upstream: `6867f509874f9bc52e12d6f4c4596cdf0d5be6b4` (`3.16.31`).
+Pinned upstream: `865a71c4048b5137f03b0711bbd80c1d24bc6915` (`3.17.0`, 12 commits past the tag).
 All patches apply in filename order to that commit.
 
 Upstream's `vulkan_get_rgb10_capture_format()` falls back to `DRM_FORMAT_XBGR2101010` on devices
@@ -216,6 +217,8 @@ Where the system is older (Debian 13: the `.deb` and the SteamOS box), the scrip
 wraps in `subprojects/` and links them into the compositor statically; Arch and Fedora keep their
 own. The WSI layer builds in a second pass that never bundles: it loads into every game beside the
 game's own libwayland-client, and the script fails if the layer does not link the system one.
+The layer also needs Vulkan-Headers ≥ 1.4.335; below that (Debian 13 again) it compiles against a
+pinned copy of the headers, and links nothing from it.
 Every library compiled in ships its notice under `share/doc/punktfunk-gamescope/`. Bump the wraps
 with the pin; each names its release tag beside the commit.
 
@@ -318,8 +321,12 @@ With Linux Vulkan, Xwayland and Vulkan-tools' `vkcube`, run the staged binary wi
 `gamescopectl`. Both runs must take roughly four seconds plus startup for 240 FIFO frames at
 60 FPS. A sub-3.5-second run fails the cap check. This checks pacing, not capture latency.
 The WSI layers are disabled so an installed layer cannot mask the compositor's limiter behavior.
+`vkcube` is pinned to `xcb`: left to pick Wayland it draws on the desktop's own compositor and
+finishes in a fraction of a second. gamescope starts its child through `gamescopereaper`, so the
+staged one goes on `PATH`.
 
 ```sh
+PATH="$STAGE/usr/lib/punktfunk/gamescope:$PATH" \
 python3 - "$STAGE/usr/bin/punktfunk-gamescope" <<'PY'
 import os
 import subprocess
@@ -334,7 +341,7 @@ for adaptive_sync in (False, True):
     if adaptive_sync:
         args.append("--adaptive-sync")
     start = time.monotonic()
-    subprocess.run(args + ["--", "vkcube", "--present_mode", "2", "--c", "240"],
+    subprocess.run(args + ["--", "vkcube", "--wsi", "xcb", "--present_mode", "2", "--c", "240"],
                    env=env, check=True, timeout=30)
     elapsed = time.monotonic() - start
     print(f"adaptive_sync={adaptive_sync}: {elapsed:.2f}s")

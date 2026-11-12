@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: unom <packages@unom.io>
 Date: Wed, 23 Sep 2026 23:22:06 +0200
-Subject: [PATCH 13/33] pipewire: repaint the capture on the Steam overlay's
+Subject: [PATCH 13/37] pipewire: repaint the capture on the Steam overlay's
  commits
 
 paint_pipewire() pushes a frame only when the focus or override window
@@ -22,10 +22,10 @@ Stamp pfhdr11 so a box upgrades to it. No new capability.
  2 files changed, 33 insertions(+), 8 deletions(-)
 
 diff --git a/src/meson.build b/src/meson.build
-index f5a9857..efca81d 100644
+index 56ef305d..ac3bfddc 100644
 --- a/src/meson.build
 +++ b/src/meson.build
-@@ -192,7 +192,8 @@ vcs_tag = run_command(vcs_tag_cmd, check: false).stdout().strip()
+@@ -200,7 +200,8 @@ vcs_tag = run_command(vcs_tag_cmd, check: false).stdout().strip()
  #   +pfhdr8 — …and the seat's keyboard carries the XKB_DEFAULT_* keymap (honours the box layout)
  #   +pfhdr9 — …and the headless connector supports adaptive sync (paint on game commit)
  #   +pfhdr10 — …and the CLI framerate limit persists across paints without switching refresh
@@ -36,10 +36,10 @@ index f5a9857..efca81d 100644
  gamescope_version_conf = configuration_data()
  gamescope_version_conf.set('VCS_TAG', version_tag)
 diff --git a/src/steamcompmgr.cpp b/src/steamcompmgr.cpp
-index 9c9cfb0..f82bb51 100644
+index 3aa59e80..9f91d1c0 100644
 --- a/src/steamcompmgr.cpp
 +++ b/src/steamcompmgr.cpp
-@@ -3033,11 +3033,19 @@ static void paint_pipewire()
+@@ -3158,11 +3158,19 @@ static void paint_pipewire()
  	// WHILE the picture behind them is static, which is the case the test would otherwise skip.
  	const uint64_t ulExternalOverlayCommitId = window_last_done_commit_id( pExternalOverlay );
  
@@ -59,7 +59,7 @@ index 9c9cfb0..f82bb51 100644
  	     bDrawCursor == s_bLastCursorDrawn &&
  	     nCursorX == s_nLastCursorX && nCursorY == s_nLastCursorY )
  		return;
-@@ -3047,6 +3055,7 @@ static void paint_pipewire()
+@@ -3172,6 +3180,7 @@ static void paint_pipewire()
  	s_ulLastUnderlayCommitId = ulUnderlayCommitId;
  	s_ulLastDecorationCommitId = ulDecorationCommitId;
  	s_ulLastExternalOverlayCommitId = ulExternalOverlayCommitId;
@@ -67,7 +67,7 @@ index 9c9cfb0..f82bb51 100644
  	s_bLastCursorDrawn = bDrawCursor;
  	s_nLastCursorX = nCursorX;
  	s_nLastCursorY = nCursorY;
-@@ -3062,12 +3071,27 @@ static void paint_pipewire()
+@@ -3187,14 +3196,29 @@ static void paint_pipewire()
  	currentOutputWidth = uWidth;
  	currentOutputHeight = uHeight;
  
@@ -76,6 +76,14 @@ index 9c9cfb0..f82bb51 100644
 +	// shows the scanout's held base, as `paint_all` does; without it the overlay lands on black.
 +	// Read-only: `BasePlane` would rewrite the scanout's cached plane from this stream's scale.
  	steamcompmgr_win_t *fit = pFocus->overrideWindow;
+ 
+-	// Leave room for the overlay painted below.
+-	const int nReservedLayers = ( !ulFocusAppId && pFocus->overlayWindow && pFocus->overlayWindow->opacity ) ? 1 : 0;
++	// Leave room for what is painted above the decorations below: the overlay, the external
++	// overlay and the cursor, each one layer.
++	const int nReservedLayers = ( pOverlay ? 1 : 0 ) + ( pExternalOverlay ? 1 : 0 ) + ( bDrawCursor ? 1 : 0 );
+ 	frameInfo.nReservedLayers = nReservedLayers;
+ 
 -	paint_window( pFocus, pFocus->focusWindow, pFocus->focusWindow, &frameInfo, nullptr, 0, 1.0f, fit );
 +	gamescope::Rc<commit_t> focusCommit;
 +	get_window_last_done_commit( pFocus->focusWindow, focusCommit );
@@ -91,15 +99,9 @@ index 9c9cfb0..f82bb51 100644
 +	else
 +		paint_window( pFocus, pFocus->focusWindow, pFocus->focusWindow, &frameInfo, nullptr, 0, 1.0f, fit );
  
--	// Leave room for the overlay painted below.
--	const int nReservedLayers = ( !ulFocusAppId && pFocus->overlayWindow && pFocus->overlayWindow->opacity ) ? 1 : 0;
-+	// Leave room for what is painted above the decorations below: the overlay, the external
-+	// overlay and the cursor, each one layer.
-+	const int nReservedLayers = ( pOverlay ? 1 : 0 ) + ( pExternalOverlay ? 1 : 0 ) + ( bDrawCursor ? 1 : 0 );
- 
  	if ( !pFocus->focusWindow->isSteamStreamingClient )
  		paint_override_underlays( pFocus, pFocus->focusWindow, &frameInfo, nullptr, nReservedLayers );
-@@ -3088,9 +3112,9 @@ static void paint_pipewire()
+@@ -3215,9 +3239,9 @@ static void paint_pipewire()
  		}
  	}
  
@@ -111,7 +113,7 @@ index 9c9cfb0..f82bb51 100644
  				( cv_overlay_unmultiplied_alpha ? PaintWindowFlag::CoverageMode : 0 )  );
  	}
  
-@@ -3100,7 +3124,7 @@ static void paint_pipewire()
+@@ -3227,7 +3251,7 @@ static void paint_pipewire()
  	// would otherwise get the overlay at the wrong size in the corner.
  	if ( pExternalOverlay )
  	{

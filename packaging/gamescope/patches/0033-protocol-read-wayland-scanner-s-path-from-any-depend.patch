@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: punktfunk <packages@unom.io>
 Date: Sun, 4 Oct 2026 00:39:36 +0200
-Subject: [PATCH 33/33] protocol: read wayland-scanner's path from any
+Subject: [PATCH 33/37] protocol: read wayland-scanner's path from any
  dependency type
 
 `get_variable(pkgconfig: 'wayland_scanner')` only answers for a pkg-config
@@ -17,7 +17,7 @@ punktfunk: also stamps the version banner +pfhdr30 (rebase onto 3.16.31).
  2 files changed, 5 insertions(+), 2 deletions(-)
 
 diff --git a/protocol/meson.build b/protocol/meson.build
-index cf8fbd1..5f19b61 100644
+index c9289f85..5def9d97 100644
 --- a/protocol/meson.build
 +++ b/protocol/meson.build
 @@ -1,7 +1,7 @@
@@ -30,10 +30,10 @@ index cf8fbd1..5f19b61 100644
  
  wayland_protos = dependency('wayland-protocols',
 diff --git a/src/meson.build b/src/meson.build
-index bf3f22c..0efd550 100644
+index 1cb20751..b555e43a 100644
 --- a/src/meson.build
 +++ b/src/meson.build
-@@ -210,7 +210,10 @@ vcs_tag = run_command(vcs_tag_cmd, check: false).stdout().strip()
+@@ -218,7 +218,10 @@ vcs_tag = run_command(vcs_tag_cmd, check: false).stdout().strip()
  #   +pfhdr25 — …and a planar capture composites through device memory, not system RAM
  #   +pfhdr26 — …and the 10-bit capture formats are offered as SDR (BT.709) too
  #   +pfhdr27 — …and --framerate-limit is the floor a refresh-cycle request for 0 falls back to

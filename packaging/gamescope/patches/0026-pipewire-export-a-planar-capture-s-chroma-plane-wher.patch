@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: =?UTF-8?q?Enrico=20B=C3=BChler?= <enrico.buehler@unom.io>
 Date: Wed, 23 Sep 2026 23:33:57 +0200
-Subject: [PATCH 26/33] pipewire: export a planar capture's chroma plane where
+Subject: [PATCH 26/37] pipewire: export a planar capture's chroma plane where
  the driver put it
 
 An NV12 or P010 capture buffer is one LINEAR Vulkan image with two
@@ -29,10 +29,10 @@ else.
  4 files changed, 71 insertions(+), 27 deletions(-)
 
 diff --git a/src/meson.build b/src/meson.build
-index 05b67df..2541e6b 100644
+index 880e8412..e9f38a2c 100644
 --- a/src/meson.build
 +++ b/src/meson.build
-@@ -204,7 +204,8 @@ vcs_tag = run_command(vcs_tag_cmd, check: false).stdout().strip()
+@@ -212,7 +212,8 @@ vcs_tag = run_command(vcs_tag_cmd, check: false).stdout().strip()
  #   +pfhdr19 — …and GAMESCOPE_SET_OUTPUT_MODE changes a headless output's mode at runtime
  #   +pfhdr20 — …and dmabuf capture buffers live in device memory, not system RAM
  #   +pfhdr21 — …and a packed RGB capture dmabuf takes a tiled modifier its consumer accepts
@@ -43,7 +43,7 @@ index 05b67df..2541e6b 100644
  gamescope_version_conf = configuration_data()
  gamescope_version_conf.set('VCS_TAG', version_tag)
 diff --git a/src/pipewire.cpp b/src/pipewire.cpp
-index d6d2cc7..d16554d 100644
+index d6d2cc7f..d16554dc 100644
 --- a/src/pipewire.cpp
 +++ b/src/pipewire.cpp
 @@ -63,8 +63,8 @@ static bool is_planar_video_format(uint32_t format)
@@ -150,7 +150,7 @@ index d6d2cc7..d16554d 100644
  		int fd = anonymous_shm_open();
  		if (fd < 0) {
 diff --git a/src/pipewire.hpp b/src/pipewire.hpp
-index 5ec3c1d..52ef316 100644
+index 5ec3c1dd..52ef316d 100644
 --- a/src/pipewire.hpp
 +++ b/src/pipewire.hpp
 @@ -44,6 +44,10 @@ struct pipewire_buffer {
@@ -165,10 +165,10 @@ index 5ec3c1d..52ef316 100644
  
  	// The PipeWire buffer, or nullptr if it's been destroyed.
 diff --git a/src/rendervulkan.cpp b/src/rendervulkan.cpp
-index 388fb5b..d90462e 100644
+index 68ad45dd..d2ec2604 100644
 --- a/src/rendervulkan.cpp
 +++ b/src/rendervulkan.cpp
-@@ -2537,27 +2537,29 @@ bool CVulkanTexture::BInit( uint32_t width, uint32_t height, uint32_t depth, uin
+@@ -2609,27 +2609,29 @@ bool CVulkanTexture::BInit( uint32_t width, uint32_t height, uint32_t depth, uin
  		g_device.vk.GetImageSubresourceLayout(g_device.device(), m_vkImage, &image_subresource, &image_layout);
  
  		m_unRowPitch = image_layout.rowPitch;

@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: =?UTF-8?q?Enrico=20B=C3=BChler?= <enrico.buehler@unom.io>
 Date: Sat, 8 Aug 2026 13:17:14 +0000
-Subject: [PATCH 04/33] pipewire: optionally composite the external overlay
+Subject: [PATCH 04/37] pipewire: optionally composite the external overlay
  into the capture stream
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
@@ -41,7 +41,7 @@ not something the viewer asked to see on that screen.
  2 files changed, 42 insertions(+)
 
 diff --git a/src/main.cpp b/src/main.cpp
-index 6bd68af..562e89f 100644
+index c977b82d..cf481c40 100644
 --- a/src/main.cpp
 +++ b/src/main.cpp
 @@ -145,6 +145,7 @@ const struct option *gamescope_options = (struct option[]){
@@ -62,10 +62,10 @@ index 6bd68af..562e89f 100644
  	"                                 If this is not set, and there is a HDR client, it will be tonemapped SDR.\n"
  	"  --sdr-gamut-wideness           Set the 'wideness' of the gamut for SDR comment. 0 - 1.\n"
 diff --git a/src/steamcompmgr.cpp b/src/steamcompmgr.cpp
-index b4b794a..62046e7 100644
+index 8dc8c512..63db5c40 100644
 --- a/src/steamcompmgr.cpp
 +++ b/src/steamcompmgr.cpp
-@@ -2870,6 +2870,12 @@ gamescope::ConVar<bool> cv_pipewire_composite_cursor{ "pipewire_composite_cursor
+@@ -2995,6 +2995,12 @@ gamescope::ConVar<bool> cv_pipewire_composite_cursor{ "pipewire_composite_cursor
  	"default: the node has never carried the pointer, and a consumer that draws its own would get "
  	"two." };
  
@@ -78,7 +78,7 @@ index b4b794a..62046e7 100644
  static void paint_pipewire()
  {
  	static struct pipewire_buffer *s_pPipewireBuffer = nullptr;
-@@ -3011,10 +3017,26 @@ static void paint_pipewire()
+@@ -3136,10 +3142,26 @@ static void paint_pipewire()
  		}
  	}
  
@@ -105,7 +105,7 @@ index b4b794a..62046e7 100644
  	     bDrawCursor == s_bLastCursorDrawn &&
  	     nCursorX == s_nLastCursorX && nCursorY == s_nLastCursorY )
  		return;
-@@ -3023,6 +3045,7 @@ static void paint_pipewire()
+@@ -3148,6 +3170,7 @@ static void paint_pipewire()
  	s_ulLastOverrideCommitId = ulOverrideCommitId;
  	s_ulLastUnderlayCommitId = ulUnderlayCommitId;
  	s_ulLastDecorationCommitId = ulDecorationCommitId;
@@ -113,7 +113,7 @@ index b4b794a..62046e7 100644
  	s_bLastCursorDrawn = bDrawCursor;
  	s_nLastCursorX = nCursorX;
  	s_nLastCursorY = nCursorY;
-@@ -3070,6 +3093,16 @@ static void paint_pipewire()
+@@ -3197,6 +3220,16 @@ static void paint_pipewire()
  				( cv_overlay_unmultiplied_alpha ? PaintWindowFlag::CoverageMode : 0 )  );
  	}
  
@@ -130,7 +130,7 @@ index b4b794a..62046e7 100644
  	// The cursor, when this stream was asked for it. gamescope keeps the pointer OUT of the
  	// PipeWire node by default — it lives on a hardware plane for scanout, and a remote-play
  	// consumer that draws its own would end up with two — so a consumer that has no cursor of
-@@ -9929,6 +9962,12 @@ steamcompmgr_main(int argc, char **argv)
+@@ -10456,6 +10489,12 @@ steamcompmgr_main(int argc, char **argv)
  					cv_pipewire_composite_cursor = true;
  #else
  					fprintf( stderr, "gamescope: --pipewire-composite-cursor ignored (built without PipeWire)\n" );
