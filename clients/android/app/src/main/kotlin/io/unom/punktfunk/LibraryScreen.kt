@@ -530,7 +530,8 @@ private suspend fun loadLibrary(
         set(LibState.Message(say(R.string.android_lib_identity_unavailable)))
         return
     }
-    val cached = withContext(Dispatchers.IO) { cache.load(key)?.games }?.takeIf { it.isNotEmpty() }
+    val profile = host.asProfile?.id
+    val cached = withContext(Dispatchers.IO) { cache.load(key, profile)?.games }?.takeIf { it.isNotEmpty() }
     if (cached != null) {
         set(LibState.Ready(cached, loader, identity, stale = Stale.Checking))
     }
@@ -543,7 +544,7 @@ private suspend fun loadLibrary(
             fpHex = host.fpHex,
             macs = host.mac,
             autoWake = autoWake,
-            profile = host.asProfile?.id,
+            profile = profile,
             streamPort = host.port,
             isCancelled = { !isActive },
             onWaking = {
@@ -561,7 +562,7 @@ private suspend fun loadLibrary(
         } else {
             set(LibState.Ready(res.games, loader, identity))
             // Remembered AFTER it is on screen: the disk write is not on the path to a shelf.
-            withContext(Dispatchers.IO) { cache.store(key, res.games) }
+            withContext(Dispatchers.IO) { cache.store(key, res.profile, res.games) }
             val status = withContext(Dispatchers.IO) {
                 LibraryClient.fetchStatus(
                     address = host.address,

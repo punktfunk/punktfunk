@@ -789,7 +789,8 @@ object SkiaConsole {
 
     /**
      * `OverlayAction::PinShortcut`: the title's link as a home-screen shortcut. The record and
-     * the cached shelf the link names give the shortcut its key and its poster.
+     * the cached shelf the link names give the shortcut its key and its poster: the link's
+     * profile's shelf, else the console's.
      */
     private fun pinShortcut(a: JSONObject) {
         val app = appContext ?: return
@@ -800,7 +801,8 @@ object SkiaConsole {
         val me = identity
         ioPool.execute {
             val posters = link.launch?.let { id ->
-                LibraryCache.standard(app.cacheDir).load(LibraryCache.keyFor(host, host.fpHex))
+                LibraryCache.standard(app.cacheDir)
+                    .load(LibraryCache.keyFor(host, host.fpHex), link.asProfile ?: consoleProfile(host))
                     ?.games?.firstOrNull { it.id == id }?.art?.posterCandidates
             }.orEmpty()
             val key = shortcutId(host.id, link.launch, link.preset)
@@ -842,9 +844,10 @@ object SkiaConsole {
             NativeBridge.nativeConsoleSessionPhase(handle, 2, identities.blockedMessage())
             return
         }
-        // The cached catalog the shelf was drawn from: it holds the host's overrides for the title.
+        // The catalog cached for the profile this launch plays as: it holds the host's overrides
+        // for the title.
         val entry = launchId?.let { id ->
-            LibraryCache.standard(app.cacheDir).load(LibraryCache.keyFor(kh, fp))?.games?.firstOrNull { it.id == id }
+            LibraryCache.standard(app.cacheDir).load(LibraryCache.keyFor(kh, fp), profile)?.games?.firstOrNull { it.id == id }
         }
         val preset: StreamPreset? = presetStore.resolveFor(kh, presetId, launchId)
         val effective = settings.effectiveFor(preset)

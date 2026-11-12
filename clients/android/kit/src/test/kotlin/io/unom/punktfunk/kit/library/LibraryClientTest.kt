@@ -61,6 +61,8 @@ class LibraryClientTest {
             }
             val want = expect.getJSONArray("asked").let { a -> (0 until a.length()).map { a.getString(it) } }
             assertEquals("$name: asked", want, asked)
+            val served = if (expect.isNull("as")) null else expect.getString("as")
+            assertEquals("$name: as", served, (shown as? LibraryResult.Ok)?.profile)
             val ids = expect.optJSONArray("ids")?.let { a -> (0 until a.length()).map { a.getString(it) } }
             assertEquals("$name: ids", ids, (shown as? LibraryResult.Ok)?.games?.map { it.id })
         }

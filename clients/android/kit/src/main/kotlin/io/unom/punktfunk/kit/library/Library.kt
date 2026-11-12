@@ -197,7 +197,8 @@ fun List<GameEntry>.launchersFirst(): List<GameEntry> {
 
 /** Fetch outcome — three states so the UI can guide setup (the common case is "not paired yet"). */
 sealed class LibraryResult {
-    data class Ok(val games: List<GameEntry>) : LibraryResult()
+    /** [profile]: the one the catalog was fetched as, which its cache entry is filed under; null the box's. */
+    data class Ok(val games: List<GameEntry>, val profile: String? = null) : LibraryResult()
     data class Unauthorized(val message: Say) : LibraryResult()
     data class Error(val message: Say) : LibraryResult()
 
@@ -550,8 +551,8 @@ object LibraryClient {
      * The catalog as [profile] plays it (`as=`), else the box's. [get] answers one path's status
      * and body. A host older than the paged route refuses it, so `GET /api/v1/library` answers
      * whole instead. A profile the host no longer holds (404 `profile_unknown`) is asked once more
-     * as the box, and that answer stands. `clients/shared/library-profile-vectors.json` pins this
-     * here, in Rust and in Swift. A refusal maps through [refused].
+     * as the box, and that answer stands, as the box's. `clients/shared/library-profile-vectors.json`
+     * pins this here, in Rust and in Swift. A refusal maps through [refused].
      */
     internal fun catalog(profile: String?, base: String, get: (path: String) -> Pair<Int, String>): LibraryResult {
         var gone = false
@@ -565,10 +566,10 @@ object LibraryClient {
                 }
             }
             return when (val walked = walkPages(base) { cursor -> ask(pagePath(cursor)) }) {
-                is Walk.Done -> LibraryResult.Ok(walked.games.launchersFirst())
+                is Walk.Done -> LibraryResult.Ok(walked.games.launchersFirst(), profile)
                 is Walk.Refused -> if (walked.code in setOf(401, 403, 404) && !gone) {
                     val (code, body) = ask("/api/v1/library")
-                    if (code == 200) LibraryResult.Ok(parse(body, base)) else refused(code)
+                    if (code == 200) LibraryResult.Ok(parse(body, base), profile) else refused(code)
                 } else {
                     refused(walked.code)
                 }
