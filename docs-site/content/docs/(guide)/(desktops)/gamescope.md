@@ -74,7 +74,7 @@ session, then the display manager. The display manager restart needs the
 
 ### The `punktfunk` group
 
-Join the `punktfunk` group on any box you stream Gaming Mode from, then log out and back in:
+Join the `punktfunk` group on any box you stream Gaming Mode from, then restart the computer:
 
 ```sh
 sudo usermod -aG punktfunk "$USER"
