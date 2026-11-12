@@ -210,8 +210,9 @@ impl Soak {
         let last = base + losses * gap;
         let (mut lost, mut anchors, mut idrs) = (Vec::new(), Vec::new(), Vec::new());
         let mut aus: Vec<crate::EncodedFrame> = Vec::new();
-        // Under acks the first loss waits a gap, until a confirmed frame can exist.
-        let skip = usize::from(self.acked);
+        // Under acks or confirmations the first loss waits a gap, until a confirmed frame can
+        // exist. NVENC keeps no IDR long-term, so a late ask about frame 1 waves there.
+        let skip = usize::from(self.acked || self.confirm.is_some());
         let lost_at = |j: usize| {
             j >= 1 && (j - 1) % gap == 0 && (skip..losses + skip).contains(&((j - 1) / gap))
         };
@@ -236,7 +237,10 @@ impl Soak {
                 if lost_at(i) {
                     lost.push(i);
                 }
-            } else if i >= base && (i - base) % gap == 0 && (i - base) / gap < losses {
+            } else if i >= base
+                && (i - base) % gap == 0
+                && (skip..losses + skip).contains(&((i - base) / gap))
+            {
                 let l = (i - lag) as i64;
                 lost.push(i - lag);
                 if enc.invalidate_ref_frames(l, l) {
