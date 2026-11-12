@@ -12,7 +12,8 @@ covers and details for all of them ([Art & Metadata](/docs/game-library#filling-
 |---|---|---|
 | **Steam** | Linux, Windows | Installed games and non-Steam shortcuts with Steam's art, plus Big Picture and desktop tiles. |
 | **Lutris** | Linux | Your Lutris games with art, and a tile that opens Lutris. |
-| **Heroic** | Linux | Everything Heroic manages (Epic, GOG, Amazon), and a tile that opens Heroic. |
+| **Heroic Games Launcher** | Linux | Everything Heroic manages (Epic, GOG, Amazon), and a tile that opens Heroic. |
+| **Hydra Launcher** | Linux, Windows | The games in your Hydra library that are installed or downloading, started through Hydra. |
 | **Desktop entries** | Linux | Every Game-category menu entry, Flatpak included, that no other plugin lists. |
 | **Bottles** | Linux | The programs in each Bottle, launched through `bottles-cli`. |
 | **Epic Games Store** | Windows | Installed Epic titles. |
@@ -23,12 +24,13 @@ covers and details for all of them ([Art & Metadata](/docs/game-library#filling-
 | **Battle.net** | Windows | Installed Blizzard titles, launched through Battle.net, which must be running. |
 | **EA app** | Windows | Games the EA app installed, launched through the EA app. |
 | **Rockstar Games** | Windows | Games the Rockstar Games Launcher installed, launched through the launcher. |
+| **Xbox / Game Pass** | Windows | Titles the Xbox app installed, Game Pass included, launched through the Xbox app. |
+| **Windows games** | Windows | Every game Windows recognised through Game Bar that no other plugin lists. |
 | **Game slots** | Linux, Windows | Keeps a copy of a game's config or saves for each device and swaps it in at launch ([below](#game-slots)). |
 | **RTSS Frame Cap** | Windows | Caps the game at the client's refresh rate through a [RivaTuner Statistics Server](https://www.guru3d.com/download/rtss-rivatuner-statistics-server-download/) you install ([below](#rtss-frame-cap)). |
 | **itch.io** | Linux, Windows | Games installed by the itch app, with covers. |
 | **Waydroid** | Linux | The Android apps installed in Waydroid. |
 | **ROM Manager** | Linux, Windows | Your ROM folders and RomM servers, each game in the host's best emulator for it ([below](#rom-manager)). |
-| **RomM** | Linux, Windows | The games on a [RomM](https://romm.app) server, played with RetroArch; each downloads on its first launch. |
 | **SteamGridDB** | Linux, Windows | Covers, heroes and logos for every game in the library. Needs a free API key. |
 | **Libretro** | Linux, Windows | Box art, developer, publisher, year and genres for ROM Manager's games. |
 | **IGDB** | Linux, Windows | Description, developer, publisher, year, genres and player count for every game. Needs a free Twitch app. |
@@ -49,9 +51,9 @@ covers and details for all of them ([Art & Metadata](/docs/game-library#filling-
    groups plugins into **Game sources**, **Art & Metadata** and **Tools**; **Detected** marks a
    launcher found on this host.
 
-A plugin with its own page opens from its name under **Plugins** → **Installed**; pin it on that
-page to keep it in the sidebar. A plugin that keeps something per game adds a tab to each game's page in
-**Library** instead.
+A plugin with its own page opens from its name under **Plugins** → **Installed**; **Pin to
+sidebar** on that page keeps it in the sidebar. A plugin that keeps something per game adds a tab
+to each game's page in **Library** instead.
 
 ### Badges and catalogs
 
@@ -68,11 +70,11 @@ before it installs.
 A catalog can also withdraw a version: the console then refuses to install it and warns on
 **Installed** if you already have it.
 
-Plugins don't run on a profile that uses an existing Linux account yet. A profile on an existing
+Plugins don't run on a profile that uses an existing Linux account. A profile on an existing
 Windows account installs **Verified** plugins only: any other would run code nobody at unom
 reviewed as that person.
 
-To add a catalog: **Sources** → **Add a catalog source**, with a name, the index URL and
+To add a catalog: **Sources** → **Add source**, with a name, the index URL and
 optionally its `ed25519:…` public key. With a key set, the host accepts only a signed index from
 that source. Plugins from it are never **Verified**.
 
@@ -120,27 +122,22 @@ A bare name installs the first-party package from Punktfunk's registry: `playnit
 
 ## Where plugins run
 
-On **Linux** each plugin runs in its own sandbox: no network unless it declared one, and only the
-folders it declared plus the ones you allowed. It can change only its own library entries. The
+Each plugin runs in a sandbox of its own: no network unless it declared one, and only the folders
+it declared plus the ones you allowed. It can change only its own library entries. On **Linux** the
 sandbox needs `bubblewrap`, which the packages install, and unprivileged user namespaces. On
-**Windows** each plugin runs in an AppContainer of its own, under the low-privilege
-`NT AUTHORITY\LocalService` account: no network unless it declared one, and only the folders it
-declared plus the ones you allowed. Program Files stays readable to it; user profiles and other
-drives do not.
-
-Each plugin also declares the programs the host may start for it. The host builds every command
-line itself, and nothing a running plugin sends can widen that list. Still, a plugin is code on
-your host: install only plugins you trust.
+**Windows** it is an AppContainer under the `NT AUTHORITY\LocalService` account, which can read
+Program Files but not user profiles or other drives. Still, a plugin is code on your host: install
+only plugins you trust.
 
 Scripts you put in `~/.config/punktfunk/scripts/` are your own code; they run in the runner itself,
 not in a plugin sandbox.
 
 ## Give a plugin a folder
 
-A plugin can't know where you keep ROMs or games. When it finds a folder it can't read,
-**Library** → **Game sources** shows the path and whether it wants read or write access. Choose
-**Allow** or **Don't allow**. Allowing restarts the plugin, or the whole runner for a folder in your
-home.
+A plugin can't know where you keep ROMs or games. When it finds a folder it can't read, the console
+asks for it, with the path and whether it wants read or write access. Choose **Allow** or **Don't
+allow**; **Later** keeps the request under **Library** → **Sources**. Allowing restarts the plugin,
+or the whole runner for a folder in your home.
 
 On Windows the runner can't read your user profile, so a launcher installed there looks like it
 isn't installed until you allow its folder.
@@ -185,10 +182,6 @@ earlier version, until it is reinstalled under **Library** → **Sources** → *
 
 The console doesn't install, prepare or remove emulators, or move saves, inside a profile that
 uses an existing Linux account. On an existing Windows account it adds no emulator copy by hand.
-
-```sh
-punktfunk-host plugins add rom-manager
-```
 
 Add folders and servers on the console's **ROM Manager** page, under **Sources**. A server signs
 in with a code you approve in RomM. Without the console, write
@@ -340,7 +333,7 @@ console warns while it is set.
 
 ### A plugin can't read one of its folders
 
-Open **Library** → **Game sources** and allow the folder there. The host refuses missing drives and
+Open **Library** → **Sources** and allow the folder there. The host refuses missing drives and
 protected paths outright; its log names each one (`plugin folder request refused`).
 
 ### Plugin interfaces are unavailable
@@ -356,11 +349,6 @@ Your browser hasn't accepted the host's certificate for the plugin port, or the 
 ### No plugin output yet
 
 The runner isn't running. Check with `punktfunk-host plugins status`.
-
-### `punktfunk-host: command not found`
-
-On Windows, open a new terminal or call the full path above. On Linux the packages install it to
-`/usr/bin/punktfunk-host`.
 
 ## Writing a plugin
 

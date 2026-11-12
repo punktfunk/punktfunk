@@ -26,7 +26,7 @@ run in the streaming path. The one exception is a launch: a hook with `hold` set
 | `game.launching` | the host is about to start a launched game; not when it picks up one still running | app id, title, store, client, fingerprint, plane, preset, `profile` |
 | `game.running` | a launched game's own process runs (not just its launcher) | app id, title, store, client, fingerprint, plane, `profile` |
 | `game.window` | the game's window reaches the screen, often 5–40 s after `game.running` | the same, plus the window's `title` and `app_id` |
-| `game.exited` | a launched game is gone | the same, plus `reason`: `exited` (the player quit) or `terminated` (the host closed it, per [these settings](/docs/virtual-displays#when-a-game-ends-and-when-a-session-does)) |
+| `game.exited` | a launched game is gone | the same, plus `reason`: `exited` (the player quit or it crashed) or `terminated` (the host closed it, per [these settings](/docs/virtual-displays#when-a-game-ends-and-when-a-session-does)) |
 | `pairing.pending` | an unpaired device knocks, once per device | name, fingerprint, plane (`native` for a browser too: it pairs into the same store) |
 | `pairing.completed` / `pairing.denied` | a pairing is approved / denied | name, fingerprint, plane |
 | `access.granted` / `access.changed` | you pick a device's access when pairing / edit it later | device, `grants` bits, `expires_unix` (absent: no expiry) |
@@ -34,9 +34,10 @@ run in the streaming path. The one exception is a launch: a hook with `hold` set
 | `display.created` / `display.released` | a virtual display is created / kept displays are released | backend and mode / count |
 | `library.changed` | the game library changes | `source`: `manual` or the provider id |
 | `downloads.changed` | a title's download starts, pauses or ends, or its files are removed | `app`, `title`, `state` (`queued`, `paused`, `done`, `failed`, `cancelled`, `removed`, …) |
+| `emulators.changed` | a managed emulator is installed or removed | emulator `id` |
 | `update.available` | a newer release is found, once per version | version, channel, install kind (`apt`, `windows-installer`, …) |
 | `update.applied` | the updated host first starts | `from`, `to` |
-| `action.invoked` | a [host power](/docs/host-power) action is accepted, or fails | `id` (`power.sleep`, `power.reboot`, `power.shutdown`, `host.restart`), device (absent for the console), `outcome` |
+| `action.invoked` | a [host power](/docs/host-power) action or **Next monitor** is accepted, or fails | `id` (`power.sleep`, `power.reboot`, `power.shutdown`, `host.restart`, `display.next`), device (absent for the console), `outcome` |
 | `plugins.changed` | a plugin registers, restarts or goes away | plugin id |
 | `store.changed` | a plugin install or uninstall finished, or a catalog refreshed | nothing: re-read the store |
 | `settings.changed` | host settings changed in the console | the setting ids |
@@ -120,9 +121,6 @@ flattened into `PF_EVENT_*` variables:
   paths and bare names like `makoctl` aren't checked.
 - At most 8 hooks run at once; more are dropped and logged, never queued.
 
-`PUNKTFUNK_ON_CONNECT_CMD` and `PUNKTFUNK_ON_DISCONNECT_CMD` in [`host.env`](/docs/configuration)
-run a command on `client.connected` / `client.disconnected` without a `hooks.json`.
-
 ### Run as administrator
 
 On Windows, `"elevated": true` (**Run as administrator** in the console) runs a command with the
@@ -190,8 +188,8 @@ with the name the event carried.
 Attach `prep` steps to a [custom library entry](/docs/game-library#adding-a-game-by-hand) in
 `library.json`, or to a GameStream `apps.json` entry. Each `do` runs before the title launches, and
 the launch waits for it (up to 30 s per step). Each `undo` runs when the session ends, in reverse
-order, even after a crash. A `do` that fails is logged and its `undo` skipped. The console's
-Library form keeps prep steps but can't edit them.
+order, even when it ends in an error. A `do` that fails is logged and its `undo` skipped. The
+console's Library form keeps prep steps but can't edit them.
 
 Every step gets the session's mode: `PF_STREAM_WIDTH`, `PF_STREAM_HEIGHT`, `PF_STREAM_REFRESH`,
 `PF_STREAM_HDR` (`1` / `0`), plus `PF_APP_ID` (a Punktfunk client's launch) or `PF_APP_TITLE`
@@ -276,8 +274,6 @@ curl -Nk -H "Authorization: Bearer $PUNKTFUNK_MGMT_TOKEN" \
   "https://127.0.0.1:47990/api/v1/events?kinds=pairing.*,stream.*"
 ```
 
-The token file is `PUNKTFUNK_MGMT_TOKEN=<token>`, so source it; `cat` into the header gets 401.
-
 - Each frame carries `id:` (the `seq`), `event:` (the kind) and `data:` (the event JSON).
 - `?kinds=` filters by kind or `domain.*`, comma-separated.
 - Reconnect with `Last-Event-ID` or `?since=<seq>` to replay what you missed from the last ~1024
@@ -293,13 +289,8 @@ Ready-made plugins sync ROMs or a Playnite library, or hand a USB device to the 
 [Plugins](/docs/plugins). To write your own, see
 [Writing plugins](/docs/developers/writing-plugins) and the
 [TypeScript client](/docs/developers/management-api#typescript-sdk). The full API is at
-[`/api/docs`](/api) on your host.
-
-A plugin under the runner gets a limited token. It can't register hooks, administer pairing, use
-the plugin store or the update endpoints, or read the logs; those routes answer 403. A script that
-should approve pairings, say by watching `pairing.pending` and calling
-`POST /api/v1/native/pending/{id}/approve` when you tap yes on your phone, needs the full token:
-set `PUNKTFUNK_MGMT_TOKEN` on its unit.
+[`/api/docs`](/api) on your host. A plugin's token can't register hooks or approve pairings; a
+script that does needs the admin token ([Credentials](/docs/developers/management-api#credentials)).
 
 ## Recipe: full controller passthrough (VirtualHere)
 

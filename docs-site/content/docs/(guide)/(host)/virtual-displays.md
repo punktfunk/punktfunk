@@ -45,13 +45,13 @@ sessions as they are.
 - **Keep until released**. The screen stays until you click **Release** on it in **Displays**, or
   **Release all kept**.
 
-Closing the client removes the screen at once. A dropped connection is noticed after the
-**Disconnect timeout** (8 s, an advanced setting in **Host**), then the window starts.
+Stopping the stream on the client skips the **Keep for** window and removes the screen at once. A
+dropped connection is noticed after the **Disconnect timeout** (8 s, an advanced setting in
+**Host**), then the window starts.
 
-**Keep for** counts while the host sleeps. A stream the host went to sleep under counts from that
-moment, so a host that sleeps past the window removes the screen a few seconds after it wakes,
-unless a device reconnects first. **Keep until released** ignores sleep.
-On gamescope the game keeps running as long as its screen does.
+**Keep for** keeps counting while the host sleeps: a host that sleeps past the window removes the
+screen a few seconds after it wakes, unless a device reconnects first. On gamescope the game keeps
+running as long as its screen does.
 
 > **Keeping a screen with Turn off keeps your monitors dark after you disconnect**, until the
 > window ends or you release it. On a PC you also use in person, pick **Desk PC**.
@@ -85,16 +85,9 @@ On gamescope the game keeps running as long as its screen does.
 
 - **Gets its own screen**.
 - **Takes over**: the first device's stream ends.
-- **Shares the screen**: it joins the live screen at that screen's resolution. Both hear the same
-  audio; mute one from its row under **Now** on **Home**.
+- **Shares the screen**: it joins the live screen at the size, refresh rate and HDR the first
+  device set. [Play together](/docs/play-together) covers what the devices share.
 - **Is told it's busy**.
-
-On a Windows host a device that shares the screen sees the pointer as part of the picture. It
-does not see Windows permission prompts or the lock screen; the first device still does.
-
-The first device sets the shared screen's size, refresh rate and HDR, and they hold while devices
-share it. Each device sees the screen fitted to its own display: see
-[Play together](/docs/play-together).
 
 The same device reconnecting always resumes. A Moonlight device that shares the screen gets the
 picture fitted into the resolution it asked for, and the app picked in Moonlight doesn't start.
@@ -137,8 +130,8 @@ host** or an answer for this device only:
 ## Stream a real monitor instead
 
 **Linux and Windows hosts.** In **Screens**, click **Stream this monitor** on a monitor's row. Every
-device then sees that monitor instead of its own virtual screen. Click it again to give each device
-its own screen.
+device then sees that monitor instead of its own virtual screen, and the button reads **Streamed to
+devices**. Click it again to give each device its own screen.
 
 A device's own pick outranks this, whether made in its app or in its
 [display settings](#per-device-settings). One device streams a monitor at a time: a device set to
@@ -156,11 +149,9 @@ a monitor another device is streaming gets its own screen for that session.
   the prompt. A device that connects while the PC is locked or signed out gets a virtual screen
   instead, so you can sign in; the monitor is streamed again from the next connection.
 
-On Linux, monitors are named by connector (`HDMI-A-1`, `DP-2`). `punktfunk-host list-monitors`
-lists them, and `mirror-test` checks the capture without a client
-([Host CLI](/docs/host-cli#list-monitors)). `punktfunk-host anchor-test --monitor HDMI-A-1` checks
-where absolute input lands. On Windows they carry the Windows display name (`\\.\DISPLAY1`), which
-the console shows.
+On Linux, monitors are named by connector (`HDMI-A-1`, `DP-2`); `punktfunk-host list-monitors`
+lists them ([Host CLI](/docs/host-cli#list-monitors)). On Windows they carry the Windows display
+name (`\\.\DISPLAY1`), which the console shows.
 
 To pin it from the host instead, set `PUNKTFUNK_CAPTURE_MONITOR=HDMI-A-1` in
 [`host.env`](/docs/configuration). It wins over the console, which then shows the choice as locked.
@@ -206,11 +197,12 @@ exactly as long as its screen:
 |---|---|
 | **Stop** on the client or in the console | ends with the screen at once, even on **Leave it running** |
 | a dropped connection | ends when the keep-alive window runs out |
-| a dropped connection, **Keep until released** | keeps running; **Always close it** still ends it after the reconnect window |
 | the host going to sleep | as a dropped connection, and the sleep counts against the window |
 
-To leave a game running on a gamescope box, keep its screen until released. On a desktop session
-(KWin, GNOME, Sway) the settings above apply as written.
+With **Keep until released** the screen outlives every disconnect, Stop included, so the game keeps
+running; **When the session ends** can still close it. To leave a game running on a gamescope box,
+keep its screen until released. On a desktop session (KWin, GNOME, Sway) the settings above apply
+as written.
 
 Hooks can react to `game.running` and `game.exited`: see [Automation](/docs/automation).
 
@@ -270,7 +262,7 @@ or **Turn off**.
 ### Keep-alive, monitors or layout settings do nothing
 
 A real monitor is being streamed, and those settings only apply to virtual screens. In
-**Screens**, click **Stream this monitor** on the streamed monitor again.
+**Screens**, click **Streamed to devices** on the streamed monitor.
 
 ### The console won't let me pick a monitor
 
@@ -278,9 +270,9 @@ A real monitor is being streamed, and those settings only apply to virtual scree
 
 ### A device streams its own screen instead of the monitor I picked
 
-The monitor isn't connected, was renamed, another device is streaming it, or the host runs in
-another session. The host log names the reason. Run `punktfunk-host list-monitors` and pick a
-listed one, or wait for the other device to finish.
+The monitor isn't connected, was renamed or switched off, another device is streaming it, or the
+host runs in another session. The host log names the reason. Run `punktfunk-host list-monitors` and
+pick a listed one, or wait for the other device to finish.
 
 ### My couch box's TV stayed on the stream after I disconnected
 
