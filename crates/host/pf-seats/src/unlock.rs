@@ -15,7 +15,7 @@ use aws_lc_rs::signature::{
     RSA_PKCS1_2048_8192_SHA256, RSA_PSS_2048_8192_SHA256,
 };
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::time::{Duration, Instant};
 
 /// How long a device stays present after it left: a reconnect needs no proof.
@@ -24,6 +24,9 @@ pub const GRACE_SECS: i64 = 600;
 pub const CAP_SECS: i64 = 24 * 60 * 60;
 /// Devices a row lists; the file stays far below its read cap.
 pub const MAX_DEVICES: usize = 64;
+/// Keys one device holds on one profile lock, one per profile it opens: a box holds at most
+/// eight profiles, and only those sharing a desktop share a lock.
+pub const MAX_KEYS: usize = 8;
 /// How long a challenge may be answered.
 pub const CHALLENGE_LIFE: Duration = Duration::from_secs(120);
 const MAX_NAME_CHARS: usize = 64;
@@ -45,8 +48,12 @@ pub struct Entry {
     pub name: String,
     #[serde(default)]
     pub stay: bool,
+    /// A person's row's key; on a profile lock, a key from before keys named their profile.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub key: Option<UnlockKey>,
+    /// A profile lock's keys, each under the profile id it opens. At most [`MAX_KEYS`].
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub keys: BTreeMap<String, UnlockKey>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub present: Option<Presence>,
     pub added_unix: i64,
@@ -70,14 +77,18 @@ impl Presence {
 
 impl Entry {
     fn admitted(&self) -> bool {
-        self.present.is_some() || (self.stay && self.key.is_none())
+        self.present.is_some() || (self.stay && !self.has_key())
+    }
+
+    fn has_key(&self) -> bool {
+        self.key.is_some() || !self.keys.is_empty()
     }
 
     fn kind(&self) -> DeviceKind {
-        match (&self.key, self.stay) {
-            (Some(_), _) => DeviceKind::Key,
-            (None, true) => DeviceKind::Stay,
-            (None, false) => DeviceKind::ForNow,
+        match (self.has_key(), self.stay) {
+            (true, _) => DeviceKind::Key,
+            (false, true) => DeviceKind::Stay,
+            (false, false) => DeviceKind::ForNow,
         }
     }
 }
@@ -93,6 +104,10 @@ impl DeviceList {
                     && valid_device_name(&e.name)
                     && seen.insert(e.fingerprint.as_str())
                     && e.key.as_ref().is_none_or(|key| key_bytes(key).is_some())
+                    && e.keys.len() <= MAX_KEYS
+                    && e.keys
+                        .iter()
+                        .all(|(id, key)| valid_profile_id(id) && key_bytes(key).is_some())
             })
     }
 
@@ -109,15 +124,28 @@ impl DeviceList {
 
     fn prune(&mut self) {
         self.devices
-            .retain(|e| e.stay || e.key.is_some() || e.present.is_some());
+            .retain(|e| e.stay || e.has_key() || e.present.is_some());
     }
 
     fn get(&self, fingerprint: &str) -> Option<&Entry> {
         self.devices.iter().find(|e| e.fingerprint == fingerprint)
     }
 
+    pub(crate) fn get_mut(&mut self, fingerprint: &str) -> Option<&mut Entry> {
+        self.devices
+            .iter_mut()
+            .find(|e| e.fingerprint == fingerprint)
+    }
+
     pub fn key_of(&self, fingerprint: &str) -> Option<&UnlockKey> {
         self.get(fingerprint)?.key.as_ref()
+    }
+
+    /// The key `fingerprint` enrolled for profile `id` on a profile lock, else its key from
+    /// before keys named their profile, which the first proof claims ([`crate::locks::Lock::proved`]).
+    pub fn key_for(&self, fingerprint: &str, id: &str) -> Option<&UnlockKey> {
+        let entry = self.get(fingerprint)?;
+        entry.keys.get(id).or(entry.key.as_ref())
     }
 
     /// Whether [`Self::grant`] has room for `fingerprint`: it is listed, or the list isn't full.
@@ -156,6 +184,7 @@ impl DeviceList {
                     name: String::new(),
                     stay: false,
                     key: None,
+                    keys: BTreeMap::new(),
                     present: None,
                     added_unix: now,
                     last_unix: now,
@@ -325,6 +354,14 @@ pub fn valid_fingerprint(text: &str) -> bool {
 /// `text` as the 32 bytes of a [`valid_fingerprint`].
 pub fn fingerprint_bytes(text: &str) -> Option<[u8; 32]> {
     lower_hex(text, 32)?.try_into().ok()
+}
+
+/// A profile id as a host mints it: 1 to 64 of `[A-Za-z0-9_-]`.
+fn valid_profile_id(id: &str) -> bool {
+    (1..=64).contains(&id.len())
+        && id
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-'))
 }
 
 /// 1 to 64 characters, none a control or a bidirectional mark that could reorder what is shown.

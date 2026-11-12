@@ -127,8 +127,8 @@ pub(super) async fn admit(
 }
 
 /// `unlock` for `id`'s lock ([`crate::profiles::Profiles::lock_holder`]): kind 1 its secret as
-/// the PIN, with any key it enrols; kind 2 a key proof over `id`'s challenge and `host_fp`. The
-/// wire's copy wipes as `unlock` drops. Blocking.
+/// the PIN, with any key it enrols for `id`; kind 2 a key proof over `id`'s challenge and
+/// `host_fp`, from the key enrolled for `id`. The wire's copy wipes as `unlock` drops. Blocking.
 fn try_unlock(
     profiles: &crate::profiles::Profiles,
     id: &str,
@@ -142,7 +142,7 @@ fn try_unlock(
         return locks.try_key((id, &holder), device, &unlock.secret, host_fp);
     }
     let pin = std::str::from_utf8(&unlock.secret[..]).unwrap_or("");
-    let enroll = enrolled(&unlock);
+    let enroll = enrolled(&unlock).map(|key| (id, key));
     locks.try_pin(&holder, device, pin, (unlock.stay_signed_in, enroll))
 }
 

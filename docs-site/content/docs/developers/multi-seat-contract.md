@@ -348,17 +348,21 @@ with the owner's lock, list and PIN. A take-turns profile keeps its own.
   clears none. A try counts there before its hash runs and is taken back when right. A right PIN
   makes the device present, or `stay` when the message asks. Each try writes one line under
   `punktfunk::audit`, never the PIN.
-- **The key.** A right PIN that brings a key to enrol, as a password does, stores it on the
-  device's entry; one the host can't verify with is left out. A device with a key is admitted
-  only while present. Once it left, `enumerate` says `pin_key`, and
+- **The key.** A right PIN that brings a key to enrol, as a password does, stores it in the
+  device's entry's `keys`, under the profile id it was typed for; one the host can't verify with
+  is left out. Profiles that share a lock keep a key each, at most 8 an entry, and a profile's
+  removal drops its keys. An entry's `key` from before `keys` opens any profile of its lock until
+  a proof makes it that profile's. A device with a key is admitted only while present. Once it
+  left, `enumerate` says `pin_key` on a profile it holds a key for, and
   `POST /profiles/{id}/unlock-challenge` answers `{challenge, profile}`: 32 bytes as 64 hex,
   valid 120 seconds and once, the device's only live one for that id. The key signs
   `"punktfunk-profile-unlock-v1"` ‖ challenge ‖ the profile id, zero bytes after it to 64 ‖ the
   device fingerprint ‖ the fingerprint of the host the device dialled, 187 bytes, signed as the
-  seat form is; `clients/shared/profile-unlock-vectors.json` holds both. A right proof makes the
-  device present. A failed one costs the device's limit alone and answers
-  `close_lock_key_failed`, or `close_lock_not_allowed` when the profile has no PIN. A device the
-  console adds drops its key and stays until signed out.
+  seat form is, and verified with that profile's key alone;
+  `clients/shared/profile-unlock-vectors.json` holds both. A right proof makes the device
+  present. A failed one costs the device's limit alone and answers `close_lock_key_failed`, or
+  `close_lock_not_allowed` when the profile has no PIN. A device the console adds drops its keys
+  and stays until signed out; signing it out drops them too.
 - **A seat host** reads the box's file, read only, and never takes a PIN or a key proof. A Windows seat reads it
   from `PUNKTFUNK_TRUST_DIR`. A Linux seat reads the [trust copy](#linux-seats), which holds its
   profile's lock with no PIN; a locked profile's seat gets only the pairing records its lock

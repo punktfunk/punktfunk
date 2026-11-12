@@ -734,7 +734,7 @@ impl Profiles {
         if id == OPERATOR_PROFILE_ID && self.locks.any_locked() {
             return Opens::No;
         }
-        self.locks.opens(&self.lock_holder(id), fp)
+        self.locks.opens((id, &self.lock_holder(id)), fp)
     }
 
     /// The profile whose lock opens `id`: the owner's for one that shares the owner's desktop,

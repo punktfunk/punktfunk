@@ -810,8 +810,9 @@ async fn the_picker_lists_what_the_device_may_open() {
 }
 
 /// A device a lock lists with an unlock key, once it left, is asked for the key's proof or the
-/// PIN, `pin_key`, on the owner and the profile sharing the owner's desktop. Its challenge names
-/// the profile it asks for; a device with no key, and the console, get none.
+/// PIN, `pin_key`, on the profile it enrolled the key for, here the one sharing the owner's
+/// desktop, and for the PIN on the owner. Its challenge names the profile it asks for; a device
+/// with no key for it, and the console, get none.
 #[tokio::test]
 async fn a_device_with_a_key_gets_its_profile_s_challenge() {
     let np = Arc::new(
@@ -839,7 +840,7 @@ async fn a_device_with_a_key_gets_its_profile_s_challenge() {
     let enrolled = profiles.locks().edit(FAMILY_OWNER, |lock, now| {
         lock.locked = true;
         lock.pin = pf_seats::locks::PinHash::new("2468");
-        assert!(lock.enrol(&device, now - 700, key));
+        assert!(lock.enrol(&device, now - 700, (FAMILY_GUEST, key)));
         lock.list.left(&keyed, now - 700);
     });
     enrolled.unwrap();
@@ -866,7 +867,7 @@ async fn a_device_with_a_key_gets_its_profile_s_challenge() {
         .iter()
         .map(|r| r["unlock"].clone())
         .collect();
-    assert_eq!(words, ["pin_key", "none", "none", "pin_key"]);
+    assert_eq!(words, ["pin", "none", "none", "pin_key"]);
     let ask = |id: &str| {
         let path = format!("/api/v1/profiles/{id}/unlock-challenge");
         json_req(Method::POST, &path, serde_json::Value::Null)
@@ -877,9 +878,11 @@ async fn a_device_with_a_key_gets_its_profile_s_challenge() {
     assert!(body.get("seat").is_none());
     let hex = body["challenge"].as_str().unwrap();
     assert!(hex.len() == 64 && hex.bytes().all(|b| b.is_ascii_hexdigit()));
-    let (status, body) = as_device(ask(FAMILY_OWNER), &bare).await;
-    assert_eq!(status, StatusCode::CONFLICT);
-    assert_eq!(body["code"], "profile_no_unlock_key");
+    for (id, fp) in [(FAMILY_OWNER, &bare), (FAMILY_OWNER, &keyed)] {
+        let (status, body) = as_device(ask(id), fp).await;
+        assert_eq!(status, StatusCode::CONFLICT);
+        assert_eq!(body["code"], "profile_no_unlock_key");
+    }
     let (status, _) = as_device(ask(FAMILY_KID), &keyed).await;
     assert_eq!(status, StatusCode::CONFLICT, "an open profile holds no key");
     assert_eq!(send(&app, ask(FAMILY_OWNER)).await.0, StatusCode::FORBIDDEN);
