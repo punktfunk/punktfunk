@@ -7,7 +7,7 @@
 //! the token is live and its own ([`vouched_by_seat`]). Then the session reaches `PERSON` and
 //! the reads the person's pages need ([`box_may_reach`]), as that profile, never as the owner.
 
-use super::owner::{Forwarded, Target};
+use super::owner::{Answer, Forwarded, Target};
 use super::scope::{scope_of, Scope};
 use super::shared::*;
 use axum::http::{HeaderMap, Method};
@@ -271,12 +271,7 @@ pub(crate) async fn open_person_session(
             tracing::info!(profile = %grant.profile, "management API: person session opened");
             Json(grant).into_response()
         }
-        Err(Refused::Wait) => api_error_coded(
-            StatusCode::TOO_MANY_REQUESTS,
-            "person_ticket_wait",
-            "Your Punktfunk didn't open after too many tries. Wait a minute, then open it again \
-             from your desktop.",
-        ),
+        Err(Refused::Wait) => wait_a_minute(),
         Err(Refused::Ticket) => {
             tracing::info!("management API: person ticket refused");
             ticket_refused()
@@ -341,6 +336,40 @@ pub(crate) async fn verify_person_session(
     }
 }
 
+/// The box's refused person sessions, per profile: a seat host's "no", or a session for another
+/// profile. As with tickets, ten in a minute make the next wait out that minute, so a local
+/// caller can't have the door ask a seat host without end. Keyed only by a profile with a seat.
+#[derive(Default)]
+pub(crate) struct Refusals(Mutex<HashMap<String, Vec<Instant>>>);
+
+impl Refusals {
+    /// Whether `profile` waits out its window at `now`.
+    pub(crate) fn waiting(&self, profile: &str, now: Instant) -> bool {
+        let mut map = self.0.lock().unwrap_or_else(|e| e.into_inner());
+        let Some(at) = map.get_mut(profile) else {
+            return false;
+        };
+        at.retain(|t| now.saturating_duration_since(*t) < FAILURE_WINDOW);
+        at.len() >= MAX_FAILURES
+    }
+
+    fn note(&self, profile: &str, now: Instant) {
+        let mut map = self.0.lock().unwrap_or_else(|e| e.into_inner());
+        map.entry(profile.to_string()).or_default().push(now);
+    }
+}
+
+/// The 429 a person session gets after too many refused tries: on its seat host, of tickets; on
+/// the box, of sessions its seat host didn't vouch for.
+pub(crate) fn wait_a_minute() -> Response {
+    api_error_coded(
+        StatusCode::TOO_MANY_REQUESTS,
+        "person_ticket_wait",
+        "Your Punktfunk didn't open after too many tries. Wait a minute, then open it again \
+         from your desktop.",
+    )
+}
+
 /// The answer to a person session the box can't take: no live session for that profile.
 pub(crate) fn session_ended() -> Response {
     api_error_coded(
@@ -357,7 +386,9 @@ pub(crate) fn presented(headers: &HeaderMap) -> Option<(&str, &str)> {
 }
 
 /// `profile`, once its seat host answered that `token` is a live session there for it. Never
-/// the owner, and never a profile with no seat of its own. Wakes no seat.
+/// the owner, and never a profile with no seat of its own. Wakes no seat. A seat host's answer
+/// that vouches for none is noted in [`MgmtState::person_refusals`]; a seat that didn't answer
+/// is not.
 pub(crate) async fn vouched_by_seat(st: &MgmtState, profile: &str, token: &str) -> Option<String> {
     let profiles = st.app.profiles.get()?;
     let owner = profiles.owner_id();
@@ -378,9 +409,17 @@ pub(crate) async fn vouched_by_seat(st: &MgmtState, profile: &str, token: &str) 
         stream: false,
         start: false,
     };
-    let answer = st.seat_call(Target::Seat(seat), call).await.ok_body()?;
-    let PersonOf { profile: theirs } = parsed(&answer)?;
-    (theirs == profile).then_some(theirs)
+    let Answer::Reply(status, _, answer) = st.seat_call(Target::Seat(seat), call).await else {
+        return None;
+    };
+    let theirs = (status == 200)
+        .then(|| parsed::<PersonOf>(&answer))
+        .flatten()
+        .filter(|of| of.profile == profile);
+    if theirs.is_none() {
+        st.person_refusals.note(profile, Instant::now());
+    }
+    theirs.map(|of| of.profile)
 }
 
 #[cfg(test)]

@@ -469,6 +469,34 @@ async fn the_box_takes_a_person_session_only_from_its_seat_host() {
     assert!(seats.calls.lock().unwrap().is_empty());
 }
 
+/// Ten sessions P's seat host vouches for none of in a minute make P's next call wait out the
+/// minute, its own live session too, with no seat asked. Q's calls still pass.
+#[tokio::test]
+async fn ten_refused_sessions_make_their_profile_wait_a_minute() {
+    let tmp = ConfigDirOverride::new();
+    let (mine, qs) = ("1".repeat(64), "2".repeat(64));
+    let live = vec![(P_SEAT, mine.clone(), SEAT_P), (Q_SEAT, qs.clone(), Q)];
+    let (app, seats) = person_door(tmp.path(), live);
+    let read = |token: &str, profile: &str| {
+        let path = format!("/api/v1/library?as={profile}");
+        as_session(get_req(&path), token, profile)
+    };
+    assert_eq!(bare(&app, read(&mine, SEAT_P)).await.0, StatusCode::OK);
+    for n in 0..10u8 {
+        let (status, _) = bare(&app, read(&format!("{n:064x}"), SEAT_P)).await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED, "guess {n}");
+    }
+    seats.calls.lock().unwrap().clear();
+    let (status, body) = bare(&app, read(&mine, SEAT_P)).await;
+    assert_eq!(status, StatusCode::TOO_MANY_REQUESTS, "{body}");
+    assert_eq!(body["code"], "person_ticket_wait");
+    assert!(
+        seats.calls.lock().unwrap().is_empty(),
+        "a waiting profile's seat was asked"
+    );
+    assert_eq!(bare(&app, read(&qs, Q)).await.0, StatusCode::OK);
+}
+
 /// A person session names its profile in `as`, carries no bearer, comes from loopback and
 /// reaches `PERSON` and the reads its pages need. Anything else is refused before any seat is
 /// asked. Its library reads are the door's own.

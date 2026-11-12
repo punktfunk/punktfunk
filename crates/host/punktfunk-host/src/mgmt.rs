@@ -227,6 +227,8 @@ pub(crate) struct MgmtState {
     door: Option<Arc<dyn owner::Seats>>,
     /// A seat host's person token and the sessions it opened. `None` on every other host.
     person: Option<person_session::PersonAuth>,
+    /// On the box, person sessions a seat host didn't vouch for, per profile.
+    person_refusals: person_session::Refusals,
 }
 
 /// `native` is the shared native pairing handle when the unified host
@@ -404,6 +406,7 @@ fn app(
         config_dir,
         door,
         person,
+        person_refusals: Default::default(),
     });
     let (api_routes, api) = api_router_parts();
     // Auth, then the door's pass-on, then the library guard and a person's own Linux account: a

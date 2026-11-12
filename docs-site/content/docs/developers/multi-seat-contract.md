@@ -790,10 +790,13 @@ reaches this lane.
 - **On the box.** The console sends `X-Punktfunk-Person-Session` and `X-Punktfunk-Person-Profile`
   with no bearer, and `?as=` naming that profile, to the door from loopback. The door asks the
   profile's seat host `POST /api/v1/auth/person/verify` `{"token"}` with its admin token, and
-  takes the call only when the answer names that profile. It reaches `mgmt_routes::PERSON` and
-  the reads `GET library`, `library/page`, `library/art/{id}/{kind}`, `library/scanners`,
-  `library/overrides` and `session/settings`, never for the owner. The owner's host takes the
-  door's word with `X-Punktfunk-Person` and its admin token, as for a device's person.
+  takes the call only when the answer names that profile. After ten answers in a minute that
+  vouch for none, a profile's calls get 429 `person_ticket_wait` for the rest of that minute,
+  and its seat host isn't asked; a seat that didn't answer counts for nothing. It reaches
+  `mgmt_routes::PERSON` and the reads `GET library`, `library/page`, `library/art/{id}/{kind}`,
+  `library/scanners`, `library/overrides` and `session/settings`, never for the owner. The
+  owner's host takes the door's word with `X-Punktfunk-Person` and its admin token, as for a
+  device's person.
 - **What only it writes, on a person's own account.** `PUT hooks` and the custom-entry writes.
   The host marks each with `person: true`, and runs only hooks and lists only own titles so
   marked: a file planted without the mark runs nothing. A `prep` step runs only when an own title the person
