@@ -21,10 +21,12 @@ pub const DEFAULT_IDLE_TIMEOUT: std::time::Duration = std::time::Duration::from_
 
 /// Bidirectional streams a client may hold open on the host: the management lane's 16 requests
 /// in flight plus as many it answers 429, or a session's control stream and clipboard fetches.
+/// cbindgen:ignore
 pub const HOST_MAX_BIDI_STREAMS: u32 = 32;
 
 /// The most a client, admitted or not, can make the host hold unread on one connection. Above
 /// quinn's 1.25 MB stream window, so one upload keeps its full rate.
+/// cbindgen:ignore
 pub const HOST_RECEIVE_WINDOW: u32 = 4 << 20;
 
 fn stream_transport() -> Arc<quinn::TransportConfig> {
