@@ -1,8 +1,9 @@
-// The password prompt of a profile on a person's own account (CONTRACT §6.2): a masked field the
-// system's password autofill can fill, the profile's name, one switch, and the host's sentence
-// when it refused. A sheet on iOS, iPadOS, visionOS and macOS; the system keyboard on tvOS. The
-// typed password lives in the view's state only while it is up, and leaves it as an UnlockSecret.
+// The prompt of a profile on a person's own account (CONTRACT §6.2) or of a locked one: a masked
+// field for its password, which autofill can fill, or its PIN on a number pad; one switch; the
+// host's sentence when it refused. A sheet, the system keyboard on tvOS. What was typed lives in
+// the view's state only while it is up, and leaves it as an UnlockSecret.
 
+import Accessibility
 import PunktfunkKit
 import SwiftUI
 
@@ -11,16 +12,19 @@ import SwiftUI
 final class UnlockAsk: Identifiable {
     let hostName: String
     let profileName: String
+    /// The PIN form, not the password's.
+    let pin: Bool
     let error: String?
     let switchTitle: String
     private var answer: ((ProfileUnlocker.Entry?) -> Void)?
 
     init(
-        hostName: String, profileName: String, error: String?, switchTitle: String,
+        hostName: String, profileName: String, pin: Bool, error: String?, switchTitle: String,
         answer: @escaping (ProfileUnlocker.Entry?) -> Void
     ) {
         self.hostName = hostName
         self.profileName = profileName
+        self.pin = pin
         self.error = error
         self.switchTitle = switchTitle
         self.answer = answer
@@ -48,7 +52,13 @@ struct UnlockPromptView: View {
     #endif
 
     private var title: String { L10n.unlockTitle(name: ask.profileName) }
-    private var note: String { L10n.unlockIntro(host: ask.hostName) }
+    private var note: String {
+        ask.pin ? L10n.unlockPinIntro(host: ask.hostName) : L10n.unlockIntro(host: ask.hostName)
+    }
+    private var label: String { String(localized: ask.pin ? L10n.unlockPin : L10n.unlockPassword) }
+    private var placeholder: LocalizedStringResource {
+        ask.pin ? L10n.unlockPinPlaceholder : L10n.unlockPasswordPlaceholder
+    }
 
     var body: some View {
         #if os(tvOS)
@@ -59,9 +69,9 @@ struct UnlockPromptView: View {
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
             TVFieldRow(
-                label: String(localized: L10n.unlockPassword),
+                label: label,
                 value: password.isEmpty ? "" : "••••••••",
-                placeholder: String(localized: L10n.unlockPasswordPlaceholder)
+                placeholder: String(localized: placeholder)
             ) { entering = true }
             Toggle(ask.switchTitle, isOn: $switchOn)
             if let error = ask.error {
@@ -75,10 +85,12 @@ struct UnlockPromptView: View {
         }
         .frame(maxWidth: 1000)
         .padding(60)
+        .onAppear(perform: announceError)
         .onDisappear(perform: close)
         .fullScreenCover(isPresented: $entering) {
             TVTextEntry(
-                title: L10n.appleUnlockPasswordFor(name: ask.profileName), text: "", secure: true
+                title: ask.pin ? label : L10n.appleUnlockPasswordFor(name: ask.profileName),
+                text: "", keyboardType: ask.pin ? .numberPad : .default, secure: true
             ) {
                 if !$0.isEmpty { password = $0 }
                 entering = false
@@ -88,10 +100,11 @@ struct UnlockPromptView: View {
         VStack(spacing: 0) {
             Form {
                 Section {
-                    SecureField(
-                        String(localized: L10n.unlockPassword), text: $password,
-                        prompt: Text(L10n.unlockPasswordPlaceholder))
-                        .textContentType(.password)
+                    SecureField(label, text: $password, prompt: Text(placeholder))
+                        .textContentType(ask.pin ? nil : .password)
+                        #if os(iOS) || os(visionOS)
+                        .keyboardType(ask.pin ? .numberPad : .default)
+                        #endif
                         .focused($focused)
                         .onSubmit(submit)
                     Toggle(ask.switchTitle, isOn: $switchOn)
@@ -134,12 +147,24 @@ struct UnlockPromptView: View {
         #if os(iOS) || os(visionOS)
         .presentationDetents([.medium, .large])
         #endif
-        .onAppear { focused = true }
+        .onAppear {
+            focused = true
+            announceError()
+        }
         .onDisappear(perform: close)
         #endif
     }
 
-    /// Hand the password over as an UnlockSecret and drop the view's copy.
+    /// VoiceOver reads the host's sentence or the prompt's own line as the prompt opens. High
+    /// priority: the sheet's own arrival would cut a default one off.
+    private func announceError() {
+        guard let error = ask.error else { return }
+        var line = AttributedString(error)
+        line.accessibilitySpeechAnnouncementPriority = .high
+        AccessibilityNotification.Announcement(line).post()
+    }
+
+    /// Hand what was typed over as an UnlockSecret and drop the view's copy.
     private func submit() {
         guard !password.isEmpty else { return }
         let entry = ProfileUnlocker.Entry(password: UnlockSecret(password), switchOn: switchOn)

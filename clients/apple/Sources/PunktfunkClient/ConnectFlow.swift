@@ -35,7 +35,7 @@ struct ConnectFlow {
     @Binding var profileAsk: ProfileAsk?
     /// The wait for the picked profile's seat to come up.
     @Binding var seatWait: SeatWait?
-    /// The password prompt of a profile on a person's own account.
+    /// The password prompt of a profile on a person's own account, or a locked one's PIN prompt.
     @Binding var unlockAsk: UnlockAsk?
 
     /// What this window's flow keeps between taps, since a `ConnectFlow` lives for one use.
@@ -232,20 +232,20 @@ struct ConnectFlow {
         }
     }
 
-    /// Shows `row`'s prompt and answers what the player entered.
+    /// Shows `row`'s prompt, its password or its PIN, and answers what the player entered.
     private func unlockPrompt(
         _ host: StoredHost, _ row: ListedProfile, unlocker: ProfileUnlocker
     ) -> ProfileUnlocker.Prompt {
         let ask = $unlockAsk
         let (hostName, switchTitle) = (host.displayName, unlocker.switchTitle)
-        let name = row.displayName
+        let (name, pin) = (row.displayName, row.unlock.pin)
         return { error in
             await withCheckedContinuation { done in
                 Task { @MainActor in
                     // A picker or seat sheet may still be closing, and a sheet shown over it drops.
                     try? await Task.sleep(nanoseconds: 400_000_000)
                     ask.wrappedValue = UnlockAsk(
-                        hostName: hostName, profileName: name, error: error,
+                        hostName: hostName, profileName: name, pin: pin, error: error,
                         switchTitle: switchTitle
                     ) { done.resume(returning: $0) }
                 }
