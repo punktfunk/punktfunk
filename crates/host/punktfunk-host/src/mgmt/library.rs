@@ -108,11 +108,15 @@ fn check_privileged_fields(
 
 /// `?as=<profile id>`: the profile a library call is for. Absent or empty: this host's own view.
 /// A write that names one changes that profile's own layer, which only the admin lane may do;
-/// any other lane gets 403. Reads stay open.
+/// any other lane gets 403. A paired device reads only a profile it opens with nothing asked
+/// ([`crate::profiles::Profiles::opens`]); any other reads as one this host doesn't hold.
 #[derive(Deserialize)]
 pub(crate) struct AsProfile {
     #[serde(rename = "as")]
     profile: Option<String>,
+    /// The asking device on the cert lane, `""` when none was stamped.
+    #[serde(skip)]
+    device: Option<String>,
 }
 
 impl<S: Send + Sync> axum::extract::FromRequestParts<S> for AsProfile {
@@ -122,11 +126,16 @@ impl<S: Send + Sync> axum::extract::FromRequestParts<S> for AsProfile {
         parts: &mut axum::http::request::Parts,
         state: &S,
     ) -> Result<Self, Response> {
-        let Query(who) = Query::<Self>::from_request_parts(parts, state)
+        let Query(mut who) = Query::<Self>::from_request_parts(parts, state)
             .await
             .map_err(IntoResponse::into_response)?;
         let names = who.profile.as_deref().is_some_and(|p| !p.is_empty());
-        let admin = parts.extensions.get::<AuthLane>() == Some(&AuthLane::Admin);
+        let lane = parts.extensions.get::<AuthLane>();
+        if lane == Some(&AuthLane::Cert) {
+            let device = parts.extensions.get::<super::auth::PairedDevice>();
+            who.device = Some(device.map(|d| d.0.clone()).unwrap_or_default());
+        }
+        let admin = lane == Some(&AuthLane::Admin);
         if names && !admin && !matches!(parts.method, Method::GET | Method::HEAD) {
             return Err(api_error_coded(
                 StatusCode::FORBIDDEN,
@@ -160,8 +169,8 @@ pub(crate) struct Scoped {
 }
 
 impl AsProfile {
-    /// The view this call is for. A profile the box doesn't hold, or an id that is no minted
-    /// one, is 404 before it touches a path.
+    /// The view this call is for. A profile the box doesn't hold, an id that is no minted one,
+    /// and one the asking device may not open are 404 before it touches a path.
     pub(crate) async fn scope(&self, st: &MgmtState) -> Result<Scoped, Response> {
         use crate::library::{Reach, View};
         let Some(id) = self.profile.as_deref().filter(|p| !p.is_empty()) else {
@@ -171,11 +180,16 @@ impl AsProfile {
                 mine: None,
             });
         };
+        let opens = |store: &crate::profiles::Profiles| match self.device.as_deref() {
+            Some(fp) => store.opens(id, Some(fp)) == crate::profiles::Opens::Yes,
+            None => true,
+        };
         let found = st
             .app
             .profiles
             .get()
             .filter(|_| crate::library::is_profile_id(id))
+            .filter(|store| opens(store))
             .and_then(|store| Some((store.get(id)?, store.owner_id())));
         let Some((profile, owner)) = found else {
             return Err(api_error_coded(
