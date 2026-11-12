@@ -9,7 +9,7 @@
 use super::{EditError, Profiles};
 use pf_seats::attempts::{Attempts, Outcome, Target};
 use pf_seats::ipc::Device;
-use pf_seats::locks::{Lock, Locks, Opens, PinHash};
+use pf_seats::locks::{Lock, Locks, Opens};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard};
@@ -352,17 +352,10 @@ impl Drop for Presence {
     }
 }
 
-/// `pin` hashed for storing, or why not. Blocking: the hash is slow.
-pub(crate) fn hash_pin(pin: &str) -> Result<PinHash, EditError> {
-    if !pf_seats::locks::valid_pin(pin) {
-        return Err(EditError::Invalid("A PIN is 4 to 8 digits".into()));
-    }
-    PinHash::new(pin).ok_or_else(|| EditError::Store(anyhow::anyhow!("draw a salt for the PIN")))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use pf_seats::locks::PinHash;
 
     const KID: &str = "c1d000000001";
 

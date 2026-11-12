@@ -77,7 +77,7 @@ pub(crate) fn seats_for(fp: Option<&str>) -> Arc<dyn Seats> {
 /// The device as the supervisor lists it: `fp`, the certificate the QUIC handshake
 /// authenticated, and its pairing record's `label` cleaned to the supervisor's rule, else a
 /// name that always passes it.
-pub(super) fn device(fp: &str, label: Option<&str>) -> Device {
+pub(crate) fn device(fp: &str, label: Option<&str>) -> Device {
     let name = crate::native_pairing::sanitize_device_name(label.unwrap_or(""), fp);
     let name = if pf_seats::unlock::valid_device_name(&name) {
         name

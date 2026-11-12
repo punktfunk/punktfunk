@@ -495,6 +495,145 @@ async fn a_knock_shows_the_profile_it_named() {
     assert!(b[1].get("profile").is_none(), "{b}");
 }
 
+/// The console locks a profile, sets and clears its PIN, puts paired devices on its list, Punktfunk
+/// or Moonlight, signs them out and unlocks it; the file holds the PIN's hash, never the PIN.
+#[tokio::test]
+async fn the_console_locks_a_profile_for_the_devices_it_chooses() {
+    let np = Arc::new(
+        crate::native_pairing::NativePairing::load_with(
+            Some(crate::test_support::scratch().join("pf-mgmt-lock-routes.json")),
+            None,
+            false,
+        )
+        .unwrap(),
+    );
+    use crate::profiles::Opens;
+    let tv = "ab".repeat(32);
+    np.add("Living room TV", &tv).unwrap();
+    let dir = crate::test_support::scratch();
+    let state = test_state();
+    let store = crate::profiles::Profiles::load_with(Some(dir.join("profiles.json")), None);
+    store.ensure_owner("box").unwrap();
+    let _ = state.profiles.set(Arc::new(store));
+    let der = b"moonlight-cert".to_vec();
+    let moonlight = hex::encode(crate::https::sha256(&der));
+    state.paired.lock().unwrap().push(der);
+    let profiles = state.profiles.get().unwrap().clone();
+    let owner = profiles.owner_id().unwrap();
+    let app = test_app_native(state, np);
+    let at = |tail: &str| format!("/api/v1/profiles/{owner}{tail}");
+    let call = |method: Method, tail: &str, body: serde_json::Value| {
+        let (app, path) = (app.clone(), at(tail));
+        async move { send(&app, json_req(method, &path, body)).await }
+    };
+    let none = serde_json::Value::Null;
+    let lock = |locked: bool, pin: bool| serde_json::json!({"locked": locked, "pin": pin, "failed_pins": 0});
+
+    assert_eq!(
+        call(Method::GET, "/lock", none.clone()).await.1,
+        lock(false, false)
+    );
+    assert_eq!(
+        call(Method::GET, "/devices", none.clone()).await.1,
+        serde_json::json!([])
+    );
+    assert_eq!(
+        call(Method::POST, "/lock", none.clone()).await.1,
+        lock(true, false)
+    );
+    assert_eq!(profiles.opens(&owner, Some(&tv)), Opens::No);
+
+    let (status, body) = call(Method::PUT, "/lock/pin", serde_json::json!({"pin": "12a4"})).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(body["code"], "profile_pin_invalid");
+    let (status, body) = call(Method::PUT, "/lock/pin", serde_json::json!({"pin": "2468"})).await;
+    assert_eq!((status, body), (StatusCode::OK, lock(true, true)));
+    assert_eq!(profiles.opens(&owner, Some(&tv)), Opens::Pin);
+    let file = dir.join(pf_seats::locks::FILE);
+    let text = std::fs::read_to_string(&file).unwrap();
+    assert!(
+        !text.contains("2468") && text.contains("\"salt\""),
+        "{text}"
+    );
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = std::fs::metadata(&file).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o600);
+    }
+
+    let add = |fp: &str| serde_json::json!({ "fingerprint": fp });
+    let (status, body) = call(Method::POST, "/devices", add(&"cd".repeat(32))).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(body["code"], "profile_device_not_paired");
+    let (status, body) = call(Method::POST, "/devices", add("not-a-fingerprint")).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    let (status, body) = call(Method::POST, "/devices", add(&tv.to_uppercase())).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body[0]["fingerprint"], tv.as_str());
+    assert_eq!(body[0]["name"], "Living room TV");
+    assert_eq!(body[0]["kind"], "stay");
+    let (_, body) = call(Method::POST, "/devices", add(&moonlight)).await;
+    assert_eq!(body.as_array().unwrap().len(), 2);
+    assert_eq!(profiles.opens(&owner, Some(&tv)), Opens::Yes);
+    assert_eq!(profiles.opens(&owner, Some(&moonlight)), Opens::Yes);
+
+    let (status, _) = call(Method::DELETE, &format!("/devices/{tv}"), none.clone()).await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    assert_eq!(profiles.opens(&owner, Some(&tv)), Opens::Pin);
+    let (status, _) = call(Method::DELETE, "/devices", none.clone()).await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    assert_eq!(
+        call(Method::GET, "/devices", none.clone()).await.1,
+        serde_json::json!([])
+    );
+    assert_eq!(
+        call(Method::DELETE, "/lock/pin", none.clone()).await.1,
+        lock(true, false)
+    );
+    assert_eq!(profiles.opens(&owner, Some(&moonlight)), Opens::No);
+    assert_eq!(
+        call(Method::DELETE, "/lock", none.clone()).await.1,
+        lock(false, false)
+    );
+    assert_eq!(profiles.opens(&owner, Some(&tv)), Opens::Yes);
+    let (status, _) = send(
+        &app,
+        json_req(Method::GET, "/api/v1/profiles/c0ffee000000/lock", none),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+/// A lock file that doesn't read keeps every profile locked: the console reads why, and every
+/// change is refused until it is fixed.
+#[tokio::test]
+async fn an_unreadable_lock_file_refuses_every_change() {
+    let dir = crate::test_support::scratch();
+    std::fs::write(dir.join(pf_seats::locks::FILE), "not a lock file").unwrap();
+    let state = test_state();
+    let profiles = crate::profiles::Profiles::load_with(Some(dir.join("profiles.json")), None);
+    profiles.ensure_owner("box").unwrap();
+    let owner = profiles.owner_id().unwrap();
+    let _ = state.profiles.set(Arc::new(profiles));
+    let app = test_app(state, None);
+    for (method, tail) in [
+        (Method::GET, "/lock"),
+        (Method::DELETE, "/lock"),
+        (Method::GET, "/devices"),
+        (Method::DELETE, "/devices"),
+    ] {
+        let path = format!("/api/v1/profiles/{owner}{tail}");
+        let (status, body) = send(
+            &app,
+            json_req(method.clone(), &path, serde_json::Value::Null),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CONFLICT, "{method} {tail}");
+        assert_eq!(body["code"], "profile_locks_unreadable", "{method} {tail}");
+    }
+}
+
 /// A device's picker lists the profiles it may open, and a locked one with a PIN marked `pin`; a
 /// locked one with no PIN is absent unless the device is on its list. The console lists all.
 #[tokio::test]
@@ -831,8 +970,21 @@ mod person {
         assert_eq!(send(&app, delete(&devices)).await.0, StatusCode::NO_CONTENT);
         let upper = format!("{devices}/{}", fp.to_uppercase());
         assert_eq!(send(&app, delete(&upper)).await.0, StatusCode::BAD_REQUEST);
+        // Any other profile answers its lock's list, and the supervisor is not asked.
         let windows = format!("/api/v1/profiles/{WINDOWS}/devices");
-        assert_eq!(send(&app, get_req(&windows)).await.0, StatusCode::CONFLICT);
+        let (status, body) = send(&app, get_req(&windows)).await;
+        assert_eq!((status, body), (StatusCode::OK, serde_json::json!([])));
+        // A person's own account opens with its password and takes no lock.
+        let add = serde_json::json!({ "fingerprint": fp });
+        for req in [
+            get_req(&format!("/api/v1/profiles/{PERSON}/lock")),
+            post(&format!("/api/v1/profiles/{PERSON}/lock")),
+            json_req(Method::POST, &devices, add),
+        ] {
+            let (status, body) = send(&app, req).await;
+            assert_eq!(status, StatusCode::CONFLICT);
+            assert_eq!(body["code"], "profile_lock_own_account");
+        }
         for req in [get_req(&devices), delete(&devices), delete(&one)] {
             assert_eq!(send_cert(&app, req, &fp).await, StatusCode::UNAUTHORIZED);
         }

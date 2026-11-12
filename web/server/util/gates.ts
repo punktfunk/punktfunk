@@ -81,8 +81,7 @@ const RECORD = "diagnostics: re-reads, records or drops a record";
 const REFETCH = "stops or removes a download: saves stay";
 const REFRESH = "re-reads a source the host already trusts";
 const PUBLIC = "open on the host too: a device proving its pairing";
-const SIGNS_OUT =
-	"signs a device out of a person's account: only takes access away";
+const SIGNS_OUT = "signs a device out of a profile: only takes access away";
 const DEVICE_ONLY =
 	"the host answers a paired device for its own unlock, never the console";
 const VERIFIED = "fetched from its own release channel and verified";
@@ -171,9 +170,14 @@ export const GATES: readonly Route[] = [
 	gated("DELETE", "profiles/{id}"),
 	open("PUT", "profiles/{id}/avatar", SETTING),
 	open("DELETE", "profiles/{id}/avatar", SETTING),
+	gated("POST", "profiles/{id}/devices"),
 	open("DELETE", "profiles/{id}/devices", SIGNS_OUT),
 	open("DELETE", "profiles/{id}/devices/{fingerprint}", SIGNS_OUT),
 	open("POST", "profiles/{id}/end", STEERS),
+	open("POST", "profiles/{id}/lock", NARROWS),
+	gated("DELETE", "profiles/{id}/lock"),
+	gated("PUT", "profiles/{id}/lock/pin"),
+	open("DELETE", "profiles/{id}/lock/pin", NARROWS),
 	open("POST", "profiles/{id}/start", STEERS),
 	open("POST", "profiles/{id}/stop", STEERS),
 	open("POST", "profiles/{id}/unlock-challenge", DEVICE_ONLY),

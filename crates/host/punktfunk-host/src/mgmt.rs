@@ -43,6 +43,7 @@ mod gpu;
 mod hooks;
 mod host;
 mod library;
+mod locks;
 mod native;
 mod own_account;
 pub(crate) mod owner;
@@ -642,9 +643,16 @@ fn api_router_parts() -> (Router<Arc<MgmtState>>, utoipa::openapi::OpenApi) {
         .routes(routes!(profiles::unlock_challenge))
         .routes(routes!(
             profiles::list_profile_devices,
+            locks::add_profile_device,
             profiles::sign_out_profile_devices
         ))
         .routes(routes!(profiles::sign_out_profile_device))
+        .routes(routes!(
+            locks::get_profile_lock,
+            locks::lock_profile,
+            locks::unlock_profile
+        ))
+        .routes(routes!(locks::set_profile_pin, locks::clear_profile_pin))
         .routes(routes!(update::get_update_status))
         .routes(routes!(update::force_update_check))
         .routes(routes!(update::apply_update))

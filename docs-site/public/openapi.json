@@ -7667,7 +7667,7 @@
           "profiles"
         ],
         "summary": "List the devices signed in to a profile",
-        "description": "For a profile on a person's own Linux account: each device that unlocked it, and how it gets\nback on. Admin lane only.",
+        "description": "For a profile on a person's own Linux account: each device that unlocked it, and how it gets\nback on. For any other profile: the devices its lock lets in, the same rows, kept while it is\nopen. Admin lane only.",
         "operationId": "listProfileDevices",
         "parameters": [
           {
@@ -7715,7 +7715,7 @@
             }
           },
           "409": {
-            "description": "The profile doesn't open with an account password",
+            "description": "The host's profile lock file doesn't read",
             "content": {
               "application/json": {
                 "schema": {
@@ -7737,12 +7737,107 @@
         },
         "x-scope": "box"
       },
+      "post": {
+        "tags": [
+          "profiles"
+        ],
+        "summary": "Let a paired device open a profile",
+        "description": "Puts a device paired with this host, Punktfunk or Moonlight, on the profile's list until it\nis signed out. Answers the list. Admin lane only.",
+        "operationId": "addProfileDevice",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The profile id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProfileDeviceAdd"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The profile's devices",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/SignedInDevice"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Not a device fingerprint",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such profile, or no paired device with that fingerprint",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "A person's own account, or the lock file doesn't read",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "The list is full",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "x-scope": "box"
+      },
       "delete": {
         "tags": [
           "profiles"
         ],
         "summary": "Sign every device out of a profile",
-        "description": "For a profile on a person's own Linux account: every device needs the account's password\nagain and every unlock key is forgotten. Admin lane only.",
+        "description": "For a profile on a person's own Linux account: every device needs the account's password\nagain and every unlock key is forgotten. For any other: its lock's list empties, and every\nsession on it from a device off the list ends. Admin lane only.",
         "operationId": "signOutProfileDevices",
         "parameters": [
           {
@@ -7780,7 +7875,7 @@
             }
           },
           "409": {
-            "description": "The profile doesn't open with an account password",
+            "description": "The host's profile lock file doesn't read",
             "content": {
               "application/json": {
                 "schema": {
@@ -7809,7 +7904,7 @@
           "profiles"
         ],
         "summary": "Sign a device out of a profile",
-        "description": "For a profile on a person's own Linux account: the device needs the account's password again\nand its unlock key is forgotten. Admin lane only.",
+        "description": "For a profile on a person's own Linux account: the device needs the account's password again\nand its unlock key is forgotten. For any other: the device leaves its lock's list, and a\nsession it plays there ends. Admin lane only.",
         "operationId": "signOutProfileDevice",
         "parameters": [
           {
@@ -7866,7 +7961,7 @@
             }
           },
           "409": {
-            "description": "The profile doesn't open with an account password",
+            "description": "The host's profile lock file doesn't read",
             "content": {
               "application/json": {
                 "schema": {
@@ -7951,6 +8046,340 @@
           },
           "503": {
             "description": "The seat's host didn't answer",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "x-scope": "box"
+      }
+    },
+    "/api/v1/profiles/{id}/lock": {
+      "get": {
+        "tags": [
+          "profiles"
+        ],
+        "summary": "Read a profile's lock",
+        "description": "Whether it is locked, whether it has a PIN, and the wrong PINs counted against it. Its\ndevices are `GET /profiles/{id}/devices`. Admin lane only.",
+        "operationId": "getProfileLock",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The profile id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The lock",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProfileLock"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No profile with that id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "A person's own account, or the lock file doesn't read",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "x-scope": "box"
+      },
+      "post": {
+        "tags": [
+          "profiles"
+        ],
+        "summary": "Lock a profile",
+        "description": "From now only the devices on its list open it, and a device that brings its PIN when it has\none. A session from any other device ends. Admin lane only.",
+        "operationId": "lockProfile",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The profile id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Locked",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProfileLock"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No profile with that id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "A person's own account, or the lock file doesn't read",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "x-scope": "box"
+      },
+      "delete": {
+        "tags": [
+          "profiles"
+        ],
+        "summary": "Unlock a profile",
+        "description": "Every paired device opens it again. Its list and its PIN stay for the next lock. Admin lane\nonly.",
+        "operationId": "unlockProfile",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The profile id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Open",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProfileLock"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No profile with that id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "A person's own account, or the lock file doesn't read",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "x-scope": "box"
+      }
+    },
+    "/api/v1/profiles/{id}/lock/pin": {
+      "put": {
+        "tags": [
+          "profiles"
+        ],
+        "summary": "Set a profile's PIN",
+        "description": "While it is locked, a device off its list opens it with this PIN, and the PIN puts it on the\nlist. Replaces any PIN it had. Admin lane only.",
+        "operationId": "setProfilePin",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The profile id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProfilePin"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Set",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProfileLock"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Not 4 to 8 digits",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No profile with that id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "A person's own account, or the lock file doesn't read",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "x-scope": "box"
+      },
+      "delete": {
+        "tags": [
+          "profiles"
+        ],
+        "summary": "Clear a profile's PIN",
+        "description": "While it is locked, only the devices on its list open it. Admin lane only.",
+        "operationId": "clearProfilePin",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The profile id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Cleared",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProfileLock"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No profile with that id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "A person's own account, or the lock file doesn't read",
             "content": {
               "application/json": {
                 "schema": {
@@ -16941,6 +17370,58 @@
           }
         }
       },
+      "ProfileDeviceAdd": {
+        "type": "object",
+        "description": "`POST /profiles/{id}/devices`.",
+        "required": [
+          "fingerprint"
+        ],
+        "properties": {
+          "fingerprint": {
+            "type": "string",
+            "description": "SHA-256 of a paired device's certificate, hex: a Punktfunk device or a Moonlight one."
+          }
+        }
+      },
+      "ProfileLock": {
+        "type": "object",
+        "description": "A profile's lock, as the console shows it.",
+        "required": [
+          "locked",
+          "pin",
+          "failed_pins"
+        ],
+        "properties": {
+          "failed_pins": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Wrong PINs in the last 15 minutes over all devices. At 10, PIN entry waits.",
+            "minimum": 0
+          },
+          "locked": {
+            "type": "boolean",
+            "description": "Only the devices on its list, and a device that brings its PIN, open it."
+          },
+          "pin": {
+            "type": "boolean",
+            "description": "It has a PIN."
+          }
+        }
+      },
+      "ProfilePin": {
+        "type": "object",
+        "description": "`PUT /profiles/{id}/lock/pin`.",
+        "required": [
+          "pin"
+        ],
+        "properties": {
+          "pin": {
+            "type": "string",
+            "description": "4 to 8 digits.",
+            "example": "2468"
+          }
+        }
+      },
       "ProfilePublic": {
         "type": "object",
         "description": "One profile as a client's picker shows it.",
@@ -18644,7 +19125,7 @@
       },
       "SignedInDevice": {
         "type": "object",
-        "description": "A device signed in to a profile on a person's own Linux account.",
+        "description": "A device signed in to a profile on a person's own Linux account, or on a locked profile's\nlist.",
         "required": [
           "fingerprint",
           "name",
