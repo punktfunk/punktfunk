@@ -1,7 +1,47 @@
 use super::{
-    build_h265_rps_s0, intra_refresh_caps, PhaseStats, VulkanVideoEncoder, PHASE_IMPORT,
-    PHASE_REPORT_EVERY, PHASE_SPIKE, PHASE_SPIKE_EVERY, PHASE_WAIT,
+    build_h265_rps_s0, intra_refresh_caps, setup_slot, trusted_refs, PhaseStats,
+    VulkanVideoEncoder, PHASE_IMPORT, PHASE_REPORT_EVERY, PHASE_SPIKE, PHASE_SPIKE_EVERY,
+    PHASE_WAIT,
 };
+
+/// Frame 300 is lost at 120 fps; confirmations trail by 12 frames and the report lands 20
+/// frames later, when the 8-slot ring holds only frames after the loss. The kept pin is still
+/// resident and older than the loss, so the loss heals by anchor, not a wave.
+#[test]
+fn a_late_loss_report_finds_the_kept_pin() {
+    let (lost, lag, report) = (300i64, 12i64, 20i64);
+    let run = |keep: bool| {
+        let (mut slot_wire, mut kept, mut prev) = (vec![-1i64; 8], crate::rfi::Kept::default(), 0);
+        for wire in 0..lost + report {
+            let setup = if wire == 0 {
+                0
+            } else {
+                setup_slot(wire as u64, prev, &slot_wire, &kept)
+            };
+            slot_wire[setup] = wire;
+            let confirmed = crate::Acked {
+                last: (wire - lag).min(lost - 1),
+                mask: 0xffff,
+            };
+            if keep {
+                let held = slot_wire.clone();
+                kept.step(wire, true, Some(&confirmed), |w| held.contains(&w));
+            }
+            prev = setup;
+        }
+        crate::rfi::pick_anchor(&trusted_refs(&slot_wire), lost)
+    };
+    let anchor = run(true).expect("the kept pin answers the late report");
+    assert!(
+        anchor.1 < lost && lost - anchor.1 <= 2 * lag + 1,
+        "{anchor:?}"
+    );
+    assert_eq!(
+        run(false),
+        None,
+        "the bare ring holds nothing older than the loss"
+    );
+}
 use crate::env_knobs::Knobs;
 use crate::test_dmabuf::{assert_edge_is_straight, edge_frame, LinearDmabuf, ODD_H, ODD_W};
 use crate::test_frames::{cpu_frame, cpu_frame_24};

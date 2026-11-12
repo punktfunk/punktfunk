@@ -497,13 +497,15 @@ impl RecoveryDriver {
     }
 }
 
-/// The frames the decoder took clean, in its order: an IDR, an anchor, or the frame right
-/// after a clean one. The newest and the sixteen before it ride
-/// [`Feedback::acked`]; while its link loses packets the host references only these.
+/// The frames the decoder took clean, in its order: an IDR, an anchor, a wave's close after an
+/// unbroken sweep, or the frame right after a clean one. The newest and the sixteen before it
+/// ride [`Feedback::acked`]; the host keeps one of these resident as the next loss's anchor.
 #[derive(Default)]
 pub(crate) struct AckChain {
     prev: Option<u32>,
     clean: bool,
+    /// Every frame since a wave's start followed the one before it.
+    sweep: bool,
     last: Option<u32>,
     mask: u16,
 }
@@ -516,10 +518,17 @@ impl AckChain {
         }
         let follows = self.prev.is_some_and(|p| p.wrapping_add(1) == index);
         self.prev = Some(index);
+        use crate::packet::{USER_FLAG_RECOVERY_CLOSE as CLOSE, USER_FLAG_RECOVERY_POINT as POINT};
+        let healed = flags & CLOSE != 0 && follows && self.sweep;
+        self.sweep = if flags & POINT != 0 {
+            flags & CLOSE == 0
+        } else {
+            follows && self.sweep
+        };
         let fresh = flags
             & (u32::from(crate::packet::FLAG_SOF) | crate::packet::USER_FLAG_RECOVERY_ANCHOR)
             != 0;
-        self.clean = fresh || (follows && self.clean);
+        self.clean = fresh || healed || (follows && self.clean);
         if !self.clean {
             return None;
         }
@@ -1174,6 +1183,24 @@ mod feedback_out_tests {
         assert_eq!(acked(13, USER_FLAG_RECOVERY_ANCHOR), Some((13, 0b111_0000)));
         assert_eq!(acked(14, 0), Some((14, 0b1110_0001)));
         assert_eq!(acked(40, USER_FLAG_RECOVERY_ANCHOR), Some((40, 0)));
+    }
+
+    /// A wave's close restarts the chain once the client saw its start and every frame after
+    /// it; a gap inside the sweep leaves the close unconfirmed.
+    #[test]
+    fn a_whole_wave_restarts_the_chain() {
+        use crate::packet::{USER_FLAG_RECOVERY_CLOSE as CLOSE, USER_FLAG_RECOVERY_POINT as POINT};
+        let mut out = FeedbackOut::default();
+        let mut acked = |i, f| out.decoded(i, f).and_then(|fb| fb.acked);
+        assert_eq!(acked(5, 0), None, "a broken chain");
+        assert_eq!(acked(6, POINT), None, "the start leans on the damage");
+        assert_eq!(acked(7, 0), None);
+        assert_eq!(acked(8, POINT | CLOSE), Some((8, 0)));
+        assert_eq!(acked(9, 0), Some((9, 0b1)));
+        assert_eq!(acked(20, 0), None, "a gap");
+        assert_eq!(acked(21, POINT), None);
+        assert_eq!(acked(23, 0), None, "22 never came");
+        assert_eq!(acked(24, POINT | CLOSE), None, "the sweep had a gap");
     }
 
     #[test]

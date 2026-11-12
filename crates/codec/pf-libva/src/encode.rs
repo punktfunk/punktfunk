@@ -154,6 +154,8 @@ pub struct Encoder {
     free: Vec<VaSurfaceId>,
     /// The long-term references, by `LongTermFrameIdx`.
     slots: Vec<Option<Slot>>,
+    /// Wires a P-frame never replaces ([`Self::keep`]).
+    kept: [Option<i64>; 2],
     /// Pictures queued so far; the next one's `wire`.
     wire: i64,
     /// The whole pool — one per pending encode, so a picture drains while the
@@ -409,6 +411,7 @@ impl Encoder {
             free: recon.clone(),
             recon,
             slots: vec![None; slot_count],
+            kept: [None; 2],
             wire: 0,
             coded,
             coded_free,
@@ -428,6 +431,24 @@ impl Encoder {
     /// The `wire` the next picture will carry.
     pub fn next_wire(&self) -> i64 {
         self.wire
+    }
+
+    /// Pictures by `wire` that no later P-frame replaces: the anchors a late loss report needs
+    /// once the ring has moved past it. An IDR empties every slot regardless.
+    pub fn keep(&mut self, wires: [Option<i64>; 2]) {
+        self.kept = wires;
+    }
+
+    /// The slot a P-frame's picture replaces: round robin from its `wire`, past `reference`
+    /// and the kept pictures.
+    fn next_slot(&self, reference: Option<usize>) -> u8 {
+        let n = self.slots.len();
+        let kept = |s: usize| self.slots[s].is_some_and(|x| self.kept.contains(&Some(x.wire)));
+        let slot = (0..n)
+            .map(|k| (self.wire as usize + k) % n)
+            .find(|&s| Some(s) != reference && !kept(s))
+            .expect("more slots than the reference and the two kept pictures");
+        slot as u8
     }
 
     /// Whether the session runs on the driver's low-power entrypoint.
@@ -731,11 +752,7 @@ impl Encoder {
             // An IDR restarts frame_num at 0, wherever the count stood.
             frame_num: if is_idr { 0 } else { self.frame_num },
             idr_pic_id: self.idr_pic_id ^ u16::from(is_idr),
-            slot: if is_idr {
-                0
-            } else {
-                (self.wire as usize % slot_count) as u8
-            },
+            slot: if is_idr { 0 } else { self.next_slot(reference) },
             max_slots: slot_count as u8,
             reference_slot: reference.map(|s| s as u8),
         };

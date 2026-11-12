@@ -5,9 +5,10 @@ installs a native ``punktfunk-client`` instead. Every call goes through the one 
 which owns its identity, known hosts and settings, so no other module cares which one answered.
 
 The CLI verbs (``discover``, ``hosts``, ``pair``, ``request_access``, ``device_code``,
-``trust_host``, ``library``, ``profiles``) build argv, run ``punktfunk``, and map its exit code to a stable error
-string. Nothing here parses the client's data files or re-implements a trust rule; the backend
-exists because Decky's frontend cannot spawn processes.
+``trust_host``, ``library``, ``profiles``, ``wake``, ``actions``, ``run_action``) build argv, run
+``punktfunk``, and map its exit code to a stable error string. Nothing here parses the client's
+data files or re-implements a trust rule; the backend exists because Decky's frontend cannot
+spawn processes.
 """
 
 import asyncio
@@ -464,6 +465,48 @@ async def profiles(ref: str) -> dict:
     if not ref or ref.startswith("-"):
         return {"ok": False, "error": "unresolved", "detail": "bad host reference"}
     return await _cli_json(["profiles", ref, "--json"], timeout=20.0)
+
+
+async def wake(ref: str) -> dict:
+    """Wake a saved host and wait for it (``punktfunk wake <host-ref> --wait``): a packet every
+    6 s, up to 90 s. ``{ok: True}`` once it answers; ``unresolved`` when no MAC is known,
+    ``unreachable`` when it never came up. A flag-shaped ref is refused, as in :func:`library`."""
+    ref = str(ref).strip()
+    if not ref or ref.startswith("-"):
+        return {"ok": False, "error": "unresolved"}
+    rc, _out, err = await _run_cli(["wake", ref, "--wait"], timeout=100.0)
+    if rc == 0:
+        return {"ok": True}
+    decky.logger.warning("wake failed (rc=%s): %s", rc, (err.strip().splitlines() or [""])[-1])
+    return {"ok": False, "error": _cli_error(rc)}
+
+
+async def actions(ref: str) -> dict:
+    """What the host lets this Deck run (``punktfunk actions <host-ref> --json``): ``{ok,
+    actions: [{id, label, danger, available, unavailable_reason}]}``, granted rows only. A host
+    that is off lists none. A flag-shaped ref is refused, as in :func:`library`."""
+    ref = str(ref).strip()
+    if not ref or ref.startswith("-"):
+        return {"ok": False, "error": "unresolved", "detail": "bad host reference"}
+    return await _cli_json(["actions", ref, "--json"], timeout=20.0)
+
+
+_ACTION_ID = re.compile(r"[a-z0-9][a-z0-9._:-]{0,63}")
+
+
+async def run_action(ref: str, action_id: str) -> dict:
+    """Run one of the host's actions (``punktfunk actions <host-ref> --run ID``): ``{ok, notice}``,
+    the notice the CLI's sentence either way. A flag-shaped ref or a malformed id is ``{ok:
+    False, error: "unresolved"}`` with no notice, never handed to the CLI."""
+    ref, action_id = str(ref).strip(), str(action_id).strip()
+    if not ref or ref.startswith("-") or not _ACTION_ID.fullmatch(action_id):
+        return {"ok": False, "error": "unresolved"}
+    rc, out, err = await _run_cli(["actions", ref, "--run", action_id], timeout=20.0)
+    lines = (out.strip() or err.strip()).splitlines()
+    notice = lines[-1] if lines else ""
+    if rc == 0:
+        return {"ok": True, "notice": notice}
+    return {"ok": False, "error": _cli_error(rc), "notice": notice}
 
 
 async def runner_info() -> dict:

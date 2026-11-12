@@ -242,8 +242,8 @@ session by design, and display activation fails while its session is inactive.
 - **The box's library, on Linux.** The box's library is the owner's. A seat other than the
   owner's runs no plugins and lists and launches only what it can start as its own user:
   `steam_appid` with an id that fits 32 bits and `steam_ui`, with its own Steam, and `emulator`,
-  with a copy it can run and a game file it can read. The seat answers every library change with
-  409. The owner's host installs a Flathub emulator box-wide through `install_flatpak`, so every
+  with a copy it can run and a game file it can read. The seat answers every change to the box's
+  library with 409. The owner's host installs a Flathub emulator box-wide through `install_flatpak`, so every
   seat runs it with its own config and saves in `~/.var/app/<id>`; which emulators stay the
   owner's is in [Profiles](/docs/profiles#on-linux). At a launch the seat installs the RetroArch
   core the entry names into its own RetroArch and places the firmware from its library copy.
@@ -267,6 +267,21 @@ session by design, and display activation fails while its session is inactive.
   `?as=<profile id>` on the library routes and `session/settings` reads and writes that layer, and
   a profile with a seat of its own lists there what its seat lists. `DELETE session/settings?as=`
   drops the profile's own session settings, so its seat takes the Seat defaults again.
+- **A profile's own titles.** A seat host keeps titles of its own, launch and `prep` included, in
+  `library.json` in its own config directory. The custom-entry routes write there on a seat host,
+  under `own:<12 hex>` ids the box never mints; a write naming any other id answers 409, and a
+  seat on a person's own account takes none (403 `library_own_account`). Its list carries them on
+  top of its profile's view, marked `own`, and they launch, run `prep` and serve art as the seat's
+  user, past the rules for what a seat lists of the box's. `GET library/own` answers each one's
+  id, title, platform and `http(s)` art, never how it starts. The box asks for that when a seat's
+  host comes up and on each `library.changed` the seat sends, and stores it through
+  `PUT library/own?as=<profile id>` on the host that writes the library: the owner's host behind a
+  door, the box host on Windows. It keeps it as `own-titles.json` in the profile's layer, under
+  the profile the seat belongs to, dropping a row with a bad id or title and a cover or platform
+  it would not store; an answer that isn't a list, lists more than 500 or repeats an id leaves
+  the stored titles as they were. `?as=` and the door's answer to a device list those rows,
+  marked `own`, with no launch: the box refuses to start one with the sentence a title gets that
+  this desktop can't start.
 - **Not a host of its own to clients.** A seat host never advertises over mDNS, whatever
   `PUNKTFUNK_MDNS` says, and its `Welcome` carries management port `0`: its API answers on
   loopback only, so a client keeps the box's port, where the library comes from.
@@ -422,7 +437,8 @@ the installed unit.
   and `library-metadata/` to `library/`, `root:punktfunk-door` `0640`, within 2 seconds of a change,
   and from there into each seat's trust copy. Each profile's layer, `library-profiles/<profile id>/`
   with `library-hidden.json`, `library-overrides.json`, `library-picks.json`,
-  `library-scanners.json` and `session-settings.json`, goes to `library/` for every profile; a
+  `library-scanners.json`, `own-titles.json` and `session-settings.json`, goes to `library/` for
+  every profile; a
   seat's trust copy gets only the folder of the profile whose `os_account` names that seat in the
   box's `profiles.json`, and loses one that stops being its own.
   `plugin-run/plugin-grants.json` goes with them, and so

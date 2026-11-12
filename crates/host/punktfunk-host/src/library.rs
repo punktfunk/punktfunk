@@ -291,6 +291,11 @@ pub struct GameEntry {
     /// Whether the title's files are on this host. Absent means they are.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub install: Option<downloads::Install>,
+    /// One of the profile in view's own titles (`own:` id). Its seat host keeps how it starts;
+    /// anywhere else it is a name and a picture, and starts nothing.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    #[schema(required = false)]
+    pub own: bool,
     #[serde(flatten)]
     pub meta: GameMeta,
 }
@@ -429,13 +434,13 @@ type Inputs = (
 
 /// Every file the list is built from is named `library*` in the library dir, or sits in its
 /// `library-metadata` folder or the view's own layer; a seat that reads the box's library adds
-/// its own play stats. A file outside that rule would leave a stale list.
+/// its own play stats and own titles. A file outside that rule would leave a stale list.
 fn inputs(view: &View) -> Inputs {
     let dir = pf_paths::seat::library_dir();
     let own = pf_paths::config_dir();
     let mut folders = vec![(dir.clone(), "library"), (dir.join("library-metadata"), "")];
     if own != dir {
-        folders.push((own, "library-stats"));
+        folders.push((own, "library"));
     }
     if let Some(layer) = view.own_dir() {
         folders.push((layer, ""));
@@ -488,19 +493,21 @@ pub(crate) fn sorted_games_for(view: &View) -> std::sync::Arc<Vec<GameEntry>> {
     games
 }
 
-/// Merge every enabled source and the custom entries in `view`, sorted by [`sort_key`], each
-/// carrying its play stats, its game overrides and what Art & Metadata sources fill, plus the
-/// host's own [`GAME_MODE_ID`] tile. Split out so the two public views differ only in how they
-/// apply the hidden set.
+/// Merge every enabled source, the custom entries and the profile in view's own titles in `view`,
+/// sorted by [`sort_key`], each carrying its play stats, its game overrides and what Art & Metadata
+/// sources fill, plus the host's own [`GAME_MODE_ID`] tile. Split out so the two public views
+/// differ only in how they apply the hidden set.
 fn collect_games(view: &View) -> Vec<GameEntry> {
     let off = disabled_scanners(view);
     let stats = game_stats();
     let overrides = Overrides::load(view);
     let fills = Fills::load(view);
-    // Manual entries always contribute; a provider's follow its toggle and [`source_off`].
+    // Manual entries always contribute; a provider's follow its toggle and [`source_off`]. The
+    // profile's own titles are its account's: no rule for the box's rows applies to them.
     let mut games: Vec<GameEntry> = load_custom()
         .into_iter()
         .filter(|e| !source_off(e, &off, view.reach))
+        .chain(own_entries(view))
         .map(GameEntry::from)
         .collect();
     for g in &mut games {
@@ -546,6 +553,7 @@ pub(crate) fn game_mode_entry(gamescope_session: bool, contract_seat: bool) -> O
         ids: BTreeMap::new(),
         filled: BTreeMap::new(),
         install: None,
+        own: false,
         meta: GameMeta::default(),
     })
 }
@@ -605,6 +613,7 @@ mod tests {
             ids: BTreeMap::new(),
             filled: BTreeMap::new(),
             install: None,
+            own: false,
             meta: GameMeta::default(),
         }
     }

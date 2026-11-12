@@ -3,13 +3,21 @@ import { useProfileView } from "@/api/seat";
 import { Button } from "@/components/ui/button";
 import { m } from "@/paraglide/messages";
 
-/** In a profile's view: the titles are the owner's library's, and the way there. */
+/**
+ * In a profile's view: the shared titles are the owner's library's, and the way there. A profile
+ * with games of its own adds those here.
+ */
 export const SharedNote: FC = () => {
 	const view = useProfileView();
 	if (!view) return null;
 	return (
 		<p className="max-w-prose text-sm text-muted-foreground">
-			{m.profile_view_shared({ owner: view.ownerName })}{" "}
+			{view.ownGames
+				? m.profile_view_shared_own({
+						owner: view.ownerName,
+						name: view.name,
+					})
+				: m.profile_view_shared({ owner: view.ownerName })}{" "}
 			<Button
 				variant="link"
 				className="h-auto p-0 text-sm"
