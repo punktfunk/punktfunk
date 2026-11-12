@@ -545,6 +545,24 @@ pub extern "system" fn Java_io_unom_punktfunk_kit_NativeBridge_nativeConsoleNoti
     .resolve::<LogErrorAndDefault>()
 }
 
+/// `NativeBridge.nativeConsoleLaunchRefused(handle, text)` — the host's sentence for the held
+/// launch it did not start; the hold says it in place of waiting.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_io_unom_punktfunk_kit_NativeBridge_nativeConsoleLaunchRefused(
+    mut env: EnvUnowned,
+    _this: JObject,
+    handle: jlong,
+    text: JString,
+) {
+    env.with_env(|env| -> jni::errors::Result<()> {
+        if let (Some(h), Ok(t)) = (CONSOLES.get(handle), text.try_to_string(env)) {
+            h.handles.console.set_launch_refused(t);
+        }
+        Ok(())
+    })
+    .resolve::<LogErrorAndDefault>()
+}
+
 /// `NativeBridge.nativeConsoleSetDeviceCode(handle, code)` — this device's code, once its
 /// identity has loaded. The console shows it while a request waits for approval.
 #[unsafe(no_mangle)]
