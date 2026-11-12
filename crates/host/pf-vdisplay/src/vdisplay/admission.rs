@@ -6,8 +6,9 @@
 //!
 //! * `separate` — fresh display at the requested mode (Linux default).
 //! * `join` — admit onto the live display: its mode, compositor, route and colour
-//!   (Welcome carries the real mode). A joiner that can't take an HDR display is refused. A
-//!   connect inside another's bring-up waits for it to stream ([`JOIN_WAIT`]).
+//!   (Welcome carries the real mode). A joiner that can't take an HDR display, or the format
+//!   of a capture it shares ([`joined_format`]), is refused. A connect inside another's
+//!   bring-up waits for it to stream ([`JOIN_WAIT`]).
 //! * `steal` — signal victim stop flags, wait for their release ([`all_gone`]), then serve.
 //! * `reject` — handshake error naming the live mode and client.
 //!
@@ -37,6 +38,9 @@ pub struct LiveDisplay {
     pub audio_sink: Arc<Mutex<Option<String>>>,
     /// The display shows HDR. Its owner republishes it on a codec change ([`publish_hdr`]).
     pub hdr: bool,
+    /// What its capture hands every session, where one stream feeds them all (gamescope).
+    /// `None`: each session casts the display itself, at a format of its own.
+    pub format: Option<SampleFormat>,
 }
 
 /// What a joiner refused by [`joined_hdr`] reads.
@@ -48,6 +52,66 @@ pub const JOIN_NEEDS_HDR: &str = "Couldn't join the shared screen — it's in HD
 /// is HDR and the joiner can't carry HDR: its capture would read PQ as SDR, so it is refused.
 pub fn joined_hdr(owner_hdr: bool, joiner_can_hdr: bool) -> Option<bool> {
     (!owner_hdr || joiner_can_hdr).then_some(owner_hdr)
+}
+
+/// The samples one capture stream hands every session on its display.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SampleFormat {
+    pub bit_depth: u8,
+    pub chroma_444: bool,
+    pub full_range: bool,
+}
+
+/// What a joiner's device can't take of a shared [`SampleFormat`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FormatGap {
+    Depth,
+    Chroma,
+    Range,
+}
+
+impl FormatGap {
+    /// The message id and the sentence a joiner refused for this reads.
+    pub fn said(self) -> (&'static str, &'static str) {
+        match self {
+            FormatGap::Depth => (
+                "close_join_needs_10bit",
+                "Couldn't join the shared screen — it streams in 10-bit colour, and this \
+                 device can't. Connect this device first and let the other one join it.",
+            ),
+            FormatGap::Chroma => (
+                "close_join_needs_444",
+                "Couldn't join the shared screen — it streams in full colour detail (4:4:4), \
+                 and this device can't. Connect this device first and let the other one join it.",
+            ),
+            FormatGap::Range => (
+                "close_join_range",
+                "Couldn't join the shared screen — its colour range is one this device can't \
+                 show. Connect this device first and let the other one join it.",
+            ),
+        }
+    }
+}
+
+/// Whether every session on a display of `compositor` takes its frames from one capture.
+pub fn shares_capture(compositor: Option<crate::Compositor>) -> bool {
+    compositor == Some(crate::Compositor::Gamescope)
+}
+
+/// The format a joiner streams a shared capture at: the capture's, as no session converts
+/// it. `can` is what the joiner's session resolves to with that format as its ceiling;
+/// `Err` names the first thing it misses.
+pub fn joined_format(shared: SampleFormat, can: SampleFormat) -> Result<SampleFormat, FormatGap> {
+    if can.bit_depth != shared.bit_depth {
+        return Err(FormatGap::Depth);
+    }
+    if can.chroma_444 != shared.chroma_444 {
+        return Err(FormatGap::Chroma);
+    }
+    if can.full_range != shared.full_range {
+        return Err(FormatGap::Range);
+    }
+    Ok(shared)
 }
 
 #[derive(Clone)]
@@ -367,6 +431,17 @@ pub fn publish_hdr(stop: &Arc<AtomicBool>, hdr: bool) {
     for s in live.iter_mut().filter(|s| Arc::ptr_eq(&s.stop, stop)) {
         if let Some(d) = s.display.as_mut() {
             d.hdr = hdr;
+        }
+    }
+}
+
+/// The format the shared capture of the session holding `stop` now delivers, for the next
+/// joiner. A display whose sessions cast it themselves keeps none.
+pub fn publish_format(stop: &Arc<AtomicBool>, format: SampleFormat) {
+    let mut live = table().lock().unwrap();
+    for s in live.iter_mut().filter(|s| Arc::ptr_eq(&s.stop, stop)) {
+        if let Some(f) = s.display.as_mut().and_then(|d| d.format.as_mut()) {
+            *f = format;
         }
     }
 }
@@ -709,6 +784,55 @@ mod tests {
         assert_eq!(row_hdr(), Some(true));
         publish_hdr(&stop, false);
         assert_eq!(row_hdr(), Some(false));
+    }
+
+    #[test]
+    fn a_joiner_takes_a_shared_captures_format_or_the_gap_is_named() {
+        let fmt = |bit_depth, chroma_444, full_range| SampleFormat {
+            bit_depth,
+            chroma_444,
+            full_range,
+        };
+        let shared = fmt(10, true, true);
+        assert_eq!(joined_format(shared, shared), Ok(shared));
+        let gap = |can| joined_format(shared, can).unwrap_err();
+        assert_eq!(gap(fmt(8, false, false)), FormatGap::Depth, "depth first");
+        assert_eq!(gap(fmt(10, false, false)), FormatGap::Chroma);
+        assert_eq!(gap(fmt(10, true, false)), FormatGap::Range);
+        // A limited-range capture refuses a session that stays full range, too.
+        let limited = fmt(8, false, false);
+        assert_eq!(
+            joined_format(limited, fmt(8, false, true)),
+            Err(FormatGap::Range)
+        );
+        for gap in [FormatGap::Depth, FormatGap::Chroma, FormatGap::Range] {
+            let (id, text) = gap.said();
+            assert!(id.starts_with("close_join_"), "{id}");
+            assert!(text.len() <= punktfunk_core::quic::REFUSED_REASON_MAX);
+        }
+    }
+
+    #[test]
+    fn only_a_shared_captures_row_takes_a_published_format() {
+        let fmt = |bit_depth| SampleFormat {
+            bit_depth,
+            chroma_444: false,
+            full_range: true,
+        };
+        let row = |format| {
+            let stop = Arc::new(AtomicBool::new(false));
+            let display = LiveDisplay {
+                format,
+                ..LiveDisplay::default()
+            };
+            let guard = register(None, MODE, stop.clone(), "f".into(), display, None);
+            publish_format(&stop, fmt(10));
+            let live = table().lock().unwrap();
+            let row = live.iter().find(|s| Arc::ptr_eq(&s.stop, &stop)).cloned();
+            (row.and_then(|s| s.display).and_then(|d| d.format), guard)
+        };
+        assert_eq!(row(Some(fmt(8))).0, Some(fmt(10)));
+        assert_eq!(row(None).0, None, "its sessions cast it themselves");
     }
 
     #[test]

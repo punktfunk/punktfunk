@@ -42,6 +42,9 @@ A friend outside your home network needs a way in first, and a PIN instead of **
 - HDR follows the screen. If the screen is in HDR, a device that joins must have HDR on in its
   client, or it is told it can't join. If the screen is in SDR, everyone gets SDR, even on an HDR
   TV. See [HDR](/docs/hdr#hdr-on-a-shared-screen).
+- On a gamescope or Game Mode host, the picture format follows the screen too: 10-bit colour,
+  4:4:4 and the colour range are the first device's. A device that joins and can show less is
+  told what it can't show.
 - On a gamescope or Game Mode host, only the screen's first device starts a game. A game picked on
   a joining device doesn't start. On other hosts it starts on the shared desktop.
 - On a Windows host a joining device sees the pointer inside the picture. It doesn't see Windows
@@ -60,6 +63,14 @@ settings…** and set **A second device connects** to **Follow host**.
 The screen is in HDR and their device didn't ask for it. Turn HDR on in their client
 ([HDR per client](/docs/hdr#per-client)). If their display can't show HDR, stop every stream, turn
 HDR off on the device that connects first, and connect again.
+
+### A friend is told their device can't show the screen
+
+On a gamescope or Game Mode host, every device gets the picture format of the first one. A device
+that can't show its 10-bit colour, its 4:4:4 or its colour range is told which. Stop every stream,
+connect that device first, and let the others join it: they follow down to what it shows. A
+message about the video codec means the two devices picked codecs that can't share the screen;
+set the same codec in both clients.
 
 ### A friend's game didn't start
 

@@ -81,6 +81,9 @@ pub struct PortalCapturer {
     core: Option<Arc<StreamCore>>,
     /// This capturer's place among the stream's viewers.
     seat: Seat,
+    /// The node already had a stream in another format when this one opened. No frame here
+    /// is then [`crate::SharedCaptureTaken`], and convicts no offer.
+    beside_shared: bool,
     /// Virtual output; its `Drop` releases the compositor output. `None` on
     /// the portal path (the portal thread closes its session), or once a
     /// capture-only rebuild took it back (`take_keepalive`).
@@ -289,6 +292,7 @@ struct PwHandles {
     wake: Receiver<()>,
     core: Arc<StreamCore>,
     seat: Seat,
+    beside_shared: bool,
 }
 
 impl PwHandles {
@@ -321,6 +325,7 @@ impl PwHandles {
             node_id,
             core: Some(self.core),
             seat: self.seat,
+            beside_shared: self.beside_shared,
             keepalive,
             _portal: portal,
         }
@@ -411,16 +416,23 @@ fn spawn_pipewire(
             opts.full_range,
         ],
     };
+    let mut beside_shared = false;
     if shareable {
-        let joined = share::find(node_id, &key).and_then(|core| Some((core.join()?, core)));
-        if let Some(((seat, queue, wake), core)) = joined {
-            tracing::info!(node_id, "sharing the capture stream already on this node");
-            return Ok(PwHandles {
-                queue,
-                wake,
-                core,
-                seat,
-            });
+        match share::find(node_id, &key) {
+            share::Live::Fits(core) => {
+                if let Some((seat, queue, wake)) = core.join() {
+                    tracing::info!(node_id, "sharing the capture stream already on this node");
+                    return Ok(PwHandles {
+                        queue,
+                        wake,
+                        core,
+                        seat,
+                        beside_shared: false,
+                    });
+                }
+            }
+            share::Live::Other => beside_shared = true,
+            share::Live::Free => {}
         }
     }
     let cfg = StreamConfig {
@@ -465,6 +477,7 @@ fn spawn_pipewire(
         wake: wake_rx,
         core,
         seat: Seat::Opener,
+        beside_shared,
     })
 }
 
@@ -836,6 +849,15 @@ impl PortalCapturer {
     ) -> Result<CapturedFrame> {
         let within = budget.as_secs_f32();
         match err {
+            // A truncated first attempt proves nothing of a producer that feeds every link.
+            RecvTimeoutError::Timeout
+                if self.beside_shared && matches!(verdict, TimeoutVerdict::Conclusive) =>
+            {
+                Err(
+                    anyhow!("no PipeWire frame within {within}s (node {})", self.node_id)
+                        .context(crate::SharedCaptureTaken),
+                )
+            }
             RecvTimeoutError::Timeout => {
                 let offer = classify_first_frame_timeout(
                     self.shared.negotiation(),
@@ -1125,6 +1147,7 @@ mod status_reader_tests {
                 gs_cursor: Default::default(),
             })),
             seat: Seat::Opener,
+            beside_shared: false,
             keepalive: None,
             _portal: None,
         };
@@ -1219,6 +1242,20 @@ mod status_reader_tests {
             }
         };
         (first, t0.elapsed() >= BUDGET)
+    }
+
+    /// A stream opened beside a shared one that got no frame names that, once the full wait
+    /// ran out; a truncated first attempt stays the ordinary, retried answer.
+    #[test]
+    fn no_frame_beside_a_shared_stream_is_the_taken_capture() {
+        let mut rig = rig(At::Streaming, false);
+        rig.cap.beside_shared = true;
+        let taken = |verdict, cap: &mut PortalCapturer| {
+            let e = cap.frame_within(BUDGET, verdict).err().expect("no frame");
+            e.downcast_ref::<crate::SharedCaptureTaken>().is_some()
+        };
+        assert!(!taken(TimeoutVerdict::Provisional, &mut rig.cap));
+        assert!(taken(TimeoutVerdict::Conclusive, &mut rig.cap));
     }
 
     /// Whether `wait_arrival` waits out a deadline with nothing queued.
