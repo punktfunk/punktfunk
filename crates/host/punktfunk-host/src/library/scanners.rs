@@ -65,12 +65,21 @@ fn left_out_here(provider: &str) -> bool {
 }
 
 /// Whether `e` is out of every library surface: its source is switched off (`off` from
-/// [`disabled_scanners`]), its provider's titles are one account's and this host is a seat, or
-/// this is a Linux seat and `e` doesn't play there.
+/// [`disabled_scanners`]), its provider's titles are one account's and this host is a seat,
+/// this is a Linux seat and `e` doesn't play there, or `e` starts the operator's own command and
+/// this seat is on a person's own account.
 pub(crate) fn source_off(e: &CustomEntry, off: &HashSet<String>) -> bool {
     source_id_for(e).is_some_and(|src| off.contains(src))
         || e.provider.as_deref().is_some_and(left_out_here)
         || (!plays_on_a_seat(e) && linux_seat())
+        || (starts_a_box_command(e) && pf_paths::seat::own_account())
+}
+
+/// Whether `e`'s launch is a program the operator wrote into the box's library, which must not
+/// run as a person on their own account ([`crate::hooks::own_account_refusal`]). A kind the host
+/// builds the command for itself names a title, not a program.
+fn starts_a_box_command(e: &CustomEntry) -> bool {
+    super::custom::privileged_field(e.launch.as_ref(), &[]).is_some()
 }
 
 /// A Linux seat reading the box's library: it plays as its own user, and has no plugins. The door
@@ -251,6 +260,26 @@ mod tests {
         assert!(!plays("command", "dolphin-emu"));
         assert!(!plays("exec", "custom"));
         assert!(!plays_on_a_seat(&entry(serde_json::Value::Null)));
+    }
+
+    /// A person's own account starts no program the operator wrote into the box's library; a
+    /// title the host builds the command for stays.
+    #[test]
+    fn only_a_command_tile_is_the_box_s_program() {
+        let entry = |launch: serde_json::Value| -> CustomEntry {
+            serde_json::from_value(serde_json::json!({"id": "r", "title": "T", "launch": launch}))
+                .unwrap()
+        };
+        let box_command = |kind: &str, value: &str| {
+            starts_a_box_command(&entry(serde_json::json!({"kind": kind, "value": value})))
+        };
+        assert!(box_command("command", "rsync ~/Games nas:/backup"));
+        assert!(box_command("a-kind-nobody-listed", "x"));
+        assert!(!box_command("steam_appid", "570"));
+        assert!(!box_command("steam_ui", "bigpicture"));
+        assert!(!box_command("emulator", "dolphin"));
+        assert!(!box_command("heroic", "legendary:Fortnite"));
+        assert!(!starts_a_box_command(&entry(serde_json::Value::Null)));
     }
 
     #[test]
