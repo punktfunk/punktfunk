@@ -98,8 +98,8 @@ the console settings form and the CLI. Four files:
     "test": "bun test"
   },
   "dependencies": {
-    "@punktfunk/host": "^0.5.0",
-    "@punktfunk/plugin-kit": "^0.14.0",
+    "@punktfunk/host": "^0.6.0",
+    "@punktfunk/plugin-kit": "^0.15.0",
     "effect": "4.0.1"
   },
   "punktfunk": {
