@@ -137,6 +137,49 @@ async fn waking_another_profiles_seat_needs_the_launch_grant() {
     assert_eq!(send(&app, wake(&kid)).await.0, StatusCode::OK);
 }
 
+/// A locked profile wakes only for a device on its list, its own default profile and a launch
+/// grant included; the console wakes it.
+#[tokio::test]
+async fn a_device_wakes_a_locked_profile_only_from_its_list() {
+    let np = Arc::new(
+        crate::native_pairing::NativePairing::load_with(
+            Some(crate::test_support::scratch().join("pf-mgmt-prof-wake-lock.json")),
+            None,
+            false,
+        )
+        .unwrap(),
+    );
+    let (listed, other) = ("ab".repeat(32), "cd".repeat(32));
+    np.add("listed", &listed).unwrap();
+    np.add("other", &other).unwrap();
+    let state = state_with_profiles("wake-lock");
+    let profiles = state.profiles.get().unwrap().clone();
+    let owner = profiles.owner_id().unwrap();
+    let app = test_app_native(state, np);
+    let wake = || {
+        axum::http::Request::post(format!("/api/v1/profiles/{owner}/wake"))
+            .body(Body::empty())
+            .unwrap()
+    };
+    assert_eq!(
+        send_cert(&app, wake(), &other).await,
+        StatusCode::OK,
+        "open"
+    );
+    let device = pf_seats::ipc::Device {
+        fingerprint: listed.clone(),
+        name: "listed".into(),
+    };
+    let locked = profiles.locks().edit(&owner, |lock, now| {
+        lock.locked = true;
+        lock.admit(&device, now, true)
+    });
+    assert!(locked.unwrap());
+    assert_eq!(send_cert(&app, wake(), &other).await, StatusCode::FORBIDDEN);
+    assert_eq!(send_cert(&app, wake(), &listed).await, StatusCode::OK);
+    assert_eq!(send(&app, wake()).await.0, StatusCode::OK);
+}
+
 /// A device's own take-turns profile is off the console exactly when it needs a wake: the device
 /// wakes it without the launch grant, and still not the owner's.
 #[tokio::test]

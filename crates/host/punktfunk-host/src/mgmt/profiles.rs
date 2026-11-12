@@ -1045,8 +1045,9 @@ pub(crate) async fn get_profile_avatar(
 /// Starts a stopped seat so the next connect lands in it, and answers at once with the seat
 /// `starting`; poll `enumerate` until it is `ready`. A profile with no seat to start only gets
 /// its row back. A paired device wakes the profile it lands in when it names none; any other
-/// needs its launch grant. A profile on a person's own Linux account is never woken: its
-/// desktop starts when the connect brings the account's password.
+/// needs its launch grant, and a locked one a device on its list. A profile on a person's own
+/// Linux account is never woken: its desktop starts when the connect brings the account's
+/// password.
 #[utoipa::path(
     post,
     path = "/profiles/{id}/wake",
@@ -1056,7 +1057,7 @@ pub(crate) async fn get_profile_avatar(
     responses(
         (status = OK, description = "The profile, its seat as it is now", body = ProfilePublic),
         (status = UNAUTHORIZED, description = "Missing or invalid credentials", body = ApiError),
-        (status = FORBIDDEN, description = "This device may not start another profile's seat", body = ApiError),
+        (status = FORBIDDEN, description = "This device may not start that profile's seat", body = ApiError),
         (status = NOT_FOUND, description = "No profile with that id", body = ApiError),
         (status = CONFLICT, description = "The profile opens with its account password", body = ApiError),
     )
@@ -1117,12 +1118,16 @@ pub(crate) async fn wake_profile(
     Json(row).into_response()
 }
 
-/// A paired device wakes the profile it lands in when it names none, one that can't play yet
-/// included, and another only while its live mask (expiry-aware) carries the launch grant.
+/// A paired device wakes only a profile it opens with nothing asked ([`Profiles::opens`]): the
+/// one it lands in when it names none, one that can't play yet included, and another only while
+/// its live mask (expiry-aware) carries the launch grant.
 fn may_wake(st: &MgmtState, profiles: &Profiles, id: &str, fp: Option<&str>) -> bool {
     let Some(fp) = fp else {
         return false;
     };
+    if profiles.opens(id, Some(fp)) != crate::profiles::Opens::Yes {
+        return false;
+    }
     let own = profiles.pick(Some(fp), None).is_ok_and(|r| r.id == id);
     own || st
         .native

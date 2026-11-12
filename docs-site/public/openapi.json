@@ -8201,7 +8201,7 @@
           "profiles"
         ],
         "summary": "Get a profile's seat ready",
-        "description": "Starts a stopped seat so the next connect lands in it, and answers at once with the seat\n`starting`; poll `enumerate` until it is `ready`. A profile with no seat to start only gets\nits row back. A paired device wakes the profile it lands in when it names none; any other\nneeds its launch grant. A profile on a person's own Linux account is never woken: its\ndesktop starts when the connect brings the account's password.",
+        "description": "Starts a stopped seat so the next connect lands in it, and answers at once with the seat\n`starting`; poll `enumerate` until it is `ready`. A profile with no seat to start only gets\nits row back. A paired device wakes the profile it lands in when it names none; any other\nneeds its launch grant, and a locked one a device on its list. A profile on a person's own\nLinux account is never woken: its desktop starts when the connect brings the account's\npassword.",
         "operationId": "wakeProfile",
         "parameters": [
           {
@@ -8236,7 +8236,7 @@
             }
           },
           "403": {
-            "description": "This device may not start another profile's seat",
+            "description": "This device may not start that profile's seat",
             "content": {
               "application/json": {
                 "schema": {
