@@ -1,7 +1,9 @@
 // One host in the QAM panel: one compact row. A ready host streams on a press, and its ▾ (or the
-// controller's menu button) lists its profiles and pinned presets. A host that needs access opens
-// the trust sheet. The host's bound preset is never listed: the plain press already applies it.
+// controller's menu button) lists its profiles, pinned presets, and Wake or the host's own power
+// actions. A host that needs access opens the trust sheet. The host's bound preset is never
+// listed: the plain press already applies it.
 import {
+  ConfirmModal,
   DialogButton,
   Focusable,
   Menu,
@@ -13,12 +15,18 @@ import {
 } from "@decky/ui";
 import { CSSProperties, FC, ReactNode, useEffect, useRef, useState } from "react";
 import { FaCaretDown, FaCheck, FaLock } from "react-icons/fa";
-import { type HostProfile, profiles as fetchProfiles } from "../backend";
+import {
+  actions as fetchActions,
+  type HostAction,
+  type HostProfile,
+  profiles as fetchProfiles,
+} from "../backend";
 import { type HostView, trustState } from "../hosts/model";
 import { t } from "../i18n";
 import { OsMark } from "../os-icon";
 import { startStream } from "../stream";
 import { TrustSheet } from "../trust/trust";
+import { actionLabel, runHostAction, wakeHost } from "./actions";
 import { rowMenu, rowStatus } from "./model";
 
 const ELLIPSIS: CSSProperties = {
@@ -59,31 +67,50 @@ interface PlayAs {
   picked: string | null;
 }
 const NOBODY: PlayAs = { profiles: [], picked: null };
+const NO_ACTIONS: HostAction[] = [];
 
-// The last answer per host ref, so a row has its ▾ the moment the panel opens; each open asks
-// again. Module-level: the panel remounts on every open.
+async function askPlayAs(ref: string): Promise<PlayAs | null> {
+  const r = await fetchProfiles(ref);
+  return r.ok ? { profiles: r.profiles ?? [], picked: r.picked ?? null } : null;
+}
+
+async function askActions(ref: string): Promise<HostAction[] | null> {
+  const r = await fetchActions(ref);
+  return r.ok ? (r.actions ?? []) : null;
+}
+
+// The last answer per host ref, so a row has its ▾ the moment the panel opens. Module-level: the
+// panel remounts on every open.
 const playAsCache = new Map<string, PlayAs>();
+const actionsCache = new Map<string, HostAction[]>();
 
-function usePlayAs(host: HostView): PlayAs {
-  const [answer, setAnswer] = useState(() => playAsCache.get(host.ref) ?? NOBODY);
+/** The cached answer for `ref` at once, then `ask`'s on each mount while `asking`. A null
+ *  answer drops the cached one. */
+function useHostAnswer<T>(
+  cache: Map<string, T>,
+  ref: string,
+  asking: boolean,
+  none: T,
+  ask: (ref: string) => Promise<T | null>,
+): T {
+  const [answer, setAnswer] = useState(() => cache.get(ref) ?? none);
   useEffect(() => {
-    setAnswer(playAsCache.get(host.ref) ?? NOBODY);
-    if (!host.online) {
+    setAnswer(cache.get(ref) ?? none);
+    if (!asking) {
       return;
     }
     let live = true;
-    void fetchProfiles(host.ref)
-      .then((r) => {
-        const next = r.ok ? { profiles: r.profiles ?? [], picked: r.picked ?? null } : NOBODY;
-        if (r.ok) playAsCache.set(host.ref, next);
-        else playAsCache.delete(host.ref);
-        if (live) setAnswer(next);
+    void ask(ref)
+      .then((next) => {
+        if (next) cache.set(ref, next);
+        else cache.delete(ref);
+        if (live) setAnswer(next ?? none);
       })
       .catch(() => {});
     return () => {
       live = false;
     };
-  }, [host.ref, host.online]);
+  }, [ref, asking]);
   return answer;
 }
 
@@ -123,10 +150,37 @@ const ProfileItem: FC<{ profile: HostProfile; picked: boolean }> = ({ profile: p
   );
 };
 
-/** A ready host: press streams, ▾ and the menu button pick a profile or preset for this stream. */
+/** A host action row: a danger one asks first, an unavailable one says why when pressed. */
+function actionItem(host: HostView, a: HostAction): ReactNode {
+  const label = actionLabel(a);
+  const run = () => void runHostAction(host, a);
+  const confirm = () => {
+    showModal(
+      <ConfirmModal
+        strTitle={t("host_power_confirm_title", { action: label })}
+        strDescription={t("hostcard_action_confirm_body", { host: host.name })}
+        strOKButtonText={label}
+        onOK={run}
+      />,
+    );
+  };
+  return (
+    <MenuItem key={`do:${a.id}`} onSelected={a.danger && a.available ? confirm : run}>
+      {a.available ? label : t("hostcard_action_unavailable", { action: label })}
+    </MenuItem>
+  );
+}
+
+/**
+ * A ready host: press streams. ▾ and the menu button pick a profile or preset for this stream,
+ * and hold Wake (offline, MAC known) or the actions the host grants this Deck (online, paired).
+ */
 export const HostRow: FC<{ host: HostView; showAddress: boolean }> = ({ host, showAddress }) => {
-  const playAs = usePlayAs(host);
-  const menu = rowMenu(host.pinnedPresets.length, playAs.profiles.length);
+  const playAs = useHostAnswer(playAsCache, host.ref, host.online, NOBODY, askPlayAs);
+  const granted = useHostAnswer(actionsCache, host.ref, host.online && host.paired, NO_ACTIONS, askActions);
+  const power = host.online ? granted : NO_ACTIONS;
+  const canWake = !host.online && host.wakeable;
+  const menu = rowMenu(host.pinnedPresets.length, playAs.profiles.length, power.length + (canWake ? 1 : 0));
   const caret = useRef<HTMLDivElement>(null);
   const openMenu = () =>
     menu &&
@@ -151,6 +205,9 @@ export const HostRow: FC<{ host: HostView; showAddress: boolean }> = ({ host, sh
               ▸ {p.name}
             </MenuItem>
           ))}
+        {menu.power && (menu.profiles || menu.presets) && <MenuSeparator />}
+        {canWake && <MenuItem onSelected={() => void wakeHost(host)}>{t("hostcard_wake")}</MenuItem>}
+        {power.map((a) => actionItem(host, a))}
       </Menu>,
       caret.current ?? undefined,
     );

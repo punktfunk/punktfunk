@@ -227,6 +227,29 @@ export const library = callable<[ref: string], LibraryResult>("library");
 
 export const profiles = callable<[ref: string], ProfilesResult>("profiles");
 
+/** One action the host lets this Deck run (`punktfunk actions <ref> --json`). */
+export interface HostAction {
+  id: string; // `power.sleep`, `power.reboot`, …; a later host may add more
+  label: string; // the CLI's words, for an id this plugin has none for
+  danger: boolean; // the host loses what it is running: confirm first
+  available: boolean;
+  unavailable_reason?: string | null;
+}
+
+export interface ActionsResult extends CliResult {
+  actions?: HostAction[];
+}
+
+/** The host's actions this Deck's access grants. A host that is off lists none. */
+export const actions = callable<[ref: string], ActionsResult>("actions");
+/** Run one by id. `notice` is the CLI's sentence either way. */
+export const runAction = callable<
+  [ref: string, actionId: string],
+  { ok: boolean; error?: string; notice?: string }
+>("run_action");
+/** Wake a saved host and wait for it, up to 90 s. `unresolved`: no MAC is known. */
+export const wake = callable<[ref: string], CliResult>("wake");
+
 // ---- Steam / plugin business (only a Decky plugin can do these) ------------------------
 
 export const runnerInfo = callable<[], RunnerInfo>("runner_info");

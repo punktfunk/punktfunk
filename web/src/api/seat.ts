@@ -33,6 +33,8 @@ export interface ScopeChoice {
 	seat: SeatChoice | null;
 	/** The profile the library's calls name in `as`; absent for the owner's library. */
 	as?: string;
+	/** The profile can have games of its own (`hasOwnGames`). */
+	ownGames?: true;
 }
 
 export interface SeatScopeValue {
@@ -72,6 +74,8 @@ export interface ProfileView {
 	id: string;
 	name: string;
 	ownerName: string;
+	/** Games only this profile has are added here, and run on its own desktop. */
+	ownGames: boolean;
 	/** Switches the console's pick to the owner. */
 	toOwner: () => void;
 }
@@ -85,6 +89,7 @@ export const useProfileView = (): ProfileView | null => {
 		id: as,
 		name: scope.current?.name ?? "",
 		ownerName: scope.choices[0]?.name ?? m.seat_box(),
+		ownGames: scope.current?.ownGames === true,
 		toOwner: () => scope.pick(null),
 	};
 };
@@ -116,6 +121,23 @@ export function isFullSeat(
 	);
 }
 
+/**
+ * True for a profile on a desktop the box made for it: a game only it has runs as that account.
+ * A person's own account, a shared desktop and taking turns have no games of their own.
+ */
+export function hasOwnGames(
+	p: ProfileAdmin,
+	os: string | undefined,
+	door = false,
+): boolean {
+	return (
+		!p.owner &&
+		isFullSeat(p, os, door) &&
+		p.seat?.kind === "desktop" &&
+		!p.seat.account
+	);
+}
+
 /** The seats with a host of its own. The console reads an account only on a seat that runs on
  * a person's own account, and full seats off a door are Windows ones. */
 export function seatChoices(
@@ -135,9 +157,9 @@ export function seatChoices(
 
 /**
  * What page `page`'s title offers, the owner first. The library offers every profile, each
- * read from the owner's host with `as`. Plugins and Automation offer the profiles whose seat has
- * a host of its own. A door's owner is a seat, except on Automation, whose calls the door
- * forwards to the owner itself.
+ * read from the owner's host with `as`, and marks those that can have games of their own.
+ * Plugins and Automation offer the profiles whose seat has a host of its own. A door's owner is
+ * a seat, except on Automation, whose calls the door forwards to the owner itself.
  */
 export function scopeChoices(
 	page: SeatPage,
@@ -155,7 +177,13 @@ export function scopeChoices(
 			{ id: null, name, seat },
 			...list
 				.filter((p) => !p.owner)
-				.map((p) => ({ id: p.id, name: p.display_name, seat, as: p.id })),
+				.map((p) => ({
+					id: p.id,
+					name: p.display_name,
+					seat,
+					as: p.id,
+					...(hasOwnGames(p, os, door) ? { ownGames: true as const } : {}),
+				})),
 		];
 	}
 	const seats = seatChoices(list, os, door);

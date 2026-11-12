@@ -5,9 +5,10 @@
 //! in the owner's session. The two kind sets are disjoint, so nothing comes back around.
 //!
 //! A seat's `game.*` also reaches the host with the plugins: the owner's on Linux, the box host
-//! itself on Windows, which tails its seats' games alone. A held launch is released on the seat
-//! once those plugins are done. An event that already names a seat is one a host relayed and is
-//! never taken back.
+//! itself on Windows, which tails its seats' games and library changes alone. A held launch is
+//! released on the seat once those plugins are done. An event that already names a seat is one a
+//! host relayed and is never taken back. A seat's own titles go to the library's writer when its
+//! tail starts and on each `library.changed` it sends ([`publish_own_titles`]).
 
 use crate::events::{EventKind, HostEvent};
 use std::collections::HashMap;
@@ -92,7 +93,9 @@ fn profile_of(seat: &pf_seats::Seat) -> Option<String> {
 
 /// Reads `seat`'s events from where this host last saw them, into this host's bus as
 /// `profile`'s, until the connection ends. The next tick starts it over. A seat's games also
-/// go to [`hand_on`], in order, on a thread of their own.
+/// go to [`hand_on`], in order, on a thread of their own. Once the seat answers, and on each of
+/// its library changes, its own titles go to the library's writer; when the owner's host comes
+/// up, every running seat's do.
 fn tail(
     seat: &pf_seats::Seat,
     profile: String,
@@ -111,6 +114,12 @@ fn tail(
     let Some(body) = super::tail(seat, &format!("events?since={since}{kinds}")) else {
         return;
     };
+    if seat.owner {
+        // Off this tail: a seat that never answers must not hold the owner's events.
+        std::thread::spawn(publish_every_seat_s_own_titles);
+    } else {
+        publish_own_titles(seat, &profile);
+    }
     let games = (!seat.owner).then(|| games_of(seat.clone())).flatten();
     for (event, data) in frames(std::io::BufReader::new(body)) {
         if event == "dropped" || event == "live" {
@@ -123,6 +132,13 @@ fn tail(
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .insert(id.clone(), ev.seq);
+        if publishes(&ev, seat.owner) {
+            publish_own_titles(seat, &profile);
+            // The Windows box's bus carries its seats' games alone.
+            if cfg!(windows) {
+                continue;
+            }
+        }
         let what = take(&ev, seat.owner, packaged());
         if what == Take::Skip {
             continue;
@@ -156,6 +172,66 @@ fn take(ev: &HostEvent, from_owner: bool, packaged: bool) -> Take {
         Take::HandOn
     } else {
         Take::Emit
+    }
+}
+
+/// Whether `ev` off a seat's stream changes what that seat lists of its own: its own library
+/// change, never one relayed there, and never the owner's row, which writes the box's.
+fn publishes(ev: &HostEvent, from_owner: bool) -> bool {
+    !from_owner && ev.seat.is_none() && matches!(ev.kind, EventKind::LibraryChanged { .. })
+}
+
+/// What `seat`'s host lists of its own, to the library's writer as `profile`'s: this host on
+/// Windows, else the owner's host while it runs. A seat or a writer that doesn't answer leaves
+/// the stored titles as they were; the writer logs an answer it refuses.
+fn publish_own_titles(seat: &pf_seats::Seat, profile: &str) {
+    use crate::mgmt::owner::{Answer, Forwarded};
+    let asked = super::forward(seat, Forwarded::get("library/own".into()));
+    let Some(body) = asked.and_then(Answer::ok_body) else {
+        tracing::debug!(seat = %seat.name, "seat's own titles not fetched");
+        return;
+    };
+    if cfg!(windows) {
+        let stored = crate::library::checked_own_titles(profile, &body)
+            .map(|titles| crate::library::store_own_titles(profile, titles));
+        if let Ok(Err(error)) = stored {
+            tracing::warn!(seat = %seat.name, error = %format!("{error:#}"), "seat's own titles not stored");
+        }
+        return;
+    }
+    let ledger = super::ledger();
+    let Ok(Some(owner)) = ledger.owner() else {
+        return;
+    };
+    if owner.runtime.state != pf_seats::RuntimeState::Running {
+        tracing::debug!(seat = %seat.name, "seat's own titles wait for the owner's host");
+        return;
+    }
+    let call = Forwarded {
+        method: "PUT".into(),
+        target: format!("library/own?as={profile}"),
+        content_type: Some("application/json".into()),
+        body,
+        device: None,
+        stream: false,
+        start: false,
+    };
+    if !matches!(super::forward(owner, call), Some(Answer::Reply(204, ..))) {
+        tracing::debug!(seat = %seat.name, "seat's own titles not stored by the owner's host");
+    }
+}
+
+/// Every running seat's own titles, as [`publish_own_titles`]: the owner's host just came up.
+fn publish_every_seat_s_own_titles() {
+    let ledger = super::ledger();
+    let running = ledger
+        .seats
+        .iter()
+        .filter(|s| !s.owner && s.runtime.state == pf_seats::RuntimeState::Running);
+    for seat in running {
+        if let Some(profile) = profile_of(seat) {
+            publish_own_titles(seat, &profile);
+        }
     }
 }
 
@@ -450,6 +526,28 @@ mod tests {
         assert_eq!(take(&ev(knock, None)), Take::Skip);
         assert_eq!(take(&ev(game("game.exited"), Some("9a3f"))), Take::Skip);
         assert_eq!(take(&ev(library, Some("9a3f"))), Take::Skip);
+    }
+
+    /// A seat's own library change sends its own titles to the writer; a relayed one, another
+    /// kind and anything off the owner's row, which writes the box's library, send nothing.
+    #[test]
+    fn only_a_seat_s_own_library_change_publishes_its_titles() {
+        let ev = |kind: serde_json::Value, seat: Option<&str>| {
+            let mut ev: HostEvent = serde_json::from_value(kind).unwrap();
+            ev.seat = seat.map(str::to_string);
+            ev
+        };
+        let library = serde_json::json!({"seq": 1, "ts_ms": 1, "schema": 1,
+            "kind": "library.changed", "source": "manual"});
+        let host = serde_json::json!({"seq": 1, "ts_ms": 1, "schema": 1,
+            "kind": "host.started", "version": "0.47.0", "gamestream": false});
+        assert!(publishes(&ev(library.clone(), None), false));
+        assert!(
+            !publishes(&ev(library.clone(), None), true),
+            "the owner's row"
+        );
+        assert!(!publishes(&ev(library, Some("9a3f")), false), "relayed");
+        assert!(!publishes(&ev(host, None), false));
     }
 
     #[test]

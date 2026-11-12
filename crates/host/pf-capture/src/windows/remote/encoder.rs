@@ -77,6 +77,12 @@ fn hdr_meta_bytes(meta: Option<pf_frame::HdrMeta>) -> [u8; 28] {
 
 /// `frames` is the header's `frames_input`: only a driver that stamps it scaled what it was
 /// asked to. A v9 driver and a capture worker encode the surface at its own size.
+/// Confirmations as a ctl's `(arg0, arg1)`: the newest wire index, then the sixteen before it
+/// shifted over a present bit. `None` is `(0, 0)`.
+fn acked_args(acked: Option<pf_encode_core::Acked>) -> (u32, u32) {
+    acked.map_or((0, 0), |a| (a.last as u32, u32::from(a.mask) << 1 | 1))
+}
+
 fn caps_from_wire(w: &encode::EncoderCapsWire, frames: bool) -> EncoderCaps {
     EncoderCaps {
         supports_rfi: w.supports_rfi != 0,
@@ -269,6 +275,8 @@ pub(crate) fn open(
         hdr_meta_retry: None,
         reference_floor: None,
         floor_refused: false,
+        confirmed: None,
+        confirmed_refused: false,
         wire_chunk: params.wire_chunk_bytes as usize,
         wire_chunk_warned: false,
         opened_at: (clocks.now)(),
@@ -307,6 +315,10 @@ pub struct EncoderProxy {
     reference_floor: Option<pf_encode_core::Acked>,
     /// The driver refused the floor op once: it predates it, and the chain stays.
     floor_refused: bool,
+    /// The confirmations the driver holds; sent only when they change.
+    confirmed: Option<pf_encode_core::Acked>,
+    /// The driver refused the confirmations op once: it predates it and keeps no anchor.
+    confirmed_refused: bool,
     /// Decided at `SET_ENCODE`; a later `set_wire_chunking` that differs is logged once.
     wire_chunk: usize,
     wire_chunk_warned: bool,
@@ -435,7 +447,7 @@ impl Encoder for EncoderProxy {
         if self.floor_refused || acked == self.reference_floor {
             return;
         }
-        let (last, bits) = acked.map_or((0, 0), |a| (a.last as u32, u32::from(a.mask) << 1 | 1));
+        let (last, bits) = acked_args(acked);
         match self.ctl(encode::ENCODE_CTL_SET_REFERENCE_FLOOR, last, bits, [0; 28]) {
             Ok(()) => self.reference_floor = acked,
             Err(e) => {
@@ -444,6 +456,30 @@ impl Encoder for EncoderProxy {
                     target_id = self.target_id,
                     error = %format!("{e:#}"),
                     "driver encode: this driver takes no reference floor — the chain stays"
+                );
+            }
+        }
+    }
+
+    fn note_confirmed(&mut self, acked: Option<pf_encode_core::Acked>) {
+        // Each send is a round trip into the driver host: one per four frames of progress.
+        // The snapshot still holds the kept candidate inside its sixteen-frame window.
+        let due = match (acked, self.confirmed) {
+            (Some(a), Some(b)) => !(0..4).contains(&(a.last - b.last)),
+            (a, b) => a.is_some() != b.is_some(),
+        };
+        if self.confirmed_refused || !due {
+            return;
+        }
+        let (last, bits) = acked_args(acked);
+        match self.ctl(encode::ENCODE_CTL_NOTE_CONFIRMED, last, bits, [0; 28]) {
+            Ok(()) => self.confirmed = acked,
+            Err(e) => {
+                self.confirmed_refused = true;
+                tracing::info!(
+                    target_id = self.target_id,
+                    error = %format!("{e:#}"),
+                    "driver encode: this driver takes no confirmations — a late loss finds no kept anchor"
                 );
             }
         }

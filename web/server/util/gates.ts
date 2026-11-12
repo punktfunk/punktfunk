@@ -59,10 +59,11 @@ const gated = (
 /** `route`, asking only on the calls `when` names. */
 const onlyWhen = (when: When, route: Route): Route => ({ ...route, when });
 
+/** `seat` is absent on a `box` row: the seat proxy refuses its path before any handler. */
 const refused = (
 	method: Method,
 	pattern: string,
-	seat: EventHandler,
+	seat?: EventHandler,
 ): Route => ({ method, pattern, refused: true, seat });
 
 const open = (method: Method, pattern: string, reason: string): Route => ({
@@ -138,6 +139,7 @@ export const GATES: readonly Route[] = [
 	open("PUT", "library/metadata", SETTING),
 	open("PUT", "library/metadata/{source}", REPORT),
 	open("DELETE", "library/metadata/{source}", NARROWS),
+	refused("PUT", "library/own"),
 	open("POST", "library/overrides/sets", SETTING),
 	open("PUT", "library/overrides/sets/{id}", SETTING),
 	open("DELETE", "library/overrides/sets/{id}", SETTING),

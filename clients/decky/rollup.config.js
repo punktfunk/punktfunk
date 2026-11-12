@@ -20,8 +20,8 @@ const sources = (dir = new URL("./src/", import.meta.url)) =>
         : [],
   );
 
-/** `virtual:l10n`: the shipped languages' common, client and decky messages the code names,
- *  and the host's `reject_` messages, which the code names by token. See src/i18n.ts. */
+/** `virtual:l10n`: the shipped languages' messages the code names, and every host `reject_`
+ *  message, which the code names by token. See src/i18n.ts. */
 function messages() {
   const id = "\0virtual:l10n";
   return {
@@ -31,7 +31,8 @@ function messages() {
       if (file !== id) return null;
       const { source, shipped, fallback } = read("locales.json");
       const code = sources().join("\n");
-      const used = (key, part) => part === "host" ? key.startsWith("reject_") : code.includes(`"${key}"`);
+      const used = (key, part) =>
+        (part === "host" && key.startsWith("reject_")) || code.includes(`"${key}"`);
       const languages = [source, ...shipped.filter((l) => l !== source)];
       const catalog = Object.fromEntries(
         languages.map((lang) => [

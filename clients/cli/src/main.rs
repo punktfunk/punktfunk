@@ -29,7 +29,7 @@ mod cli {
     use pf_client_core::presets::PresetsFile;
     use pf_client_core::profiles::{self, ListedProfile};
     use pf_client_core::trust::{self, AddOutcome, HostEdit, KnownHost, KnownHosts, Settings};
-    use pf_client_core::{library, start, wol};
+    use pf_client_core::{host_actions, library, start, wol};
     use punktfunk_core::client::health::{self, CleanRound, FindingId, HealthReport, LegShape};
     use punktfunk_core::client::ProbeOutcome;
     use std::time::Duration;
@@ -61,6 +61,7 @@ punktfunk — the Punktfunk client, headless
   punktfunk wake <host-ref> [--wait]
   punktfunk library [<host-ref>] [--json]
   punktfunk end-game [<host-ref>] --game ID
+  punktfunk actions [<host-ref>] [--json] [--run ID]
   punktfunk launch [<host-ref>] [--game ID] [--preset REF] [--as PROFILE]
                                 [--request-access] [--exec] [--fullscreen]
   punktfunk profiles <host-ref> [--json] [--pick PROFILE | --clear]
@@ -202,6 +203,20 @@ outcome on stdout.
 Exit 0 when it ended, 5 when the host had nothing of it running, 3 when this
 device's access expired, 2 when the host couldn't be asked or is too old,
 6 when the host isn't paired."
+            }
+            "actions" => {
+                "\
+punktfunk actions [<host-ref>] [--json] [--run ID] — the host's own actions
+
+Lists what the host lets this device run — sleep, restart, shut down, … — as
+id TAB label TAB available (or the host's reason it can't now). --json emits
+{\"actions\":[{\"id\",\"label\",\"danger\",\"available\",\"unavailable_reason\"}]}.
+Only actions this device's access grants are listed; an unreachable host lists
+none. Needs a paired host (exit 6 otherwise).
+
+  --run ID   run one, by id (`power.sleep`, `power.reboot`, …). The host ends
+             every stream and acts about a second later. Prints the outcome on
+             stdout; exit 0 when the host accepted it, 2 when it didn't."
             }
             "launch" => {
                 "\
@@ -382,6 +397,7 @@ from the config directory for a true factory reset."
                 | "--timeout"
                 | "--as"
                 | "--pick"
+                | "--run"
         )
     }
 
@@ -511,6 +527,7 @@ from the config directory for a true factory reset."
             "wake" => wake(&rest),
             "library" => library_cmd(&rest),
             "end-game" => end_game_cmd(&rest),
+            "actions" => actions_cmd(&rest),
             "launch" => launch(&rest),
             "open" => open(&rest),
             "reachable" => reachable(&rest),
@@ -1156,6 +1173,85 @@ from the config directory for a true factory reset."
             library::GameEnd::Expired => TRUST_REJECTED,
             library::GameEnd::Unsupported | library::GameEnd::Failed(_) => CONNECT_FAILED,
         }
+    }
+
+    /// `actions [<host-ref>] [--json] [--run ID]` — the host's actions this device may run
+    /// (sleep, restart, …), or `--run` one. The list is empty on any miss, as in every host menu.
+    fn actions_cmd(args: &[String]) -> u8 {
+        let usage = "punktfunk actions [<host-ref>] [--json] [--run ID]";
+        let (known, i) = match resolve_or_default(args, usage) {
+            Ok(v) => v,
+            Err(code) => return code,
+        };
+        let host = &known.hosts[i];
+        let Some(pin) = trust::parse_hex32(&host.fp_hex) else {
+            eprintln!(
+                "{} isn't paired yet — punktfunk pair {}",
+                host.name, host.addr
+            );
+            return NEEDS_INTERACTION;
+        };
+        let identity = match trust::load_or_create_identity() {
+            Ok(id) => id,
+            Err(e) => {
+                eprintln!("client identity: {e:#}");
+                return CONNECT_FAILED;
+            }
+        };
+        let (addr, mgmt) = (host.addr.as_str(), host.effective_mgmt_port());
+        if let Some(id) = value(args, "--run") {
+            // The id becomes a URL path segment.
+            let id_ok = !id.is_empty()
+                && id
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || ".:_-".contains(c));
+            if !id_ok {
+                eprintln!("no action called \"{id}\"");
+                return UNRESOLVED;
+            }
+            let label = host_actions::known_label(&id).unwrap_or(id.as_str());
+            let said = host_actions::run(
+                &host.name,
+                addr,
+                mgmt,
+                host.port,
+                &identity,
+                &host.fp_hex,
+                &id,
+                label,
+            );
+            let code = if said.is_ok() { OK } else { CONNECT_FAILED };
+            println!("{}", said.unwrap_or_else(|e| e));
+            return code;
+        }
+        let rows: Vec<_> = host_actions::fetch_actions(addr, mgmt, host.port, &identity, Some(pin))
+            .into_iter()
+            .filter(host_actions::ActionInfo::offerable)
+            .collect();
+        if has(args, "--json") {
+            let rows: Vec<serde_json::Value> = rows
+                .iter()
+                .map(|a| {
+                    serde_json::json!({
+                        "id": a.id,
+                        "label": a.label(),
+                        "danger": a.danger,
+                        "available": a.available,
+                        "unavailable_reason": a.unavailable_reason,
+                    })
+                })
+                .collect();
+            println!("{}", serde_json::json!({ "actions": rows }));
+        } else {
+            for a in &rows {
+                let state = match (a.available, a.unavailable_reason.as_deref()) {
+                    (true, _) => "available",
+                    (false, why) => why.unwrap_or("unavailable"),
+                };
+                println!("{}\t{}\t{state}", a.id, a.label());
+            }
+        }
+        OK
     }
 
     /// `launch <host-ref> [--game ID] [--preset REF] [--exec]` — start a stream, wake included.
@@ -1997,6 +2093,7 @@ from the config directory for a true factory reset."
                 "default-host",
                 "wake",
                 "library",
+                "actions",
                 "launch",
                 "open",
                 "reachable",

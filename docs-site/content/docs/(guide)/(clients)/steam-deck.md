@@ -44,8 +44,10 @@ the running stream, your hosts, then **Punktfunk**, **Troubleshooting** and **Ab
   address; its row then reads **Offline · wakes on connect**.
 - **▾** beside a host opens its options. The **☰** button does the same while the host is
   selected. Pick a profile to stream as it this time only; the check marks the profile this Deck
-  plays as. Pick a [preset](/docs/presets-and-links) to stream with it. A host with one profile and
-  no pinned presets has no ▾. Pin presets in the Punktfunk app; the panel only shows them.
+  plays as. Pick a [preset](/docs/presets-and-links) to stream with it. It also holds **Wake host**
+  while the host sleeps, and the [host power](/docs/host-power) actions this Deck may run while it's
+  on. A host with nothing to pick has no ▾. Pin presets in the Punktfunk app; the panel only shows
+  them.
 - **Needs access** lists hosts that haven't let this Deck in yet. Tap one and choose **Request
   access** or **Use a PIN instead…**. See [Request access](#request-access), or
   [pair with a PIN](/docs/pairing#pair-with-a-pin). After that, the host moves to **Hosts**.

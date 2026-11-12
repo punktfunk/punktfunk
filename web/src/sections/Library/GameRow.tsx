@@ -19,7 +19,8 @@ import { streamSummary } from "./overrides";
  * One title as a line: a small cover, its name, where it comes from, the host's stream settings,
  * and the same two controls a card has. Many more fit a screen than posters do, which is the
  * point of the row view. In selection mode the row is one checkbox. In a profile's view its hide
- * and its own stream settings carry its mark.
+ * and its own stream settings carry its mark, and a game only it has is marked so in place of
+ * its source and deletes rather than hides.
  */
 export const GameRow: FC<GameCardProps> = ({
 	game,
@@ -38,6 +39,7 @@ export const GameRow: FC<GameCardProps> = ({
 	const isCustom = isOperatorOwned(game);
 	const stream = streamSummary(game.overrides);
 	const ownStream = who !== undefined && game.profile?.overrides === true;
+	const own = who !== undefined && game.own === true;
 	const [failed, setFailed] = useState<Record<string, boolean>>({});
 	const src = [game.art.portrait, game.art.header].find(
 		(u): u is string => !!u && !failed[u],
@@ -79,9 +81,13 @@ export const GameRow: FC<GameCardProps> = ({
 						)}
 					</p>
 					<div className="mt-1 flex flex-wrap gap-1">
-						<Badge variant={isCustom ? "secondary" : "outline"}>
-							{sourceLabel(game, nameOf)}
-						</Badge>
+						{own ? (
+							<OwnBadge label={m.profile_view_own({ name: who ?? "" })} />
+						) : (
+							<Badge variant={isCustom ? "secondary" : "outline"}>
+								{sourceLabel(game, nameOf)}
+							</Badge>
+						)}
 						{game.platform && game.platform.toUpperCase() !== "PC" && (
 							<Badge variant="outline">{game.platform}</Badge>
 						)}
@@ -114,18 +120,24 @@ export const GameRow: FC<GameCardProps> = ({
 				</div>
 			</Link>
 			<div className={`flex shrink-0 gap-1${selecting ? " invisible" : ""}`}>
-				<Button
-					variant="ghost"
-					size="icon"
-					className="size-8"
-					aria-label={hideLabel(hidden, who)}
-					title={hideLabel(hidden, who)}
-					aria-pressed={hidden}
-					disabled={hiding}
-					onClick={onToggleHidden}
-				>
-					{hidden ? <Eye className="size-4" /> : <EyeOff className="size-4" />}
-				</Button>
+				{!own && (
+					<Button
+						variant="ghost"
+						size="icon"
+						className="size-8"
+						aria-label={hideLabel(hidden, who)}
+						title={hideLabel(hidden, who)}
+						aria-pressed={hidden}
+						disabled={hiding}
+						onClick={onToggleHidden}
+					>
+						{hidden ? (
+							<Eye className="size-4" />
+						) : (
+							<EyeOff className="size-4" />
+						)}
+					</Button>
+				)}
 				{isCustom && onDelete && (
 					<Button
 						variant="ghost"
