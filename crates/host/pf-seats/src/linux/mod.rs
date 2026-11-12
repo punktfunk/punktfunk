@@ -42,6 +42,8 @@ mod session;
 mod shared;
 pub mod socket;
 #[cfg(test)]
+mod start_tests;
+#[cfg(test)]
 mod unlock_tests;
 
 pub use pam::{run_check as pam_check, CHECK_VERB as PAM_CHECK_VERB};
