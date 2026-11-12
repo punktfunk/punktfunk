@@ -223,6 +223,7 @@ mod tests {
             ("PUT", "/api/v1/display/presets/{id}"),
             ("PUT", "/api/v1/display/settings"),
             ("PUT", "/api/v1/gpus/preference"),
+            ("PUT", "/api/v1/library/own"),
         ];
         let doc: serde_json::Value = serde_json::from_str(&crate::mgmt::openapi_json()).unwrap();
         let mut changed = Vec::new();

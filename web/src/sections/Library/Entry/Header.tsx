@@ -9,6 +9,7 @@ import {
 } from "@/components/password-confirm";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Spinner } from "@/components/ui/spinner";
 import { fmtAgo, fmtSpan } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { m } from "@/paraglide/messages";
@@ -41,7 +42,32 @@ export interface EntryHeaderProps {
 	/** The profile whose view this is, by name: the hide is its own, and the way back is to its
 	 * library. */
 	who?: string;
+	/** A game only `who` has, or one being added for them: marked as theirs. */
+	own?: boolean;
+	/** The save or delete waits for `who`'s desktop: the line says so, in place of an error. */
+	waiting?: { line: string; onCancel: () => void };
 }
+
+/**
+ * A call waiting for a profile's desktop: what happens once it is up, and the way out. Shaped as
+ * the error that would take its place, so a failed start moves nothing.
+ */
+export const DesktopWait: FC<{ line: string; onCancel?: () => void }> = ({
+	line,
+	onCancel,
+}) => (
+	<div className="flex flex-wrap items-center gap-x-3 gap-y-2 rounded-md border bg-muted/40 px-3 py-2 text-sm">
+		<Spinner className="size-4 shrink-0" aria-hidden />
+		<p role="status" className="min-w-0 flex-1">
+			{line}
+		</p>
+		{onCancel && (
+			<Button variant="outline" size="sm" onClick={onCancel}>
+				{m.common_cancel()}
+			</Button>
+		)}
+	</div>
+);
 
 /** The page's inset (the main's padding plus the section's), for a band that runs past it. */
 const BLEED =
@@ -122,11 +148,14 @@ export const EntryHeader: FC<EntryHeaderProps> = ({
 	hiding,
 	error,
 	who,
+	own,
+	waiting,
 }) => {
 	const [heroFailed, setHeroFailed] = useState(false);
 	const hidden = entry?.hidden === true;
 	const creating = entry === null;
-	const blocked = !dirty || saving || !title.trim() || (gated && !password);
+	const blocked =
+		!dirty || saving || !!waiting || !title.trim() || (gated && !password);
 	const hero = !heroFailed ? entry?.art.hero : null;
 	// One line of what it is: the source, a console, the year, who made it.
 	const meta = [
@@ -176,6 +205,9 @@ export const EntryHeader: FC<EntryHeaderProps> = ({
 						</h1>
 						{meta && <p className="text-sm text-muted-foreground">{meta}</p>}
 						{stats && <p className="text-xs text-muted-foreground">{stats}</p>}
+						{own && who && (
+							<OwnBadge label={m.profile_view_own({ name: who })} />
+						)}
 						{hidden &&
 							(who ? (
 								<OwnBadge label={m.profile_view_hidden_badge({ name: who })} />
@@ -204,7 +236,7 @@ export const EntryHeader: FC<EntryHeaderProps> = ({
 							<Button
 								variant="outline"
 								size="sm"
-								disabled={deleting}
+								disabled={deleting || !!waiting}
 								onClick={onDelete}
 							>
 								<Trash2 className="size-4 text-destructive" />
@@ -224,8 +256,9 @@ export const EntryHeader: FC<EntryHeaderProps> = ({
 					{m.library_entry_managed_note({ source: managedBy })}
 				</p>
 			)}
-			{/* Saving a command, or a row that carries prep, runs code as the host user: the
-			    console password is asked for exactly when the BFF gate applies. */}
+			{/* Saving a command, or a row that carries prep, runs code as the host user, or on a
+			    profile's own game as its account: the console password is asked for exactly when
+			    the BFF gate applies. A save waiting for a desktop has already taken it. */}
 			{onSave && gated && (
 				<div className="max-w-sm">
 					<PasswordConfirmField
@@ -233,30 +266,48 @@ export const EntryHeader: FC<EntryHeaderProps> = ({
 						value={password}
 						onChange={onPassword}
 						failure={failure}
-						help={m.library_field_password_help()}
+						disabled={!!waiting}
+						help={
+							own && who
+								? m.profile_view_password_help({ name: who })
+								: m.library_field_password_help()
+						}
 					/>
 				</div>
 			)}
-			{error && (
-				<p
-					role="alert"
-					className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive"
-				>
-					{error}
-				</p>
+			{waiting ? (
+				<DesktopWait line={waiting.line} onCancel={waiting.onCancel} />
+			) : (
+				error && (
+					<p
+						role="alert"
+						className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive"
+					>
+						{error}
+					</p>
+				)
 			)}
 			{/* Phones: the header's Save scrolls away on a long tab, so a dirty page keeps one in
-			    reach above the bottom nav. */}
+			    reach above the bottom nav, and the wait for a desktop with its Cancel. */}
 			{onSave && dirty && (
 				<div className="fixed inset-x-4 bottom-20 z-30 flex items-center justify-between gap-3 rounded-xl border bg-card/95 px-4 py-3 shadow-lg backdrop-blur sm:hidden">
-					<span className="text-sm text-muted-foreground">
-						{gated && !password
-							? m.library_entry_password_first()
-							: m.library_entry_unsaved()}
+					{waiting && <Spinner className="size-4 shrink-0" aria-hidden />}
+					<span className="min-w-0 flex-1 text-sm text-muted-foreground">
+						{waiting
+							? waiting.line
+							: gated && !password
+								? m.library_entry_password_first()
+								: m.library_entry_unsaved()}
 					</span>
-					<Button size="sm" disabled={blocked} onClick={onSave}>
-						{creating ? m.library_create() : m.library_save()}
-					</Button>
+					{waiting ? (
+						<Button size="sm" variant="outline" onClick={waiting.onCancel}>
+							{m.common_cancel()}
+						</Button>
+					) : (
+						<Button size="sm" disabled={blocked} onClick={onSave}>
+							{creating ? m.library_create() : m.library_save()}
+						</Button>
+					)}
 				</div>
 			)}
 		</div>

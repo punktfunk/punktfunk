@@ -89,11 +89,15 @@ pub fn game_mode_launch() -> Option<LaunchTarget> {
 }
 
 /// Map a store-qualified library id to a [`LaunchTarget`] from the library in `view`.
-/// `None` = unknown or hidden id, or on Linux a title with no runnable recipe.
+/// `None` = unknown or hidden id, a profile's own title off its seat host, or on Linux a title
+/// with no runnable recipe.
 ///
 /// Shared by both planes. Linux runs the command (nested gamescope or live
 /// session). Windows has no nest: `launch_title` resolves the process later.
 pub fn resolve_launch(view: &View, id: &str) -> Option<LaunchTarget> {
+    if is_own_id(id) && !keeps_own_titles() {
+        return None;
+    }
     let entry = all_games_for(view).into_iter().find(|g| g.id == id)?;
     let game = GameRef {
         id: Some(entry.id.clone()),
@@ -103,23 +107,28 @@ pub fn resolve_launch(view: &View, id: &str) -> Option<LaunchTarget> {
     plat::launch_target(entry, game)
 }
 
-/// Whether the box's library has `id` and `view` leaves it out by a hide or a source switch,
-/// the box's or its profile's: the rules [`all_games_for`] applies, not what this host can play.
+/// Whether `view`'s library has `id` and leaves it out by a hide or a source switch, the box's
+/// or its profile's: the rules [`all_games_for`] applies, not what this host can play. A
+/// profile's own title has no source; a hide holds it back.
 pub fn held_back(view: &View, id: &str) -> bool {
+    let (by_box, by_profile) = hidden_layers(view);
+    let hidden = by_box.contains(id) || by_profile.contains(id);
+    if is_own_id(id) {
+        return hidden;
+    }
     let Some(e) = load_custom().into_iter().find(|e| library_id_for(e) == id) else {
         return false;
     };
-    let (by_box, by_profile) = hidden_layers(view);
-    by_box.contains(id)
-        || by_profile.contains(id)
-        || source_id_for(&e).is_some_and(|src| disabled_scanners(view).contains(src))
+    hidden || source_id_for(&e).is_some_and(|src| disabled_scanners(view).contains(src))
 }
 
 /// The message id and sentence a launch of `id` that [`resolve_launch`] found nothing for in
 /// `view` is refused with. A host that reads the box's library tells a title held back in `view`
-/// from one this desktop can't start; the box says its library lacks the title.
+/// from one this desktop can't start, and so does any host for a profile's own title, which
+/// starts on its seat alone; the box says its library lacks any other.
 pub fn launch_refusal(view: &View, id: &str) -> (&'static str, &'static str) {
-    if pf_paths::seat::box_library_dir().is_some() && !held_back(view, id) {
+    let elsewhere = pf_paths::seat::box_library_dir().is_some() || is_own_id(id);
+    if elsewhere && !held_back(view, id) {
         (
             "launch_title_not_on_desktop",
             "Couldn't start that title — this desktop doesn't have its emulator, launcher or game \

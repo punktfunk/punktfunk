@@ -367,10 +367,11 @@ pub fn serve(
             if pf_paths::seat::role().is_seat_host() {
                 crate::seats::restart_when_replaced();
             }
-            // The Windows box host runs its seats' plugins, so their games join its bus.
+            // The Windows box host runs its seats' plugins, so their games join its bus, and
+            // writes the library, so it hears what each seat lists of its own.
             #[cfg(windows)]
             if !pf_paths::seat::role().is_seat_host() {
-                crate::seats::events::fan_in("&kinds=game.*");
+                crate::seats::events::fan_in("&kinds=game.*,library.changed");
             }
             tokio::spawn(crate::hooks::runner());
         }

@@ -160,9 +160,17 @@ pick stays as you move between pages. In a profile's library you can:
 - Under **Sources**, turn a source off to hide all its games from Anna.
 
 A profile only ever narrows your library. A game you hide, or a source you turn off, in your own
-library stays hidden for everyone, and shows there as **Turned off in Enrico's library**. Games
-are added, edited, installed and removed in your library, which the link under the title opens.
-Nothing in a profile's library needs its seat to be running.
+library stays hidden for everyone, and shows there as **Turned off in Enrico's library**. Shared
+games are added, edited, installed and removed in your library, which the link under the title
+opens. None of this needs the profile's desktop to be running.
+
+A profile with a desktop of its own on a **New account** can also have games nobody else has.
+**Add game for Kid** adds a game or a command that is kept on Kid's desktop and runs there as
+Kid. It shows **Only for Kid** and is on Kid's shelf whether the desktop is running or not. Adding,
+changing or deleting one starts Kid's desktop first, which takes about 20 seconds, and a cover
+picked from a file on that desktop shows only while it runs. A profile on
+[someone's own account](/docs/own-account) has none: a game added from the console would run as
+that person.
 
 The Apple, Android, Linux and Windows apps show a player the library of the profile they play as.
 Hiding a game is for tidiness, not a lock: a player who picks another profile sees that
