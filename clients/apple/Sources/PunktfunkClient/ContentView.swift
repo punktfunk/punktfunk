@@ -222,8 +222,11 @@ struct ContentView: View {
                 isPresented: approvalChoicePresented,
                 presenting: approvalChoice
             ) { req in
-                Button(L10n.pairRequestAccess) {
-                    DispatchQueue.main.async { flow.requestAccess(req) }
+                // A request names the fingerprint the host must show. A typed host has none.
+                if req.advertisedFingerprint != nil {
+                    Button(L10n.pairRequestAccess) {
+                        DispatchQueue.main.async { flow.requestAccess(req) }
+                    }
                 }
                 Button(L10n.pairUsePin) {
                     DispatchQueue.main.async {
@@ -235,7 +238,9 @@ struct ContentView: View {
             } message: { req in
                 Text(
                     L10n.pairRequiredBody(host: req.host.displayName) + "\n\n"
-                        + String(localized: L10n.pairIntro))
+                        + String(
+                            localized: req.advertisedFingerprint == nil
+                                ? L10n.pairIntroPinOnly : L10n.pairIntro))
             }
             // One "Connection failed" surface for every home screen (touch grid, gamepad launcher)
             // and platform — SessionModel funnels all connect/session errors into `errorMessage`.

@@ -163,13 +163,14 @@ pub fn device_code(identity: &(String, String)) -> Option<String> {
 }
 
 /// Request access without a PIN: blocks until the host's operator approves this device or
-/// refuses it. `pin` is the advertised fingerprint (`None` trusts on first use); setting
-/// `cancel` withdraws the request. Returns the host certificate fingerprint. Never streams.
+/// refuses it. `pin` is the fingerprint the host must show: a host that advertised none pairs
+/// by PIN. Setting `cancel` withdraws the request. Returns the host certificate fingerprint.
+/// Never streams.
 pub fn request_access_to_host(
     addr: &str,
     port: u16,
     identity: &(String, String),
-    pin: Option<[u8; 32]>,
+    pin: [u8; 32],
     device_name: &str,
     cancel: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
 ) -> std::result::Result<[u8; 32], punktfunk_core::PunktfunkError> {

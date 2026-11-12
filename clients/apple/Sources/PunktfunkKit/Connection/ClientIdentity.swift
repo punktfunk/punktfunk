@@ -91,26 +91,22 @@ public func pair(
 
 /// Request access without a PIN: blocks until the host's operator approves this device (or
 /// refuses it), then returns the host's fingerprint to persist as paired. Never streams.
-/// `pinSHA256` is the advertised fingerprint; nil trusts on first use. A refusal throws
-/// `.rejected`; an unreachable host or a mismatched fingerprint throws `.connectFailed`.
+/// `pinSHA256` is the fingerprint the host must show: its advert's, or a link's. A host with
+/// none pairs by PIN. A refusal throws `.rejected`; an unreachable host or a mismatched
+/// fingerprint throws `.connectFailed`.
 public func requestAccess(
     host: String, port: UInt16 = 9777,
-    identity: ClientIdentity, pinSHA256: Data?, name: String,
+    identity: ClientIdentity, pinSHA256: Data, name: String,
     timeoutMs: UInt32 = 185_000
 ) throws -> Data {
-    if let pin = pinSHA256, pin.count != 32 { throw PunktfunkClientError.invalidPin }
+    guard pinSHA256.count == 32 else { throw PunktfunkClientError.invalidPin }
     var observed = [UInt8](repeating: 0, count: 32)
-    let pin = pinSHA256.map { [UInt8]($0) }
+    let pin = [UInt8](pinSHA256)
     let rc = host.withCString { cs in
         identity.certPEM.withCString { cert in
             identity.keyPEM.withCString { key in
                 name.withCString { n in
-                    if let pin {
-                        return punktfunk_request_access(
-                            cs, port, cert, key, pin, n, &observed, timeoutMs)
-                    }
-                    return punktfunk_request_access(
-                        cs, port, cert, key, nil, n, &observed, timeoutMs)
+                    punktfunk_request_access(cs, port, cert, key, pin, n, &observed, timeoutMs)
                 }
             }
         }
