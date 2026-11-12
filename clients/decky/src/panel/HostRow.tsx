@@ -1,117 +1,186 @@
-// One host in the QAM panel: the row that streams it or opens the trust sheet, its pinned cards,
-// and one chip per profile on a box with several.
-import { ButtonItem, PanelSectionRow, showModal } from "@decky/ui";
-import { FC, useEffect, useState } from "react";
-import { FaLock, FaPlay } from "react-icons/fa";
+// One host in the QAM panel: one compact row. A ready host streams on a press, and its ▾ (or the
+// controller's menu button) lists its profiles and pinned presets. A host that needs access opens
+// the trust sheet. The host's bound preset is never listed: the plain press already applies it.
+import {
+  DialogButton,
+  Focusable,
+  Menu,
+  MenuItem,
+  MenuSeparator,
+  PanelSectionRow,
+  showContextMenu,
+  showModal,
+} from "@decky/ui";
+import { CSSProperties, FC, ReactNode, useEffect, useRef, useState } from "react";
+import { FaCaretDown, FaCheck, FaLock } from "react-icons/fa";
 import { type HostProfile, profiles as fetchProfiles } from "../backend";
-import { type HostView, needsPair, trustState } from "../hosts/model";
+import { type HostView, trustState } from "../hosts/model";
 import { t } from "../i18n";
 import { OsMark } from "../os-icon";
 import { startStream } from "../stream";
 import { TrustSheet } from "../trust/trust";
+import { rowMenu, rowStatus } from "./model";
 
-/** The line under a host's name: where it is, whether it's up, and how far trust has got. */
-function hostDescription(v: HostView): string {
-  const trust = {
-    paired: t("hostcard_paired"),
-    trusted: t("decky_host_trusted"),
-    "needs-access": t("decky_host_needs_access"),
-  }[trustState(v)];
-  const online = v.online ? t("hostcard_status_online") : t("hostcard_status_offline");
-  return `${v.addr}:${v.port} · ${online} · ${trust}`;
+const ELLIPSIS: CSSProperties = {
+  minWidth: 0,
+  overflow: "hidden",
+  textOverflow: "ellipsis",
+  whiteSpace: "nowrap",
+};
+
+/** The name on its own line, so status words never push it out; status below, small. */
+const HostLabel: FC<{ host: HostView; icon: ReactNode; showAddress: boolean }> = ({
+  host,
+  icon,
+  showAddress,
+}) => {
+  const status = rowStatus(host);
+  const notes = [
+    status === "offline-wakes" ? t("hostcard_status_offline_wakes") : null,
+    status === "offline" ? t("hostcard_status_offline") : null,
+    trustState(host) === "trusted" ? t("decky_host_trusted") : null,
+    showAddress ? `${host.addr}:${host.port}` : null,
+  ].filter(Boolean);
+  return (
+    <div style={{ display: "flex", flexDirection: "column", width: "100%", minWidth: 0, textAlign: "left" }}>
+      <div style={{ display: "flex", alignItems: "center", gap: "0.4em", minWidth: 0 }}>
+        {icon}
+        <span style={ELLIPSIS}>{host.name}</span>
+      </div>
+      {notes.length > 0 && (
+        <div style={{ ...ELLIPSIS, fontSize: "0.8em", opacity: 0.7 }}>{notes.join(" · ")}</div>
+      )}
+    </div>
+  );
+};
+
+interface PlayAs {
+  profiles: HostProfile[];
+  picked: string | null;
 }
+const NOBODY: PlayAs = { profiles: [], picked: null };
 
-/** The profiles of a paired, online host. Empty for a host with one profile or none: no chips. */
-function useHostProfiles(host: HostView, gated: boolean): HostProfile[] {
-  const [list, setList] = useState<HostProfile[]>([]);
+// The last answer per host ref, so a row has its ▾ the moment the panel opens; each open asks
+// again. Module-level: the panel remounts on every open.
+const playAsCache = new Map<string, PlayAs>();
+
+function usePlayAs(host: HostView): PlayAs {
+  const [answer, setAnswer] = useState(() => playAsCache.get(host.ref) ?? NOBODY);
   useEffect(() => {
-    if (gated || !host.online) {
-      setList([]);
+    setAnswer(playAsCache.get(host.ref) ?? NOBODY);
+    if (!host.online) {
       return;
     }
     let live = true;
     void fetchProfiles(host.ref)
-      .then((r) => live && setList(r.ok && (r.profiles?.length ?? 0) > 1 ? r.profiles! : []))
+      .then((r) => {
+        const next = r.ok ? { profiles: r.profiles ?? [], picked: r.picked ?? null } : NOBODY;
+        if (r.ok) playAsCache.set(host.ref, next);
+        else playAsCache.delete(host.ref);
+        if (live) setAnswer(next);
+      })
       .catch(() => {});
     return () => {
       live = false;
     };
-  }, [host.ref, host.online, gated]);
-  return list;
+  }, [host.ref, host.online]);
+  return answer;
 }
 
-export const HostRow: FC<{ host: HostView; refresh: () => void }> = ({ host, refresh }) => {
-  const gated = needsPair(host);
-  const people = useHostProfiles(host, gated);
-  const stream = (opts: { requestAccess?: boolean } = {}) => void startStream(host, opts);
+/** A profile row: a check on the one this Deck plays as, its picture, its name, its note. */
+const ProfileItem: FC<{ profile: HostProfile; picked: boolean }> = ({ profile: p, picked }) => {
   return (
-    <>
-      <PanelSectionRow>
-        <ButtonItem
-          layout="below"
-          onClick={() =>
-            gated
-              ? showModal(
-                  <TrustSheet host={host} onStream={stream} onChanged={refresh} />,
-                )
-              : stream()
-          }
-          label={
-            <span style={{ display: "inline-flex", alignItems: "center", gap: "0.4em" }}>
-              {gated ? <FaLock /> : <OsMark os={host.os} />}
-              {host.name}
-            </span>
-          }
-          description={hostDescription(host)}
-        >
-          {gated ? t("decky_host_connect") : t("decky_stream")}
-        </ButtonItem>
-      </PanelSectionRow>
-      {/* Pinned cards, nested under their host rather than in a section of their own: a card
-          IS a (host, preset) pair, and a row that floats free of its host is the "a pinned
-          tile reads as a duplicate host" problem the desktop shells still have. The host's
-          own BOUND preset is deliberately not a card — it applies silently on the plain row
-          above, and showing it twice would suggest they do different things. */}
-      {!gated &&
-        host.pinnedPresets.map((p) => (
-          <PanelSectionRow key={`${host.ref}:${p.id}`}>
-            <ButtonItem
-              layout="below"
-              onClick={() => void startStream(host, { presetId: p.id }, { preset: p.name })}
-              label={`▸ ${p.name}`}
-            >
-              <FaPlay style={{ marginRight: "0.5em" }} />
-              {t("decky_stream")}
-            </ButtonItem>
-          </PanelSectionRow>
-        ))}
-      {/* One chip per profile on a box with several: streams as that player, this time only. */}
-      {people.map((p) => (
-        <PanelSectionRow key={`${host.ref}:as:${p.id}`}>
-          <ButtonItem
-            layout="below"
-            onClick={() => void startStream(host, { profileId: p.id }, { profile: p.display_name })}
-            label={
-              <span style={{ display: "inline-flex", alignItems: "center", gap: "0.4em" }}>
-                {p.picture ? (
-                  <img
-                    src={p.picture}
-                    alt=""
-                    style={{ width: "1.2em", height: "1.2em", borderRadius: "50%", objectFit: "cover" }}
-                  />
-                ) : (
-                  "●"
-                )}
-                {p.display_name}
-              </span>
-            }
-            description={p.note ?? undefined}
-          >
-            <FaPlay style={{ marginRight: "0.5em" }} />
-            {t("decky_stream")}
-          </ButtonItem>
-        </PanelSectionRow>
-      ))}
-    </>
+    <span style={{ display: "flex", alignItems: "center", gap: "0.5em", minWidth: 0 }}>
+      <span style={{ width: "1em", flexShrink: 0 }}>{picked && <FaCheck style={{ color: "#1a9fff" }} />}</span>
+      {p.picture ? (
+        <img
+          src={p.picture}
+          alt=""
+          style={{ width: "1.2em", height: "1.2em", borderRadius: "50%", objectFit: "cover", flexShrink: 0 }}
+        />
+      ) : (
+        "●"
+      )}
+      <span style={ELLIPSIS}>{p.display_name}</span>
+      {p.note && <span style={{ ...ELLIPSIS, opacity: 0.6, fontSize: "0.85em" }}>{p.note}</span>}
+    </span>
   );
 };
+
+/** A ready host: press streams, ▾ and the menu button pick a profile or preset for this stream. */
+export const HostRow: FC<{ host: HostView; showAddress: boolean }> = ({ host, showAddress }) => {
+  const playAs = usePlayAs(host);
+  const menu = rowMenu(host.pinnedPresets.length, playAs.profiles.length);
+  const caret = useRef<HTMLDivElement>(null);
+  const openMenu = () =>
+    menu &&
+    showContextMenu(
+      <Menu label={host.name}>
+        {menu.profiles &&
+          playAs.profiles.map((p) => (
+            <MenuItem
+              key={`as:${p.id}`}
+              onSelected={() => void startStream(host, { profileId: p.id }, { profile: p.display_name })}
+            >
+              <ProfileItem profile={p} picked={p.id === playAs.picked} />
+            </MenuItem>
+          ))}
+        {menu.profiles && menu.presets && <MenuSeparator />}
+        {menu.presets &&
+          host.pinnedPresets.map((p) => (
+            <MenuItem
+              key={`preset:${p.id}`}
+              onSelected={() => void startStream(host, { presetId: p.id }, { preset: p.name })}
+            >
+              ▸ {p.name}
+            </MenuItem>
+          ))}
+      </Menu>,
+      caret.current ?? undefined,
+    );
+  return (
+    <PanelSectionRow>
+      <Focusable style={{ display: "flex", gap: "0.4em" }} flow-children="horizontal">
+        <DialogButton
+          style={{ flex: 1, minWidth: 0 }}
+          onClick={() => void startStream(host)}
+          onOKActionDescription={t("decky_stream")}
+          onMenuButton={menu ? openMenu : undefined}
+          onMenuActionDescription={menu ? t("hostcard_more_a11y") : undefined}
+        >
+          <HostLabel host={host} icon={<OsMark os={host.os} />} showAddress={showAddress} />
+        </DialogButton>
+        {menu && (
+          <DialogButton
+            ref={caret}
+            style={{ flex: "0 0 auto", width: "auto", minWidth: 0, padding: "0 0.8em" }}
+            onClick={openMenu}
+          >
+            <FaCaretDown />
+          </DialogButton>
+        )}
+      </Focusable>
+    </PanelSectionRow>
+  );
+};
+
+/** A host with no pinned fingerprint: press opens the trust sheet. */
+export const AccessRow: FC<{ host: HostView; showAddress: boolean; refresh: () => void }> = ({
+  host,
+  showAddress,
+  refresh,
+}) => (
+  <PanelSectionRow>
+    <DialogButton
+      style={{ width: "100%", minWidth: 0 }}
+      onOKActionDescription={t("decky_host_connect")}
+      onClick={() =>
+        showModal(
+          <TrustSheet host={host} onStream={(opts) => void startStream(host, opts)} onChanged={refresh} />,
+        )
+      }
+    >
+      <HostLabel host={host} icon={<FaLock />} showAddress={showAddress} />
+    </DialogButton>
+  </PanelSectionRow>
+);

@@ -90,6 +90,12 @@ export function needsPair(v: HostView): boolean {
   return v.fp === "";
 }
 
+/** The panel's two groups, each in list order: hosts that stream on a press, and hosts that
+ *  open the trust sheet. */
+export function splitByAccess(views: HostView[]): { ready: HostView[]; access: HostView[] } {
+  return { ready: views.filter((v) => !needsPair(v)), access: views.filter(needsPair) };
+}
+
 /**
  * Is this advert that saved record? The CLI's own match decides when it names the record; the
  * rule below, `same_host` in pf-client-core, covers a client too old to say and a record the CLI
