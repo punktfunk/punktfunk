@@ -4291,7 +4291,7 @@
           "library"
         ],
         "summary": "Set one game's overrides",
-        "description": "`{ \"set\": id }` points the game at a shared override; fields alone are its own values;\n`{ \"none\": true }` leaves it to the device, whatever the source sets; `{}` clears its entry,\nand the game takes its source's. The id is not required to exist now, as with hiding.\nWith `as`, the entry is that profile's own and `set` may name the box's shared override or\nthe profile's; `{}` hands the game back to the box's entry. Emits `library.changed`.",
+        "description": "`{ \"set\": id }` points the game at a shared override; fields alone are its own values;\n`{ \"none\": true }` leaves it to the device, whatever the source sets; `{}` clears its entry,\nand the game takes its source's. The id is not required to exist now, as with hiding.\nWith `as`, the entry is that profile's own and `set` may name the box's shared override or\nthe profile's; `{}` hands the game back to the box's entry. A paired device that is that\nlocked profile's person may set it too. Emits `library.changed`.",
         "operationId": "setGameOverrides",
         "parameters": [
           {
@@ -4346,6 +4346,16 @@
           },
           "401": {
             "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "A device that isn't the person of the profile `as` names, or a plugin",
             "content": {
               "application/json": {
                 "schema": {

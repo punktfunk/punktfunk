@@ -1653,7 +1653,8 @@ pub(crate) async fn delete_override_set(
 /// `{ "none": true }` leaves it to the device, whatever the source sets; `{}` clears its entry,
 /// and the game takes its source's. The id is not required to exist now, as with hiding.
 /// With `as`, the entry is that profile's own and `set` may name the box's shared override or
-/// the profile's; `{}` hands the game back to the box's entry. Emits `library.changed`.
+/// the profile's; `{}` hands the game back to the box's entry. A paired device that is that
+/// locked profile's person may set it too. Emits `library.changed`.
 #[utoipa::path(
     put,
     path = "/library/overrides/games/{id}",
@@ -1668,6 +1669,7 @@ pub(crate) async fn delete_override_set(
         (status = OK, description = "Stored; the game's entry after the call", body = crate::library::OverrideEntry),
         (status = BAD_REQUEST, description = "Empty id, a value out of range, or `set` or `none` beside another field", body = ApiError),
         (status = UNAUTHORIZED, description = "Missing or invalid bearer token", body = ApiError),
+        (status = FORBIDDEN, description = "A device that isn't the person of the profile `as` names, or a plugin", body = ApiError),
         (status = NOT_FOUND, description = "`set` names no shared override, or `as` names no profile on this host", body = ApiError),
         (status = INTERNAL_SERVER_ERROR, description = "Couldn't save the overrides", body = ApiError),
     )

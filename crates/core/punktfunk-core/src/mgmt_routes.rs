@@ -36,7 +36,10 @@ pub fn path_matches(pattern: &str, path: &str) -> bool {
 /// `(method, path)` of a locked profile's own library view and game-exit choice, as the API
 /// document spells them. A device reaches them only naming a profile (`?as=`), and the handler
 /// demands that the device is that profile's person: reachable grants nothing by itself.
-pub const PERSON: &[(&str, &str)] = &[("PUT", "/api/v1/library/hidden/{id}")];
+pub const PERSON: &[(&str, &str)] = &[
+    ("PUT", "/api/v1/library/hidden/{id}"),
+    ("PUT", "/api/v1/library/overrides/games/{id}"),
+];
 
 /// A route in [`PERSON`].
 pub fn person_route(method: &str, path: &str) -> bool {
@@ -119,15 +122,18 @@ mod tests {
     /// Widening the lane is a change to this test.
     #[test]
     fn a_person_reaches_its_routes_and_nothing_beside_them() {
-        let reached = [("PUT", "/api/v1/library/hidden/steam:70")];
+        let reached = [
+            ("PUT", "/api/v1/library/hidden/steam:70"),
+            ("PUT", "/api/v1/library/overrides/games/steam:70"),
+        ];
         assert_eq!(PERSON.len(), reached.len());
         for (method, path) in reached {
             assert!(person_route(method, path), "{method} {path}");
             assert!(paired_may_access(method, path), "{method} {path}");
         }
         for (method, path) in [
+            // A pick is a URL the host fetches itself: a device would aim it at the host's LAN.
             ("PUT", "/api/v1/library/picks/steam:70"),
-            ("PUT", "/api/v1/library/overrides/games/steam:70"),
             ("PUT", "/api/v1/library/scanners/steam"),
             ("PUT", "/api/v1/session/settings"),
             ("DELETE", "/api/v1/session/settings"),
