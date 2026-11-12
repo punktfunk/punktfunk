@@ -619,9 +619,14 @@ public enum LibraryClient {
 
     /// The request path of one page. The cursor is the host's own text, so it is encoded.
     static func pagePath(cursor: String?) -> String {
-        let plain = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "-._~"))
-        let next = cursor?.addingPercentEncoding(withAllowedCharacters: plain)
+        let next = cursor.flatMap(queryValue)
         return "/api/v1/library/page?limit=\(pageLimit)" + (next.map { "&cursor=\($0)" } ?? "")
+    }
+
+    /// `s` percent-encoded for a query value.
+    static func queryValue(_ s: String) -> String? {
+        s.addingPercentEncoding(
+            withAllowedCharacters: CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "-._~")))
     }
 
     /// The whole catalog, a page at a time, so no answer grows with the library. `get` takes
@@ -640,25 +645,56 @@ public enum LibraryClient {
         return games
     }
 
-    /// The host's catalog, walked by `GET /api/v1/library/page` over ``send(_:to:method:body:)``'s
-    /// lanes. A host older than the paged route refuses it, so `GET /api/v1/library` answers
-    /// whole instead.
-    public static func fetch(_ target: MgmtTarget) async throws -> [GameEntry] {
+    /// A 404 `profile_unknown`: the host no longer holds the profile a call named.
+    private struct ProfileGone: Error {}
+
+    /// The catalog as `profile` plays it (`as=`), else the box's. `get` answers one path. A host
+    /// older than the paged route refuses it, so `GET /api/v1/library` answers whole instead. A
+    /// profile the host no longer holds is asked once more as the box, and that answer stands.
+    /// `clients/shared/library-profile-vectors.json` pins this here, in Rust and in Kotlin.
+    static func catalog(
+        as profile: String?, _ get: (String) async throws -> HTTPResponse
+    ) async throws -> [GameEntry] {
+        func walk(_ profile: String?) async throws -> [GameEntry] {
+            func body(_ path: String) async throws -> Data {
+                var path = path
+                if let profile, let id = queryValue(profile) {
+                    path += (path.contains("?") ? "&" : "?") + "as=" + id
+                }
+                let response = try await get(path)
+                if profile != nil, response.status == 404,
+                   (try? JSONDecoder().decode(Coded.self, from: response.body))?.code
+                       == "profile_unknown"
+                {
+                    throw ProfileGone()
+                }
+                try expectOK(response)
+                return response.body
+            }
+            do {
+                return try await walkPages { cursor in try await body(pagePath(cursor: cursor)) }
+            } catch LibraryError.unauthorized, LibraryError.http(404) {
+                return try JSONDecoder().decode(
+                    [GameEntry].self, from: try await body("/api/v1/library"))
+            }
+        }
+        do {
+            return try await walk(profile)
+        } catch is ProfileGone {
+            return try await walk(nil)
+        }
+    }
+
+    /// An `ApiError` body's `code`.
+    private struct Coded: Decodable { let code: String? }
+
+    /// The host's catalog as `profile` plays it, walked over ``send(_:to:method:body:)``'s lanes
+    /// (``catalog(as:_:)``).
+    public static func fetch(_ target: MgmtTarget, as profile: String?) async throws -> [GameEntry] {
         guard let base = URL(
             string: "\(baseURL(address: target.address, port: target.port))/api/v1/library")
         else { throw LibraryError.unreachable("invalid host address") }
-        let body: (String) async throws -> Data = { path in
-            let response = try await send(path, to: target)
-            try expectOK(response)
-            return response.body
-        }
-        var games: [GameEntry]
-        do {
-            games = try await walkPages { cursor in try await body(pagePath(cursor: cursor)) }
-        } catch LibraryError.unauthorized, LibraryError.http(404) {
-            games = try JSONDecoder().decode(
-                [GameEntry].self, from: try await body("/api/v1/library"))
-        }
+        var games = try await catalog(as: profile) { path in try await send(path, to: target) }
         // Art the host serves arrives as host-relative proxy paths (`/api/v1/library/art/...`).
         // Resolve them against THIS host, so every consumer sees absolute URLs.
         for i in games.indices {

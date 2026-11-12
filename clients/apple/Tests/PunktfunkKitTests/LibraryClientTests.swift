@@ -103,6 +103,35 @@ final class LibraryClientTests: XCTestCase {
         XCTAssertNil(LibraryClient.pictureURL(nil, base: base))
     }
 
+    /// `clients/shared/library-profile-vectors.json`, the rule Rust and Kotlin replay too.
+    func testALibraryFetchFollowsTheSharedProfileVectors() async throws {
+        let url = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent() // PunktfunkKitTests
+            .deletingLastPathComponent() // Tests
+            .deletingLastPathComponent() // apple
+            .deletingLastPathComponent() // clients
+            .appendingPathComponent("shared/library-profile-vectors.json")
+        let doc = try JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any]
+        let cases = try XCTUnwrap(doc?["cases"] as? [[String: Any]])
+        XCTAssertFalse(cases.isEmpty)
+        for c in cases {
+            let name = c["name"] as? String ?? ""
+            let host = c["host"] as? [String: [String: Any]] ?? [:]
+            let expect = c["expect"] as? [String: Any] ?? [:]
+            var asked: [String] = []
+            let shown = try? await LibraryClient.catalog(as: c["pick"] as? String) { path in
+                asked.append(path)
+                guard let answer = host[path], let status = answer["status"] as? Int else {
+                    return HTTPResponse(status: 404, headers: [:], body: Data())
+                }
+                let body = try JSONSerialization.data(withJSONObject: answer["body"] as Any)
+                return HTTPResponse(status: status, headers: [:], body: body)
+            }
+            XCTAssertEqual(asked, expect["asked"] as? [String], "\(name): asked")
+            XCTAssertEqual(shown?.map(\.id), expect["ids"] as? [String], "\(name): ids")
+        }
+    }
+
     func testACursorIsEncodedIntoThePagePath() {
         XCTAssertEqual(LibraryClient.pagePath(cursor: nil), "/api/v1/library/page?limit=200")
         XCTAssertEqual(

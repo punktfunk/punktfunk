@@ -38,11 +38,12 @@ public struct LibraryLoad {
         L10n.libLoadFailedWhy(why: error.errorDescription ?? "")
     }
 
-    /// Load `target`'s library, cached under `hostID`. When `WakePolicy.autoWakes` the host
-    /// (`autoWake` is the player's setting), it wakes the host first and retries an unreachable
-    /// fetch while it boots; otherwise it asks once. Cancelling the consumer cancels the load.
+    /// Load `target`'s library as `profile` plays it, cached under `hostID`. When
+    /// `WakePolicy.autoWakes` the host (`autoWake` is the player's setting), it wakes the host
+    /// first and retries an unreachable fetch while it boots; otherwise it asks once. Cancelling
+    /// the consumer cancels the load.
     public static func run(
-        target: MgmtTarget, hostID: String, wakeMacs: [String], autoWake: Bool
+        target: MgmtTarget, hostID: String, wakeMacs: [String], autoWake: Bool, profile: String?
     ) -> AsyncStream<LibraryLoadEvent> {
         // Sent on every open, not only when the host looks offline: an awake machine ignores a
         // magic packet, and finding out first costs more than sending it.
@@ -56,7 +57,7 @@ public struct LibraryLoad {
             : nil
         let load = LibraryLoad(
             hostID: hostID, cache: LibraryCache.shared, wake: wake,
-            fetch: { try await LibraryClient.fetch(target) },
+            fetch: { try await LibraryClient.fetch(target, as: profile) },
             status: { await LibraryClient.statusIfAnswered(target) })
         return AsyncStream { continuation in
             let task = Task {
