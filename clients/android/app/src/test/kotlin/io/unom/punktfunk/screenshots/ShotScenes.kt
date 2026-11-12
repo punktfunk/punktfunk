@@ -203,14 +203,14 @@ internal fun HostsScene() {
                     Spacer(Modifier.height(8.dp))
                     Text("Punktfunk", style = MaterialTheme.typography.headlineLarge)
                     Text(
-                        stringResource(R.string.hosts_tagline),
+                        stringResource(io.unom.punktfunk.kit.R.string.hosts_tagline),
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                     Spacer(Modifier.height(24.dp))
                 }
             }
-            item(span = { GridItemSpan(maxLineSpan) }) { SectionLabel(stringResource(R.string.hosts_section_saved)) }
+            item(span = { GridItemSpan(maxLineSpan) }) { SectionLabel(stringResource(io.unom.punktfunk.kit.R.string.hosts_section_saved)) }
             // A pinned card is its OWN grid cell right after its host — the same flat list the
             // connect screen builds, not a second card crammed into the host's cell.
             SAVED.forEach { h ->
@@ -244,7 +244,7 @@ internal fun HostsScene() {
             }
             item(span = { GridItemSpan(maxLineSpan) }) {
                 Spacer(Modifier.height(12.dp))
-                SectionLabel(stringResource(R.string.hosts_section_discovered))
+                SectionLabel(stringResource(io.unom.punktfunk.kit.R.string.hosts_section_discovered))
             }
             items(DISCOVERED) { h ->
                 HostCard(
@@ -404,10 +404,10 @@ internal fun TrustDialog() {
 internal fun PairDialog() {
     AlertDialog(
         onDismissRequest = {},
-        title = { Text(stringResource(R.string.pair_title, "Living Room PC")) },
+        title = { Text(stringResource(io.unom.punktfunk.kit.R.string.pair_title, "Living Room PC")) },
         text = {
             Column {
-                Text(stringResource(R.string.pair_intro_pin_only))
+                Text(stringResource(io.unom.punktfunk.kit.R.string.pair_intro_pin_only))
                 Spacer(Modifier.height(16.dp))
                 Surface(
                     color = MaterialTheme.colorScheme.surfaceVariant,
@@ -423,14 +423,14 @@ internal fun PairDialog() {
                 }
                 Spacer(Modifier.height(12.dp))
                 Text(
-                    stringResource(R.string.pair_device_name) + ": Pixel 9 Pro",
+                    stringResource(io.unom.punktfunk.kit.R.string.pair_device_name) + ": Pixel 9 Pro",
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
         },
-        confirmButton = { TextButton({}) { Text(stringResource(R.string.pair_action)) } },
-        dismissButton = { TextButton({}) { Text(stringResource(R.string.common_cancel)) } },
+        confirmButton = { TextButton({}) { Text(stringResource(io.unom.punktfunk.kit.R.string.pair_action)) } },
+        dismissButton = { TextButton({}) { Text(stringResource(io.unom.punktfunk.kit.R.string.common_cancel)) } },
     )
 }
 

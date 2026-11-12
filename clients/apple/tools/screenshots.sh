@@ -211,8 +211,9 @@ shoot_sim() {
   # prebuilt-vs-source swift-syntax makes no difference. Until Xcode fixes the planner, the
   # workaround is temporarily unlinking SwiftUINavigationTransitions from the tvOS target
   # (HomeView's use is canImport-guarded — the push transition degrades to the crossfade).
+  # -skipMacroValidation: nobody is there to approve a package's macros in a headless build.
   xcodebuild -project Punktfunk.xcodeproj -scheme "$scheme" -configuration Debug \
-    -sdk "$sdk" -destination "id=$udid" -derivedDataPath "$dd" \
+    -sdk "$sdk" -destination "id=$udid" -derivedDataPath "$dd" -skipMacroValidation \
     CODE_SIGNING_ALLOWED=NO build >/dev/null \
     || die "$prefix: xcodebuild failed"
   local app; app="$(find "$dd/Build/Products" -maxdepth 2 -name '*.app' -type d | head -1)"

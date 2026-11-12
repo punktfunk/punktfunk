@@ -95,6 +95,11 @@ class ScreenshotTest {
     @Config(sdk = [36], qualifiers = "w800dp-h360dp-xxhdpi") // landscape — the stream is immersive
     fun stream() = shootRoot("stream", statusBar = false) { StreamScene(io.unom.punktfunk.StatsVerbosity.DETAILED) }
 
+    // The picture alone, for a store frame: the stats line sits on the game's own HUD.
+    @Test
+    @Config(sdk = [36], qualifiers = "w800dp-h360dp-xxhdpi")
+    fun streamClean() = shootRoot("stream-clean", statusBar = false) { StreamScene(io.unom.punktfunk.StatsVerbosity.OFF, loss = false) }
+
     @Test
     @Config(sdk = [36], qualifiers = "w800dp-h360dp-xxhdpi")
     fun streamCompact() = shootRoot("stream-compact", statusBar = false) { StreamScene(io.unom.punktfunk.StatsVerbosity.COMPACT) }

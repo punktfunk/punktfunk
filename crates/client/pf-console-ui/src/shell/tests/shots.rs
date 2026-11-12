@@ -833,7 +833,8 @@ fn store_shots_in_language() {
 /// Apple scales are `ConsoleView.designScale`: iOS is screen scale × 0.75 on a phone and × 1
 /// on an iPad; macOS is max(short side px / 800, backing × 0.75). webOS passes none, so a
 /// panel takes the couch k = height / 800: 1.35 at 1080p, 2.7 at 4K. The Deck is twice its
-/// 1280×800 panel: k = 2 draws its 1× layout sharp enough for a close render. No safe-area
+/// 1280×800 panel: k = 2 draws its 1× layout sharp enough for a close render. An Android phone
+/// passes none either, at a 20:9 panel's 2400×1080. No safe-area
 /// insets: the backdrop runs edge to edge.
 #[test]
 #[ignore]
@@ -842,7 +843,9 @@ fn website_shots() {
 }
 
 fn website_shots_in_language() {
-    use crate::platform::Platform::{Apple, Desktop, WebOS};
+    use crate::platform::Platform::{Android, Apple, Desktop, WebOS};
+    // `PF_CONSOLE_ONLY=phone` draws one device.
+    let only = std::env::var("PF_CONSOLE_ONLY").ok();
     let mut rig = Rig::new(crate::console::Viewport::plain(1920, 1080), WebOS);
     for (device, width, height, scale, platform) in [
         ("iphone", 2868, 1320, Some(3.0 * 0.75), Apple),
@@ -851,7 +854,11 @@ fn website_shots_in_language() {
         ("tv", 1920, 1080, None, WebOS),
         ("tv-4k", 3840, 2160, None, WebOS),
         ("deck", 2560, 1600, None, Desktop),
+        ("phone", 2400, 1080, None, Android),
     ] {
+        if only.as_deref().is_some_and(|o| o != device) {
+            continue;
+        }
         rig.viewport = crate::console::Viewport {
             width,
             height,
