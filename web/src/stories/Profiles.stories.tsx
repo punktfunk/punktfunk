@@ -1,10 +1,12 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
+import type { ComponentProps, ReactNode } from "react";
 import type { SessionSettingsState } from "@/api/gen/model/sessionSettingsState";
 import { GameExitFixed, GameExitView } from "@/sections/Profiles/session";
 import {
 	AddProfileDialog,
 	DoctorDialog,
 	DoorDialog,
+	EditProfileDialog,
 	ProfilesView,
 	RemoveProfileDialog,
 	SeatsDialog,
@@ -278,73 +280,74 @@ const exit = (
 	settings: { session_on_game_exit: end },
 });
 
-/**
- * **When the game exits** on each card whose seat has a host of its own: Kid follows the host,
- * Leon set his own (the host can't drop it yet), Mia's is on its way, Oma's couldn't be read.
- */
-export const SessionPreference: Story = {
-	args: {
-		profiles: { data: profilesWindows, isLoading: false, error: null },
-		seats,
-		session: (p) => {
-			const at = (state: SessionSettingsState | undefined, more = {}) => (
-				<GameExitView
-					state={state}
-					loading={false}
-					error={null}
-					busy={false}
-					onPick={noop}
-					{...more}
+/** The pencil's dialog for `name` of the Windows box, with `exit` under the name. */
+const edit = (name: string, exit?: ReactNode) => {
+	const profile = profilesWindows.find((p) => p.display_name === name);
+	return (
+		<>
+			{profile && (
+				<EditProfileDialog
+					profile={profile}
+					exit={exit}
+					onRename={noop}
+					onClose={noop}
 				/>
-			);
-			switch (p.display_name) {
-				case "Kid":
-					return at(exit(false, true));
-				case "Leon":
-					return at(exit(true, false));
-				case "Mia":
-					return at(undefined, { loading: true });
-				case "Oma":
-					return at(undefined, {
-						error: "That host didn't answer. Try again in a moment.",
-					});
-				case "Alice":
-					return at(exit(false, false));
-				default:
-					return null;
-			}
-		},
-	},
+			)}
+		</>
+	);
 };
 
-/** A door: Leon's own desktop has the choice; Oma plays on her own Linux account, where a
- * game's exit always goes back to her desktop. */
-export const SessionPreferenceDoor: Story = {
-	args: {
-		profiles: {
-			data: profilesDoor.map((p) =>
-				p.display_name === "Oma" && p.seat
-					? { ...p, seat: { ...p.seat, account: "oma" } }
-					: p,
-			),
-			isLoading: false,
-			error: null,
-		},
-		seats,
-		door: { on: true, changing: false, onChange: noop },
-		session: (p) =>
-			p.display_name === "Oma" ? (
-				<GameExitFixed name={p.display_name} />
-			) : p.display_name === "Leon" ? (
-				<GameExitView
-					state={exit(false, true)}
-					loading={false}
-					error={null}
-					busy={false}
-					onPick={noop}
-				/>
-			) : null,
-	},
+/** **When the game exits** in the edit dialog, as the host answers it. */
+const exitView = (
+	state: SessionSettingsState | undefined,
+	more: Partial<ComponentProps<typeof GameExitView>> = {},
+) => (
+	<GameExitView
+		state={state}
+		loading={false}
+		error={null}
+		busy={false}
+		onPick={noop}
+		{...more}
+	/>
+);
+
+/** Kid's seat follows the host, which ends the session. */
+export const EditFollowsHost: Story = {
+	render: () => edit("Kid", exitView(exit(false, true))),
+};
+
+/** Leon set his own; **As the host does** drops it again. */
+export const EditOwnSetting: Story = {
+	render: () => edit("Leon", exitView(exit(true, false))),
+};
+
+/** Mia's setting is on its way; the name is already editable. */
+export const EditLoading: Story = {
+	render: () => edit("Mia", exitView(undefined, { loading: true })),
+};
+
+/** Oma's host didn't answer: the host's sentence and **Retry**, the name still editable. */
+export const EditFailed: Story = {
+	render: () =>
+		edit(
+			"Oma",
+			exitView(undefined, {
+				error: "That host didn't answer. Try again in a moment.",
+				onRetry: noop,
+			}),
+		),
+};
+
+/** A door: Oma plays on her own Linux account, where a game's exit always goes back to her
+ * desktop. */
+export const EditOwnLinuxAccount: Story = {
+	render: () => edit("Oma", <GameExitFixed name="Oma" />),
+};
+
+/** Anna shares the owner's desktop: the pencil only renames. */
+export const EditShared: Story = {
+	render: () => edit("Anna"),
 };
 
 /** **Remove** a Windows seat profile: no choice to keep its account, and the password. */

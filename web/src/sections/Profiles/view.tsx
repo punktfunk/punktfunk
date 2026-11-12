@@ -134,8 +134,7 @@ export type DoorControl = {
 };
 
 /** The page: one card per profile, the owner first, and **Add profile**. A profile on a person's
- * own account shows its signed-in devices under its row, and one whose seat has a host of its
- * own what a game's exit does to its stream. */
+ * own account shows its signed-in devices under its row. */
 export const ProfilesView: FC<{
 	profiles: Loadable<ProfileAdmin[]>;
 	onAdd: () => void;
@@ -150,8 +149,6 @@ export const ProfilesView: FC<{
 	door?: DoorControl;
 	/** A Linux door: the signed-in devices of a profile on a person's own account. */
 	devices?: (p: ProfileAdmin) => ReactNode;
-	/** A profile's own session setting, for one whose seat has a host of its own. */
-	session?: (p: ProfileAdmin) => ReactNode;
 }> = ({
 	profiles,
 	onAdd,
@@ -163,7 +160,6 @@ export const ProfilesView: FC<{
 	seats,
 	door,
 	devices,
-	session,
 }) => {
 	const list = profiles.data ?? [];
 	const ownerName = list.find((p) => p.owner)?.display_name ?? "";
@@ -200,7 +196,6 @@ export const ProfilesView: FC<{
 									seats={seats}
 									linux={door !== undefined}
 									devices={p.seat?.account ? devices?.(p) : undefined}
-									session={session?.(p)}
 									busy={busyId === p.id}
 									onRename={() => onRename(p)}
 									onPicture={(f) => onPicture(p, f)}
@@ -289,8 +284,6 @@ const ProfileRow: FC<{
 	linux: boolean;
 	/** Below the row: the profile's signed-in devices. */
 	devices?: ReactNode;
-	/** Below the row: the profile's own session setting. */
-	session?: ReactNode;
 	busy: boolean;
 	onRename: () => void;
 	onPicture: (file: File) => void;
@@ -302,7 +295,6 @@ const ProfileRow: FC<{
 	seats,
 	linux,
 	devices,
-	session,
 	busy,
 	onRename,
 	onPicture,
@@ -455,7 +447,6 @@ const ProfileRow: FC<{
 					</Button>
 				)}
 			</div>
-			{session && <div className="sm:basis-full">{session}</div>}
 			{devices && <div className="sm:basis-full">{devices}</div>}
 		</div>
 	);
@@ -908,6 +899,61 @@ export const SeatPasswordDialog: FC<{
 						</Button>
 					</DialogFooter>
 				</form>
+			</DialogContent>
+		</Dialog>
+	);
+};
+
+/**
+ * The pencil: **Rename profile**, or for a profile whose seat has a host of its own **Edit
+ * profile**, with `exit` under the name. That part saves on its own and loads and fails alone.
+ */
+export const EditProfileDialog: FC<{
+	profile: ProfileAdmin;
+	exit?: ReactNode;
+	onRename: (name: string) => void;
+	onClose: () => void;
+}> = ({ profile, exit, onRename, onClose }) => {
+	const [name, setName] = useState(profile.display_name);
+	const submit = () => {
+		const next = name.trim();
+		if (next && next !== profile.display_name) onRename(next);
+		onClose();
+	};
+	return (
+		<Dialog open onOpenChange={(o) => !o && onClose()}>
+			<DialogContent className="max-w-md">
+				<DialogHeader>
+					<DialogTitle>
+						{exit ? m.profiles_edit_title() : m.profiles_rename_title()}
+					</DialogTitle>
+				</DialogHeader>
+				<form
+					id="profile-edit"
+					className="space-y-2"
+					onSubmit={(e) => {
+						e.preventDefault();
+						submit();
+					}}
+				>
+					<Label htmlFor="profile-name">{m.profiles_name()}</Label>
+					<Input
+						id="profile-name"
+						autoFocus
+						autoComplete="off"
+						value={name}
+						onChange={(e) => setName(e.target.value)}
+					/>
+				</form>
+				{exit}
+				<DialogFooter>
+					<Button type="button" variant="outline" onClick={onClose}>
+						{m.common_cancel()}
+					</Button>
+					<Button type="submit" form="profile-edit">
+						{exit ? m.common_save() : m.action_rename()}
+					</Button>
+				</DialogFooter>
 			</DialogContent>
 		</Dialog>
 	);

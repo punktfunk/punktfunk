@@ -1808,6 +1808,7 @@
 	"profiles_game_exit_host_end": "The host ends the session.",
 	"profiles_game_exit_host_keep": "The host keeps streaming.",
 	"profiles_game_exit_own_desktop": "When a game exits, the stream goes back to {name}'s desktop.",
+	"profiles_edit_title": "Edit profile",
 	"display_preset_default_hint": "Good for most setups: quick reconnects, the whole desktop, and a screen of their own for extra viewers.",
 	"display_preset_gaming_rig_hint": "For a host with no monitor: the game keeps running when you leave, and whoever connects next takes over.",
 	"display_preset_hotdesk_hint": "One person at a time, with instant reconnects between your devices; anyone else is told it's busy.",
