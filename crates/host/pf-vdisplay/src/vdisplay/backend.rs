@@ -295,6 +295,12 @@ pub trait VirtualDisplay: Send {
     /// `None` reads [`crate::effective_topology`] there. Default no-op: a backend that applies
     /// no topology.
     fn set_topology(&mut self, _topology: Option<crate::policy::Topology>) {}
+    /// The topology the next [`create`](Self::create) applies ([`crate::create_topology`]).
+    /// Registry reuse key: a kept display made under another one is retired, not reused.
+    /// Default `None`: a backend that applies none, whose kept displays any session may take.
+    fn topology(&self) -> Option<crate::policy::Topology> {
+        None
+    }
     /// `mode_conflict: join` admitted this session: share a live display of the same mode
     /// instead of creating one. Honored by a backend with a [`join_cast`](Self::join_cast).
     /// Default no-op.

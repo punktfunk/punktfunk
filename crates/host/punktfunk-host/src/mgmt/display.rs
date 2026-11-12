@@ -847,12 +847,13 @@ pub(crate) enum ScreenRole {
 }
 
 impl ScreenRole {
-    /// The role `topology` gives. Without a main screen (`primary` false) `primary` extends.
+    /// The role `topology` gives ([`crate::vdisplay::role_of`]).
     fn of(topology: Topology, primary: bool) -> ScreenRole {
-        match topology {
-            Topology::Exclusive => ScreenRole::Only,
-            Topology::Primary if primary => ScreenRole::Main,
-            Topology::Primary | Topology::Extend | Topology::Auto => ScreenRole::Second,
+        use punktfunk_core::quic::v2::hello::Role;
+        match crate::vdisplay::role_of(topology, primary) {
+            Role::Only => ScreenRole::Only,
+            Role::Main => ScreenRole::Main,
+            Role::Second => ScreenRole::Second,
         }
     }
 }
@@ -870,9 +871,8 @@ pub(crate) struct ScreenRoles {
     offered: Vec<ScreenRole>,
 }
 
-/// The device's [`ScreenRoles`], or `None` off the desk: a contract `seat`, a gamescope
-/// session, or heads that read with no `physical` one (`Some(false)`). Heads that cannot be
-/// read (`None`) keep the roles. `main` is offered where `compositor` has a main screen.
+/// The device's [`ScreenRoles`], or `None` off the desk ([`crate::vdisplay::on_the_desk`]).
+/// `main` is offered where `compositor` has a main screen.
 pub(super) fn screen_roles(
     seat: bool,
     compositor: Option<Compositor>,
@@ -880,7 +880,7 @@ pub(super) fn screen_roles(
     yours: Option<Topology>,
     host_default: Topology,
 ) -> Option<ScreenRoles> {
-    if seat || compositor == Some(Compositor::Gamescope) || physical == Some(false) {
+    if !crate::vdisplay::on_the_desk(seat, compositor, physical) {
         return None;
     }
     let primary = compositor.is_some_and(Compositor::has_primary);

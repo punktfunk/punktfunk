@@ -12,8 +12,9 @@ use super::*;
 use crate::native::bitrate::{
     audio_reserved_kbps, resolve_bitrate_kbps_for, session_pyrowave_bpp, EncDerive,
 };
+use crate::vdisplay::policy::{DisplayTarget, Topology};
 use punktfunk_core::abr::budget::FEC_ADAPTIVE_START;
-use punktfunk_core::quic::v2::hello::ScreenEcho;
+use punktfunk_core::quic::v2::hello::{Role, RoleEcho, RoleReason, ScreenEcho, ScreenWish};
 
 /// Encode tier and `0xD2` redundancy, budgeted against this session's video kbps.
 ///
@@ -608,6 +609,8 @@ struct Terms {
     wanted: Option<crate::vdisplay::policy::DisplayTarget>,
     /// [`Negotiated::topology`].
     topology: Option<crate::vdisplay::policy::Topology>,
+    /// The role the Welcome states ([`role_echo`]).
+    role: Option<RoleEcho>,
 }
 
 /// `ClientHello` → `ServerHello` → `Ready`. Borrows the control streams; the caller keeps them
@@ -641,7 +644,12 @@ pub(super) async fn negotiate(
         compositor = d.compositor;
         gamescope_route = d.route.clone();
     }
-    let (wanted, screen, topology) = session_screen(&n, joined.is_some(), compositor).await?;
+    let SessionScreen {
+        wanted,
+        echo: screen,
+        topology,
+        role,
+    } = session_screen(&n, joined.is_some(), compositor).await?;
     let mirrored = matches!(screen, Some(ScreenEcho::Monitor(_)));
     // A joiner's view rides `joined`; a mirrored head keeps its own fit.
     let view = view.filter(|_| joined.is_none() && !mirrored);
@@ -744,6 +752,7 @@ pub(super) async fn negotiate(
         mirrored,
         wanted,
         topology,
+        role,
     };
     let server_hello = server_hello(&n, &t, welcome(&n, &t));
     let host_link = crate::telemetry::net_health::host_link(
@@ -787,50 +796,152 @@ pub(super) async fn negotiate(
     })
 }
 
-/// What [`session_screen`] settles: the screen wanted, the one the Welcome states, and the
-/// topology an own screen opens under.
-type SessionScreen = (
-    Option<crate::vdisplay::policy::DisplayTarget>,
-    Option<ScreenEcho>,
-    Option<crate::vdisplay::policy::Topology>,
-);
+/// What [`session_screen`] settles.
+#[derive(Default)]
+struct SessionScreen {
+    /// The screen wanted, which every open re-checks.
+    wanted: Option<DisplayTarget>,
+    /// The screen the Welcome states.
+    echo: Option<ScreenEcho>,
+    /// The topology an own screen opens under.
+    topology: Option<Topology>,
+    /// The role the Welcome states ([`role_echo`]).
+    role: Option<RoleEcho>,
+}
 
-/// The screen this session wants, the one the Welcome states, and the topology of its own
-/// screen ([`crate::vdisplay::session_topology`]), decided once. The device's own pick counts
-/// only with `GRANT_DISPLAY` in its mask. A monitor the session cannot mirror now is stated as
-/// its own screen. A joiner streams the owner's display and states none; neither it nor a
-/// mirror carries a topology. A synthetic source wants none. Blocks on a compositor read.
+/// The screen this session wants, the one the Welcome states, the topology of its own screen
+/// ([`crate::vdisplay::session_topology`]) and its role, decided once and logged. A joiner
+/// streams the owner's display and states neither; a synthetic source has no screen, so a wish
+/// there reads as no monitors. Blocks on a compositor read.
 async fn session_screen(
     n: &Negotiation<'_>,
     joined: bool,
     compositor: Option<crate::vdisplay::Compositor>,
 ) -> Result<SessionScreen> {
-    if !matches!(n.source, Punktfunk1Source::Virtual) {
-        return Ok((None, None, None));
-    }
-    let client = n.conn.peer_fingerprint();
     let may_choose = n.grants & punktfunk_core::quic::GRANT_DISPLAY != 0;
-    let (wanted, echo, topology) = tokio::task::spawn_blocking(move || {
-        let fp = crate::vdisplay::policy::fp_hex(client);
-        let wanted = crate::vdisplay::screen_target(fp.as_deref(), may_choose).0;
-        let echo = (!joined).then(|| {
-            let target = crate::vdisplay::resolve_screen(client, Some(wanted.clone())).target;
-            match target.clone().into_monitor() {
-                Some(c) if crate::vdisplay::mirrors(&target) => ScreenEcho::Monitor(c),
-                _ => ScreenEcho::Own,
-            }
-        });
-        let topology = match (&echo, compositor) {
-            (Some(ScreenEcho::Own), Some(c)) => {
-                crate::vdisplay::session_topology(client, may_choose, c)
-            }
-            _ => None,
+    let wish = n.first.screen_wish.clone();
+    let settled = if matches!(n.source, Punktfunk1Source::Virtual) {
+        let client = n.conn.peer_fingerprint();
+        let wish = wish.clone();
+        tokio::task::spawn_blocking(move || {
+            // Only a wish pays for the monitor read: every connect would wait on it otherwise.
+            let desk = !joined && crate::vdisplay::desk(compositor, wish.is_some());
+            settle_screen(client, may_choose, wish, joined, compositor, desk)
+        })
+        .await
+        .context("resolve screen task")?
+    } else {
+        let role = role_echo(wish.is_some(), may_choose, false, None, false, false);
+        SessionScreen {
+            role,
+            ..SessionScreen::default()
+        }
+    };
+    let role = settled.role;
+    tracing::info!(
+        wish = wish.as_ref().map_or_else(|| "none".into(), ToString::to_string),
+        role = ?role.and_then(|r| r.role),
+        reason = ?role.map(|r| r.reason),
+        "session screen role"
+    );
+    Ok(settled)
+}
+
+/// [`session_screen`] for a virtual display. The Hello's `wish` comes first while it counts
+/// ([`asked`]), then the device's pick with the grant (`may_choose`), then the operator's. A
+/// monitor that cannot be mirrored now is stated as the session's own screen.
+fn settle_screen(
+    client: Option<[u8; 32]>,
+    may_choose: bool,
+    wish: Option<ScreenWish>,
+    joined: bool,
+    compositor: Option<crate::vdisplay::Compositor>,
+    desk: bool,
+) -> SessionScreen {
+    let fp = crate::vdisplay::policy::fp_hex(client);
+    let (row, pinned) = crate::vdisplay::screen_target(fp.as_deref(), may_choose);
+    let primary = compositor.is_some_and(crate::vdisplay::Compositor::has_primary);
+    let asked = asked(wish.as_ref(), may_choose, desk, pinned, primary);
+    let wanted = asked.as_ref().map_or(row, |(screen, _)| screen.clone());
+    if joined {
+        return SessionScreen {
+            wanted: Some(wanted),
+            ..SessionScreen::default()
         };
-        (wanted, echo, topology)
-    })
-    .await
-    .context("resolve screen task")?;
-    Ok((Some(wanted), echo, topology))
+    }
+    let pick = crate::vdisplay::resolve_screen(client, Some(wanted.clone()));
+    let mirrored = crate::vdisplay::mirrors(&pick.target);
+    let echo = match pick.target.into_monitor() {
+        Some(c) if mirrored => ScreenEcho::Monitor(c),
+        _ => ScreenEcho::Own,
+    };
+    // A wished monitor that fell back.
+    let unavailable = asked.is_some() && pick.reason.is_some();
+    let (mut topology, mut held, mut got) = (None, false, None);
+    if let (ScreenEcho::Own, Some(c)) = (&echo, compositor) {
+        let want = asked.and_then(|(_, t)| t);
+        let want = want.or_else(|| crate::vdisplay::wanted_topology(fp.as_deref(), may_choose));
+        (topology, held) = crate::vdisplay::session_topology(client, want, c);
+        let applied = topology.unwrap_or_else(|| crate::vdisplay::effective_topology(client));
+        // Monitors this session wants on stay off under an earlier `only` screen.
+        held |= applied != Topology::Exclusive
+            && crate::vdisplay::monitors_off_by()
+                .iter()
+                .flatten()
+                .any(|d| Some(d) != fp.as_ref());
+        got = Some(crate::vdisplay::role_of(applied, primary));
+    }
+    let allowed = may_choose && !pinned;
+    SessionScreen {
+        wanted: Some(wanted),
+        role: role_echo(wish.is_some(), allowed, desk, got, unavailable, held),
+        echo: Some(echo),
+        topology,
+    }
+}
+
+/// What the Hello's `wish` asks while it counts: the screen, and the topology its own screen
+/// opens under (`None` for a monitor). It counts with the grant (`may_choose`), on the `desk`,
+/// and without the env pin (`pinned`). `main` is `second` where the desktop has no main screen
+/// (`primary`). Nothing is stored.
+fn asked(
+    wish: Option<&ScreenWish>,
+    may_choose: bool,
+    desk: bool,
+    pinned: bool,
+    primary: bool,
+) -> Option<(DisplayTarget, Option<Topology>)> {
+    let own = |t| Some((DisplayTarget::Own, Some(t)));
+    match wish.filter(|_| may_choose && desk && !pinned)? {
+        ScreenWish::Only => own(Topology::Exclusive),
+        ScreenWish::Main if primary => own(Topology::Primary),
+        ScreenWish::Main | ScreenWish::Second => own(Topology::Extend),
+        ScreenWish::Monitor(c) => Some((DisplayTarget::Monitor(c.clone()), None)),
+    }
+}
+
+/// Tag 30: the role `got` (`None` for a copy of a monitor) and why it is not what a `wish`, or
+/// with none nothing, asked. Off the `desk` there is no role, and only a wish is answered.
+/// `allowed`: the device may choose and no env pin decides. `unavailable`: a wished monitor
+/// fell back. `held`: an earlier session decided the monitors. Precedence 1, 4, 3, 2.
+fn role_echo(
+    wish: bool,
+    allowed: bool,
+    desk: bool,
+    got: Option<Role>,
+    unavailable: bool,
+    held: bool,
+) -> Option<RoleEcho> {
+    let reason = match () {
+        _ if wish && !allowed => RoleReason::NotAllowed,
+        _ if wish && !desk => RoleReason::NoMonitors,
+        _ if !desk => return None,
+        _ if unavailable => RoleReason::Unavailable,
+        _ if held => RoleReason::MonitorsHeld,
+        _ => RoleReason::AsAsked,
+    };
+    let role = got.filter(|_| desk);
+    Some(RoleEcho { role, reason })
 }
 
 /// The Welcome's shard payload. Before Welcome: a path a previous session proved jumbo is given
@@ -939,7 +1050,8 @@ fn welcome(n: &Negotiation<'_>, t: &Terms) -> Welcome {
 }
 
 /// The `ServerHello` around `welcome`. Settles the session's media suite, which keys the media,
-/// offers the native features this session can run, and tells a joiner its screen is shared.
+/// offers the native features this session can run, states its screen and role, and tells a
+/// joiner its screen is shared.
 fn server_hello(n: &Negotiation<'_>, t: &Terms, welcome: Welcome) -> ServerHello {
     // A browser's media goes unsealed, inside WebTransport's own encryption.
     let suite = (!n.conn.is_web()).then_some(if t.chacha {
@@ -983,7 +1095,7 @@ fn server_hello(n: &Negotiation<'_>, t: &Terms, welcome: Welcome) -> ServerHello
             Some(_) => Some(ScreenEcho::Shared),
             None => t.screen.clone(),
         },
-        role: None,
+        role: t.role,
     }
 }
 
@@ -2703,5 +2815,79 @@ mod tests {
         assert_eq!(p.bits, pcm::BITS_16);
         assert_eq!(p.frame_us, 0);
         assert!(!p.is_pcm());
+    }
+
+    /// A wish counts only with the grant, on the desk and without the env pin; then it names the
+    /// screen and its topology. `main` is `second` where the desktop has no main screen.
+    #[test]
+    fn a_wish_counts_with_the_grant_on_the_desk_without_the_pin() {
+        use ScreenWish::{Main, Monitor, Only, Second};
+        let own = |t| Some((DisplayTarget::Own, Some(t)));
+        let granted = |w: &ScreenWish, primary| asked(Some(w), true, true, false, primary);
+        assert_eq!(granted(&Only, true), own(Topology::Exclusive));
+        assert_eq!(granted(&Main, true), own(Topology::Primary));
+        assert_eq!(
+            granted(&Main, false),
+            own(Topology::Extend),
+            "no main screen"
+        );
+        assert_eq!(granted(&Second, true), own(Topology::Extend));
+        let tv = Monitor("HDMI-A-1".into());
+        assert_eq!(
+            granted(&tv, true),
+            Some((DisplayTarget::Monitor("HDMI-A-1".into()), None))
+        );
+        assert_eq!(
+            asked(Some(&Only), false, true, false, true),
+            None,
+            "no grant"
+        );
+        assert_eq!(asked(Some(&Only), true, false, false, true), None, "a seat");
+        assert_eq!(
+            asked(Some(&tv), true, true, true, true),
+            None,
+            "the env pin"
+        );
+        assert_eq!(asked(None, true, true, false, true), None, "no wish");
+    }
+
+    /// Each reason, and the precedence 1, 4, 3, 2. Off the desk only a wish is answered, with
+    /// no role; with no wish only an earlier session changes what the session asked.
+    #[test]
+    fn the_role_echo_names_why_a_session_did_not_get_what_it_asked() {
+        use RoleReason::{AsAsked, MonitorsHeld, NoMonitors, NotAllowed, Unavailable};
+        let echo = |role, reason| Some(RoleEcho { role, reason });
+        let second = Some(Role::Second);
+        assert_eq!(
+            role_echo(true, false, false, second, true, true),
+            echo(None, NotAllowed)
+        );
+        assert_eq!(
+            role_echo(true, true, false, second, true, true),
+            echo(None, NoMonitors)
+        );
+        assert_eq!(
+            role_echo(true, true, true, second, true, true),
+            echo(second, Unavailable)
+        );
+        assert_eq!(
+            role_echo(true, true, true, second, false, true),
+            echo(second, MonitorsHeld)
+        );
+        assert_eq!(
+            role_echo(false, false, true, second, false, true),
+            echo(second, MonitorsHeld),
+            "the first-session rule without a wish"
+        );
+        assert_eq!(
+            role_echo(false, false, true, second, false, false),
+            echo(second, AsAsked)
+        );
+        assert_eq!(
+            role_echo(true, true, true, None, false, false),
+            echo(None, AsAsked),
+            "a copy of a monitor"
+        );
+        assert_eq!(role_echo(false, true, false, second, false, false), None);
     }
 }

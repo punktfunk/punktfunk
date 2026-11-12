@@ -264,6 +264,10 @@ impl VirtualDisplay for UmbrielDisplay {
         self.topology = topology;
     }
 
+    fn topology(&self) -> Option<crate::policy::Topology> {
+        Some(crate::create_topology(self.topology, self.client_fp))
+    }
+
     fn last_identity_slot(&self) -> Option<u32> {
         self.last_slot
     }

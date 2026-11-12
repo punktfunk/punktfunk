@@ -91,6 +91,8 @@ pub(crate) struct Script {
     pub(crate) client_fp: Option<[u8; 32]>,
     /// `join_live`; `join_cast` then casts the node it names.
     pub(crate) join_live: bool,
+    /// `topology`: what the next create applies.
+    pub(crate) topology: Option<crate::policy::Topology>,
 }
 
 struct Shared {
@@ -151,6 +153,7 @@ impl FakeDisplay {
                     identity_slot: None,
                     client_fp: None,
                     join_live: false,
+                    topology: None,
                 },
                 calls: Vec::new(),
                 nodes: 0,
@@ -288,6 +291,10 @@ impl VirtualDisplay for FakeDisplay {
 
     fn set_topology(&mut self, topology: Option<crate::policy::Topology>) {
         self.log(Call::SetTopology(topology));
+    }
+
+    fn topology(&self) -> Option<crate::policy::Topology> {
+        self.answer(|s| s.topology)
     }
 
     fn set_join_live(&mut self, on: bool) {

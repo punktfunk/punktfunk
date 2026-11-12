@@ -2934,6 +2934,14 @@ pub(crate) fn shared(generation: u64) -> bool {
         .is_some_and(|m| m.view.lock().unwrap().shared(generation))
 }
 
+/// The device on each virtual monitor of a group that keeps the host's monitors off, as the
+/// last commit left them.
+pub(crate) fn dark_devices() -> Vec<Option<[u8; 32]>> {
+    VDM.get()
+        .map(|m| m.view.lock().unwrap().dark())
+        .unwrap_or_default()
+}
+
 #[cfg(test)]
 mod tests {
     use super::ccd::fake::{CcdCall, FakeCcd};

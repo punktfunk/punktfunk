@@ -776,6 +776,24 @@ pub fn screen_holders() -> Vec<Option<String>> {
         .collect()
 }
 
+/// The devices (fingerprint hex) whose screen here, live or kept, sits in a group that keeps the
+/// host's monitors off: one of its members was made `exclusive`. `None` is a device not known.
+/// Linux reads the pool, Windows the group its first monitor isolated.
+pub fn monitors_off_by() -> Vec<Option<String>> {
+    #[cfg(target_os = "linux")]
+    {
+        let slots = registry::dark_slots().into_iter();
+        slots.map(identity::slot_owner).collect()
+    }
+    #[cfg(target_os = "windows")]
+    {
+        let devices = manager::dark_devices().into_iter();
+        devices.map(policy::fp_hex).collect()
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "windows")))]
+    Vec::new()
+}
+
 // The Windows manager applies its own unconfigured rule (`PUNKTFUNK_NO_ISOLATE`).
 #[cfg(target_os = "windows")]
 use manager::unconfigured_topology;
