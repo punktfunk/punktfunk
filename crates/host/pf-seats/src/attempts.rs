@@ -1,12 +1,13 @@
-//! Attempt limits for password checks, kept in the supervisor's memory. Pure: the caller passes
-//! the time.
+//! Attempt limits for secret checks, kept in memory: the supervisor's for passwords, the host's
+//! for profile PINs. Pure: the caller passes the time.
 //!
-//! A device, of a seat or an account, waits `2 s × 2^failures` after each failed check and
-//! [`LOCKOUT`] after the fifth. An account lets at most [`ACCOUNT_FAILURES`] failed checks through
-//! in any [`WINDOW`], over all its devices, so a login stack that locks an account after three
-//! (`pam_faillock`) is never driven there from here. A check in flight counts as failed until it
-//! settles, so concurrent attempts can't share one allowance. A refusal here is not a failure, a
-//! pass clears its device and account, and an entry goes once its last failure is a window old.
+//! A device, of a seat, an account or a profile, waits `2 s × 2^failures` after each failed check
+//! and [`LOCKOUT`] after the fifth. An account lets at most [`ACCOUNT_FAILURES`] failed checks
+//! through in any [`WINDOW`], over all its devices, so a login stack that locks an account after
+//! three (`pam_faillock`) is never driven there from here; [`Attempts::with_cap`] sets another
+//! cap. A check in flight counts as failed until it settles, so concurrent attempts can't share
+//! one allowance. A refusal here is not a failure, a pass clears its device and account, and an
+//! entry goes once its last failure is a window old.
 
 use crate::backend::BackendError;
 use std::collections::HashMap;
@@ -20,16 +21,16 @@ const LOCKOUT: Duration = Duration::from_secs(15 * 60);
 const ACCOUNT_FAILURES: usize = 2;
 const WINDOW: Duration = Duration::from_secs(15 * 60);
 
-/// What a check is for: `device`, a device of a seat or an account, and `account`, the account the
-/// password opens. A side that is `None` has no limit of its own.
+/// What a check is for: `device`, a device of a seat, an account or a profile, and `account`, what
+/// the secret opens. A side that is `None` has no limit of its own.
 #[derive(Clone, Copy, Debug)]
-pub(crate) struct Target<'a> {
+pub struct Target<'a> {
     pub device: Option<(&'a str, &'a str)>,
     pub account: Option<&'a str>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum Outcome {
+pub enum Outcome {
     /// The password opened the account.
     Passed,
     /// The password may be wrong.
@@ -41,12 +42,20 @@ pub(crate) enum Outcome {
 /// An admitted check: when its charge was taken. [`Attempts::settle`] takes it back.
 #[must_use]
 #[derive(Debug)]
-pub(crate) struct Ticket(Instant);
+pub struct Ticket(Instant);
 
-#[derive(Debug, Default)]
-pub(crate) struct Attempts {
+#[derive(Debug)]
+pub struct Attempts {
     devices: HashMap<(String, String), Device>,
     accounts: HashMap<String, Account>,
+    /// Failed checks an account takes in any [`WINDOW`].
+    cap: usize,
+}
+
+impl Default for Attempts {
+    fn default() -> Self {
+        Self::with_cap(ACCOUNT_FAILURES)
+    }
 }
 
 #[derive(Debug, Default)]
@@ -66,8 +75,17 @@ struct Account {
 }
 
 impl Attempts {
+    /// Limits whose account side takes `cap` failed checks in any [`WINDOW`].
+    pub fn with_cap(cap: usize) -> Self {
+        Self {
+            devices: HashMap::new(),
+            accounts: HashMap::new(),
+            cap,
+        }
+    }
+
     /// Admits a check for `target` at `now`, or answers how long until one would be.
-    pub(crate) fn admit(&mut self, target: Target<'_>, now: Instant) -> Result<Ticket, Duration> {
+    pub fn admit(&mut self, target: Target<'_>, now: Instant) -> Result<Ticket, Duration> {
         self.expire(now);
         let device = target
             .device
@@ -76,7 +94,7 @@ impl Attempts {
         let account = target
             .account
             .and_then(|account| self.accounts.get(account))
-            .map_or(Duration::ZERO, |a| a.wait(now));
+            .map_or(Duration::ZERO, |a| a.wait(now, self.cap));
         let wait = device.max(account);
         if !wait.is_zero() {
             return Err(wait);
@@ -92,13 +110,7 @@ impl Attempts {
     }
 
     /// Counts `outcome`, the answer at `now` of the check `ticket` admitted for `target`.
-    pub(crate) fn settle(
-        &mut self,
-        target: Target<'_>,
-        ticket: Ticket,
-        outcome: Outcome,
-        now: Instant,
-    ) {
+    pub fn settle(&mut self, target: Target<'_>, ticket: Ticket, outcome: Outcome, now: Instant) {
         if let Some((of, device)) = target.device {
             let entry = self.devices.entry(key(of, device)).or_default();
             entry.pending = None;
@@ -126,7 +138,7 @@ impl Attempts {
 
     /// The failures counted at `now`: the device's since its last pass, the account's in the
     /// window.
-    pub(crate) fn failures(&mut self, target: Target<'_>, now: Instant) -> (u32, usize) {
+    pub fn failures(&mut self, target: Target<'_>, now: Instant) -> (u32, usize) {
         self.expire(now);
         let device = target
             .device
@@ -168,15 +180,15 @@ impl Device {
 }
 
 impl Account {
-    /// Zero while fewer than [`ACCOUNT_FAILURES`] failures and checks in flight count, else until
-    /// all but one of them have left the window.
-    fn wait(&self, now: Instant) -> Duration {
+    /// Zero while fewer than `cap` failures and checks in flight count, else until all but
+    /// `cap - 1` of them have left the window.
+    fn wait(&self, now: Instant, cap: usize) -> Duration {
         let mut counted: Vec<Instant> = self.failed.iter().chain(&self.pending).copied().collect();
-        if counted.len() < ACCOUNT_FAILURES {
+        if counted.len() < cap {
             return Duration::ZERO;
         }
         counted.sort_unstable();
-        (counted[counted.len() - ACCOUNT_FAILURES] + WINDOW).saturating_duration_since(now)
+        (counted[counted.len() - cap] + WINDOW).saturating_duration_since(now)
     }
 }
 
@@ -344,6 +356,26 @@ mod tests {
             MINUTE,
             "the window slides: the second failure leaves it next"
         );
+    }
+
+    /// Another cap lets that many failures through the window, over all devices, then waits
+    /// until the oldest is a window old.
+    #[test]
+    fn a_wider_cap_takes_that_many_failures() {
+        let mut gate = Attempts::with_cap(10);
+        let t0 = Instant::now();
+        let from = |device| Target {
+            device: Some(("profile", device)),
+            account: Some("profile"),
+        };
+        let devices = ["a", "b", "c", "d", "e", "f", "g", "h", "i", "j"];
+        for (n, device) in devices.into_iter().enumerate() {
+            let at = t0 + SECOND * n as u32;
+            attempt(&mut gate, from(device), at, &mut || Outcome::Failed).unwrap();
+        }
+        let refused = gate.admit(from("k"), t0 + 10 * SECOND).unwrap_err();
+        assert_eq!(refused, WINDOW - 10 * SECOND);
+        assert!(gate.admit(from("k"), t0 + WINDOW).is_ok());
     }
 
     /// A pass clears the device's failures and the account's.

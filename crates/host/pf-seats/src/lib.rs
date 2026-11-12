@@ -11,7 +11,7 @@
 // drop), `linux::handover`'s `SO_PEERPIDFD` read and `linux::loopback`'s `bpf(2)` call.
 #![cfg_attr(not(windows), deny(unsafe_code))]
 
-mod attempts;
+pub mod attempts;
 pub mod backend;
 pub mod backoff;
 #[cfg(any(windows, test))]
