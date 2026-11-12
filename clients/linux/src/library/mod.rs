@@ -44,6 +44,8 @@ pub struct Shelf {
     /// What a title here connects with; a pinned shelf's preset is its one-off.
     pub req: ConnectRequest,
     pub mgmt_port: u16,
+    /// The saved pick's id: the library is the one that profile plays.
+    pub profile: Option<String>,
 }
 
 /// A paired host as the Desktops section shows it.
@@ -755,6 +757,7 @@ impl LibraryPage {
                 os: k.os.clone(),
                 req,
                 mgmt_port: k.mgmt_port.unwrap_or(library::DEFAULT_MGMT_PORT),
+                profile: k.profile.as_ref().map(|p| p.id.clone()),
             };
             shelves.push(shelf(key.clone(), k.name.clone(), req.clone()));
             for p in k
@@ -833,7 +836,7 @@ impl LibraryPage {
         }
         let (sender, identity) = (self.view.sender.clone(), self.identity.clone());
         let (addr, port, fp) = (shelf.req.host.addr, shelf.mgmt_port, shelf.req.host.fp_hex);
-        let stream_port = shelf.req.host.port;
+        let (stream_port, profile) = (shelf.req.host.port, shelf.profile);
         std::thread::Builder::new()
             .name("punktfunk-library".into())
             .spawn(move || {
@@ -848,7 +851,14 @@ impl LibraryPage {
                         return;
                     }
                 }
-                let fetched = library::fetch_games(&addr, port, stream_port, &identity, pin);
+                let fetched = library::fetch_games(
+                    &addr,
+                    port,
+                    stream_port,
+                    &identity,
+                    pin,
+                    profile.as_deref(),
+                );
                 if let (Some(fp), Ok(games)) = (&fp, &fetched) {
                     // `store` keeps the last real catalog over an empty answer.
                     pf_client_core::library_cache::store(fp, games);

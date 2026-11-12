@@ -544,7 +544,7 @@ fn a_library_fetch_a_newer_fetch_outlived_writes_nothing() {
             LOOPBACK.into(),
             (0, port),
             svc.identity.clone(),
-            fp('a'),
+            (fp('a'), None),
             Vec::new(),
             a.clone(),
         )

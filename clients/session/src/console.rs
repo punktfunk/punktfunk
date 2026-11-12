@@ -846,17 +846,22 @@ impl ServiceState {
         // of the placeholder at `addr:port`. Empty with auto-wake off or no MAC on record: the
         // fetch then asks once instead of retrying across a boot.
         let known = trust::KnownHosts::load();
-        let macs = known
-            .resolve(Some(&fp_hex), &addr, port)
+        let host = known.resolve(Some(&fp_hex), &addr, port);
+        let macs = host
             .filter(|_| trust::Settings::load().auto_wake)
             .map(|h| h.mac.clone())
             .unwrap_or_default();
+        // The console plays as a remembered pick only, so its shelf is that profile's.
+        let profile = host
+            .and_then(|h| h.profile.as_ref())
+            .filter(|p| p.remember)
+            .map(|p| p.id.clone());
         spawn_fetch(
             self.library.clone(),
             addr,
             (port, mgmt),
             self.identity.clone(),
-            fp_hex,
+            (fp_hex, profile),
             macs,
             req,
         );
@@ -1713,7 +1718,8 @@ fn stream_port(fp_hex: &str) -> u16 {
 
 /// Fetch the library off the service thread, then stream poster art into the shared
 /// model as results land (the renderer drains `push_art` per frame). `(port, mgmt)`: the
-/// stream port the management tunnel tries first, then the HTTPS port.
+/// stream port the management tunnel tries first, then the HTTPS port. `profile`: the
+/// library as that profile plays it.
 ///
 /// Three things happen before the host is ever asked, and the order is the point:
 /// 1. the CACHED catalog goes up immediately, marked stale — a library is the screen a player
@@ -1730,7 +1736,7 @@ fn spawn_fetch(
     addr: String,
     (port, mgmt): (u16, u16),
     identity: (String, String),
-    fp_hex: String,
+    (fp_hex, profile): (String, Option<String>),
     macs: Vec<String>,
     req: RequestKey,
 ) -> Worker {
@@ -1774,7 +1780,7 @@ fn spawn_fetch(
             let mut last_err = None;
             let mut fetched = None;
             loop {
-                match library::fetch_games(&addr, mgmt, port, &identity, pin) {
+                match library::fetch_games(&addr, mgmt, port, &identity, pin, profile.as_deref()) {
                     Ok(games) => {
                         fetched = Some(games);
                         break;

@@ -1075,6 +1075,7 @@ from the config directory for a true factory reset."
             host.port,
             &identity,
             pin,
+            host.profile.as_ref().map(|p| p.id.as_str()),
         ) {
             Ok(games) => {
                 if has(args, "--json") {

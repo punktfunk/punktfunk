@@ -153,12 +153,21 @@ pub(crate) fn start_fetch(ctx: &Arc<AppCtx>, set_library: &AsyncSetState<Library
                 }
             };
             let mut state = LibraryState::default();
+            let known = pf_client_core::trust::KnownHosts::load();
+            let saved = known.resolve(
+                target.host.fp_hex.as_deref(),
+                &target.host.addr,
+                target.host.port,
+            );
             let games = match library::fetch_games(
                 &target.host.addr,
                 target.host.mgmt_port.unwrap_or(library::DEFAULT_MGMT_PORT),
                 target.host.port,
                 &identity,
                 pin,
+                saved
+                    .and_then(|h| h.profile.as_ref())
+                    .map(|p| p.id.as_str()),
             ) {
                 Ok(games) => games,
                 Err(e) => {

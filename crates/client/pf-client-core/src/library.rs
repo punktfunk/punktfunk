@@ -368,13 +368,11 @@ pub fn walk_pages<E>(
 const TUNNEL_WAIT: Duration = Duration::from_secs(3);
 
 /// A management answer: its status and body.
-#[cfg(desktop)]
 pub(crate) struct Reply {
     pub(crate) status: u16,
     pub(crate) body: Vec<u8>,
 }
 
-#[cfg(desktop)]
 impl Reply {
     /// The body of a 2xx; 401/403 → [`LibraryError::NotPaired`], anything else `Http`.
     pub(crate) fn ok(self) -> Result<Vec<u8>, LibraryError> {
@@ -502,7 +500,6 @@ impl HostApi {
 }
 
 /// `s` percent-encoded for a query value.
-#[cfg(desktop)]
 fn query_value(s: &str) -> String {
     s.bytes()
         .map(|b| match b {
@@ -514,9 +511,58 @@ fn query_value(s: &str) -> String {
         .collect()
 }
 
-/// The host's catalog, walked by `GET /api/v1/library/page` over [`HostApi`]'s lanes. A host
-/// older than the paged route refuses it, so `GET /api/v1/library` answers whole instead.
-/// 401/403 → [`LibraryError::NotPaired`]; pin failure → [`LibraryError::PinMismatch`].
+/// The catalog as `profile` plays it (`as=`), else the box's. `get` answers one path's status
+/// and body. A host older than the paged route refuses it, so `GET /api/v1/library` answers
+/// whole instead. A profile the host no longer holds (404 `profile_unknown`) is asked once more
+/// as the box, and that answer stands. `clients/shared/library-profile-vectors.json` pins this
+/// here, in Swift and in Kotlin.
+pub fn fetch_catalog(
+    profile: Option<&str>,
+    mut get: impl FnMut(&str) -> Result<(u16, Vec<u8>), LibraryError>,
+) -> Result<Vec<GameEntry>, LibraryError> {
+    let gone = std::cell::Cell::new(false);
+    let mut walk = |profile: Option<&str>| {
+        let mut body = |mut path: String| {
+            if let Some(p) = profile {
+                let sep = if path.contains('?') { '&' } else { '?' };
+                path = format!("{path}{sep}as={}", query_value(p));
+            }
+            let (status, body) = get(&path)?;
+            if profile.is_some() && status == 404 {
+                let coded = serde_json::from_slice::<serde_json::Value>(&body);
+                gone.set(coded.is_ok_and(|v| v["code"] == "profile_unknown"));
+            }
+            let body = Reply { status, body }.ok()?;
+            Ok(String::from_utf8_lossy(&body).into_owned())
+        };
+        let paged = walk_pages(
+            |cursor| {
+                let mut path = format!("/api/v1/library/page?limit={PAGE_LIMIT}");
+                if let Some(c) = cursor {
+                    path.push_str("&cursor=");
+                    path.push_str(&query_value(c));
+                }
+                body(path)
+            },
+            LibraryError::Unreachable,
+        );
+        match paged {
+            Err(LibraryError::NotPaired | LibraryError::Http(404)) if !gone.get() => {
+                let all = body("/api/v1/library".into())?;
+                serde_json::from_str(&all)
+                    .map_err(|e| LibraryError::Unreachable(format!("bad JSON: {e}")))
+            }
+            walked => walked,
+        }
+    };
+    match walk(profile) {
+        Err(_) if gone.replace(false) => walk(None),
+        walked => walked,
+    }
+}
+
+/// [`fetch_catalog`] over [`HostApi`]'s lanes. 401/403 → [`LibraryError::NotPaired`]; pin
+/// failure → [`LibraryError::PinMismatch`].
 #[cfg(desktop)]
 pub fn fetch_games(
     addr: &str,
@@ -524,32 +570,14 @@ pub fn fetch_games(
     stream_port: u16,
     identity: &(String, String),
     pin: Option<[u8; 32]>,
+    profile: Option<&str>,
 ) -> Result<Vec<GameEntry>, LibraryError> {
     let https = agent(identity, pin)?;
     let api = HostApi::new(addr, mgmt_port, stream_port, identity, pin);
-    let get = |path: &str| {
-        let body = api.call(&https, "GET", path, None)?.ok()?;
-        Ok(String::from_utf8_lossy(&body).into_owned())
-    };
-    let bad_reply = LibraryError::Unreachable;
-    let paged = walk_pages(
-        |cursor| {
-            let mut path = format!("/api/v1/library/page?limit={PAGE_LIMIT}");
-            if let Some(c) = cursor {
-                path.push_str("&cursor=");
-                path.push_str(&query_value(c));
-            }
-            get(&path)
-        },
-        bad_reply,
-    );
-    match paged {
-        Err(LibraryError::NotPaired | LibraryError::Http(404)) => {
-            let body = get("/api/v1/library")?;
-            serde_json::from_str(&body).map_err(|e| bad_reply(format!("bad JSON: {e}")))
-        }
-        walked => walked,
-    }
+    fetch_catalog(profile, |path| {
+        let reply = api.call(&https, "GET", path, None)?;
+        Ok((reply.status, reply.body))
+    })
 }
 
 /// One title currently launched, from `GET /api/v1/status`. Partial
@@ -1412,7 +1440,6 @@ mod tests {
     use super::*;
 
     /// A host's opaque cursor survives the query string whatever it holds.
-    #[cfg(desktop)]
     #[test]
     fn a_cursor_is_percent_encoded() {
         assert_eq!(query_value("a1-_.~"), "a1-_.~");
@@ -1871,6 +1898,50 @@ mod tests {
         assert_eq!(walked.unwrap_err(), "the host went away");
         let undecodable = walk_pages(|_| Ok::<_, String>("[]".into()), |why| why);
         assert!(undecodable.unwrap_err().starts_with("bad JSON"));
+    }
+
+    #[derive(Deserialize)]
+    struct ProfileVectors {
+        cases: Vec<ProfileCase>,
+    }
+
+    #[derive(Deserialize)]
+    struct ProfileCase {
+        name: String,
+        pick: Option<String>,
+        host: std::collections::BTreeMap<String, HostAnswer>,
+        expect: ProfileExpect,
+    }
+
+    #[derive(Deserialize)]
+    struct HostAnswer {
+        status: u16,
+        body: serde_json::Value,
+    }
+
+    #[derive(Deserialize)]
+    struct ProfileExpect {
+        asked: Vec<String>,
+        ids: Option<Vec<String>>,
+    }
+
+    #[test]
+    fn a_library_fetch_follows_the_shared_profile_vectors() {
+        let raw = include_str!("../../../../clients/shared/library-profile-vectors.json");
+        let v: ProfileVectors = serde_json::from_str(raw).expect("vectors parse");
+        assert!(!v.cases.is_empty());
+        for c in v.cases {
+            let mut asked = Vec::new();
+            let shown = fetch_catalog(c.pick.as_deref(), |path| {
+                asked.push(path.to_string());
+                Ok(c.host.get(path).map_or((404, Vec::new()), |a| {
+                    (a.status, a.body.to_string().into_bytes())
+                }))
+            });
+            assert_eq!(asked, c.expect.asked, "{}: asked", c.name);
+            let shown = shown.ok().map(|g| g.into_iter().map(|g| g.id).collect());
+            assert_eq!(shown, c.expect.ids, "{}: ids", c.name);
+        }
     }
 
     #[test]
