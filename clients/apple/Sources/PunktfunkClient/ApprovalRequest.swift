@@ -3,7 +3,7 @@ import PunktfunkKit
 
 /// A fresh `pair=required`/unknown host pending a trust decision: drives both the "request access
 /// vs. pair with PIN" choice and the subsequent approval wait. `advertisedFingerprint` is the
-/// discovered host's advertised cert (nil for a manually-typed host → trust-on-first-use).
+/// discovered host's advertised cert. A typed host has none, and is offered the PIN only.
 struct ApprovalRequest {
     let host: StoredHost
     let advertisedFingerprint: Data?

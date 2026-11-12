@@ -486,12 +486,17 @@ struct ConnectFlow {
     /// The no-PIN delegated-approval flow: ask the host, which parks the request until the
     /// operator approves it in the console, under the cancelable "Waiting for approval" prompt.
     /// Approval pins the host as paired and streams only for a link. The advertised certificate
-    /// is the pin (impostor defence during the long wait); a typed host has none, so first use.
+    /// is the pin (impostor defence during the long wait); a typed host has none and pairs by
+    /// PIN, so it goes back to the choice, which then offers only that.
     func requestAccess(_ req: ApprovalRequest) {
         guard !model.isBusy else { return }
+        guard let pin = req.advertisedFingerprint else {
+            approvalChoice = req
+            return
+        }
         awaitingApproval = req
         let (store, model, awaiting) = (store, model, $awaitingApproval)
-        let (address, port, pin) = (req.host.address, req.host.port, req.advertisedFingerprint)
+        let (address, port) = (req.host.address, req.host.port)
         Task { @MainActor in
             let result = await Task.detached(priority: .userInitiated) {
                 Result {

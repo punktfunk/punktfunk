@@ -1241,6 +1241,9 @@ fn access_request_pairs_without_a_session() {
     let store = crate::test_support::scratch().join("pf-access-test.json");
     let np = Arc::new(NativePairing::load_with(Some(store.clone()), None, false).unwrap());
     let np_host = np.clone();
+    // A request names the fingerprint the host must show, as an advert would give it.
+    let identity = crate::identity::ephemeral().unwrap();
+    let host_pin = endpoint::fingerprint_of_pem(&identity.cert_pem).unwrap();
     let host = std::thread::spawn(move || {
         let rt = tokio::runtime::Builder::new_multi_thread()
             .worker_threads(2)
@@ -1268,7 +1271,7 @@ fn access_request_pairs_without_a_session() {
             StatsRecorder::new(
                 std::env::temp_dir().join(format!("pf-access-stats-{}", std::process::id())),
             ),
-            crate::identity::ephemeral().unwrap(),
+            identity,
             None,
         ))
     });
@@ -1306,7 +1309,7 @@ fn access_request_pairs_without_a_session() {
             "127.0.0.1",
             19795,
             (&cert, &key),
-            None,
+            host_pin,
             "Access Deck",
             std::time::Duration::from_secs(15),
             None,
@@ -1314,7 +1317,7 @@ fn access_request_pairs_without_a_session() {
     };
     let host_fp = ask().expect("approval answers the parked request");
     approver.join().unwrap();
-    assert_ne!(host_fp, [0; 32]);
+    assert_eq!(host_fp, host_pin);
     assert!(np.is_paired(&expected_fp), "approval pairs the device");
 
     let started = std::time::Instant::now();
