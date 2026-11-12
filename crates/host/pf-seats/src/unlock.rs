@@ -341,7 +341,7 @@ pub fn signature_bytes(text: &str) -> Option<Vec<u8>> {
 }
 
 /// The bytes of 1 to `max` from lowercase hex; the length is checked before anything is decoded.
-fn lower_hex(text: &str, max: usize) -> Option<Vec<u8>> {
+pub(crate) fn lower_hex(text: &str, max: usize) -> Option<Vec<u8>> {
     let digit = |b: u8| b.is_ascii_digit() || (b'a'..=b'f').contains(&b);
     let fits = !text.is_empty() && text.len() <= max * 2 && text.len().is_multiple_of(2);
     (fits && text.bytes().all(digit)).then(|| hex::decode(text).ok())?

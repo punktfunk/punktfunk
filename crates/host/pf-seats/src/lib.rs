@@ -23,6 +23,7 @@ pub mod ipc;
 /// The Linux half. Its tests run wherever Unix does; only the daemon needs Linux.
 #[cfg(any(target_os = "linux", all(test, unix)))]
 pub mod linux;
+pub mod locks;
 pub mod logging;
 pub mod model;
 pub mod persistence;
