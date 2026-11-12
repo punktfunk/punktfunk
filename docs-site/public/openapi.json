@@ -5359,7 +5359,7 @@
             }
           },
           "403": {
-            "description": "A plugin toggled another plugin's source",
+            "description": "A plugin toggled another plugin's source, or named a profile",
             "content": {
               "application/json": {
                 "schema": {
@@ -8488,6 +8488,16 @@
           },
           "401": {
             "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`as` on a lane other than the operator's",
             "content": {
               "application/json": {
                 "schema": {

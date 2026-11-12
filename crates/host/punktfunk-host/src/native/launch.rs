@@ -5,16 +5,17 @@
 use super::plays_seat_mode;
 use super::{opens_big_picture, Admitted, Agreed, SessionScope};
 use anyhow::{Context, Result};
-use punktfunk_core::quic::{Hello, Welcome};
+use punktfunk_core::quic::Hello;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 /// The session's library launch, before the display opens: the title (the one asked for, else
 /// the profile's home), the command the display runs for it, then reprieve, claim, prep and
-/// the launch hold. A title whose files never arrived is dropped and the client told why on
-/// `outcome`; the returned [`Prepared`](crate::session_launch::Prepared) has `declined` taken.
+/// the launch hold. A title refused in the profile's view runs none of its prep. A title whose
+/// files never arrived is dropped and the client told why on `outcome`; the returned
+/// [`Prepared`](crate::session_launch::Prepared) has `declined` taken. `hdr`: the stream's.
 pub(super) async fn prepare_launch(
     hello: &Hello,
-    welcome: &Welcome,
+    hdr: bool,
     profile: &crate::profiles::Resolved,
     owner: &crate::session_launch::LaunchOwner,
     outcome: &crate::gamelease::OutcomeTx,
@@ -33,7 +34,10 @@ pub(super) async fn prepare_launch(
     let command = target.as_ref().and(hello.launch.clone());
     #[cfg(not(target_os = "windows"))]
     let command = target.as_ref().and_then(|t| t.command.clone());
-    let (prep_cmds, prep_env) = launch_prep(hello, welcome, owner.preset.as_ref());
+    let (prep_cmds, prep_env) = match &target {
+        Some(_) => launch_prep(hello, hdr, owner.preset.as_ref()),
+        None => Default::default(),
+    };
     // `block_in_place`: operator code is blocking and this is a multi-thread runtime.
     let mut prepared = tokio::task::block_in_place(|| {
         crate::session_launch::prepare(target.as_ref(), owner, &prep_cmds, &prep_env, &|| {
@@ -146,7 +150,7 @@ fn opens_game_mode() -> bool {
 /// handheld one. Empty without a launch.
 fn launch_prep(
     hello: &Hello,
-    welcome: &Welcome,
+    hdr: bool,
     preset: Option<&crate::events::PresetRef>,
 ) -> (Vec<crate::hooks::PrepCmd>, Vec<(String, String)>) {
     let Some(id) = hello.launch.as_deref() else {
@@ -161,7 +165,7 @@ fn launch_prep(
         hello.mode.width,
         hello.mode.height,
         hello.mode.refresh_hz,
-        welcome.color.is_hdr(),
+        hdr,
     ));
     (crate::library::prep_for(id), env)
 }
@@ -218,7 +222,7 @@ pub(super) async fn launch_session(
         },
     ) = prepare_launch(
         &n.hello,
-        &n.welcome,
+        n.welcome.color.is_hdr(),
         &n.resolved,
         &owner,
         outcome,
@@ -227,11 +231,12 @@ pub(super) async fn launch_session(
     .await?;
     scope.hold(prep);
     scope.hold(waiting);
-    // The title's `audio.sessions`, over every session on this display. Lifted with the session.
+    // The launched title's `audio.sessions`, over every session on this display. Lifted with the
+    // session. A refused title has none.
     scope.hold(
-        n.hello
-            .launch
-            .as_deref()
+        target
+            .as_ref()
+            .and(n.hello.launch.as_deref())
             .and_then(crate::library::audio_sessions_for)
             .map(|policy| crate::session_status::apply_audio_policy(policy, &client_label)),
     );

@@ -1652,6 +1652,8 @@ export type SetSessionSettings400 = ApiError
 export const SetSessionSettings400 = ApiError
 export type SetSessionSettings401 = ApiError
 export const SetSessionSettings401 = ApiError
+export type SetSessionSettings403 = ApiError
+export const SetSessionSettings403 = ApiError
 export type SetSessionSettings404 = ApiError
 export const SetSessionSettings404 = ApiError
 export type SetSessionSettings409 = ApiError
@@ -3414,6 +3416,7 @@ export const make = (
       "2xx": decodeSuccess(SetSessionSettings200),
       "400": decodeError("SetSessionSettings400", SetSessionSettings400),
       "401": decodeError("SetSessionSettings401", SetSessionSettings401),
+      "403": decodeError("SetSessionSettings403", SetSessionSettings403),
       "404": decodeError("SetSessionSettings404", SetSessionSettings404),
       "409": decodeError("SetSessionSettings409", SetSessionSettings409),
       "500": decodeError("SetSessionSettings500", SetSessionSettings500),
@@ -4892,8 +4895,8 @@ readonly "getRecentSessions": {
 * that profile's own seat; a profile on the host's own desktop has none of its own.
 */
 readonly "setSessionSettings": {
-    <Config extends OperationConfig | undefined = undefined>(options: { readonly params?: typeof SetSessionSettingsParams.Encoded | undefined; readonly payload: typeof SetSessionSettingsRequestJson.Encoded; readonly config: Config }): Effect.Effect<WithOptionalResponse<typeof SetSessionSettings200.Type, Config>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"SetSessionSettings400", typeof SetSessionSettings400.Type> | PunktfunkError<"SetSessionSettings401", typeof SetSessionSettings401.Type> | PunktfunkError<"SetSessionSettings404", typeof SetSessionSettings404.Type> | PunktfunkError<"SetSessionSettings409", typeof SetSessionSettings409.Type> | PunktfunkError<"SetSessionSettings500", typeof SetSessionSettings500.Type>>;
-    <Config extends OperationConfig | undefined = undefined>(options: { readonly params?: typeof SetSessionSettingsParams.Encoded | undefined; readonly payload: typeof SetSessionSettingsRequestJson.Encoded; readonly config?: Config | undefined }): Effect.Effect<WithOptionalResponse<typeof SetSessionSettings200.Type, Config | undefined>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"SetSessionSettings400", typeof SetSessionSettings400.Type> | PunktfunkError<"SetSessionSettings401", typeof SetSessionSettings401.Type> | PunktfunkError<"SetSessionSettings404", typeof SetSessionSettings404.Type> | PunktfunkError<"SetSessionSettings409", typeof SetSessionSettings409.Type> | PunktfunkError<"SetSessionSettings500", typeof SetSessionSettings500.Type>>;
+    <Config extends OperationConfig | undefined = undefined>(options: { readonly params?: typeof SetSessionSettingsParams.Encoded | undefined; readonly payload: typeof SetSessionSettingsRequestJson.Encoded; readonly config: Config }): Effect.Effect<WithOptionalResponse<typeof SetSessionSettings200.Type, Config>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"SetSessionSettings400", typeof SetSessionSettings400.Type> | PunktfunkError<"SetSessionSettings401", typeof SetSessionSettings401.Type> | PunktfunkError<"SetSessionSettings403", typeof SetSessionSettings403.Type> | PunktfunkError<"SetSessionSettings404", typeof SetSessionSettings404.Type> | PunktfunkError<"SetSessionSettings409", typeof SetSessionSettings409.Type> | PunktfunkError<"SetSessionSettings500", typeof SetSessionSettings500.Type>>;
+    <Config extends OperationConfig | undefined = undefined>(options: { readonly params?: typeof SetSessionSettingsParams.Encoded | undefined; readonly payload: typeof SetSessionSettingsRequestJson.Encoded; readonly config?: Config | undefined }): Effect.Effect<WithOptionalResponse<typeof SetSessionSettings200.Type, Config | undefined>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"SetSessionSettings400", typeof SetSessionSettings400.Type> | PunktfunkError<"SetSessionSettings401", typeof SetSessionSettings401.Type> | PunktfunkError<"SetSessionSettings403", typeof SetSessionSettings403.Type> | PunktfunkError<"SetSessionSettings404", typeof SetSessionSettings404.Type> | PunktfunkError<"SetSessionSettings409", typeof SetSessionSettings409.Type> | PunktfunkError<"SetSessionSettings500", typeof SetSessionSettings500.Type>>;
   }
   /**
 * Same deliberate stop as `DELETE /session`, for the one id. Every other live

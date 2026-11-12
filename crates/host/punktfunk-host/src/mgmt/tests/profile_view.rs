@@ -448,6 +448,53 @@ async fn writes_with_as_land_in_the_profile_s_own_files() {
     assert_eq!(stored["session_on_game_exit"], true);
 }
 
+/// A profile's entry naming a shared override the box then deletes sets nothing: the box's
+/// entry applies, and the row does not call it the profile's. Its `none` still wins.
+#[tokio::test]
+async fn a_profile_s_entry_on_a_deleted_shared_override_leaves_the_box_s() {
+    let tmp = ConfigDirOverride::new();
+    write_fixture(tmp.path());
+    let app = test_app(profiles_state(tmp.path(), profiles()), None);
+    let set = serde_json::json!({"name": "4K", "lines": 2160});
+    let (s, set) = send(
+        &app,
+        json_req(Method::POST, "/api/v1/library/overrides/sets", set),
+    )
+    .await;
+    assert_eq!(s, StatusCode::CREATED, "{set}");
+    let set = set["id"].as_str().unwrap().to_string();
+    for (id, entry) in [
+        ("steam:400", serde_json::json!({"set": set})),
+        ("steam:70", serde_json::json!({"none": true})),
+    ] {
+        let path = format!("/api/v1/library/overrides/games/{id}?as={SHARER}");
+        let (s, j) = send(&app, json_req(Method::PUT, &path, entry)).await;
+        assert_eq!(s, StatusCode::OK, "{id}: {j}");
+    }
+    let delete = axum::http::Request::delete(format!("/api/v1/library/overrides/sets/{set}"))
+        .body(Body::empty())
+        .unwrap();
+    let (s, j) = send(&app, delete).await;
+    assert!(s.is_success(), "{s}: {j}");
+
+    let (_, json) = send(&app, get_req(&format!("/api/v1/library/page?as={SHARER}"))).await;
+    let portal = row(&json, "Portal");
+    assert_eq!(
+        portal["overrides"],
+        serde_json::json!({"hz": 60}),
+        "the box's"
+    );
+    assert!(portal.get("profile").is_none(), "{portal}");
+    let half_life = row(&json, "Half-Life");
+    assert!(half_life["overrides"].is_null(), "{half_life}");
+    assert_eq!(half_life["profile"], serde_json::json!({"overrides": true}));
+    let hz = crate::library::overrides_for(
+        &crate::library::View::of(SHARER, false, Default::default()),
+        "steam:400",
+    );
+    assert_eq!(hz.and_then(|o| o.hz), Some(60), "a launch takes the box's");
+}
+
 /// `as` is a profile the box holds, by a minted id, or 404 before it reaches a path.
 #[tokio::test]
 async fn as_names_a_minted_profile_or_nothing() {
