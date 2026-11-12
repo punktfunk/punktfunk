@@ -254,7 +254,8 @@ fun LibraryScreen(
 
     // Keyed on the mgmt port too: a discovery tick can learn it after this screen is composed, and
     // the fetch must redo itself against the real port rather than stay on a stale 47990 failure.
-    LaunchedEffect(host.address, host.port, host.fpHex, host.effectiveMgmtPort, reloadKey) {
+    // And on the saved pick: the shelf is the library that profile plays.
+    LaunchedEffect(host.address, host.port, host.fpHex, host.effectiveMgmtPort, host.asProfile?.id, reloadKey) {
         loadLibrary(context, host, settings.autoWakeEnabled) { state = it }
     }
 
@@ -542,6 +543,7 @@ private suspend fun loadLibrary(
             fpHex = host.fpHex,
             macs = host.mac,
             autoWake = autoWake,
+            profile = host.asProfile?.id,
             streamPort = host.port,
             isCancelled = { !isActive },
             onWaking = {

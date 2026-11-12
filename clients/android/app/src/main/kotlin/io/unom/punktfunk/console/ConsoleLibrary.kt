@@ -130,6 +130,8 @@ internal fun SkiaConsole.fetchLibrary(c: JSONObject, refreshOnly: Boolean) {
             addr, mgmt, id.certPem, id.privateKeyPem, fp,
             macs = kh?.mac.orEmpty(),
             autoWake = autoWake,
+            // The console plays as a remembered pick only, so its shelf is that profile's.
+            profile = kh?.asProfile?.takeIf { it.remember }?.id,
             streamPort = port,
             isCancelled = { gen != fetchGen.get() },
             onWaking = { state.launch { if (gen == fetchGen.get()) NativeBridge.nativeConsoleLibraryStale(handle, 1) } },
