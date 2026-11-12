@@ -46,6 +46,9 @@ pub(crate) struct VulkanFacts {
     pub(crate) supported: bool,
     pub(crate) eight_bit: bool,
     pub(crate) ten_bit: bool,
+    /// The pairs the device's EFC converts; `None` without an EFC.
+    pub(crate) efc: Option<crate::vcn_firmware::EfcPairs>,
+    pub(crate) vcn: Option<VcnFirmware>,
 }
 
 /// [`Resolved::wire_caps`] on Linux: the narrowed probe `/serverinfo` advertises too, so the
@@ -98,9 +101,24 @@ pub(crate) fn ingests_rgb_444(_: &Resolved) -> bool {
     false
 }
 
-/// [`Resolved::rgb_full_range`] on Linux: no conversion here is known to ignore the request.
-pub(crate) fn rgb_full_range(_: &Resolved) -> bool {
-    true
+/// [`Resolved::rgb_full_range`] on Linux. Vulkan Video's EFC converts BT.709 at narrow range
+/// only on a two-pair VCN; an SDR session there is planned narrow so the chip still converts.
+/// `PUNKTFUNK_VULKAN_RGB_DIRECT=0` takes the EFC out, and the range goes back to the ask.
+pub(crate) fn rgb_full_range(r: &Resolved, codec: Codec) -> RgbFullRange {
+    let two_pairs = r.vulkan_encodes(codec)
+        && r.vulkan(codec).efc == Some(crate::vcn_firmware::EfcPairs::TwoPairs)
+        && Knobs::from_env().vulkan_rgb_direct != Some(false);
+    RgbFullRange {
+        sdr: !two_pairs,
+        hdr: true,
+    }
+}
+
+/// [`Resolved::vcn_firmware`] on Linux: HEVC's probe names the device both codecs encode on.
+pub(crate) fn vcn_firmware(r: &Resolved) -> Option<VcnFirmware> {
+    r.vulkan_encodes(Codec::H265)
+        .then(|| r.vulkan(Codec::H265).vcn)
+        .flatten()
 }
 
 /// [`Resolved::carries_sdr10`] on Linux.
@@ -511,6 +529,17 @@ impl Resolved {
             })
     }
 
+    /// Vulkan Video is built, switched on and the AMD/Intel plane's encoder for `codec`.
+    fn vulkan_encodes(&self, codec: Codec) -> bool {
+        self.inputs.features.vulkan_encode
+            && self.inputs.vulkan_row
+            && matches!(codec, Codec::H265 | Codec::Av1)
+            && matches!(
+                self.backend(),
+                LinuxBackend::AmdIntel | LinuxBackend::Vulkan
+            )
+    }
+
     /// Vulkan Video encode caps for `codec`. The probe opens its own Vulkan instance; callers
     /// check the feature and the row first.
     fn vulkan(&self, codec: Codec) -> VulkanFacts {
@@ -654,6 +683,8 @@ fn probe_vulkan_encode_caps(codec: Codec) -> VulkanFacts {
                 ?codec,
                 eight_bit = caps.eight_bit,
                 ten_bit = caps.ten_bit,
+                efc = ?caps.efc,
+                vcn_firmware = %caps.vcn.map(|v| v.to_string()).unwrap_or_default(),
                 "Vulkan Video encode probed — producer-native NV12 capture is eligible, and a \
                  10-bit session keeps this backend (real RFI + the compute CSC's cursor blend) \
                  where the device accepts the profile"
@@ -669,6 +700,8 @@ fn probe_vulkan_encode_caps(codec: Codec) -> VulkanFacts {
             supported: caps.supported,
             eight_bit: caps.eight_bit,
             ten_bit: caps.ten_bit,
+            efc: caps.efc,
+            vcn: caps.vcn,
         }
     }
     #[cfg(not(feature = "vulkan-encode"))]
@@ -1092,6 +1125,7 @@ mod tests {
             supported: eight_bit || ten_bit,
             eight_bit,
             ten_bit,
+            ..VulkanFacts::default()
         }
     }
 

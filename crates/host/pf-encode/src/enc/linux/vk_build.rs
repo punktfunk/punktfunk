@@ -12,6 +12,7 @@
 // `super::*` is the point of the child-module shape. `vk_util` is a crate-root sibling, so
 // `crate::` — not the parent-relative `super::` the parent uses.
 use super::*;
+use crate::vcn_firmware::{EfcPairs, VcnFirmware};
 use crate::vk_util::{
     ext_advertised, find_mem_preferring, find_readback_mem, make_plain_image, make_view,
 };
@@ -107,56 +108,12 @@ pub(super) unsafe fn probe_rgb_direct(
     full_range: bool,
     src_fmt: vk::Format,
 ) -> Result<(u32, u32), &'static str> {
-    use crate::vk_av1_encode as av1b;
     use crate::vk_valve_rgb as vrgb;
-    let Ok(exts) = instance.enumerate_device_extension_properties(pd) else {
-        return Err("probe-failed(ext-enum)");
-    };
-    if !ext_advertised(&exts, vrgb::EXTENSION_NAME) {
-        return Err("no-ext(mesa<26.0-or-no-efc)");
-    }
-    let mut feat = vrgb::PhysicalDeviceVideoEncodeRgbConversionFeaturesVALVE {
-        s_type: vrgb::stype(vrgb::ST_PHYSICAL_DEVICE_FEATURES),
-        p_next: std::ptr::null_mut(),
-        video_encode_rgb_conversion: vk::FALSE,
-    };
-    let mut f2 = vk::PhysicalDeviceFeatures2 {
-        p_next: &mut feat as *mut _ as *mut c_void,
-        ..Default::default()
-    };
-    instance.get_physical_device_features2(pd, &mut f2);
-    if feat.video_encode_rgb_conversion == vk::FALSE {
-        return Err("no-feature");
-    }
     // Caps under the rgb-chained profile: colour math must match the compute CSC (`rgb2yuv.comp`
     // 709 / `rgb2yuv10.comp` 2020 / `rgb2yuv10_709.comp` 709 at ten bits). Depth-only profile here.
     let mut ps = ProfileStack::new(codec_op, ten_bit, true);
     let profile = *ps.wire(av1);
-    let mut rgb_caps = vrgb::VideoEncodeRgbConversionCapabilitiesVALVE {
-        s_type: vrgb::stype(vrgb::ST_CAPABILITIES),
-        p_next: std::ptr::null_mut(),
-        rgb_models: 0,
-        rgb_ranges: 0,
-        x_chroma_offsets: 0,
-        y_chroma_offsets: 0,
-    };
-    let mut h265_caps = vk::VideoEncodeH265CapabilitiesKHR::default();
-    let mut av1_caps: av1b::VideoEncodeAV1CapabilitiesKHR = std::mem::zeroed();
-    av1_caps.s_type = av1b::stype(av1b::ST_CAPABILITIES);
-    let mut enc_caps = vk::VideoEncodeCapabilitiesKHR::default();
-    let mut caps = vk::VideoCapabilitiesKHR::default();
-    if av1 {
-        av1_caps.p_next = &mut rgb_caps as *mut _ as *mut c_void;
-        enc_caps.p_next = &mut av1_caps as *mut _ as *mut c_void;
-    } else {
-        h265_caps.p_next = &mut rgb_caps as *mut _ as *mut c_void;
-        enc_caps.p_next = &mut h265_caps as *mut _ as *mut c_void;
-    }
-    caps.p_next = &mut enc_caps as *mut _ as *mut c_void;
-    let r = (vq_inst.fp().get_physical_device_video_capabilities_khr)(pd, &profile, &mut caps);
-    if r != vk::Result::SUCCESS {
-        return Err("no-rgb-profile(caps)");
-    }
+    let rgb_caps = efc_caps(instance, vq_inst, pd, &profile, av1)?;
     // Model + range must match the shader. Siting should too: the shader and every decoder use
     // chroma location 0 (x cosited-even, y midpoint), and nothing in the bitstream says
     // otherwise. Prefer that bit per axis, else accept the other rather than lose EFC.
@@ -169,7 +126,7 @@ pub(super) unsafe fn probe_rgb_direct(
     );
     let offered = (rgb_caps.rgb_models, rgb_caps.rgb_ranges);
     let want = (rgb_model_for(hdr), rgb_range_for(full_range));
-    if !efc_serves(offered, want, is_radv(instance, pd)) {
+    if !efc_serves(offered, want, efc_pairs_of(instance, pd, offered)) {
         return Err(match (hdr, full_range) {
             (true, true) => "no-2020-full",
             (true, false) => "no-2020-narrow",
@@ -336,16 +293,124 @@ mod direct_planes_tests {
     }
 }
 
-/// Whether an EFC offering `(models, ranges)` converts the `(model, range)` a session wants.
+/// The EFC's capabilities under the rgb-chained `profile`, or the first thing this device
+/// lacks for one.
 ///
-/// RADV offers 709 narrow alone for VCN firmware that converts 709 narrow and 2020 full and
-/// nothing else: two masks cannot name two pairs. It hands the session's pair to the firmware
-/// unchecked, so 2020 full is served there too.
-pub(super) fn efc_serves(offered: (u32, u32), want: (u32, u32), radv: bool) -> bool {
+/// # Safety
+/// `vq_inst` wraps the live `instance` `pd` was enumerated from, and `profile` is a whole chain.
+unsafe fn efc_caps(
+    instance: &ash::Instance,
+    vq_inst: &ash::khr::video_queue::Instance,
+    pd: vk::PhysicalDevice,
+    profile: &vk::VideoProfileInfoKHR,
+    av1: bool,
+) -> Result<crate::vk_valve_rgb::VideoEncodeRgbConversionCapabilitiesVALVE, &'static str> {
+    use crate::vk_av1_encode as av1b;
     use crate::vk_valve_rgb as vrgb;
-    let two_pairs = radv && offered == (vrgb::MODEL_YCBCR_709, vrgb::RANGE_NARROW);
-    (offered.0 & want.0 != 0 && offered.1 & want.1 != 0)
-        || (two_pairs && want == (vrgb::MODEL_YCBCR_2020, vrgb::RANGE_FULL))
+    let Ok(exts) = instance.enumerate_device_extension_properties(pd) else {
+        return Err("probe-failed(ext-enum)");
+    };
+    if !ext_advertised(&exts, vrgb::EXTENSION_NAME) {
+        return Err("no-ext(mesa<26.0-or-no-efc)");
+    }
+    let mut feat = vrgb::PhysicalDeviceVideoEncodeRgbConversionFeaturesVALVE {
+        s_type: vrgb::stype(vrgb::ST_PHYSICAL_DEVICE_FEATURES),
+        p_next: std::ptr::null_mut(),
+        video_encode_rgb_conversion: vk::FALSE,
+    };
+    let mut f2 = vk::PhysicalDeviceFeatures2 {
+        p_next: &mut feat as *mut _ as *mut c_void,
+        ..Default::default()
+    };
+    instance.get_physical_device_features2(pd, &mut f2);
+    if feat.video_encode_rgb_conversion == vk::FALSE {
+        return Err("no-feature");
+    }
+    let mut rgb_caps = vrgb::VideoEncodeRgbConversionCapabilitiesVALVE {
+        s_type: vrgb::stype(vrgb::ST_CAPABILITIES),
+        p_next: std::ptr::null_mut(),
+        rgb_models: 0,
+        rgb_ranges: 0,
+        x_chroma_offsets: 0,
+        y_chroma_offsets: 0,
+    };
+    let mut h265_caps = vk::VideoEncodeH265CapabilitiesKHR::default();
+    let mut av1_caps: av1b::VideoEncodeAV1CapabilitiesKHR = std::mem::zeroed();
+    av1_caps.s_type = av1b::stype(av1b::ST_CAPABILITIES);
+    let mut enc_caps = vk::VideoEncodeCapabilitiesKHR::default();
+    let mut caps = vk::VideoCapabilitiesKHR::default();
+    if av1 {
+        av1_caps.p_next = &mut rgb_caps as *mut _ as *mut c_void;
+        enc_caps.p_next = &mut av1_caps as *mut _ as *mut c_void;
+    } else {
+        h265_caps.p_next = &mut rgb_caps as *mut _ as *mut c_void;
+        enc_caps.p_next = &mut h265_caps as *mut _ as *mut c_void;
+    }
+    caps.p_next = &mut enc_caps as *mut _ as *mut c_void;
+    let r = (vq_inst.fp().get_physical_device_video_capabilities_khr)(pd, profile, &mut caps);
+    if r != vk::Result::SUCCESS {
+        return Err("no-rgb-profile(caps)");
+    }
+    Ok(rgb_caps)
+}
+
+/// Whether an EFC offering `(models, ranges)` converts the `(model, range)` a session wants.
+/// [`EfcPairs::TwoPairs`] overrules the offer both ways: RADV passes the session's pair to the
+/// firmware unchecked.
+pub(super) fn efc_serves(offered: (u32, u32), want: (u32, u32), pairs: EfcPairs) -> bool {
+    use crate::vk_valve_rgb as vrgb;
+    match pairs {
+        EfcPairs::AsReported => offered.0 & want.0 != 0 && offered.1 & want.1 != 0,
+        EfcPairs::TwoPairs => {
+            want == NARROW_709 || want == (vrgb::MODEL_YCBCR_2020, vrgb::RANGE_FULL)
+        }
+    }
+}
+
+/// The masks naming BT.709 narrow alone.
+const NARROW_709: (u32, u32) = (
+    crate::vk_valve_rgb::MODEL_YCBCR_709,
+    crate::vk_valve_rgb::RANGE_NARROW,
+);
+
+/// The pairs `pd`'s EFC converts, given the `(models, ranges)` it offers.
+///
+/// # Safety
+/// `instance` is live and `pd` one of its devices.
+unsafe fn efc_pairs_of(
+    instance: &ash::Instance,
+    pd: vk::PhysicalDevice,
+    offered: (u32, u32),
+) -> EfcPairs {
+    crate::vcn_firmware::efc_pairs(
+        is_radv(instance, pd),
+        vcn_firmware_of(instance, pd),
+        offered,
+        NARROW_709,
+    )
+}
+
+/// The pairs `pd`'s EFC converts for `codec_op`, `None` without an EFC. Session open and the
+/// range a session is planned at both ask here.
+///
+/// # Safety
+/// `vq_inst` wraps the live `instance` `pd` was enumerated from.
+pub(super) unsafe fn probe_efc_pairs(
+    instance: &ash::Instance,
+    vq_inst: &ash::khr::video_queue::Instance,
+    pd: vk::PhysicalDevice,
+    codec_op: vk::VideoCodecOperationFlagsKHR,
+    av1: bool,
+    ten_bit: bool,
+) -> Option<EfcPairs> {
+    let mut ps = ProfileStack::new(codec_op, ten_bit, true);
+    let profile = *ps.wire(av1);
+    let caps = efc_caps(instance, vq_inst, pd, &profile, av1).ok()?;
+    Some(efc_pairs_of(
+        instance,
+        pd,
+        (caps.rgb_models, caps.rgb_ranges),
+    ))
 }
 
 /// Whether Mesa RADV drives `pd`.
@@ -354,6 +419,28 @@ unsafe fn is_radv(instance: &ash::Instance, pd: vk::PhysicalDevice) -> bool {
     let mut props = vk::PhysicalDeviceProperties2::default().push_next(&mut driver);
     instance.get_physical_device_properties2(pd, &mut props);
     driver.driver_id == vk::DriverId::MESA_RADV
+}
+
+/// `pd`'s VCN firmware, read off its render node. `None` off amdgpu.
+///
+/// # Safety
+/// `instance` is live and `pd` one of its devices.
+pub(super) unsafe fn vcn_firmware_of(
+    instance: &ash::Instance,
+    pd: vk::PhysicalDevice,
+) -> Option<VcnFirmware> {
+    let exts = instance.enumerate_device_extension_properties(pd).ok()?;
+    if !ext_advertised(&exts, ash::ext::physical_device_drm::NAME) {
+        return None;
+    }
+    let mut drm = vk::PhysicalDeviceDrmPropertiesEXT::default();
+    let mut props = vk::PhysicalDeviceProperties2::default().push_next(&mut drm);
+    instance.get_physical_device_properties2(pd, &mut props);
+    if drm.has_render != vk::TRUE {
+        return None;
+    }
+    let node = format!("/dev/dri/renderD{}", drm.render_minor);
+    crate::vcn_firmware::query(std::path::Path::new(&node))
 }
 
 /// EFC colour model for this session (2020 HDR / 709 SDR, at either depth) — the same matrices the
@@ -1413,24 +1500,29 @@ mod tests {
         assert_eq!(h265_vui(true, true).matrix_coeffs, 9);
     }
 
-    /// A VCN that converts two pairs reports one. Only RADV's report is read that way.
+    /// Two pairs overrule the offer both ways: 2020 full is served unoffered, 709 full is not
+    /// served though offered.
     #[test]
-    fn an_efc_reporting_709_narrow_alone_serves_2020_full_on_radv() {
+    fn a_two_pair_efc_serves_709_narrow_and_2020_full_only() {
         use crate::vk_valve_rgb::{
             MODEL_YCBCR_2020 as M2020, MODEL_YCBCR_709 as M709, RANGE_FULL as FULL,
             RANGE_NARROW as NARROW,
         };
-        let two_pairs = (M709, NARROW);
-        assert!(efc_serves(two_pairs, (M709, NARROW), true));
-        assert!(efc_serves(two_pairs, (M2020, FULL), true));
-        assert!(!efc_serves(two_pairs, (M2020, FULL), false));
-        assert!(!efc_serves(two_pairs, (M709, FULL), true));
-        assert!(!efc_serves(two_pairs, (M2020, NARROW), true));
         let all = (M709 | M2020, FULL | NARROW);
-        for want in [(M709, FULL), (M709, NARROW), (M2020, FULL), (M2020, NARROW)] {
-            assert!(efc_serves(all, want, false));
+        for offered in [(M709, NARROW), all] {
+            assert!(efc_serves(offered, (M709, NARROW), EfcPairs::TwoPairs));
+            assert!(efc_serves(offered, (M2020, FULL), EfcPairs::TwoPairs));
+            assert!(!efc_serves(offered, (M709, FULL), EfcPairs::TwoPairs));
+            assert!(!efc_serves(offered, (M2020, NARROW), EfcPairs::TwoPairs));
         }
-        assert!(!efc_serves((M709 | M2020, NARROW), (M2020, FULL), true));
+        for want in [(M709, FULL), (M709, NARROW), (M2020, FULL), (M2020, NARROW)] {
+            assert!(efc_serves(all, want, EfcPairs::AsReported));
+        }
+        assert!(!efc_serves(
+            (M709, NARROW),
+            (M2020, FULL),
+            EfcPairs::AsReported
+        ));
     }
 
     /// The EFC is asked for the range the bitstream signals.

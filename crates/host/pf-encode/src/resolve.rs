@@ -68,8 +68,12 @@ mod imp {
         false
     }
 
-    pub(crate) fn rgb_full_range(_: &Resolved) -> bool {
-        true
+    pub(crate) fn rgb_full_range(_: &Resolved, _codec: Codec) -> RgbFullRange {
+        RgbFullRange::BOTH
+    }
+
+    pub(crate) fn vcn_firmware(_: &Resolved) -> Option<VcnFirmware> {
+        None
     }
 
     /// No resolver: only a software pin is a CPU path.
@@ -83,6 +87,29 @@ mod imp {
 
     fn is_software(pref: &str) -> bool {
         matches!(pref, "software" | "sw" | "openh264")
+    }
+}
+
+/// The colours a backend's own RGB→YUV conversion writes at full range when asked to.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RgbFullRange {
+    pub sdr: bool,
+    pub hdr: bool,
+}
+
+impl RgbFullRange {
+    pub const BOTH: Self = RgbFullRange {
+        sdr: true,
+        hdr: true,
+    };
+
+    /// The answer for a session at `hdr`.
+    pub fn at(self, hdr: bool) -> bool {
+        if hdr {
+            self.hdr
+        } else {
+            self.sdr
+        }
     }
 }
 
@@ -257,11 +284,19 @@ impl Resolved {
         imp::sdr10(self, codec)
     }
 
-    /// The backend's own RGB→YUV conversion writes the range it is asked for. `false` only on
-    /// Windows AMF where the GPU writes studio whatever is asked (RDNA4), measured once per
-    /// adapter; every other conversion is ours or follows the request.
-    pub fn rgb_full_range(&self) -> bool {
-        imp::rgb_full_range(self)
+    /// The colours the backend's own RGB→YUV conversion writes at full range for `codec`.
+    /// Short of both on Windows AMF where the GPU writes studio whatever is asked (RDNA4),
+    /// measured once per adapter, and on Linux where the VCN firmware converts BT.709 at
+    /// narrow range only ([`VcnFirmware::efc_two_pairs`]). Every other conversion is ours or
+    /// follows the request.
+    pub fn rgb_full_range(&self, codec: Codec) -> RgbFullRange {
+        imp::rgb_full_range(self, codec)
+    }
+
+    /// The firmware of the video chip Vulkan Video encodes on. `None` off AMD, and where
+    /// another backend encodes.
+    pub fn vcn_firmware(&self) -> Option<VcnFirmware> {
+        imp::vcn_firmware(self)
     }
 }
 
