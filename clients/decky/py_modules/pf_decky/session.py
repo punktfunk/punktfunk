@@ -10,7 +10,7 @@ outlives the process.
 
 import asyncio
 import os
-import shutil
+import signal
 from pathlib import Path
 
 import decky
@@ -30,18 +30,45 @@ def _ctl_sockets() -> list[Path]:
     ]
 
 
+# What a native client runs as: the shell, the CLI, and the session a stream ends up in. Every
+# package installs the three in one bindir.
+_NATIVE_PROCS = (client.NATIVE_BIN, client.CLI_BIN, "punktfunk-session")
+
+
+def _native_pids(bindir: Path, proc: Path = Path("/proc")) -> list[int]:
+    """This user's processes running a client binary out of ``bindir``, found by executable.
+    Not by name: the kernel keeps 15 characters of one, and these are longer, so ``pkill -x``
+    matches nothing. Another user's ``exe`` link is unreadable and skipped."""
+    wanted = {str(bindir / name) for name in _NATIVE_PROCS}
+    pids = []
+    for entry in proc.iterdir():
+        if not entry.name.isdigit():
+            continue
+        try:
+            exe = os.readlink(entry / "exe")
+        except OSError:
+            continue
+        # The kernel marks a binary an update replaced while it still runs.
+        if exe.removesuffix(" (deleted)") in wanted:
+            pids.append(int(entry.name))
+    return sorted(pids)
+
+
 async def kill_stream() -> dict:
-    """Force-stop a wedged client: ``flatpak kill`` for the sandboxed one, SIGTERM by name for a
-    native install, which has no flatpak instance to kill."""
+    """Force-stop a wedged client: ``flatpak kill`` for the sandboxed one, SIGTERM to each
+    process of a native install, which has no flatpak instance to kill."""
     prefix = client._client_argv()
     if not prefix:
         return {"ok": False, "error": "client-not-found"}
-    if prefix[0] == client._flatpak():
-        argv = [prefix[0], "kill", prefix[-1]]  # the app id is last, see client._client_argv
-    else:
-        # -x: whole-name match, so this can only ever hit the client itself.
-        killer = shutil.which("pkill") or "/usr/bin/pkill"
-        argv = [killer, "-x", client.NATIVE_BIN]
+    if prefix[0] != client._flatpak():
+        # Resolved: a profile's bin/ is a symlink, and /proc names the real file.
+        for pid in _native_pids(Path(prefix[0]).resolve().parent):
+            try:
+                os.kill(pid, signal.SIGTERM)
+            except OSError:
+                pass  # it exited first
+        return {"ok": True}
+    argv = [prefix[0], "kill", prefix[-1]]  # the app id is last, see client._client_argv
     try:
         proc = await asyncio.create_subprocess_exec(
             *argv,
