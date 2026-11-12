@@ -213,7 +213,7 @@ pub(super) async fn launch_session(
         },
     ) = prepare_launch(
         &n.hello,
-        n.welcome.color.is_hdr(),
+        n.display_hdr,
         &n.resolved,
         &owner,
         outcome,

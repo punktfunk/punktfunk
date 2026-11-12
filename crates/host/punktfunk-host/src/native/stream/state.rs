@@ -288,6 +288,9 @@ pub(super) struct StreamState {
     /// The session's place among the seat's followers, left when it ends.
     #[cfg(target_os = "linux")]
     pub(super) following: Option<crate::seats::session_switch::Following>,
+    /// The watch on what the session's gamescope shows, for a session that follows its source.
+    #[cfg(target_os = "linux")]
+    pub(super) content: Option<super::session_watch::ContentFollow>,
     /// Screens past the first, when the session negotiated them. Before `send`: their loops
     /// hold senders the send thread waits out.
     pub(super) screens: Option<super::screens::ScreenSet>,
@@ -706,6 +709,8 @@ impl StreamState {
             seat_join: ctx.follows_seat.then_some(ctx.join_live),
             #[cfg(target_os = "linux")]
             following: None,
+            #[cfg(target_os = "linux")]
+            content: None,
             game_life,
         };
         let (rx, tell) = (c.ends.screens_rx, c.ends.screen_tell_tx);
@@ -768,6 +773,11 @@ impl StreamState {
         let _session_span = tracing::info_span!("session", id = self.live_session.id).entered();
         self.facts.life.enter(crate::lifecycle::Phase::Streaming);
         self.spawn_session_watcher();
+        #[cfg(target_os = "linux")]
+        if self.facts.format_facts.follows {
+            let stop = self.facts.life.stop_flag().clone();
+            self.content = Some(super::session_watch::ContentFollow::spawn(stop));
+        }
         self.publish_arrival_poke();
         let result = self.tick_loop();
         self.finish(result.is_ok());
@@ -780,6 +790,7 @@ impl StreamState {
             self.on_mode_switch();
             self.on_screens();
             self.on_format_change();
+            self.on_content()?;
             self.on_topology_reassert()?;
             self.on_fec_moved();
             self.on_bitrate_request();
@@ -900,8 +911,8 @@ type CursorPlan = (
 
 /// The display request: the cursor plan, and what every display of this session opens with.
 /// Bring-up's launch rides the params; a rebuild swaps in its own cursor and route, and drops
-/// the launch. `hdr` is the HDR verdict, not the depth: a 10-bit SDR session leaves the output
-/// SDR.
+/// the launch. `hdr` is the display's HDR verdict, not the depth or what the stream carries:
+/// a 10-bit SDR session leaves the output SDR, and SDR content leaves it lit in HDR.
 fn display_request(
     ctx: &SessionContext,
     plan: &crate::session_plan::SessionPlan,
@@ -929,7 +940,7 @@ fn display_request(
     let params = crate::vdisplay::SessionParams {
         client_fp: ctx.conn.peer_fingerprint(),
         client_hdr: ctx.client_hdr,
-        hdr: ctx.common.hdr,
+        hdr: ctx.display_hdr,
         hw_cursor: ctx.cursor_forward || metadata_composite,
         join_live: ctx.join_live,
         quit: ctx.common.life.quit_flag().clone(),
