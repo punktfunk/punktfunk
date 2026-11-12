@@ -2,8 +2,14 @@ import { afterEach, expect, test } from "bun:test";
 import { MutationObserver, QueryClient } from "@tanstack/react-query";
 import type { CatalogEntry } from "@/api/gen/model";
 import type { ProfileAdmin } from "@/api/gen/model/profileAdmin";
-import { apiFetch } from "./fetcher";
-import { isFullSeat, scopeChoices, seatChoices, seatClient } from "./seat";
+import { ApiError, apiFetch } from "./fetcher";
+import {
+	isFullSeat,
+	onProfileGone,
+	scopeChoices,
+	seatChoices,
+	seatClient,
+} from "./seat";
 import { installable } from "./store";
 
 const KID = "0a1b2c3d4e5f";
@@ -193,6 +199,33 @@ test("a seat's writes go to the seat's host", async () => {
 		mutationFn: () => apiFetch("/api/v1/library/custom", { method: "POST" }),
 	}).mutate();
 	expect(urls).toEqual([`/api/v1/profiles/${KID}/proxy/library/custom`]);
+});
+
+test("a profile the host no longer has is reported once per failed call", async () => {
+	const client = new QueryClient({
+		defaultOptions: { queries: { retry: false } },
+	});
+	const gone = new ApiError(404, {
+		error: "That profile is gone from this host. Pick another one.",
+		code: "profile_unknown",
+	});
+	const seen: boolean[] = [];
+	const stop = onProfileGone(client, (_e, read) => seen.push(read));
+	const fail = (e: unknown) => () => Promise.reject(e);
+	await client
+		.fetchQuery({ queryKey: ["anna"], queryFn: fail(gone) })
+		.catch(() => {});
+	await client
+		.fetchQuery({ queryKey: ["busy"], queryFn: fail(new ApiError(409, {})) })
+		.catch(() => {});
+	await new MutationObserver(client, { mutationFn: fail(gone) })
+		.mutate()
+		.catch(() => {});
+	stop();
+	await client
+		.fetchQuery({ queryKey: ["later"], queryFn: fail(gone) })
+		.catch(() => {});
+	expect(seen).toEqual([true, false]);
 });
 
 test("a seat's cache is kept and takes the box's defaults", () => {

@@ -4,6 +4,7 @@
 import { QueryClient } from "@tanstack/react-query";
 import { createContext, useContext } from "react";
 import type { ProfileAdmin } from "@/api/gen/model/profileAdmin";
+import { apiErrorCode } from "@/lib/errors";
 import { m } from "@/paraglide/messages";
 import { inSeat } from "./fetcher";
 
@@ -186,6 +187,37 @@ function bind<O extends object>(
 }
 
 const clients = new Map<string, QueryClient>();
+
+/**
+ * Calls `onGone` with the refusal when a read (`read`) or a write of `client` names a profile
+ * the host no longer has. Returns the unsubscribe.
+ */
+export function onProfileGone(
+	client: QueryClient,
+	onGone: (error: unknown, read: boolean) => void,
+): () => void {
+	const gone = (e: unknown) => apiErrorCode(e) === "profile_unknown";
+	const reads = client.getQueryCache().subscribe((ev) => {
+		if (
+			ev.type === "updated" &&
+			ev.action.type === "error" &&
+			gone(ev.action.error)
+		)
+			onGone(ev.action.error, true);
+	});
+	const writes = client.getMutationCache().subscribe((ev) => {
+		if (
+			ev.type === "updated" &&
+			ev.action.type === "error" &&
+			gone(ev.action.error)
+		)
+			onGone(ev.action.error, false);
+	});
+	return () => {
+		reads();
+		writes();
+	};
+}
 
 /** The cache of seat `id`, when a page has opened it; a seat nobody looked at holds nothing. */
 export const seatClientIfAny = (id: string): QueryClient | undefined =>

@@ -2,10 +2,15 @@
 // the whole console. Library shows any profile's view of the box's library; Plugins and
 // Automation a seat's own host. A page that has nothing of the pick's shows the owner's.
 import { QueryClientProvider, useQueryClient } from "@tanstack/react-query";
-import { type FC, type ReactNode, useContext } from "react";
+import { toast } from "@unom/ui/toast";
+import { type FC, type ReactNode, useContext, useEffect } from "react";
 import { useGetHostInfo } from "@/api/gen/host/host";
-import { useListProfiles } from "@/api/gen/profiles/profiles";
 import {
+	getListProfilesQueryKey,
+	useListProfiles,
+} from "@/api/gen/profiles/profiles";
+import {
+	onProfileGone,
 	type SeatPage,
 	SeatScopeContext,
 	type SeatScopeValue,
@@ -20,6 +25,7 @@ import {
 	SelectTrigger,
 	SelectValue,
 } from "@/components/ui/select";
+import { apiErrorMessage } from "@/lib/errors";
 import { useLocalPref } from "@/lib/prefs";
 import { m } from "@/paraglide/messages";
 
@@ -82,7 +88,8 @@ export const SeatScope: FC<{ page: SeatPage; children: ReactNode }> = ({
 
 /**
  * `SeatScope` without its queries. A seat gets its own cache, and a pick that changes the seat
- * remounts the page; a profile's view of the library keeps it and names the profile in `as`.
+ * remounts the page; a profile's view of the library keeps it and names the profile in `as`. A
+ * profile the host no longer has turns the pick back to the owner at once, with its sentence.
  */
 export const SeatScopeView: FC<SeatScopeValue & { children: ReactNode }> = ({
 	children,
@@ -90,12 +97,24 @@ export const SeatScopeView: FC<SeatScopeValue & { children: ReactNode }> = ({
 }) => {
 	const root = useQueryClient();
 	const id = scope.current?.seat?.id ?? null;
+	const client = id ? seatClient(id, root) : root;
+	const as = scope.current?.as;
+	const { pick } = scope;
+	useEffect(() => {
+		if (!as) return;
+		return onProfileGone(client, (e, read) => {
+			// A failed write already says so in its own toast.
+			if (read)
+				toast.error(apiErrorMessage(e) ?? m.common_error(), {
+					id: "profile-gone",
+				});
+			pick(null);
+			void root.invalidateQueries({ queryKey: getListProfilesQueryKey() });
+		});
+	}, [client, root, as, pick]);
 	return (
 		<SeatScopeContext.Provider value={scope}>
-			<QueryClientProvider
-				key={id ?? OWNER}
-				client={id ? seatClient(id, root) : root}
-			>
+			<QueryClientProvider key={id ?? OWNER} client={client}>
 				{children}
 			</QueryClientProvider>
 		</SeatScopeContext.Provider>
