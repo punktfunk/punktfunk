@@ -55,6 +55,8 @@ import androidx.compose.ui.unit.sp
 import coil3.ImageLoader
 import coil3.compose.AsyncImage
 import coil3.request.ImageRequest
+import io.unom.punktfunk.kit.HostText
+import io.unom.punktfunk.kit.NativeBridge
 import io.unom.punktfunk.kit.R
 import io.unom.punktfunk.kit.Say
 import io.unom.punktfunk.kit.library.Download
@@ -81,12 +83,14 @@ private const val LAUNCH_NO_LEASE_S = 15.0
 /**
  * Why the hold is giving up, in one sentence, or null while it should keep waiting.
  *
- * [state] is the host's own `games[]` word for this title, null when the host lists nothing for it
- * at all — which is what a refused launch looks like from here. Every sentence this returns ends
- * the hold with a message and its three actions; `running`, `untracked` and `grace` return null
- * and the caller shows the stream, because those are launches that worked.
+ * [why] is the host's own reason nothing started — its refusal, or a download that stopped — and
+ * is said at once. Else [state] is the host's `games[]` word for this title, null when the host
+ * lists nothing for it at all — which is what a refusal it said nothing about looks like. Every
+ * sentence this returns ends the hold with a message and its three actions; `running`, `untracked`
+ * and `grace` return null and the caller shows the stream, because those are launches that worked.
  */
-internal fun launchGaveUp(title: String, state: String?, elapsed: Double): Say? = when {
+internal fun launchGaveUp(title: String, state: String?, elapsed: Double, why: Say? = null): Say? = when {
+    why != null -> why
     state == null && elapsed >= LAUNCH_NO_LEASE_S -> say(R.string.lib_hold_gave_up_not_started, title)
     state == "launching" && elapsed >= LAUNCH_HOLD_MAX_S -> say(R.string.lib_hold_gave_up_slow, title)
     state == "exited" -> say(R.string.lib_hold_gave_up_exited, title)
@@ -128,12 +132,13 @@ object TileFrames {
  * game is actually up.
  *
  * Opaque, so the launcher and desktop behind it are never seen — that is the whole job. Polls the
- * host's `/status` once a second (the Resume badge's lane) and calls [onShow] once the title is up;
- * a tap does the same. When the launch did not produce a game it says so and offers the three moves
+ * host's `/status` once a second (the Resume badge's lane) and session [handle]'s launch verdict,
+ * and calls [onShow] once the title is up; a tap does the same. When the launch did not produce a
+ * game it says so, in the host's words when it sent some, and offers the three moves
  * ([launchGaveUp]), rather than sliding away and leaving the player on a desktop.
  */
 @Composable
-fun LaunchHoldOverlay(hold: LaunchHold, onRetry: () -> Unit, onShow: () -> Unit) {
+fun LaunchHoldOverlay(hold: LaunchHold, handle: Long, onRetry: () -> Unit, onShow: () -> Unit) {
     val context = LocalContext.current
     val density = LocalDensity.current
     var loader by remember(hold) { mutableStateOf<ImageLoader?>(null) }
@@ -172,9 +177,11 @@ fun LaunchHoldOverlay(hold: LaunchHold, onRetry: () -> Unit, onShow: () -> Unit)
             val game = status.games.firstOrNull { it.appId == hold.game.id }
             val state = game?.state
             val dl = status.downloads.firstOrNull { it.appId == hold.game.id }
+            // The host's own sentence for a launch it did not start: nothing outwaits it.
+            val refused = HostText.launch(NativeBridge.nativeLaunchRefusal(handle))
             // The host fetches the title's files before it starts it: no cap while they come, and
             // the clocks start over once they are in.
-            if (dl?.live == true) {
+            if (refused == null && dl?.live == true) {
                 download = dl
                 began = SystemClock.elapsedRealtime()
                 delay(1_000)
@@ -185,7 +192,7 @@ fun LaunchHoldOverlay(hold: LaunchHold, onRetry: () -> Unit, onShow: () -> Unit)
             val stopped = dl?.takeIf { state == null || state == "launching" }
                 ?.stopped(hold.game.title)
             val elapsed = (SystemClock.elapsedRealtime() - began) / 1000.0
-            val said = stopped ?: launchGaveUp(hold.game.title, state, elapsed)
+            val said = launchGaveUp(hold.game.title, state, elapsed, refused ?: stopped)
             if (said != null) {
                 gaveUp = said
                 return@LaunchedEffect

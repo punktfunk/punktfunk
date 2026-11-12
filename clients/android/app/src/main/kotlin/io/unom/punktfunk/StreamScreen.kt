@@ -941,6 +941,7 @@ fun StreamScreen(
             launchHold?.let {
                 LaunchHoldOverlay(
                     it,
+                    handle,
                     // Retry is the shelf the launch came off: ending as `GAME_EXITED` puts a library
                     // launch back on it, one press from the same tile.
                     onRetry = { endAway(true, SessionEndReason.GAME_EXITED) },
