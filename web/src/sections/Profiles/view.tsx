@@ -904,6 +904,61 @@ export const SeatPasswordDialog: FC<{
 	);
 };
 
+/**
+ * The pencil: **Rename profile**, or for a profile whose seat has a host of its own **Edit
+ * profile**, with `exit` under the name. That part saves on its own and loads and fails alone.
+ */
+export const EditProfileDialog: FC<{
+	profile: ProfileAdmin;
+	exit?: ReactNode;
+	onRename: (name: string) => void;
+	onClose: () => void;
+}> = ({ profile, exit, onRename, onClose }) => {
+	const [name, setName] = useState(profile.display_name);
+	const submit = () => {
+		const next = name.trim();
+		if (next && next !== profile.display_name) onRename(next);
+		onClose();
+	};
+	return (
+		<Dialog open onOpenChange={(o) => !o && onClose()}>
+			<DialogContent className="max-w-md">
+				<DialogHeader>
+					<DialogTitle>
+						{exit ? m.profiles_edit_title() : m.profiles_rename_title()}
+					</DialogTitle>
+				</DialogHeader>
+				<form
+					id="profile-edit"
+					className="space-y-2"
+					onSubmit={(e) => {
+						e.preventDefault();
+						submit();
+					}}
+				>
+					<Label htmlFor="profile-name">{m.profiles_name()}</Label>
+					<Input
+						id="profile-name"
+						autoFocus
+						autoComplete="off"
+						value={name}
+						onChange={(e) => setName(e.target.value)}
+					/>
+				</form>
+				{exit}
+				<DialogFooter>
+					<Button type="button" variant="outline" onClick={onClose}>
+						{m.common_cancel()}
+					</Button>
+					<Button type="submit" form="profile-edit">
+						{exit ? m.common_save() : m.action_rename()}
+					</Button>
+				</DialogFooter>
+			</DialogContent>
+		</Dialog>
+	);
+};
+
 /** The doctor's verdict under the cards: its first error, else how many notes, else healthy. */
 const DoctorFooter: FC<{ line: DoctorLine }> = ({ line }) => (
 	<div className="flex items-center justify-between gap-4 text-sm text-muted-foreground">

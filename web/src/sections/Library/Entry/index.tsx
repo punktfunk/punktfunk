@@ -18,6 +18,7 @@ import {
 	useUpdateCustomGame,
 } from "@/api/gen/library/library";
 import type { OperatorGameEntry } from "@/api/gen/model/operatorGameEntry";
+import { useAs, useProfileView } from "@/api/seat";
 import { useDialogs } from "@/components/dialogs";
 import { passwordFailure } from "@/components/password-confirm";
 import { QueryState } from "@/components/query-state";
@@ -33,6 +34,7 @@ import {
 	refreshLibrary,
 	storeLabel,
 } from "../helpers";
+import { SharedNote } from "../SharedNote";
 import { useSourceNames } from "../Sources";
 import {
 	emptyForm,
@@ -57,12 +59,16 @@ export const SectionLibraryEntry: FC = () => (
 const LibraryEntry: FC = () => {
 	useLocale();
 	const { gameId } = route.useParams();
+	const view = useProfileView();
+	const as = useAs();
 	const creating = gameId === "new";
-	// This one title, not the library it belongs to.
+	// This one title, not the library it belongs to; in a profile's view, as it has it.
 	const library = useGetLibraryPage(
-		{ id: gameId, limit: 1 },
+		{ id: gameId, limit: 1, ...as },
 		{ query: { enabled: !creating } },
 	);
+	// A new title is the owner's library's: a profile's view says where to add it.
+	if (creating && view) return <SharedOnly />;
 	if (creating)
 		return <EntryEditor key="new" entry={null} initial={emptyForm} />;
 	const entry = library.data?.items[0];
@@ -73,7 +79,7 @@ const LibraryEntry: FC = () => {
 			refetch={library.refetch}
 		>
 			{entry ? (
-				isOperatorOwned(entry) ? (
+				isOperatorOwned(entry) && !view ? (
 					<OwnedEntry key={entry.id} entry={entry} />
 				) : (
 					<EntryEditor key={entry.id} entry={entry} initial={formFrom(entry)} />
@@ -100,6 +106,12 @@ const OwnedEntry: FC<{ entry: OperatorGameEntry }> = ({ entry }) => {
 		</QueryState>
 	);
 };
+
+const SharedOnly: FC = () => (
+	<Section maxWidth={false}>
+		<SharedNote />
+	</Section>
+);
 
 const Missing: FC = () => (
 	<Section maxWidth={false}>
@@ -128,10 +140,13 @@ const EntryEditor: FC<{
 	const { tab } = route.useSearch();
 	const { confirm } = useDialogs();
 	const nameOf = useSourceNames();
+	const view = useProfileView();
+	const as = useAs();
 	const [draft, setDraft] = useState(initial);
 	const [baseline, setBaseline] = useState(initial);
 	const [password, setPassword] = useState("");
-	const pluginTabs = usePluginTabs(entry?.id ?? null);
+	// A plugin's own tab is the owner's library's.
+	const pluginTabs = usePluginTabs(view ? null : (entry?.id ?? null));
 	const create = useCreateCustomGame();
 	const update = useUpdateCustomGame();
 	const remove = useDeleteCustomGame();
@@ -214,6 +229,7 @@ const EntryEditor: FC<{
 			await setHidden.mutateAsync({
 				id: entry.id,
 				data: { hidden: entry.hidden !== true },
+				params: as,
 			});
 		} catch (e) {
 			toast.error(apiErrorMessage(e) ?? m.library_hide_failed());
@@ -244,8 +260,12 @@ const EntryEditor: FC<{
 			}
 			header={{
 				storeName: entry ? storeLabel(entry.store, nameOf) : null,
+				// A profile's view says under the header that the title is the owner's library's.
 				managedBy:
-					readOnly && source ? (nameOf(source) ?? storeLabel(source)) : null,
+					readOnly && source && !view
+						? (nameOf(source) ?? storeLabel(source))
+						: null,
+				...(view ? { who: view.name } : {}),
 				dirty,
 				saving: create.isPending || update.isPending,
 				gated,

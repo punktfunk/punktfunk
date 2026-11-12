@@ -14,7 +14,7 @@ import {
 	useSourceStatus,
 } from "@/api/metadata";
 import { usePlugins } from "@/api/plugins";
-import { usePluginsReachable } from "@/api/seat";
+import { usePluginsReachable, useProfileView } from "@/api/seat";
 import { Button } from "@/components/ui/button";
 import {
 	Dialog,
@@ -113,7 +113,10 @@ export const ChooseArtDialog: FC<{
 	);
 };
 
-/** One source: what it matched, "wrong game?", and its images for the slot. */
+/**
+ * One source: what it matched, "wrong game?", and its images for the slot. The match is the
+ * owner's library's, so a profile's view only reads it.
+ */
 const SourcePanel: FC<{
 	id: string;
 	name: string;
@@ -123,6 +126,7 @@ const SourcePanel: FC<{
 	onPick: (url: string) => void;
 }> = ({ id, name, entryId, entryTitle, kind, onPick }) => {
 	const qc = useQueryClient();
+	const view = useProfileView();
 	const status = useSourceStatus(id);
 	const match = useSourceMatch(id, entryId);
 	const images = useSourceImages(id, entryId, kind);
@@ -174,7 +178,7 @@ const SourcePanel: FC<{
 					</span>
 				)}
 				<div className="ml-auto flex gap-2">
-					{match.data?.pinned && (
+					{!view && match.data?.pinned && (
 						<Button
 							size="sm"
 							variant="ghost"
@@ -184,7 +188,7 @@ const SourcePanel: FC<{
 							{m.library_media_unpin()}
 						</Button>
 					)}
-					{status.data?.searchable && (
+					{!view && status.data?.searchable && (
 						<Button
 							size="sm"
 							variant="outline"

@@ -125,6 +125,23 @@ async function main() {
 			await page.goto(url, { waitUntil: "networkidle", timeout: 30_000 });
 			// Story root mounted with real content.
 			await page.waitForSelector("#storybook-root > *", { timeout: 20_000 });
+			// The story's play function has run to its end: a menu it opens has settled. A story
+			// with none rests in `completing`.
+			await page
+				.waitForFunction(
+					() =>
+						[
+							"played",
+							"completing",
+							"completed",
+							"finished",
+							"errored",
+							"aborted",
+						].includes(window.__STORYBOOK_PREVIEW__?.currentRender?.phase),
+					null,
+					{ timeout: 10_000 },
+				)
+				.catch(() => {});
 			// Web fonts settled (else text reflows / falls back in the shot).
 			await page.evaluate(() => document.fonts.ready);
 			// Recharts mounts behind a client-only guard — wait for the SVG if present.
@@ -136,7 +153,12 @@ async function main() {
 			await page.waitForTimeout(SETTLE);
 			const suffix = GLOBALS ? `--${GLOBALS.replace(/[^a-z0-9]+/gi, "-")}` : "";
 			const file = join(OUT, `${story.id}${suffix}.png`);
-			await page.screenshot({ path: file, fullPage: FULL });
+			// A full-page shot resizes the window, which closes an open menu mid-shot: a story
+			// that opened one is shot at the window's size.
+			const menu = await page.evaluate(
+				() => !!document.querySelector('[role="listbox"], [role="menu"]'),
+			);
+			await page.screenshot({ path: file, fullPage: FULL && !menu });
 			console.log(`✓ ${story.id} → ${file}`);
 			ok++;
 		} catch (e) {

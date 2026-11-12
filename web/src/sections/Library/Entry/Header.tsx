@@ -12,6 +12,7 @@ import { Button } from "@/components/ui/button";
 import { fmtAgo, fmtSpan } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { m } from "@/paraglide/messages";
+import { hideLabel, OwnBadge } from "../GameCard";
 
 export interface EntryHeaderProps {
 	/** The catalog entry; null while creating. */
@@ -37,6 +38,9 @@ export interface EntryHeaderProps {
 	onToggleHidden?: () => void;
 	hiding: boolean;
 	error?: string | null;
+	/** The profile whose view this is, by name: the hide is its own, and the way back is to its
+	 * library. */
+	who?: string;
 }
 
 /** The page's inset (the main's padding plus the section's), for a band that runs past it. */
@@ -117,6 +121,7 @@ export const EntryHeader: FC<EntryHeaderProps> = ({
 	onToggleHidden,
 	hiding,
 	error,
+	who,
 }) => {
 	const [heroFailed, setHeroFailed] = useState(false);
 	const hidden = entry?.hidden === true;
@@ -145,7 +150,7 @@ export const EntryHeader: FC<EntryHeaderProps> = ({
 			)}
 		>
 			<ArrowLeft className="size-3.5" />
-			{m.library_title()}
+			{who ? m.seat_library_of({ name: who }) : m.library_title()}
 		</Link>
 	);
 	return (
@@ -171,9 +176,12 @@ export const EntryHeader: FC<EntryHeaderProps> = ({
 						</h1>
 						{meta && <p className="text-sm text-muted-foreground">{meta}</p>}
 						{stats && <p className="text-xs text-muted-foreground">{stats}</p>}
-						{hidden && (
-							<Badge variant="secondary">{m.library_hidden_badge()}</Badge>
-						)}
+						{hidden &&
+							(who ? (
+								<OwnBadge label={m.profile_view_hidden_badge({ name: who })} />
+							) : (
+								<Badge variant="secondary">{m.library_hidden_badge()}</Badge>
+							))}
 					</div>
 					<div className="flex w-full flex-wrap items-center gap-2 @lg:w-auto @lg:pb-1">
 						{onToggleHidden && (
@@ -189,7 +197,7 @@ export const EntryHeader: FC<EntryHeaderProps> = ({
 								) : (
 									<EyeOff className="size-4" />
 								)}
-								{hidden ? m.library_unhide_action() : m.library_hide_action()}
+								{hideLabel(hidden, who)}
 							</Button>
 						)}
 						{onDelete && (

@@ -3,6 +3,7 @@ import { toast } from "@unom/ui/toast";
 import { ImageOff } from "lucide-react";
 import { type FC, useState } from "react";
 import { useSetLibraryArtPick } from "@/api/gen/library/library";
+import { useAs, useProfileView } from "@/api/seat";
 import { LAUNCHER_ICONS, LauncherIcon } from "@/components/launcher-icon";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
@@ -15,6 +16,7 @@ import {
 } from "@/components/ui/select";
 import { apiErrorMessage } from "@/lib/errors";
 import { m } from "@/paraglide/messages";
+import { OwnBadge } from "../../GameCard";
 import { refreshLibrary } from "../../helpers";
 import { useSourceNames } from "../../Sources";
 import { type ArtKind, ChooseArtDialog } from "../ChooseArt";
@@ -110,7 +112,8 @@ const Preview: FC<{
 /**
  * The four artwork slots with previews, and the brand mark. Choose… lists every Art & Metadata
  * source's images for a slot: on an entry a plugin owns the pick is stored by the host, on the
- * operator's own entry it goes into the draft like a typed URL.
+ * operator's own entry it goes into the draft like a typed URL. In a profile's view the pick is
+ * its own, marked, with one action back to the owner's.
  */
 export const MediaTab: FC<TabProps> = ({
 	draft,
@@ -122,8 +125,11 @@ export const MediaTab: FC<TabProps> = ({
 	const qc = useQueryClient();
 	const pick = useSetLibraryArtPick();
 	const nameOf = useSourceNames();
+	const view = useProfileView();
+	const as = useAs();
 	const [choosing, setChoosing] = useState<ArtKind | null>(null);
 	const filled = entry?.filled ?? {};
+	const mine = new Set(entry?.profile?.picks ?? []);
 
 	const store = async (kind: ArtKind, url: string | null) => {
 		if (!entry) return;
@@ -132,7 +138,7 @@ export const MediaTab: FC<TabProps> = ({
 			return;
 		}
 		try {
-			await pick.mutateAsync({ id: entry.id, data: { kind, url } });
+			await pick.mutateAsync({ id: entry.id, data: { kind, url }, params: as });
 			await refreshLibrary(qc);
 		} catch (e) {
 			toast.error(apiErrorMessage(e) ?? m.library_media_pick_failed());
@@ -156,7 +162,9 @@ export const MediaTab: FC<TabProps> = ({
 						const borrowed =
 							own === null && source !== undefined && source !== "pick";
 						const src = borrowed ? entry?.art[kind] : own;
-						const showsSource = source !== undefined && (readOnly || borrowed);
+						const hers = view !== null && mine.has(kind);
+						const showsSource =
+							!hers && source !== undefined && (readOnly || borrowed);
 						return (
 							<div key={kind} className={`space-y-3 ${cell ?? ""}`}>
 								<Preview src={src} frame={frame} contain={kind === "logo"} />
@@ -176,6 +184,11 @@ export const MediaTab: FC<TabProps> = ({
 								)}
 								{entry && (
 									<div className="flex flex-wrap items-center gap-2">
+										{hers && (
+											<OwnBadge
+												label={m.profile_view_own({ name: view?.name ?? "" })}
+											/>
+										)}
 										{showsSource && (
 											<span className="text-xs text-muted-foreground">
 												{source === "pick"
@@ -192,16 +205,31 @@ export const MediaTab: FC<TabProps> = ({
 										>
 											{m.library_media_choose()}
 										</Button>
-										{readOnly && source === "pick" && (
-											<Button
-												size="sm"
-												variant="ghost"
-												disabled={pick.isPending}
-												onClick={() => store(kind, null)}
-											>
-												{m.library_media_reset()}
-											</Button>
-										)}
+										{/* A profile undoes only its own pick; the owner's is the owner's. */}
+										{view
+											? hers && (
+													<Button
+														size="sm"
+														variant="ghost"
+														disabled={pick.isPending}
+														onClick={() => store(kind, null)}
+													>
+														{m.profile_view_use_owner_art({
+															owner: view.ownerName,
+														})}
+													</Button>
+												)
+											: readOnly &&
+												source === "pick" && (
+													<Button
+														size="sm"
+														variant="ghost"
+														disabled={pick.isPending}
+														onClick={() => store(kind, null)}
+													>
+														{m.library_media_reset()}
+													</Button>
+												)}
 									</div>
 								)}
 							</div>

@@ -103,6 +103,69 @@ export const setList = (
 		.map(([id, s]) => ({ ...s, id }))
 		.sort((a, b) => (a.name ?? "").localeCompare(b.name ?? "", locale));
 
+/** The shared overrides a profile's entry may name: the owner's library's, and its own. */
+export const mergedSets = (
+	box: OverridesDoc | undefined,
+	own: OverridesDoc | undefined,
+): OverridesDoc => ({ sets: { ...box?.sets, ...own?.sets } });
+
+/** A game's or a source's stream settings in a profile's view, as the host resolves them. */
+export interface ProfileStream {
+	/** The profile's own entry; absent, the fallback applies. */
+	mine?: OverrideEntry;
+	/** What applies without `mine`: the profile's own entry for the game's source, else the
+	 * owner's library's. */
+	fallback?: OverrideEntry;
+	/** `fallback` is the profile's own source entry, not the owner's. */
+	fallbackIsOwn: boolean;
+	/** The shared override in force, when it still exists. */
+	setId?: string;
+	/** The values in force. */
+	shown: Fields;
+}
+
+/**
+ * Game or source `id` in a profile's view. The profile's entry for a game or its source beats
+ * the owner's; a set it names is looked up in its own file, then the owner's.
+ */
+export function profileStream(
+	kind: "game" | "source",
+	id: string,
+	box: OverridesDoc | undefined,
+	own: OverridesDoc | undefined,
+): ProfileStream {
+	const store = kind === "game" ? storeOf(id) : id;
+	const mine = kind === "game" ? own?.games?.[id] : own?.sources?.[id];
+	const ownSource = kind === "game" ? own?.sources?.[store] : undefined;
+	const fallback =
+		ownSource ??
+		(kind === "game" ? box?.games?.[id] : undefined) ??
+		box?.sources?.[store];
+	const entry = mine ?? fallback;
+	const sets = mergedSets(box, own).sets ?? {};
+	const setId = entry?.set && sets[entry.set] ? entry.set : undefined;
+	return {
+		...(mine ? { mine } : {}),
+		...(fallback ? { fallback } : {}),
+		fallbackIsOwn: ownSource !== undefined,
+		...(setId ? { setId } : {}),
+		shown: entry?.none ? {} : fieldsOf(setId ? sets[setId] : entry),
+	};
+}
+
+/**
+ * What a profile's entry stores for `data`: `null` hands it back to the fallback. A game with
+ * nothing of its own is `none`, or it would take the fallback's values.
+ */
+export function profileEntry(
+	kind: "game" | "source",
+	data: OverrideEntry | null,
+): OverrideEntry {
+	if (!data) return {};
+	const empty = !data.set && Object.keys(fieldsOf(data)).length === 0;
+	return empty && kind === "game" ? { none: true } : data;
+}
+
 /** How many games and sources name shared override `set`. */
 export function usageOf(
 	doc: OverridesDoc | undefined,
