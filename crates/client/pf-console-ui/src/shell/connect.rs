@@ -796,8 +796,9 @@ impl Shell {
         self.connect = Connect::SeatWait(w);
     }
 
-    /// Dial `intent`, whose profile is `row` as the box listed it: first the password prompt,
-    /// where the profile needs one and this host carries it. The console holds no device key.
+    /// Dial `intent`, whose profile is `row` as the box listed it: first the password or PIN
+    /// prompt, where the profile needs one and this host carries it. The console holds no
+    /// device key.
     fn dial_or_prompt(&mut self, intent: ConnectIntent, row: Option<&ListedProfile>) {
         match row {
             Some(row) if self.prompts_unlock => match unlock::before_dial(row.unlock, false) {
@@ -808,16 +809,18 @@ impl Shell {
         }
     }
 
-    /// The password prompt for `intent`'s profile, `error` under its field.
+    /// The prompt for `intent`'s profile, `error` under its field: its PIN where its box lists
+    /// it locked, else its password.
     pub(super) fn prompt_unlock(&mut self, intent: ConnectIntent, error: Option<String>) {
         let id = intent.profile.clone().unwrap_or_default();
-        let name = self
-            .listed_row(&intent)
+        let row = self.listed_row(&intent);
+        let pin = row.is_some_and(|p| p.unlock.pin());
+        let name = row
             .map(|p| p.display_name.clone())
             .filter(|n| !n.is_empty())
             .unwrap_or(id);
         let host = self.host_name(&intent);
-        let screen = crate::screens::unlock::UnlockScreen::new(intent, name, host, error);
+        let screen = crate::screens::unlock::UnlockScreen::new(intent, (name, host), pin, error);
         self.apply_nav(Nav::Push(Box::new(Screen::Unlock(screen))));
     }
 

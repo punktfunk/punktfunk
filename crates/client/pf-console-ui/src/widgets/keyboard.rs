@@ -177,6 +177,14 @@ impl Keyboard {
         }
     }
 
+    /// The keyboard of a field that takes digits: it opens on the digits' row.
+    pub(crate) fn digits_first() -> Keyboard {
+        Keyboard {
+            row: 0,
+            ..Keyboard::new()
+        }
+    }
+
     /// Press types the key under it and moves the cursor there. A miss between
     /// keys is swallowed: the tray is modal and must not reach the list behind.
     pub fn pointer(&mut self, p: Pointer) -> (KeyMsg, Option<MenuPulse>) {

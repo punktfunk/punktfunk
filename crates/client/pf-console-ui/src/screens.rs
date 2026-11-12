@@ -229,6 +229,14 @@ impl TextEntry {
         }
     }
 
+    /// [`Self::secret`] for a PIN: the tray opens on its digits.
+    pub(crate) fn secret_digits() -> TextEntry {
+        TextEntry {
+            keyboard: Keyboard::digits_first(),
+            ..TextEntry::secret()
+        }
+    }
+
     /// The device's own keyboard types into this field.
     fn system(&self, device: &Device) -> bool {
         device.system_keyboard && !self.secret

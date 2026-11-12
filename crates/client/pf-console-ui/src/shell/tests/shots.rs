@@ -530,6 +530,24 @@ fn dump_profiles() {
         dump(&mut s9, 40, "13b-host-and-profile");
         s9.handle_menu(MenuEvent::Move(MenuDir::Down));
         dump(&mut s9, 40, "13c-host-and-profile-faces");
+
+        // A locked profile's PIN, two digits in, the tray up on its digits.
+        let mut opts = test_options();
+        opts.profiles = true;
+        opts.prompts_unlock = true;
+        let home = vec![Screen::Home(HomeScreen::new())];
+        let bus = ConsoleBus::default();
+        let mut s10 = Shell::new(console8.clone(), library.clone(), bus, opts, home).unwrap();
+        s10.start_connect(crate::screens::ConnectIntent::to_host(&rows[0], None));
+        let kid = ListedProfile {
+            unlock: pf_client_core::profiles::UnlockNeed::Pin,
+            ..p("kid", "Kid", Some("#5AC18E"), None)
+        };
+        console8.set_profiles("aa11", ProfilesAnswer::Listed(vec![kid]));
+        dump(&mut s10, 40, "_14-settle");
+        s10.handle_menu(MenuEvent::Confirm);
+        s10.text_input("24");
+        dump(&mut s10, 40, "14-unlock-pin-keyboard");
     }
 }
 
