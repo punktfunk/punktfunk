@@ -1,4 +1,4 @@
-use pf_seats::backend::{BackendError, PlatformBackend};
+use pf_seats::backend::{Adopted, BackendError, PlatformBackend};
 use pf_seats::ipc::{Command, CommandResult, Diagnostic, ErrorCode, SeatingStatus};
 use pf_seats::model::{CreateSeat, Ledger, RuntimeState, RuntimeStatus, Seat};
 use pf_seats::persistence::{LedgerStore, LEDGER_FILE};
@@ -148,7 +148,8 @@ impl PlatformBackend for FakeBackend {
         }
     }
 
-    fn adopt_account(&self, seat: &Seat, password: &Secret) -> Result<bool, BackendError> {
+    /// A Windows account joins Remote Desktop Users; `Bärbel Ott` held the console deny already.
+    fn adopt_account(&self, seat: &Seat, password: &Secret) -> Result<Adopted, BackendError> {
         self.record("adopt_account", seat);
         if seat.account == "Administrator" {
             return Err(BackendError::new(
@@ -157,7 +158,10 @@ impl PlatformBackend for FakeBackend {
             ));
         }
         refuse_wrong(&seat.account, password)?;
-        Ok(seat.adopted_uid.is_none())
+        Ok(Adopted {
+            rdp_granted: seat.adopted_uid.is_none(),
+            console_deny_kept: seat.account == "Bärbel Ott",
+        })
     }
 
     fn check_password(&self, seat: &Seat, password: &Secret) -> Result<(), BackendError> {
@@ -542,8 +546,8 @@ fn adopt_existing(account: &str, sid: &str) -> Command {
     }
 }
 
-/// An adopted row carries its SID and the Remote Desktop grant the backend reports; a refused
-/// adopt leaves no row. Only an adopted row's password is resealed, and delete releases it
+/// An adopted row carries its SID, the Remote Desktop grant and the console deny the backend
+/// reports; a refused adopt leaves no row. Only an adopted row's password is resealed, and delete releases it
 /// through `remove` once.
 #[test]
 fn an_adopted_account_is_resealed_and_released_through_the_backend() {
@@ -569,7 +573,7 @@ fn an_adopted_account_is_resealed_and_released_through_the_backend() {
     let sid = "S-1-5-21-1-2-3-1001";
     let adopted = created(adopt_existing("Bärbel Ott", sid));
     assert_eq!(adopted.adopted_sid.as_deref(), Some(sid));
-    assert!(adopted.rdp_granted);
+    assert!(adopted.rdp_granted && adopted.console_deny_kept);
     assert_eq!(service.ledger().seats, std::slice::from_ref(&adopted));
     let made = created(create("Kid", "pf-kid", false));
     backend.clear_calls();

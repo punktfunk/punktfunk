@@ -353,7 +353,7 @@ impl<B: PlatformBackend> SeatService<B> {
 
     /// A seat on a person's own account, whose SID is `sid`. Allocated on a copy, as `create`
     /// is; a backend that refuses has undone its own steps. Its sign-in counts against the
-    /// account's attempt limit.
+    /// account's attempt limit. The row records what the backend changed, for release.
     fn adopt(
         &self,
         request: CreateSeat,
@@ -371,8 +371,9 @@ impl<B: PlatformBackend> SeatService<B> {
             device: None,
             account: Some(&account),
         };
-        let granted = self.limited(target, || self.backend.adopt_account(&seat, password))?;
-        seat.rdp_granted = granted;
+        let adopted = self.limited(target, || self.backend.adopt_account(&seat, password))?;
+        seat.rdp_granted = adopted.rdp_granted;
+        seat.console_deny_kept = adopted.console_deny_kept;
         self.land(seat)
     }
 

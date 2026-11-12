@@ -37,6 +37,7 @@ fn row(account: &str, id: &str, owner: bool, adopted_uid: Option<u32>) -> Seat {
         adopted_sid: None,
         adopted_uid,
         rdp_granted: false,
+        console_deny_kept: false,
     }
 }
 

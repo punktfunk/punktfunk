@@ -14,7 +14,7 @@
 //! goes with its profile, at the next service start if the profile won't go at once; an
 //! adopted one is never deleted.
 
-use crate::backend::BackendError;
+use crate::backend::{Adopted, BackendError};
 use crate::doctor::AccountInspection;
 use crate::model::{Seat, SeatId};
 use crate::secret::Secret;
@@ -198,9 +198,9 @@ impl AccountManager {
     /// Makes `seat`'s account, a person's own standard account, ready to run as a seat with
     /// `password`: its blob, Remote Desktop Users, [`SEATS_GROUP`] and the console deny, each
     /// step idempotent. Sets no account flag and writes no comment. A refusal's message is the
-    /// console's sentence; a failed step undoes what this call added. `true`: this call put the
-    /// account in Remote Desktop Users.
-    pub(super) fn adopt(&self, seat: &Seat, password: &Secret) -> WinResult<bool> {
+    /// console's sentence; a failed step undoes what this call added. The answer says whether
+    /// this call put the account in Remote Desktop Users and whether the deny was there before.
+    pub(super) fn adopt(&self, seat: &Seat, password: &Secret) -> WinResult<Adopted> {
         require_local_system()?;
         let account = seat.account.as_str();
         let Some(sid) = seat
@@ -246,6 +246,7 @@ impl AccountManager {
         })?;
 
         let had_blob = self.credentials.exists(&seat.id)?;
+        let console_deny_kept = has_account_right(account, DENY_CONSOLE)?;
         let (mut rdp_added, mut seats_added) = (false, false);
         let result = (|| {
             self.credentials.store(&seat.id, &credential)?;
@@ -254,7 +255,10 @@ impl AccountManager {
             add_account_right(account, DENY_CONSOLE)
         })();
         let Err(error) = result else {
-            return Ok(rdp_added);
+            return Ok(Adopted {
+                rdp_granted: rdp_added,
+                console_deny_kept,
+            });
         };
         // The console deny is the last step, so a failure never added it.
         let undone = with_sid(sid, |sid| {
@@ -287,18 +291,20 @@ impl AccountManager {
     }
 
     /// Gives an adopted `seat`'s account back by `sid`, the row's SID, so a renamed account gets
-    /// it back too: the console deny off, out of [`SEATS_GROUP`], out of Remote Desktop Users
-    /// when adopt put it there, the blob gone, the Steam launchers undone. Never deletes the
-    /// account or its profile, and never acts by name. Every step runs and treats "already gone"
-    /// as done; the first failure is the answer, so Remove can run again. When the name is gone
-    /// or holds another account, the SID's steps only warn.
+    /// it back too: the console deny off unless the account held it before adopt, out of
+    /// [`SEATS_GROUP`], out of Remote Desktop Users when adopt put it there, the blob gone, the
+    /// Steam launchers undone. Never deletes the account or its profile, and never acts by name.
+    /// Every step runs and treats "already gone" as done; the first failure is the answer, so
+    /// Remove can run again. When the name is gone or holds another account, the SID's steps
+    /// only warn.
     fn release(&self, seat: &Seat, sid: &str) -> WinResult<()> {
         let present = sid_string(&seat.account).is_some_and(|found| found == sid);
         let mut results = with_sid(sid, |sid| {
-            let mut results = vec![
-                remove_account_right(sid, DENY_CONSOLE),
-                remove_member(SEATS_GROUP, sid),
-            ];
+            let mut results = Vec::new();
+            if seat.releases_console_deny() {
+                results.push(remove_account_right(sid, DENY_CONSOLE));
+            }
+            results.push(remove_member(SEATS_GROUP, sid));
             if seat.rdp_granted {
                 let rdp = localized_alias(RDP_USERS_SID);
                 results.push(rdp.and_then(|group| remove_member(&group, sid)));

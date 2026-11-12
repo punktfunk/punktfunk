@@ -51,7 +51,7 @@ pub use pam::{run_check as pam_check, CHECK_VERB as PAM_CHECK_VERB};
 pub use shared::ledger_root;
 pub use socket::SOCKET_PATH;
 
-use crate::backend::{BackendError, PlatformBackend};
+use crate::backend::{Adopted, BackendError, PlatformBackend};
 use crate::ipc::{Diagnostic, DiagnosticLevel, SeatingStatus};
 use crate::model::{Ledger, RuntimeState, RuntimeStatus, Seat, SeatId};
 use crate::persistence::{LedgerStore, StoreError};
@@ -967,15 +967,15 @@ impl PlatformBackend for LinuxBackend {
     }
 
     /// A person's row, whose password [`Self::check_password`] passed: the account still resolves
-    /// to the recorded uid, then the row's directory is made. Nothing is made in the account, and
-    /// a refusal leaves nothing behind.
-    fn adopt_account(&self, seat: &Seat, _password: &Secret) -> Result<bool, BackendError> {
+    /// to the recorded uid, then the row's directory is made. Nothing is made in the account, so
+    /// release has nothing of it to take back, and a refusal leaves nothing behind.
+    fn adopt_account(&self, seat: &Seat, _password: &Secret) -> Result<Adopted, BackendError> {
         let passwd = accounts::require_person(seat)?;
         let made = shared::ensure_person_dirs(&self.inner.state, &seat.id, &passwd);
         if made.is_err() {
             let _ = shared::remove_seat_dirs(&self.inner.state, &seat.id);
         }
-        made.map(|()| false)
+        made.map(|()| Adopted::default())
     }
 
     fn account_owned(&self, seat: &Seat) -> Result<(), BackendError> {
@@ -1883,6 +1883,7 @@ mod tests {
             adopted_sid: None,
             adopted_uid: None,
             rdp_granted: false,
+            console_deny_kept: false,
         };
         let passwd = accounts::Passwd {
             name: "bob".into(),
@@ -1919,6 +1920,7 @@ mod tests {
             adopted_sid: None,
             adopted_uid: None,
             rdp_granted: false,
+            console_deny_kept: false,
         };
         let passwd = accounts::Passwd {
             name: "pf-seat-9".into(),

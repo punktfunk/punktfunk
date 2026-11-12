@@ -71,10 +71,9 @@ pub trait PlatformBackend: Send + Sync + 'static {
     }
 
     /// Make `seat`, a new adopted row, ready to run on its person's account with `password`. A
-    /// refusal undoes its own steps. `Ok(true)`: adopt put the account in Remote Desktop Users.
-    /// Windows verifies the password here and seals it; Linux has had [`Self::check_password`]
-    /// pass and ignores it.
-    fn adopt_account(&self, _seat: &Seat, _password: &Secret) -> Result<bool, BackendError> {
+    /// refusal undoes its own steps; the answer is what release must take back. Windows verifies
+    /// the password here and seals it; Linux has had [`Self::check_password`] pass and ignores it.
+    fn adopt_account(&self, _seat: &Seat, _password: &Secret) -> Result<Adopted, BackendError> {
         Err(UnsupportedBackend::unavailable())
     }
 
@@ -143,6 +142,16 @@ pub trait PlatformBackend: Send + Sync + 'static {
     fn remove_flatpak(&self, _id: &str, _purge: bool) -> Result<(), BackendError> {
         Err(no_flatpaks())
     }
+}
+
+/// What [`PlatformBackend::adopt_account`] found and changed on a person's account. The row keeps
+/// both, so release takes back only what adopt gave.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Adopted {
+    /// Adopt put the account in Remote Desktop Users.
+    pub rdp_granted: bool,
+    /// The account already held the console deny before adopt.
+    pub console_deny_kept: bool,
 }
 
 fn no_flatpaks() -> BackendError {

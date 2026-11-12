@@ -22,7 +22,7 @@ mod supervisor;
 mod util;
 mod wts;
 
-use crate::backend::{BackendError, PlatformBackend};
+use crate::backend::{Adopted, BackendError, PlatformBackend};
 use crate::doctor::{report_rows, seat_rows, BoxFacts, SeatFacts};
 use crate::ipc::{Diagnostic, DiagnosticLevel, SeatingStatus};
 use crate::model::{Ledger, RuntimeStatus, Seat};
@@ -290,7 +290,7 @@ impl PlatformBackend for WindowsBackend {
         Ok(())
     }
 
-    fn adopt_account(&self, seat: &Seat, password: &Secret) -> Result<bool, BackendError> {
+    fn adopt_account(&self, seat: &Seat, password: &Secret) -> Result<Adopted, BackendError> {
         self.ensure_runtime_prerequisites()?;
         self.accounts.adopt(seat, password)
     }
@@ -570,6 +570,7 @@ mod tests {
             adopted_sid: None,
             adopted_uid: None,
             rdp_granted: false,
+            console_deny_kept: false,
         };
         let (stopped, starting) = (seat("pfs-absent"), seat("pfs-absent-2"));
         assert!(backend.unless_stopped(&stopped).is_ok());

@@ -1022,6 +1022,7 @@ mod tests {
             adopted_sid: None,
             adopted_uid: None,
             rdp_granted: false,
+            console_deny_kept: false,
         }
     }
 
