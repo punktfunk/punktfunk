@@ -107,10 +107,36 @@ fn check_privileged_fields(
 }
 
 /// `?as=<profile id>`: the profile a library call is for. Absent or empty: this host's own view.
+/// A write that names one changes that profile's own layer, which only the admin lane may do;
+/// any other lane gets 403. Reads stay open.
 #[derive(Deserialize)]
 pub(crate) struct AsProfile {
     #[serde(rename = "as")]
     profile: Option<String>,
+}
+
+impl<S: Send + Sync> axum::extract::FromRequestParts<S> for AsProfile {
+    type Rejection = Response;
+
+    async fn from_request_parts(
+        parts: &mut axum::http::request::Parts,
+        state: &S,
+    ) -> Result<Self, Response> {
+        let Query(who) = Query::<Self>::from_request_parts(parts, state)
+            .await
+            .map_err(IntoResponse::into_response)?;
+        let names = who.profile.as_deref().is_some_and(|p| !p.is_empty());
+        let admin = parts.extensions.get::<AuthLane>() == Some(&AuthLane::Admin);
+        if names && !admin && !matches!(parts.method, Method::GET | Method::HEAD) {
+            return Err(api_error_coded(
+                StatusCode::FORBIDDEN,
+                "profile_layer_console_only",
+                "Couldn't change this profile's own settings. Change them in the host's web \
+                 console.",
+            ));
+        }
+        Ok(who)
+    }
 }
 
 /// Where the profile a call names plays.
@@ -266,7 +292,7 @@ pub(crate) async fn get_library(
     State(st): State<Arc<MgmtState>>,
     Extension(lane): Extension<AuthLane>,
     Query(q): Query<LibraryQuery>,
-    Query(who): Query<AsProfile>,
+    who: AsProfile,
 ) -> Response {
     let scoped = scoped!(who, st);
     let view = &scoped.view;
@@ -417,7 +443,7 @@ pub(crate) async fn get_library_page(
     State(st): State<Arc<MgmtState>>,
     Extension(lane): Extension<AuthLane>,
     Query(q): Query<LibraryPageQuery>,
-    Query(who): Query<AsProfile>,
+    who: AsProfile,
 ) -> Response {
     let scoped = scoped!(who, st);
     let view = &scoped.view;
@@ -582,7 +608,7 @@ pub(crate) struct HiddenState {
 pub(crate) async fn set_library_entry_hidden(
     State(st): State<Arc<MgmtState>>,
     Path(id): Path<String>,
-    Query(who): Query<AsProfile>,
+    who: AsProfile,
     ApiJson(toggle): ApiJson<HiddenToggle>,
 ) -> Response {
     if id.trim().is_empty() {
@@ -624,7 +650,7 @@ pub(crate) struct ScannerToggle {
 )]
 pub(crate) async fn list_library_scanners(
     State(st): State<Arc<MgmtState>>,
-    Query(who): Query<AsProfile>,
+    who: AsProfile,
 ) -> Response {
     let scoped = scoped!(who, st);
     Json(crate::library::list_scanners(&scoped.view)).into_response()
@@ -649,7 +675,7 @@ pub(crate) async fn list_library_scanners(
     responses(
         (status = OK, description = "Toggle stored; the full scanner list", body = [crate::library::ScannerInfo]),
         (status = UNAUTHORIZED, description = "Missing or invalid bearer token", body = ApiError),
-        (status = FORBIDDEN, description = "A plugin toggled another plugin's source", body = ApiError),
+        (status = FORBIDDEN, description = "A plugin toggled another plugin's source, or named a profile", body = ApiError),
         (status = NOT_FOUND, description = "No such scanner on this platform, or `as` names no profile on this host", body = ApiError),
         (status = INTERNAL_SERVER_ERROR, description = "Couldn't save the settings", body = ApiError),
     )
@@ -657,7 +683,7 @@ pub(crate) async fn list_library_scanners(
 pub(crate) async fn set_library_scanner(
     State(st): State<Arc<MgmtState>>,
     OwnedId(id, _): OwnedId<AnyId>,
-    Query(who): Query<AsProfile>,
+    who: AsProfile,
     ApiJson(toggle): ApiJson<ScannerToggle>,
 ) -> Response {
     let scoped = scoped!(who, st);
@@ -1277,7 +1303,7 @@ pub(crate) async fn set_library_metadata(
 pub(crate) async fn set_library_art_pick(
     State(st): State<Arc<MgmtState>>,
     Path(id): Path<String>,
-    Query(who): Query<AsProfile>,
+    who: AsProfile,
     ApiJson(input): ApiJson<crate::library::ArtPickInput>,
 ) -> Response {
     if id.trim().is_empty() {
@@ -1359,7 +1385,7 @@ fn override_refused(e: crate::library::OverrideError) -> Response {
 )]
 pub(crate) async fn get_library_overrides(
     State(st): State<Arc<MgmtState>>,
-    Query(who): Query<AsProfile>,
+    who: AsProfile,
 ) -> Response {
     let scoped = scoped!(who, st);
     Json(crate::library::load_overrides(&scoped.view)).into_response()
@@ -1387,7 +1413,7 @@ pub(crate) async fn get_library_overrides(
 )]
 pub(crate) async fn create_override_set(
     State(st): State<Arc<MgmtState>>,
-    Query(who): Query<AsProfile>,
+    who: AsProfile,
     ApiJson(values): ApiJson<punktfunk_core::game_overrides::GameOverrides>,
 ) -> Response {
     let scoped = scoped!(who, st);
@@ -1427,7 +1453,7 @@ pub(crate) async fn create_override_set(
 pub(crate) async fn update_override_set(
     State(st): State<Arc<MgmtState>>,
     Path(id): Path<String>,
-    Query(who): Query<AsProfile>,
+    who: AsProfile,
     ApiJson(patch): ApiJson<crate::library::OverrideSetPatch>,
 ) -> Response {
     let scoped = scoped!(who, st);
@@ -1464,7 +1490,7 @@ pub(crate) async fn update_override_set(
 pub(crate) async fn delete_override_set(
     State(st): State<Arc<MgmtState>>,
     Path(id): Path<String>,
-    Query(who): Query<AsProfile>,
+    who: AsProfile,
 ) -> Response {
     let scoped = scoped!(who, st);
     match crate::library::delete_override_set(&scoped.view, &id) {
@@ -1509,7 +1535,7 @@ pub(crate) async fn delete_override_set(
 pub(crate) async fn set_game_overrides(
     State(st): State<Arc<MgmtState>>,
     Path(id): Path<String>,
-    Query(who): Query<AsProfile>,
+    who: AsProfile,
     ApiJson(entry): ApiJson<crate::library::OverrideEntry>,
 ) -> Response {
     if id.trim().is_empty() {
@@ -1551,7 +1577,7 @@ pub(crate) async fn set_game_overrides(
 pub(crate) async fn set_source_overrides(
     State(st): State<Arc<MgmtState>>,
     Path(source): Path<String>,
-    Query(who): Query<AsProfile>,
+    who: AsProfile,
     ApiJson(entry): ApiJson<crate::library::OverrideEntry>,
 ) -> Response {
     if source.trim().is_empty() || source.contains(':') {
@@ -1601,7 +1627,7 @@ pub(crate) async fn set_source_overrides(
 pub(crate) async fn get_library_art(
     State(st): State<Arc<MgmtState>>,
     Path((id, kind)): Path<(String, String)>,
-    Query(who): Query<AsProfile>,
+    who: AsProfile,
     headers: axum::http::HeaderMap,
 ) -> Response {
     let Some(kind) = crate::library::ArtKind::parse(&kind) else {

@@ -642,7 +642,7 @@ fn plays_on_the_host() -> Response {
 )]
 pub(crate) async fn get_session_settings(
     State(st): State<Arc<MgmtState>>,
-    Query(who): Query<super::library::AsProfile>,
+    who: super::library::AsProfile,
 ) -> Response {
     use super::library::Whose;
     let scoped = match who.scope(&st).await {
@@ -675,13 +675,14 @@ pub(crate) async fn get_session_settings(
         (status = BAD_REQUEST, description = "Malformed settings body", body = ApiError),
         (status = INTERNAL_SERVER_ERROR, description = "Couldn't save the session settings", body = ApiError),
         (status = UNAUTHORIZED, description = "Missing or invalid bearer token", body = ApiError),
+        (status = FORBIDDEN, description = "`as` on a lane other than the operator's", body = ApiError),
         (status = NOT_FOUND, description = "`as` names no profile on this host", body = ApiError),
         (status = CONFLICT, description = "A seat's own host, or `as` names a profile that plays on the host's own desktop", body = ApiError),
     )
 )]
 pub(crate) async fn set_session_settings(
     State(st): State<Arc<MgmtState>>,
-    Query(who): Query<super::library::AsProfile>,
+    who: super::library::AsProfile,
     ApiJson(settings): ApiJson<crate::session_settings::SessionSettings>,
 ) -> Response {
     use super::library::Whose;

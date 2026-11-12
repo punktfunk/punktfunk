@@ -432,6 +432,82 @@ async fn a_plugin_changes_only_its_own_library_rows() {
     assert_eq!(status, StatusCode::NO_CONTENT);
 }
 
+/// A write naming a profile (`?as=`) changes that profile's own layer: the operator's alone. On
+/// every write route that takes `as`, the plugin lane gets 403 (coded where it reaches the route)
+/// and the cert lane reaches none. Reads with `as` stay open where the lane reaches them.
+#[tokio::test]
+async fn only_the_operator_writes_a_profile_s_layer() {
+    use axum::http::Method;
+    let _dir = ConfigDirOverride::new();
+    let app = test_app(test_state(), None);
+    let doc: serde_json::Value = serde_json::from_str(&openapi_json()).unwrap();
+    let mut writes = 0;
+    for (path, ops) in doc["paths"].as_object().unwrap() {
+        for (method, op) in ops.as_object().unwrap() {
+            let params = op["parameters"].as_array();
+            if !params.is_some_and(|ps| ps.iter().any(|p| p["name"] == "as" && p["in"] == "query"))
+            {
+                continue;
+            }
+            let m = Method::from_bytes(method.to_uppercase().as_bytes()).unwrap();
+            let concrete: Vec<&str> = path
+                .split('/')
+                .map(|s| if s.starts_with('{') { "demo" } else { s })
+                .collect();
+            let concrete = concrete.join("/");
+            let uri = format!("{concrete}?as=a1b2c3d4e5f6");
+            let reachable = auth::plugin_may_access(&m, &concrete);
+            // `demo-secret` is the `demo` plugin's own token; `plugin-secret` the runner's.
+            for token in ["plugin-secret", "demo-secret"] {
+                let req = with_bearer(json_req(m.clone(), &uri, serde_json::json!({})), token);
+                let (status, body) = send(&app, req).await;
+                if m == Method::GET {
+                    assert!(
+                        !reachable || status != StatusCode::FORBIDDEN,
+                        "{token} {m} {uri}"
+                    );
+                    continue;
+                }
+                assert_eq!(status, StatusCode::FORBIDDEN, "{token} {m} {uri}: {body}");
+                if reachable {
+                    assert_eq!(
+                        body["code"], "profile_layer_console_only",
+                        "{token} {m} {uri}"
+                    );
+                }
+            }
+            if m != Method::GET {
+                writes += 1;
+                assert!(
+                    !auth::cert_may_access(&m, &concrete),
+                    "cert lane: {m} {path}"
+                );
+            }
+        }
+    }
+    // Hidden, scanner, pick, three on shared overrides, game, source, session settings.
+    assert_eq!(
+        writes, 9,
+        "a new write that takes `as` belongs in this list"
+    );
+    // The operator passes the lane check and meets the profile check.
+    let path = "/api/v1/library/hidden/steam:400?as=a1b2c3d4e5f6";
+    let req = json_req(Method::PUT, path, serde_json::json!({"hidden": true}));
+    let (status, body) = send(&app, req).await;
+    assert_eq!(
+        (status, &body["code"]),
+        (StatusCode::NOT_FOUND, &"profile_unknown".into())
+    );
+    // An empty `as` names nobody: the plugin's own switch on the box, as before.
+    let req = json_req(
+        Method::PUT,
+        "/api/v1/library/scanners/demo?as=",
+        serde_json::json!({"enabled": true}),
+    );
+    let (status, _) = send(&app, with_bearer(req, "demo-secret")).await;
+    assert_ne!(status, StatusCode::FORBIDDEN);
+}
+
 /// The seat proxy is the operator's: no plugin and no paired device reaches a seat through it.
 #[test]
 fn the_seat_proxy_is_admin_only() {
