@@ -19,7 +19,7 @@ import { useHosts } from "../hosts/store";
 import { t } from "../i18n";
 import { lastGameStream, launchGamepadUi } from "../steam/launch";
 import { applyUpdate, checkForUpdatesNow, useUpdate } from "../update/actions";
-import { clientUpdateIsManualOnly, clientUpdateIsOneTap, hasUpdate } from "../update/model";
+import { updateBanner } from "../update/model";
 import {
   endStreamedGame,
   forceStop,
@@ -32,6 +32,7 @@ import { HostRow } from "./HostRow";
 export const QamPanel: FC = () => {
   const { views, scanning, problem, refresh } = useHosts();
   const { info: update, checking, check } = useUpdate();
+  const banner = updateBanner(update);
   // The host-buttons section shows only while the streaming client is up (checked per
   // panel open — the QAM panel mounts fresh each time).
   const [streaming, setStreaming] = useState(false);
@@ -48,12 +49,8 @@ export const QamPanel: FC = () => {
 
   return (
     <>
-      {hasUpdate(update) &&
-        // A client this Deck can't install (a sysext, a nix profile, a source build, or a box
-        // that hasn't opted into one-tap updates) gets the command, not a button — tapping
-        // something that can only fail is worse than reading one line. A pending PLUGIN update
-        // still wins the button, since that half always works.
-        (clientUpdateIsManualOnly(update) && !update!.update_available ? (
+      {banner !== "none" &&
+        (banner === "manual-client" ? (
           <PanelSection title={t("decky_section_client_update")}>
             <PanelSectionRow>
               <Field
@@ -70,20 +67,17 @@ export const QamPanel: FC = () => {
                 layout="below"
                 onClick={() => applyUpdate(update!, check)}
                 label={
-                  update!.update_available
-                    ? // "+ client" only when this tap will really install it. A manual-only
-                      // client rides along as a toast with the command, and promising it in the
-                      // label would make that read as a failure.
-                      clientUpdateIsOneTap(update)
-                        ? t("decky_update_plugin_client", {
-                            current: update!.current,
-                            latest: update!.latest,
-                          })
-                        : t("decky_update_plugin", {
-                            current: update!.current,
-                            latest: update!.latest,
-                          })
-                    : t("decky_update_client_only")
+                  banner === "plugin-and-client"
+                    ? t("decky_update_plugin_client", {
+                        current: update!.current,
+                        latest: update!.latest,
+                      })
+                    : banner === "plugin"
+                      ? t("decky_update_plugin", {
+                          current: update!.current,
+                          latest: update!.latest,
+                        })
+                      : t("decky_update_client_only")
                 }
                 description={t("decky_update_hint")}
               >

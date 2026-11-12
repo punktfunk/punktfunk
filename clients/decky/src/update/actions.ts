@@ -5,7 +5,7 @@ import { checkUpdate, updateClient, type UpdateInfo } from "../backend";
 import { t } from "../i18n";
 import { diag } from "../lib/diag";
 import { toast } from "../lib/toast";
-import { clientUpdateIsManualOnly, clientUpdateIsOneTap, hasUpdate } from "./model";
+import { type CheckKind, checkOutcome, clientUpdateIsOneTap } from "./model";
 
 // Decky Loader's own authenticated WSRouter, a loader internal and not @decky/api, so optional
 // and guarded. It drives the root loader's install (download, SHA-256 check, extract, reload):
@@ -48,50 +48,44 @@ export function useUpdate() {
   return { info, checking, check };
 }
 
-/** The explicit "Check for updates" action — always ends in a toast so the tap has feedback. */
+/** One toast line for what "Check for updates" found. */
+function checkBody(kind: CheckKind, res: UpdateInfo | null): string {
+  const current = res?.current ?? "";
+  const latest = res?.latest ?? "";
+  const version = res?.client_latest ?? "";
+  switch (kind) {
+    case "unreachable":
+      return t("decky_update_server_unreachable");
+    case "both":
+      return t("decky_update_available_both", { current, latest, version });
+    case "both-unknown":
+      return t("decky_update_available_both_unknown", { current, latest });
+    case "plugin":
+      return t("decky_update_available_plugin", { current, latest });
+    case "client":
+      return t("decky_update_available_client", { version });
+    case "client-unknown":
+      return t("decky_update_available_client_unknown");
+    case "client-outdated":
+      return t("decky_update_client_outdated");
+    case "client-check-failed":
+      return t("decky_update_client_check_failed");
+    case "dev-build":
+      return t("decky_update_dev_build");
+    case "up-to-date":
+      return t("decky_up_to_date", { version: current });
+  }
+}
+
+/** The explicit "Check for updates" action — always ends in a toast so the tap has feedback. A
+ *  client this Deck can't update says so here, before the player finds out at the button. */
 export async function checkForUpdatesNow(
   check: (force: boolean) => Promise<UpdateInfo | null>,
 ): Promise<void> {
   const res = await check(true);
-  let body: string;
-  if (!res || res.error === "fetch-failed") {
-    body = t("decky_update_server_unreachable");
-  } else if (hasUpdate(res)) {
-    const version = res.client_latest;
-    if (res.update_available && res.client_update_available) {
-      body = version
-        ? t("decky_update_available_both", {
-            current: res.current,
-            latest: res.latest,
-            version,
-          })
-        : t("decky_update_available_both_unknown", {
-            current: res.current,
-            latest: res.latest,
-          });
-    } else if (res.update_available) {
-      body = t("decky_update_available_plugin", { current: res.current, latest: res.latest });
-    } else {
-      body = version
-        ? t("decky_update_available_client", { version })
-        : t("decky_update_available_client_unknown");
-    }
-    if (clientUpdateIsManualOnly(res)) {
-      // Say the honest thing up front rather than letting the user find out at the button.
-      body += ` ${t("decky_update_client_manual_note")}`;
-    }
-  } else if (res.client_error) {
-    // A failed CLIENT check must never read as "up to date" — that is the one wrong answer.
-    body =
-      res.client_error === "client-outdated"
-        ? t("decky_update_client_outdated")
-        : t("decky_update_client_check_failed");
-  } else if (res.error === "update-channel-unknown") {
-    body = t("decky_update_dev_build");
-  } else {
-    body = t("decky_up_to_date", { version: res.current });
-  }
-  toast(body);
+  const { kind, manual } = checkOutcome(res);
+  const body = checkBody(kind, res);
+  toast(manual ? `${body} ${t("decky_update_client_manual_note")}` : body);
 }
 
 /** One line of user-facing copy for whatever `updateClient()` came back with. */
