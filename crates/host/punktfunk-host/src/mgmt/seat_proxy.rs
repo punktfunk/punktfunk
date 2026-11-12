@@ -207,6 +207,7 @@ mod tests {
     #[test]
     fn the_table_refuses_what_the_named_list_did_and_the_box_s_rest() {
         const NEWLY_REFUSED: &[(&str, &str)] = &[
+            ("DELETE", "/api/v1/auth/person/session"),
             ("DELETE", "/api/v1/client-logs/{id}"),
             ("DELETE", "/api/v1/display/presets/{id}"),
             ("GET", "/api/v1/client-logs"),
@@ -217,6 +218,8 @@ mod tests {
             ("GET", "/api/v1/webtransport"),
             ("POST", "/api/v1/auth/device/challenge"),
             ("POST", "/api/v1/auth/device/token"),
+            ("POST", "/api/v1/auth/person/session"),
+            ("POST", "/api/v1/auth/person/verify"),
             ("POST", "/api/v1/client-logs"),
             ("POST", "/api/v1/display/presets"),
             ("POST", "/api/v1/display/release"),

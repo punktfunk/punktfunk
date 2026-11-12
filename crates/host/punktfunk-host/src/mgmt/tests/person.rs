@@ -81,7 +81,7 @@ async fn as_device(
 }
 
 /// Every file under `dir`, by its path there.
-fn files(dir: &Path) -> BTreeMap<PathBuf, Vec<u8>> {
+pub(super) fn files(dir: &Path) -> BTreeMap<PathBuf, Vec<u8>> {
     let mut out = BTreeMap::new();
     let mut todo = vec![dir.to_path_buf()];
     while let Some(at) = todo.pop() {
@@ -135,7 +135,7 @@ fn lane() -> Vec<(Method, &'static str, Option<serde_json::Value>)> {
 }
 
 /// `files` but those in profile `id`'s own layer.
-fn outside(files: &BTreeMap<PathBuf, Vec<u8>>, id: &str) -> BTreeMap<PathBuf, Vec<u8>> {
+pub(super) fn outside(files: &BTreeMap<PathBuf, Vec<u8>>, id: &str) -> BTreeMap<PathBuf, Vec<u8>> {
     let layer = Path::new("library-profiles").join(id);
     let theirs = |(p, _): &(&PathBuf, &Vec<u8>)| !p.starts_with(&layer);
     let kept = files.iter().filter(theirs);

@@ -50,6 +50,7 @@ mod library;
 mod native_pairing;
 mod own_account;
 mod person;
+mod person_session;
 mod plugin_access;
 mod plugins;
 mod profile_view;
@@ -163,6 +164,7 @@ fn unstamped_app(state: Arc<AppState>, token: Option<&str>, box_library: bool) -
         false,
         box_library,
         None,
+        None,
     )
 }
 
@@ -190,6 +192,33 @@ fn test_app_door(
         // The door reads the box's library copy, as a seat does.
         true,
         Some(seats),
+        None,
+    ))
+}
+
+/// A seat host whose person token is `token` and whose own profile is `profile`.
+fn test_app_seat(state: Arc<AppState>, token: &str, profile: &'static str) -> Router {
+    let stats = state.stats.clone();
+    let person = super::person_session::PersonAuth::new(token.to_string(), move || {
+        Some(profile.to_string())
+    });
+    from_loopback(app(
+        state,
+        Some("test-secret".to_string()),
+        Some("plugin-secret".to_string()),
+        shared_plugin_tokens(test_plugin_tokens()),
+        Some(TRAY_TOKEN.to_string()),
+        DEFAULT_PORT,
+        None,
+        stats,
+        test_client_logs_dir(),
+        test_access_dir(),
+        false,
+        None,
+        false,
+        false,
+        None,
+        Some(person),
     ))
 }
 
@@ -211,6 +240,7 @@ fn test_app_browser(state: Arc<AppState>) -> Router {
         None,
         true,
         false,
+        None,
         None,
     ))
 }
@@ -234,6 +264,7 @@ fn test_app_native(state: Arc<AppState>, np: Arc<crate::native_pairing::NativePa
         Some([0x5a; 32]),
         false,
         false,
+        None,
         None,
     ))
 }
@@ -443,6 +474,7 @@ fn test_app_access(state: Arc<AppState>, access_dir: &std::path::Path) -> Router
         None,
         false,
         false,
+        None,
         None,
     ))
 }

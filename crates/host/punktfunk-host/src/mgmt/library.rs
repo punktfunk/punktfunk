@@ -25,7 +25,7 @@ use sha2::{Digest, Sha256};
 /// A seat host reading the box's library ([`pf_paths::seat::box_library_dir`], `box_library`)
 /// changes none of it: every write under `/api/v1/library` answers 409, but the custom-entry
 /// writes, which land in its own titles ([`crate::library::keeps_own_titles`]). The box host is
-/// the library's one writer. On a person's own account no custom-entry write lands at all.
+/// the library's one writer. On a person's own account only that person's lane writes them.
 pub(super) async fn box_library_is_read_only(
     box_library: bool,
     req: Request,
@@ -35,7 +35,8 @@ pub(super) async fn box_library_is_read_only(
     let library = path == "/api/v1/library" || path.starts_with("/api/v1/library/");
     let custom = path == "/api/v1/library/custom" || path.starts_with("/api/v1/library/custom/");
     let write = !matches!(*req.method(), Method::GET | Method::HEAD);
-    if custom && write && pf_paths::seat::own_account() {
+    let person = req.extensions().get::<AuthLane>() == Some(&AuthLane::Person);
+    if custom && write && pf_paths::seat::own_account() && !person {
         return api_error_coded(
             StatusCode::FORBIDDEN,
             "library_own_account",
@@ -125,9 +126,11 @@ fn check_privileged_fields(
 /// `?as=<profile id>`: the profile a library call is for. Absent or empty: this host's own view.
 /// A write that names one changes that profile's own layer: the admin lane's, and on a
 /// [`punktfunk_core::mgmt_routes::PERSON`] route a device that is that profile's person
-/// ([`super::person::check`]). Any other write that names one, and every other device write, is
-/// 403. A paired device reads only a profile it opens with nothing asked
-/// ([`crate::profiles::Profiles::opens`]); any other reads as one this host doesn't hold.
+/// ([`super::person::check`]) or that profile's person session
+/// ([`super::person::session_refusal`]).
+/// Any other write that names one, and every other device write, is 403. A paired device reads
+/// only a profile it opens with nothing asked ([`crate::profiles::Profiles::opens`]); any other
+/// reads as one this host doesn't hold.
 #[derive(Deserialize)]
 pub(crate) struct AsProfile {
     #[serde(rename = "as")]
@@ -135,6 +138,9 @@ pub(crate) struct AsProfile {
     /// The asking device on the cert lane, `""` when none was stamped.
     #[serde(skip)]
     device: Option<String>,
+    /// A person session the box took the seat host's word for.
+    #[serde(skip)]
+    person: bool,
 }
 
 impl axum::extract::FromRequestParts<Arc<MgmtState>> for AsProfile {
@@ -153,8 +159,17 @@ impl axum::extract::FromRequestParts<Arc<MgmtState>> for AsProfile {
             let device = parts.extensions.get::<super::auth::PairedDevice>();
             who.device = Some(device.map(|d| d.0.clone()).unwrap_or_default());
         }
+        who.person = lane == Some(AuthLane::PersonVouched);
         if lane == Some(AuthLane::Admin) || matches!(parts.method, Method::GET | Method::HEAD) {
             return Ok(who);
+        }
+        if who.person {
+            let vouched = parts.extensions.get::<super::person::Vouched>();
+            let vouched = vouched.map(|v| v.0.as_str());
+            return match super::person::session_refusal(st, who.profile.as_deref(), vouched) {
+                Some(refused) => Err(refused),
+                None => Ok(who),
+            };
         }
         // Nested routes see their path without `/api/v1`; the table spells it whole.
         let original = parts.extensions.get::<axum::extract::OriginalUri>();
@@ -208,15 +223,17 @@ pub(crate) struct Scoped {
     mine: Option<String>,
 }
 
-/// The 404 for a device's write that `adds` an entry for title `id` when `view`'s library lists no
-/// such title: what a device writes stays bounded by the library. Taking an entry away needs none.
+/// The 404 for a device's or a person session's write that `adds` an entry for title `id` when
+/// `view`'s library lists no such title: what they write stays bounded by the library. Taking an
+/// entry away needs none.
 fn unlisted(
     who: &AsProfile,
     view: &crate::library::View,
     id: &str,
     adds: bool,
 ) -> Option<Response> {
-    let refused = adds && who.device.is_some() && !crate::library::lists(view, id);
+    let bounded = who.device.is_some() || who.person;
+    let refused = adds && bounded && !crate::library::lists(view, id);
     refused.then(|| {
         api_error(
             StatusCode::NOT_FOUND,
@@ -405,7 +422,10 @@ fn redact_for_lane(g: &mut crate::library::GameEntry, lane: &AuthLane) {
             l.value.clear();
         }
     }
-    if matches!(lane, AuthLane::Cert) {
+    if matches!(
+        lane,
+        AuthLane::Cert | AuthLane::Person | AuthLane::PersonVouched
+    ) {
         g.ids.clear();
         g.filled.clear();
         if let Some(i) = g.install.as_mut() {
@@ -779,8 +799,8 @@ pub(crate) async fn set_library_scanner(
 ///
 /// A user-curated entry. The host assigns a stable id, returned in the body. On a seat host it is
 /// that host's own title, under an `own:` id, kept in its own config folder and run as its
-/// account; the box lists its name and picture for the seat's profile. A profile that uses an
-/// existing account takes none.
+/// account; the box lists its name and picture for the seat's profile. On a profile that uses an
+/// existing account only that person adds one, from their own session.
 #[utoipa::path(
     post,
     path = "/library/custom",
@@ -811,7 +831,7 @@ pub(crate) async fn create_custom_game(
     ) {
         return denied;
     }
-    match crate::library::add_custom(input) {
+    match crate::library::add_custom(input, lane == AuthLane::Person) {
         Ok(entry) => (StatusCode::CREATED, Json(entry)).into_response(),
         Err(e) => host_error("library change refused", &e),
     }
@@ -820,7 +840,9 @@ pub(crate) async fn create_custom_game(
 /// One custom entry as stored, `detect` and `prep` included
 ///
 /// Operator lane only: the hint names host paths, which is why the catalog read
-/// model leaves it out. The paired-cert allowlist names `GET /library` exactly.
+/// model leaves it out. The paired-cert allowlist names `GET /library` exactly. On a person's
+/// own account a title of its own is that person's alone to read: any other lane gets the 404.
+
 #[utoipa::path(
     get,
     path = "/library/custom/{id}",
@@ -833,8 +855,15 @@ pub(crate) async fn create_custom_game(
         (status = NOT_FOUND, description = "No custom entry with that id", body = ApiError),
     )
 )]
-pub(crate) async fn get_custom_game(Path(id): Path<String>) -> Response {
-    match crate::library::get_custom(&id) {
+pub(crate) async fn get_custom_game(
+    Extension(lane): Extension<AuthLane>,
+    Path(id): Path<String>,
+) -> Response {
+    let theirs = pf_paths::seat::own_account() && crate::library::is_own_id(&id);
+    let found = (!theirs || lane == AuthLane::Person)
+        .then(|| crate::library::get_custom(&id))
+        .flatten();
+    match found {
         Some(entry) => Json(entry).into_response(),
         None => api_error(StatusCode::NOT_FOUND, "no custom entry with that id"),
     }
@@ -882,7 +911,7 @@ pub(crate) async fn update_custom_game(
         return denied;
     }
     use crate::library::MutateOutcome;
-    match crate::library::update_custom(&id, input) {
+    match crate::library::update_custom(&id, input, lane == AuthLane::Person) {
         Ok(MutateOutcome::Done(entry)) => Json(entry).into_response(),
         Ok(MutateOutcome::NotFound) => {
             api_error(StatusCode::NOT_FOUND, "no custom entry with that id")

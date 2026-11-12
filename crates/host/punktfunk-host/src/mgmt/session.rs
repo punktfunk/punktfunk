@@ -428,8 +428,9 @@ fn not_on_this_plane() -> Response {
     )
 }
 
-/// Who may end which launched game. The operator and the plugin runner reach every
-/// launch; a paired device reaches only its own, and nothing once its access expired.
+/// Who may end which launched game. The operator, the plugin runner and a person on their own
+/// seat host reach every launch; a paired device reaches only its own, and nothing once its
+/// access expired.
 pub(crate) struct GameEnder {
     /// `None` = every device's launches.
     owner: Option<String>,
@@ -440,7 +441,8 @@ pub(crate) struct GameEnder {
 impl GameEnder {
     pub(crate) fn of(st: &MgmtState, lane: AuthLane, fp: Option<&str>) -> Self {
         match lane {
-            AuthLane::Admin | AuthLane::Plugin => Self {
+            // A person ends what plays on their own seat host.
+            AuthLane::Admin | AuthLane::Plugin | AuthLane::Person => Self {
                 owner: None,
                 refused: false,
             },
@@ -455,7 +457,7 @@ impl GameEnder {
                     refused: !live,
                 }
             }
-            AuthLane::Public => Self {
+            AuthLane::PersonVouched | AuthLane::Public => Self {
                 owner: None,
                 refused: true,
             },

@@ -123,7 +123,7 @@ fn power_permitted(st: &MgmtState, lane: AuthLane, fp: Option<&str>) -> bool {
                 .and_then(|n| n.effective(fp, crate::clock::unix_secs()))
                 .is_some_and(|mask| mask & punktfunk_core::quic::GRANT_POWER != 0)
         }),
-        AuthLane::Plugin | AuthLane::Public => false,
+        AuthLane::Plugin | AuthLane::Person | AuthLane::PersonVouched | AuthLane::Public => false,
     }
 }
 
@@ -133,7 +133,7 @@ fn display_permitted(lane: AuthLane, fp: Option<&str>) -> bool {
     match lane {
         AuthLane::Admin => true,
         AuthLane::Cert => fp.is_some_and(crate::session_status::owns_live_session),
-        AuthLane::Plugin | AuthLane::Public => false,
+        AuthLane::Plugin | AuthLane::Person | AuthLane::PersonVouched | AuthLane::Public => false,
     }
 }
 

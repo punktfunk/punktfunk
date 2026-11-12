@@ -60,6 +60,11 @@ pub struct CustomEntry {
     /// Whether the title's files are on this host. Set only by provider reconcile.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub install: Option<super::downloads::Install>,
+    /// A seat host's own title its person wrote, in their own session. On a person's own account
+    /// a title without it is neither listed nor started. Set by the host, never from a body.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    #[schema(read_only)]
+    pub person: bool,
     #[serde(flatten)]
     pub meta: GameMeta,
 }
@@ -193,12 +198,10 @@ pub(crate) fn is_own_id(id: &str) -> bool {
 }
 
 /// Whether this host keeps entries of its own beside the box's: a seat host reading the box's
-/// library, on an account made for its seat. Their recipes stay in its own config folder. A
-/// person's own account keeps none: its config folder is that person's.
+/// library. Their recipes stay in its own config folder. On a person's own account only that
+/// person writes them ([`own_entries`]).
 pub(crate) fn keeps_own_titles() -> bool {
-    pf_paths::seat::role().is_seat_host()
-        && pf_paths::seat::box_library_dir().is_some()
-        && !pf_paths::seat::own_account()
+    pf_paths::seat::role().is_seat_host() && pf_paths::seat::box_library_dir().is_some()
 }
 
 /// One `library.json`: the box's, or a seat host's own.
@@ -351,10 +354,18 @@ pub fn get_custom(id: &str) -> Option<CustomEntry> {
 }
 
 /// The profile in view's own titles: on a seat host its own rows, on any other host the names
-/// its seat published ([`own_titles`]), which start nothing there.
+/// its seat published ([`own_titles`]), which start nothing there. On a person's own account a
+/// row that person didn't write is left out.
 pub(crate) fn own_entries(view: &View) -> Vec<CustomEntry> {
     if keeps_own_titles() {
-        return catalog_of(Shelf::Own).entries.clone();
+        let own = pf_paths::seat::own_account();
+        let rows = catalog_of(Shelf::Own);
+        return rows
+            .entries
+            .iter()
+            .filter(|e| e.person || !own)
+            .cloned()
+            .collect();
     }
     own_titles(view)
         .into_iter()
@@ -503,8 +514,8 @@ pub enum MutateOutcome<T> {
 }
 
 /// Add a manual row: to this seat host's own shelf on a seat host ([`keeps_own_titles`]), else to
-/// the box's.
-pub fn add_custom(input: CustomInput) -> Result<CustomEntry> {
+/// the box's. `person`: written in the seat's person's own session.
+pub fn add_custom(input: CustomInput, person: bool) -> Result<CustomEntry> {
     let shelf = Shelf::here();
     let _serial = catalog_lock();
     let mut catalog = load_catalog(shelf);
@@ -524,6 +535,7 @@ pub fn add_custom(input: CustomInput) -> Result<CustomEntry> {
         audio: audio_policy(input.audio),
         ids: BTreeMap::new(),
         install: None,
+        person,
         meta: input.meta,
     };
     catalog.entries.push(entry.clone());
@@ -533,8 +545,12 @@ pub fn add_custom(input: CustomInput) -> Result<CustomEntry> {
 }
 
 /// Replace a manual row (id kept), on the shelf its id names ([`Shelf::of`]). Provider-owned rows
-/// are refused — they belong to reconcile.
-pub fn update_custom(id: &str, input: CustomInput) -> Result<MutateOutcome<CustomEntry>> {
+/// are refused — they belong to reconcile. `person` as [`add_custom`]'s: the last writer's.
+pub fn update_custom(
+    id: &str,
+    input: CustomInput,
+    person: bool,
+) -> Result<MutateOutcome<CustomEntry>> {
     let shelf = Shelf::of(id);
     let _serial = catalog_lock();
     let mut catalog = load_catalog(shelf);
@@ -563,6 +579,7 @@ pub fn update_custom(id: &str, input: CustomInput) -> Result<MutateOutcome<Custo
         slot.audio = audio_policy(input.audio);
     }
     slot.meta = input.meta;
+    slot.person = person;
     let updated = slot.clone();
     save_catalog(shelf, &catalog)?;
     emit_changed("manual");
@@ -861,6 +878,7 @@ fn reconcile_entries(
                 free_bytes: None,
                 ..i
             }),
+            person: false,
             meta: input.meta,
         });
     }
@@ -951,6 +969,19 @@ pub fn delete_provider(provider: &str) -> Result<usize> {
     Ok(removed)
 }
 
+/// Every prep step of this seat host's own titles its person wrote ([`CustomEntry::person`]):
+/// on a person's own account, the only steps that run (`hooks::run_prep`).
+pub(crate) fn person_prep() -> Vec<crate::hooks::PrepCmd> {
+    if !keeps_own_titles() {
+        return Vec::new();
+    }
+    let rows = catalog_of(Shelf::Own).entries.clone();
+    rows.into_iter()
+        .filter(|e| e.person)
+        .flat_map(|e| e.prep)
+        .collect()
+}
+
 /// Prep/undo for a stored library id. In-host scanners have no per-title config; GameStream
 /// `apps.json` carries its own `prep`. Goes through [`entry_for_library_id`], not a `custom:`
 /// prefix strip, so a claimed `steam:440` still runs operator prep.
@@ -1027,6 +1058,7 @@ mod tests {
             audio: None,
             ids: BTreeMap::new(),
             install: None,
+            person: false,
             meta: GameMeta::default(),
         }
     }

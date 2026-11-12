@@ -24,6 +24,11 @@ fn every_route_is_classified_for_the_plugin_and_cert_lanes() {
         // `mgmt::device_auth`.
         ("POST", "/api/v1/auth/device/challenge", false, false),
         ("POST", "/api/v1/auth/device/token", false, false),
+        // A person's session on their own seat host: `require_auth` exempts the session path,
+        // whose ticket or token is the proof, and verifying one is the admin lane's.
+        ("POST", "/api/v1/auth/person/session", false, false),
+        ("DELETE", "/api/v1/auth/person/session", false, false),
+        ("POST", "/api/v1/auth/person/verify", false, false),
         ("GET", "/api/v1/host", true, true),
         ("GET", "/api/v1/status", true, true),
         ("GET", "/api/v1/local/summary", true, false), // loopback-only, handled before the gates
@@ -408,6 +413,7 @@ async fn a_plugin_changes_only_its_own_library_rows() {
     let app = test_app(test_state(), None);
     let manual = crate::library::add_custom(
         serde_json::from_value(serde_json::json!({ "title": "Mine" })).unwrap(),
+        false,
     )
     .unwrap()
     .id;
@@ -674,6 +680,9 @@ fn every_route_has_a_side_on_the_door() {
         ("GET", "/api/v1/webtransport", true),
         ("POST", "/api/v1/auth/device/challenge", true),
         ("POST", "/api/v1/auth/device/token", true),
+        ("POST", "/api/v1/auth/person/session", true),
+        ("DELETE", "/api/v1/auth/person/session", true),
+        ("POST", "/api/v1/auth/person/verify", true),
         ("GET", "/api/v1/local/summary", true),
         ("GET", "/api/v1/host", true),
         ("GET", "/api/v1/host/settings", true),

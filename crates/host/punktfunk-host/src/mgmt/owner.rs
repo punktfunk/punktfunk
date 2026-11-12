@@ -27,6 +27,8 @@ pub(crate) const DOOR: &[(&str, &str)] = &[
     ("*", "health"),
     ("*", "webtransport"),
     ("*", "auth/device/*"),
+    // A person's session is their seat host's: the door opens and checks none.
+    ("*", "auth/person/*"),
     ("*", "local/summary"),
     // The door merges these with the owner's host's.
     ("GET", "host"),
@@ -373,8 +375,9 @@ fn device_seat(st: &MgmtState, seats: &crate::seats::Snapshot, fp: &str) -> Opti
 /// On a door: an admin call the door does not answer itself goes to the owner's host, and a
 /// device's call about its own play to the host [`device_route`] names, carrying the device so
 /// that host answers as it would the device. A person's call carries the profile the door found
-/// the device is the person of, and any other is refused here. A device's read wakes no seat: a
-/// client asks each time it shows the host. Every other lane, and every other host, is answered
+/// the device is the person of, and any other is refused here. A person session goes to the
+/// owner's host as its profile, with no device, where the admin call would. A device's or a
+/// person session's read wakes no seat. Every other lane, and every other host, is answered
 /// here.
 pub(crate) async fn pass_on(
     State(st): State<Arc<MgmtState>>,
@@ -394,6 +397,14 @@ pub(crate) async fn pass_on(
     let mut person = None;
     let target = match (lane, device_route(req.method(), &rest)) {
         (Some(AuthLane::Admin), _) if classify(req.method(), &rest) == Verdict::Forward => {
+            Target::Owner
+        }
+        // A person session its seat host vouched for: the owner's host writes the library.
+        (Some(AuthLane::PersonVouched), _) if classify(req.method(), &rest) == Verdict::Forward => {
+            person = req
+                .extensions()
+                .get::<super::person::Vouched>()
+                .map(|v| v.0.clone());
             Target::Owner
         }
         (Some(AuthLane::Cert), Some(side)) => {
@@ -446,7 +457,8 @@ pub(crate) async fn pass_on(
         device: parts.extensions.get::<PairedDevice>().map(|d| d.0.clone()),
         person,
         stream: tail(&rest),
-        start: lane != Some(AuthLane::Cert) || parts.method != Method::GET,
+        start: !matches!(lane, Some(AuthLane::Cert | AuthLane::PersonVouched))
+            || parts.method != Method::GET,
     };
     let to_owner = target == Target::Owner;
     match tokio::task::spawn_blocking(move || seats.call(&target, call)).await {

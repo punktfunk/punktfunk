@@ -882,8 +882,8 @@ async fn box_lists(app: &Router, profile: &str) -> serde_json::Value {
 
 /// [`SEAT_P`]'s seat host keeps a game with a command of its own: it lists and starts it, and
 /// tells the box its name and picture alone. The box, handed that answer, lists the row for the
-/// profile and starts none of it. A person's own account takes no such game. The seat's half runs
-/// in a child, as the role is process environment.
+/// profile and starts none of it. On a person's own account the console adds no such game. The
+/// seat's half runs in a child, as the role is process environment.
 #[tokio::test]
 async fn a_seat_host_keeps_its_own_titles_and_the_box_lists_their_names() {
     let Some(out) = std::env::var_os(CHILD) else {
@@ -902,7 +902,6 @@ async fn a_seat_host_keeps_its_own_titles_and_the_box_lists_their_names() {
         let (s, refused) = send(&app, post()).await;
         assert_eq!(s, StatusCode::FORBIDDEN, "{refused}");
         assert_eq!(refused["code"], "library_own_account");
-        assert!(!crate::library::keeps_own_titles());
         let titles = crate::library::published_own_titles();
         std::fs::write(&out, serde_json::to_vec(&titles).unwrap()).unwrap();
         return;
