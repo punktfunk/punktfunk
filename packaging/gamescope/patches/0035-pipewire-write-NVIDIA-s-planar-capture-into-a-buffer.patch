@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: punktfunk <packages@unom.io>
 Date: Sat, 7 Nov 2026 12:00:00 +0100
-Subject: [PATCH 36/36] pipewire: write NVIDIA's planar capture into a buffer
+Subject: [PATCH 35/38] pipewire: write NVIDIA's planar capture into a buffer
 
 With 0035 a GTX 1080 Ti still streamed the NV12 capture striped: 32-byte
 sectors moved inside each KiB. An EGL import, a map of the allocation's own
@@ -18,18 +18,21 @@ the LINEAR-modifier image of 0035.
 
 punktfunk: also stamps the version banner +pfhdr33.
 ---
- src/meson.build                     |   5 ++++-
- src/pipewire.cpp                    |   5 ++++-
- src/rendervulkan.cpp                | 207 ++++++++++++++++++++++++++++++++++++++++---------
- src/rendervulkan.hpp                |  20 +++++++++++++++++---
- src/shaders/cs_rgb_to_nv12_buf.comp |  88 ++++++++++++++++++++++++++++++++++++++++
- src/shaders/cs_rgb_to_p010_buf.comp |  83 ++++++++++++++++++++++++++++++++++++++++
+ src/meson.build                     |   5 +-
+ src/pipewire.cpp                    |   5 +-
+ src/rendervulkan.cpp                | 207 ++++++++++++++++++++++++++--
+ src/rendervulkan.hpp                |  20 ++-
+ src/shaders/cs_rgb_to_nv12_buf.comp |  88 ++++++++++++
+ src/shaders/cs_rgb_to_p010_buf.comp |  83 +++++++++++
  6 files changed, 394 insertions(+), 14 deletions(-)
+ create mode 100644 src/shaders/cs_rgb_to_nv12_buf.comp
+ create mode 100644 src/shaders/cs_rgb_to_p010_buf.comp
 
 diff --git a/src/meson.build b/src/meson.build
+index bd1d8ff3..81a5a335 100644
 --- a/src/meson.build
 +++ b/src/meson.build
-@@ -72,6 +72,8 @@
+@@ -75,6 +75,8 @@ shader_src = [
    'shaders/cs_rgb_to_nv12.comp',
    'shaders/cs_sgsr.comp',
    'shaders/cs_rgb_to_p010.comp',
@@ -38,7 +41,7 @@ diff --git a/src/meson.build b/src/meson.build
  ]
  
  spirv_shaders = glsl_generator.process(shader_src)
-@@ -215,7 +217,8 @@
+@@ -223,7 +225,8 @@ vcs_tag = run_command(vcs_tag_cmd, check: false).stdout().strip()
  #   +pfhdr30 — …on upstream 3.16.31 (28 and 29 are upstream there); builds against a vendored wayland
  #   +pfhdr31 — …and each uploaded constant block meets the device's uniform offset alignment
  #   +pfhdr32 — …and a planar capture dmabuf on NVIDIA carries DRM_FORMAT_MOD_LINEAR's layout
@@ -49,9 +52,10 @@ diff --git a/src/meson.build b/src/meson.build
  gamescope_version_conf = configuration_data()
  gamescope_version_conf.set('VCS_TAG', version_tag)
 diff --git a/src/pipewire.cpp b/src/pipewire.cpp
+index 84b7256c..77d9de81 100644
 --- a/src/pipewire.cpp
 +++ b/src/pipewire.cpp
-@@ -810,9 +810,12 @@
+@@ -810,9 +810,12 @@ static void stream_handle_add_buffer(void *user_data, struct pw_buffer *pw_buffe
  	{
  		screenshotImageFlags.bExportable = true;
  		const bool bPlanar = is_planar_video_format(state->video_info.format);
@@ -66,9 +70,10 @@ diff --git a/src/pipewire.cpp b/src/pipewire.cpp
  		else
  			screenshotImageFlags.bLinear = true;
 diff --git a/src/rendervulkan.cpp b/src/rendervulkan.cpp
+index da20be21..19c15d96 100644
 --- a/src/rendervulkan.cpp
 +++ b/src/rendervulkan.cpp
-@@ -51,6 +51,8 @@
+@@ -53,6 +53,8 @@
  #include "cs_rgb_to_nv12.h"
  #include "cs_sgsr.h"
  #include "cs_rgb_to_p010.h"
@@ -77,7 +82,7 @@ diff --git a/src/rendervulkan.cpp b/src/rendervulkan.cpp
  
  #define A_CPU
  #include "shaders/ffx_a.h"
-@@ -856,7 +858,7 @@
+@@ -860,7 +862,7 @@ bool CVulkanDevice::createLayouts()
  	for (auto& sampler : ycbcrSamplers)
  		sampler = m_ycbcrSampler;
  
@@ -86,7 +91,7 @@ diff --git a/src/rendervulkan.cpp b/src/rendervulkan.cpp
  		VkDescriptorSetLayoutBinding {
  			.binding = 0,
  			.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
-@@ -900,6 +902,13 @@
+@@ -904,6 +906,13 @@ bool CVulkanDevice::createLayouts()
  			.descriptorCount = VKR_LUT3D_COUNT,
  			.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT,
  		},
@@ -100,7 +105,7 @@ diff --git a/src/rendervulkan.cpp b/src/rendervulkan.cpp
  	};
  
  	VkDescriptorSetLayoutCreateInfo descriptorSetLayoutCreateInfo =
-@@ -979,7 +988,7 @@
+@@ -983,7 +992,7 @@ bool CVulkanDevice::createPools()
  
  	res = vk.GetPhysicalDeviceImageFormatProperties2( physDev(), &imageFormatInfo, &imageFormatProps );
  
@@ -109,18 +114,18 @@ diff --git a/src/rendervulkan.cpp b/src/rendervulkan.cpp
  		{
  			VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
  			uint32_t(m_descriptorSets.size()),
-@@ -989,6 +998,10 @@
+@@ -992,6 +1001,10 @@ bool CVulkanDevice::createPools()
+ 			VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
  			uint32_t(m_descriptorSets.size()) * 2,
  		},
- 		{
++		{
 +			VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
 +			uint32_t(m_descriptorSets.size()),
 +		},
-+		{
+ 		{
  			VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
  			uint32_t(m_descriptorSets.size()) * (((ycbcrProps.combinedImageSamplerDescriptorCount + 1) * VKR_SAMPLER_SLOTS) + (2 * VKR_LUT3D_COUNT)),
- 		},
-@@ -1047,6 +1060,8 @@
+@@ -1053,6 +1066,8 @@ bool CVulkanDevice::createShaders()
  	SHADER(RGB_TO_NV12, cs_rgb_to_nv12);
  	SHADER(SGSR, cs_sgsr);
  	SHADER(RGB_TO_P010, cs_rgb_to_p010);
@@ -129,7 +134,7 @@ diff --git a/src/rendervulkan.cpp b/src/rendervulkan.cpp
  #undef SHADER
  
  	for (uint32_t i = 0; i < shaderInfos.size(); i++)
-@@ -1279,6 +1294,8 @@
+@@ -1286,6 +1301,8 @@ void CVulkanDevice::compileAllPipelines(std::stop_token st)
  	SHADER(RGB_TO_NV12, 1, 1, 1);
  	SHADER(SGSR, 1, 1, 1);
  	SHADER(RGB_TO_P010, 1, 1, 1);
@@ -138,7 +143,7 @@ diff --git a/src/rendervulkan.cpp b/src/rendervulkan.cpp
  #undef SHADER
  
  	for (auto& info : pipelineInfos) {
-@@ -1771,7 +1788,7 @@
+@@ -1784,7 +1801,7 @@ void CVulkanCmdBuffer::dispatch(uint32_t x, uint32_t y, uint32_t z)
  
  	VkDescriptorSet descriptorSet = m_device->descriptorSet( this );
  
@@ -147,7 +152,7 @@ diff --git a/src/rendervulkan.cpp b/src/rendervulkan.cpp
  	std::array<VkDescriptorImageInfo, VKR_SAMPLER_SLOTS> imageDescriptors = {};
  	std::array<VkDescriptorImageInfo, VKR_SAMPLER_SLOTS> ycbcrImageDescriptors = {};
  	std::array<VkDescriptorImageInfo, VKR_TARGET_SLOTS> targetDescriptors = {};
-@@ -1849,6 +1866,22 @@
+@@ -1862,6 +1879,22 @@ void CVulkanCmdBuffer::dispatch(uint32_t x, uint32_t y, uint32_t z)
  		.pImageInfo = lut3DDescriptor.data(),
  	};
  
@@ -170,7 +175,7 @@ diff --git a/src/rendervulkan.cpp b/src/rendervulkan.cpp
  	scratchDescriptor.buffer = m_device->m_uploadBuffer;
  	scratchDescriptor.offset = m_renderBufferOffset;
  	scratchDescriptor.range = VK_WHOLE_SIZE;
-@@ -2010,6 +2043,7 @@
+@@ -2047,6 +2080,7 @@ void CVulkanCmdBuffer::markDirty(CVulkanTexture *image)
  void CVulkanCmdBuffer::insertBarrier(bool flush)
  {
  	std::vector<VkImageMemoryBarrier> barriers;
@@ -178,7 +183,7 @@ diff --git a/src/rendervulkan.cpp b/src/rendervulkan.cpp
  
  	uint32_t externalQueue = m_device->supportsModifiers() ? VK_QUEUE_FAMILY_FOREIGN_EXT : VK_QUEUE_FAMILY_EXTERNAL_KHR;
  
-@@ -2051,7 +2085,21 @@
+@@ -2088,7 +2122,21 @@ void CVulkanCmdBuffer::insertBarrier(bool flush)
  			.subresourceRange = subResRange
  		};
  
@@ -201,7 +206,7 @@ diff --git a/src/rendervulkan.cpp b/src/rendervulkan.cpp
  
  		state.discarded = false;
  		state.dirty = false;
-@@ -2060,7 +2108,7 @@
+@@ -2097,7 +2145,7 @@ void CVulkanCmdBuffer::insertBarrier(bool flush)
  
  	// TODO replace VK_PIPELINE_STAGE_ALL_COMMANDS_BIT
  	m_device->vk.CmdPipelineBarrier(m_cmdBuffer, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
@@ -210,7 +215,7 @@ diff --git a/src/rendervulkan.cpp b/src/rendervulkan.cpp
  }
  
  namespace { CNoDestroy<CVulkanDevice> g_deviceHolder; }
-@@ -2162,6 +2210,18 @@
+@@ -2199,6 +2247,18 @@ EPlanarCaptureAlloc vulkan_get_planar_capture_alloc( uint32_t drmFormat )
  	if ( g_device.vendorID() != k_uNvidiaVendorID )
  		return EPlanarCaptureAlloc::PlainLinear;
  
@@ -229,7 +234,7 @@ diff --git a/src/rendervulkan.cpp b/src/rendervulkan.cpp
  	if ( !g_device.supportsModifiers() )
  		return EPlanarCaptureAlloc::Unavailable;
  
-@@ -2241,6 +2301,9 @@
+@@ -2278,6 +2338,9 @@ std::vector<uint64_t> vulkan_get_capture_modifiers( uint32_t drmFormat )
  
  bool CVulkanTexture::BInit( uint32_t width, uint32_t height, uint32_t depth, uint32_t drmFormat, createFlags flags, wlr_dmabuf_attributes *pDMA /* = nullptr */,  uint32_t contentWidth /* = 0 */, uint32_t contentHeight /* =  0 */, CVulkanTexture *pExistingImageToReuseMemory, gamescope::OwningRc<gamescope::IBackendFb> pBackendFb )
  {
@@ -239,15 +244,15 @@ diff --git a/src/rendervulkan.cpp b/src/rendervulkan.cpp
  	m_pBackendFb = std::move( pBackendFb );
  	m_drmFormat = drmFormat;
  	VkResult res = VK_ERROR_INITIALIZATION_FAILED;
-@@ -2840,10 +2903,118 @@
+@@ -2912,7 +2975,115 @@ bool CVulkanTexture::BInit( uint32_t width, uint32_t height, uint32_t depth, uin
  	}
  	
  	m_bInitialized = true;
 -	
 +
- 	return true;
- }
- 
++	return true;
++}
++
 +// Luma rows, then chroma rows, at one pitch, in exportable device memory. Pitches and offsets are
 +// whole words for the pass; 256-byte rows and a page-aligned chroma suit every importer.
 +bool CVulkanTexture::BInitPlanarBuffer( uint32_t width, uint32_t height, uint32_t drmFormat )
@@ -353,13 +358,10 @@ diff --git a/src/rendervulkan.cpp b/src/rendervulkan.cpp
 +	m_dmabuf = dmabuf;
 +
 +	m_bInitialized = true;
-+	return true;
-+}
-+
- bool CVulkanTexture::BInitFromSwapchain( VkImage image, uint32_t width, uint32_t height, VkFormat format )
- {
- 	m_drmFormat = VulkanFormatToDRM( format );
-@@ -2959,6 +3130,12 @@
+ 	return true;
+ }
+ 
+@@ -3031,6 +3202,12 @@ CVulkanTexture::~CVulkanTexture( void )
  	if ( m_pBackendFb != nullptr )
  		m_pBackendFb = nullptr;
  
@@ -372,7 +374,7 @@ diff --git a/src/rendervulkan.cpp b/src/rendervulkan.cpp
  	if ( m_vkImageMemory != VK_NULL_HANDLE )
  	{
  		if ( m_vkImage != VK_NULL_HANDLE )
-@@ -4099,6 +4276,10 @@
+@@ -4201,6 +4378,10 @@ struct CaptureConvertBlitData_t
  	mat3x4 outputCTM;
  	uint32_t borderMask;
  	uint32_t halfExtent[2];
@@ -383,7 +385,7 @@ diff --git a/src/rendervulkan.cpp b/src/rendervulkan.cpp
  
  	explicit CaptureConvertBlitData_t(float blit_scale, const mat3x4 &color_matrix) {
  		scale[0] = { blit_scale, blit_scale };
-@@ -4292,15 +4473,21 @@
+@@ -4410,15 +4591,21 @@ std::optional<uint64_t> vulkan_screenshot( const struct FrameInfo_t *frameInfo,
  		float scale = (float)pScreenshotTexture->width() / pYUVOutTexture->width();
  
  		const bool bTenBit = pYUVOutTexture->isYcbcr10();
@@ -406,7 +408,7 @@ diff --git a/src/rendervulkan.cpp b/src/rendervulkan.cpp
  		cmdBuffer->bindTexture(0, pScreenshotTexture);
  		cmdBuffer->setTextureSrgb(0, !bTenBit);
  		cmdBuffer->setSamplerNearest(0, false);
-@@ -4313,10 +4500,12 @@
+@@ -4431,10 +4618,12 @@ std::optional<uint64_t> vulkan_screenshot( const struct FrameInfo_t *frameInfo,
  
  		const int pixelsPerGroup = 8;
  
@@ -422,9 +424,10 @@ diff --git a/src/rendervulkan.cpp b/src/rendervulkan.cpp
  
  	uint64_t sequence = g_device.submit(std::move(cmdBuffer));
 diff --git a/src/rendervulkan.hpp b/src/rendervulkan.hpp
+index 2479b4b7..c1b81ba0 100644
 --- a/src/rendervulkan.hpp
 +++ b/src/rendervulkan.hpp
-@@ -132,12 +132,14 @@
+@@ -134,12 +134,14 @@ inline GamescopeAppTextureColorspace VkColorSpaceToGamescopeAppTextureColorSpace
  // take. Empty without VK_EXT_image_drm_format_modifier.
  std::vector<uint64_t> vulkan_get_capture_modifiers( uint32_t drmFormat );
  
@@ -442,7 +445,7 @@ diff --git a/src/rendervulkan.hpp b/src/rendervulkan.hpp
  	LinearModifier,
  	Unavailable,
  };
-@@ -160,6 +162,7 @@
+@@ -162,6 +164,7 @@ public:
  			bExportable = false;
  			bOutputImage = false;
  			bColorAttachment = false;
@@ -450,7 +453,7 @@ diff --git a/src/rendervulkan.hpp b/src/rendervulkan.hpp
  			imageType = VK_IMAGE_TYPE_2D;
  		}
  
-@@ -173,6 +176,9 @@
+@@ -175,6 +178,9 @@ public:
  		bool bExportable : 1;
  		bool bOutputImage : 1;
  		bool bColorAttachment : 1;
@@ -460,8 +463,8 @@ diff --git a/src/rendervulkan.hpp b/src/rendervulkan.hpp
  		VkImageType imageType;
  		// Allocate with exactly this DRM format modifier, in device memory, and export it.
  		// INVALID leaves the choice to bLinear or the backend's list.
-@@ -203,6 +209,8 @@
- 	inline VkFormat format() const { return m_format; }
+@@ -206,6 +212,8 @@ public:
+ 	inline bool transferSrc() const { return m_bTransferSrc; }
  	inline const struct wlr_dmabuf_attributes& dmabuf() { return m_dmabuf; }
  	inline VkImage vkImage() { return m_vkImage; }
 +	// Set only on a bPlanarBuffer target, which has no image.
@@ -469,7 +472,7 @@ diff --git a/src/rendervulkan.hpp b/src/rendervulkan.hpp
  	inline bool outputImage() { return m_bOutputImage; }
  	inline bool externalImage() { return m_bExternal; }
  	inline VkDeviceSize totalSize() const { return m_size; }
-@@ -235,6 +243,8 @@
+@@ -238,6 +246,8 @@ public:
  	uint32_t queueFamily = VK_QUEUE_FAMILY_IGNORED;
  
  private:
@@ -477,8 +480,8 @@ diff --git a/src/rendervulkan.hpp b/src/rendervulkan.hpp
 +
  	bool m_bInitialized = false;
  	bool m_bExternal = false;
- 	bool m_bOutputImage = false;
-@@ -242,6 +252,7 @@
+ 	bool m_bTransferSrc = false;
+@@ -246,6 +256,7 @@ private:
  	uint32_t m_drmFormat = DRM_FORMAT_INVALID;
  
  	VkImage m_vkImage = VK_NULL_HANDLE;
@@ -486,7 +489,7 @@ diff --git a/src/rendervulkan.hpp b/src/rendervulkan.hpp
  	VkDeviceMemory m_vkImageMemory = VK_NULL_HANDLE;
  	
  	VkImageView m_srgbView = VK_NULL_HANDLE;
-@@ -643,6 +654,8 @@
+@@ -655,6 +666,8 @@ enum ShaderType {
  	SHADER_TYPE_RGB_TO_NV12,
  	SHADER_TYPE_SGSR,
  	SHADER_TYPE_RGB_TO_P010,
@@ -495,7 +498,7 @@ diff --git a/src/rendervulkan.hpp b/src/rendervulkan.hpp
  
  	SHADER_TYPE_COUNT
  };
-@@ -741,6 +754,7 @@
+@@ -753,6 +766,7 @@ static inline uint32_t div_roundup(uint32_t x, uint32_t y)
  	VK_FUNC(EnumerateDeviceExtensionProperties) \
  	VK_FUNC(EnumeratePhysicalDevices) \
  	VK_FUNC(GetDeviceProcAddr) \
@@ -505,6 +508,7 @@ diff --git a/src/rendervulkan.hpp b/src/rendervulkan.hpp
  	VK_FUNC(GetPhysicalDeviceFormatProperties2) \
 diff --git a/src/shaders/cs_rgb_to_nv12_buf.comp b/src/shaders/cs_rgb_to_nv12_buf.comp
 new file mode 100644
+index 00000000..53442662
 --- /dev/null
 +++ b/src/shaders/cs_rgb_to_nv12_buf.comp
 @@ -0,0 +1,88 @@
@@ -598,6 +602,7 @@ new file mode 100644
 +}
 diff --git a/src/shaders/cs_rgb_to_p010_buf.comp b/src/shaders/cs_rgb_to_p010_buf.comp
 new file mode 100644
+index 00000000..e127ac90
 --- /dev/null
 +++ b/src/shaders/cs_rgb_to_p010_buf.comp
 @@ -0,0 +1,83 @@
@@ -684,5 +689,3 @@ new file mode 100644
 +  dst_words[row + u_pitchWords] = lumaCode(bottom_left) | (lumaCode(bottom_right) << 16);
 +  dst_words[u_chromaOffsetWords + thread_id.y * u_pitchWords + thread_id.x] = uv.y | (uv.z << 16);
 +}
--- 
-2.49.0

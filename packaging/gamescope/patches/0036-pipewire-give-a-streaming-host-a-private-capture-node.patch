@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: =?UTF-8?q?Enrico=20B=C3=BChler?= <enrico.buehler@unom.io>
 Date: Thu, 12 Nov 2026 16:00:00 +0100
-Subject: [PATCH 37/37] pipewire: give a streaming host a private capture node
+Subject: [PATCH 36/38] pipewire: give a streaming host a private capture node
 
 Steam's Game Recording links to the node the gamescope_pipewire protocol
 announces as soon as a game starts, and sets the stream's focus appid to
@@ -17,92 +17,31 @@ vblank.
 
 Stamp pfhdr34.
 ---
-diff --git a/src/pipewire.hpp b/src/pipewire.hpp
---- a/src/pipewire.hpp
-+++ b/src/pipewire.hpp
-@@ -1,5 +1,7 @@
- #pragma once
+ src/meson.build      |   3 +-
+ src/pipewire.cpp     | 285 +++++++++++++++++++++++--------------------
+ src/pipewire.hpp     |  40 +++++-
+ src/steamcompmgr.cpp |  58 ++++++---
+ 4 files changed, 230 insertions(+), 156 deletions(-)
+
+diff --git a/src/meson.build b/src/meson.build
+index 81a5a335..72f2019a 100644
+--- a/src/meson.build
++++ b/src/meson.build
+@@ -226,7 +226,8 @@ vcs_tag = run_command(vcs_tag_cmd, check: false).stdout().strip()
+ #   +pfhdr31 — …and each uploaded constant block meets the device's uniform offset alignment
+ #   +pfhdr32 — …and a planar capture dmabuf on NVIDIA carries DRM_FORMAT_MOD_LINEAR's layout
+ #   +pfhdr33 — …written into a storage buffer, so its bytes sit where the export says
+-version_tag = vcs_tag + '+pfhdr33' + ' (' + compiler_name + ' ' + compiler_version + ')'
++#   +pfhdr34 — …and a private reliable capture node beside the public one Steam reads
++version_tag = vcs_tag + '+pfhdr34' + ' (' + compiler_name + ' ' + compiler_version + ')'
  
-+#include <atomic>
-+#include <chrono>
- #include <memory>
- #include <pipewire/pipewire.h>
- #include <spa/param/video/format-utils.h>
-@@ -7,6 +9,18 @@
- #include "rendervulkan.hpp"
- #include "pipewire_gamescope.hpp"
- 
-+// Public: the node the gamescope_pipewire protocol announces. Steam's Game Recording and Remote
-+// Play read it and steer it (focus appid, requested size). Private: a reliable node no protocol
-+// names, for a streaming host. PipeWire 1.6 hands a reliable frame to one link only, so a host
-+// sharing the public node with Steam gets no frames.
-+enum class PipewireStream {
-+	Public,
-+	Private,
-+	Count,
-+};
-+
-+struct pipewire_buffer;
-+
- struct pipewire_state {
- 	struct pw_loop *loop;
- 	struct pw_context *context;
-@@ -24,6 +38,23 @@
- 	uint64_t modifier;
- 	int shm_stride;
- 	uint64_t seq;
-+
-+	// node.name, or nullptr for the application's own.
-+	const char *node_name;
-+	bool reliable;
-+	struct spa_hook stream_hook;
-+	// Pending buffer for PipeWire → steamcompmgr
-+	std::atomic<struct pipewire_buffer *> out_buffer;
-+	// Pending buffer for steamcompmgr → PipeWire
-+	std::atomic<struct pipewire_buffer *> in_buffer;
-+	uint32_t requested_width, requested_height;
-+	uint32_t capture_width, capture_height;
-+	uint32_t output_width, output_height;
-+	// See request_buffer.
-+	std::atomic<bool> pump_cycle;
-+	std::chrono::steady_clock::time_point last_pump;
-+	// See fixate_modifier.
-+	int fixate_rounds;
- };
- 
- /**
-@@ -32,6 +63,8 @@
-  * push_pipewire_buffer) for copying.
-  */
- struct pipewire_buffer {
-+	// The stream this buffer belongs to.
-+	struct pipewire_state *state = nullptr;
- 	enum spa_data_type type; // SPA_DATA_MemFd or SPA_DATA_DmaBuf
- 	struct spa_video_info_raw video_info;
- 	struct spa_gamescope gamescope_info;
-@@ -64,14 +97,15 @@
- };
- 
- bool init_pipewire(void);
-+// The public node, for the gamescope_pipewire protocol.
- uint32_t get_pipewire_stream_node_id(void);
--struct pipewire_buffer *dequeue_pipewire_buffer(void);
--bool pipewire_is_streaming();
-+struct pipewire_buffer *dequeue_pipewire_buffer(PipewireStream stream);
-+bool pipewire_is_streaming(PipewireStream stream);
- void pipewire_destroy_buffer(struct pipewire_buffer *buffer);
- // Destroy textures queued by the PipeWire thread. Must run on steamcompmgr —
- // CVulkanTexture's dtor talks to the Vulkan device.
- void pipewire_reap_dead_buffers(void);
--// Returns the buffer this push displaced, which the PipeWire thread never took; the caller owns
-+// Pushes onto the buffer's own stream. Returns the buffer this push displaced, which the PipeWire thread never took; the caller owns
- // it again. nullptr when the slot was empty.
- struct pipewire_buffer *push_pipewire_buffer(struct pipewire_buffer *buffer);
- void nudge_pipewire(void);
+ gamescope_version_conf = configuration_data()
+ gamescope_version_conf.set('VCS_TAG', version_tag)
 diff --git a/src/pipewire.cpp b/src/pipewire.cpp
+index 77d9de81..addf9afb 100644
 --- a/src/pipewire.cpp
 +++ b/src/pipewire.cpp
-@@ -80,22 +80,18 @@
+@@ -80,21 +80,17 @@ static std::vector<uint64_t> capture_modifiers(uint32_t format)
  	return vulkan_get_capture_modifiers(spa_format_to_drm(format));
  }
  
@@ -118,11 +57,7 @@ diff --git a/src/pipewire.cpp b/src/pipewire.cpp
 -static std::atomic<struct pipewire_buffer *> out_buffer;
 -// Pending buffer for steamcompmgr → PipeWire
 -static std::atomic<struct pipewire_buffer *> in_buffer;
-+static struct pipewire_state *stream_state(PipewireStream stream)
-+{
-+	return &s_states[(size_t) stream];
-+}
- 
+-
 -// Requested capture size
 -static uint32_t s_nRequestedWidth;
 -static uint32_t s_nRequestedHeight;
@@ -130,11 +65,14 @@ diff --git a/src/pipewire.cpp b/src/pipewire.cpp
 -static uint32_t s_nCaptureHeight;
 -static uint32_t s_nOutputWidth;
 -static uint32_t s_nOutputHeight;
--
++static struct pipewire_state *stream_state(PipewireStream stream)
++{
++	return &s_states[(size_t) stream];
++}
+ 
  static void destroy_buffer(struct pipewire_buffer *buffer) {
  	assert(buffer->buffer == nullptr);
- 
-@@ -125,10 +121,12 @@
+@@ -125,10 +121,12 @@ static void destroy_buffer(struct pipewire_buffer *buffer) {
  
  	// If out_buffer == buffer, then set it to nullptr.
  	// We don't care about the result.
@@ -151,7 +89,7 @@ diff --git a/src/pipewire.cpp b/src/pipewire.cpp
  
  	delete buffer;
  }
-@@ -161,29 +159,29 @@
+@@ -161,29 +159,29 @@ void pipewire_destroy_buffer(struct pipewire_buffer *buffer)
  	destroy_buffer(buffer);
  }
  
@@ -194,7 +132,7 @@ diff --git a/src/pipewire.cpp b/src/pipewire.cpp
  }
  
  // The colorimetry properties that go with `format`, appended into an already-open EnumFormat
-@@ -249,11 +247,11 @@
+@@ -249,11 +247,11 @@ static void add_format_color_params(struct spa_pod_builder *builder, spa_video_f
  
  // `pFixated` builds the one pod that answers a DONT_FIXATE negotiation: the dmabuf offer with the
  // modifier this stream settled on, and no SHM twin. `bHDR` picks a 10-bit format's colorimetry.
@@ -208,7 +146,7 @@ diff --git a/src/pipewire.cpp b/src/pipewire.cpp
  	struct spa_rectangle min_requested_size = { 0, 0 };
  	struct spa_rectangle max_requested_size = { UINT32_MAX, UINT32_MAX };
  	struct spa_fraction framerate = SPA_FRACTION(0, 1);
-@@ -308,12 +306,12 @@
+@@ -308,12 +306,12 @@ static void build_format_params(struct spa_pod_builder *builder, spa_video_forma
  }
  
  
@@ -224,7 +162,7 @@ diff --git a/src/pipewire.cpp b/src/pipewire.cpp
  #if GAMESCOPE_PIPEWIRE_HDR
  	// Listed LAST, on purpose: PipeWire intersects in offer order, so every consumer that
  	// negotiates today's 8-bit stream keeps negotiating it bit-for-bit. Only a consumer that
-@@ -328,16 +326,16 @@
+@@ -328,16 +326,16 @@ static std::vector<const struct spa_pod *> build_format_params(struct spa_pod_bu
  	// i.e. red and blue swapped, with every format mapping on both ends individually correct.
  	// A2B10G10R10 is the universally supported packed-10 format, so leading with it costs nothing
  	// on AMD or Intel. xRGB_210LE stays as the second pod for a consumer that only speaks it.
@@ -247,7 +185,7 @@ diff --git a/src/pipewire.cpp b/src/pipewire.cpp
  #endif
  
  	return params;
-@@ -346,17 +344,14 @@
+@@ -346,17 +344,14 @@ static std::vector<const struct spa_pod *> build_format_params(struct spa_pod_bu
  // steamcompmgr found no buffer to paint into; the PipeWire thread answers with a cycle that
  // carries no new frame. Frames and returned buffers move only inside a cycle and only this stream
  // starts one, so a stream waiting on its consumer has to keep cycling or it waits forever.
@@ -267,7 +205,7 @@ diff --git a/src/pipewire.cpp b/src/pipewire.cpp
  			nudge_pipewire();
  		}
  		return;
-@@ -374,7 +369,7 @@
+@@ -374,7 +369,7 @@ static void request_buffer(struct pipewire_state *state)
  
  	// Past this exchange, the PipeWire thread shares the buffer with the
  	// steamcompmgr thread
@@ -276,7 +214,7 @@ diff --git a/src/pipewire.cpp b/src/pipewire.cpp
  	assert(old == nullptr);
  }
  
-@@ -471,35 +466,26 @@
+@@ -471,35 +466,26 @@ static void copy_buffer(struct pipewire_state *state, struct pipewire_buffer *bu
  	}
  }
  
@@ -290,22 +228,22 @@ diff --git a/src/pipewire.cpp b/src/pipewire.cpp
 -				pwr_log.errorf_errno("dispatch_nudge: read failed");
 -			break;
 -		}
+-	}
+-
+-	if (g_nOutputWidth != s_nOutputWidth || g_nOutputHeight != s_nOutputHeight) {
+-		s_nOutputWidth = g_nOutputWidth;
+-		s_nOutputHeight = g_nOutputHeight;
+-		calculate_capture_size();
 +	if (g_nOutputWidth != state->output_width || g_nOutputHeight != state->output_height) {
 +		state->output_width = g_nOutputWidth;
 +		state->output_height = g_nOutputHeight;
 +		calculate_capture_size(state);
  	}
+-	if (s_nCaptureWidth != state->video_info.size.width || s_nCaptureHeight != state->video_info.size.height) {
+-		pwr_log.debugf("renegotiating stream params (size: %dx%d)", s_nCaptureWidth, s_nCaptureHeight);
 +	if (state->capture_width != state->video_info.size.width || state->capture_height != state->video_info.size.height) {
 +		pwr_log.debugf("renegotiating stream params (size: %dx%d)", state->capture_width, state->capture_height);
  
--	if (g_nOutputWidth != s_nOutputWidth || g_nOutputHeight != s_nOutputHeight) {
--		s_nOutputWidth = g_nOutputWidth;
--		s_nOutputHeight = g_nOutputHeight;
--		calculate_capture_size();
--	}
--	if (s_nCaptureWidth != state->video_info.size.width || s_nCaptureHeight != state->video_info.size.height) {
--		pwr_log.debugf("renegotiating stream params (size: %dx%d)", s_nCaptureWidth, s_nCaptureHeight);
--
  		uint8_t buf[16384];
  		struct spa_pod_builder builder = SPA_POD_BUILDER_INIT(buf, sizeof(buf));
 -		std::vector<const struct spa_pod *> format_params = build_format_params(&builder);
@@ -321,7 +259,7 @@ diff --git a/src/pipewire.cpp b/src/pipewire.cpp
  	if (buffer != nullptr) {
  		// We now completely own the buffer, it's no longer shared with the
  		// steamcompmgr thread.
-@@ -514,17 +500,32 @@
+@@ -514,17 +500,32 @@ static void dispatch_nudge(struct pipewire_state *state, int fd)
  				pwr_log.errorf("pw_stream_queue_buffer failed");
  			}
  			// Queueing stops starting the cycle once a stream has triggered one itself.
@@ -356,7 +294,7 @@ diff --git a/src/pipewire.cpp b/src/pipewire.cpp
  static void stream_handle_state_changed(void *data, enum pw_stream_state old_stream_state, enum pw_stream_state stream_state, const char *error)
  {
  	struct pipewire_state *state = (struct pipewire_state *) data;
-@@ -551,21 +552,17 @@
+@@ -551,21 +552,17 @@ static void stream_handle_state_changed(void *data, enum pw_stream_state old_str
  	}
  }
  
@@ -379,7 +317,7 @@ diff --git a/src/pipewire.cpp b/src/pipewire.cpp
  		// Values are the default first, then the alternatives (which repeat it).
  		const uint32_t nValues = SPA_POD_CHOICE_N_VALUES(pod);
  		const uint64_t *pValues = (const uint64_t *) SPA_POD_CHOICE_VALUES(pod);
-@@ -588,8 +585,8 @@
+@@ -588,8 +585,8 @@ static void fixate_modifier(struct pipewire_state *state, const struct spa_pod_p
  #else
  	const bool bHDR = true;
  #endif
@@ -390,7 +328,7 @@ diff --git a/src/pipewire.cpp b/src/pipewire.cpp
  	params.insert(params.end(), offers.begin(), offers.end());
  
  	pwr_log.infof("fixating the dmabuf modifier: 0x%llx", (unsigned long long) chosen);
-@@ -612,9 +609,9 @@
+@@ -612,9 +609,9 @@ static void stream_handle_param_changed(void *data, uint32_t id, const struct sp
  		pwr_log.errorf("spa_format_video_raw_parse failed");
  		return;
  	}
@@ -403,7 +341,7 @@ diff --git a/src/pipewire.cpp b/src/pipewire.cpp
  
  	state->gamescope_info = gamescope_info;
  
-@@ -634,7 +631,7 @@
+@@ -634,7 +631,7 @@ static void stream_handle_param_changed(void *data, uint32_t id, const struct sp
  		fixate_modifier(state, modifier_prop);
  		return;
  	}
@@ -412,7 +350,7 @@ diff --git a/src/pipewire.cpp b/src/pipewire.cpp
  	state->modifier = DRM_FORMAT_MOD_LINEAR;
  	if (modifier_prop != nullptr) {
  		int64_t nModifier = 0;
-@@ -685,7 +682,7 @@
+@@ -685,7 +682,7 @@ static void stream_handle_param_changed(void *data, uint32_t id, const struct sp
  
  	pwr_log.debugf("format changed (size: %dx%d, requested %dx%d, format %d, stride %d, size: %d, dmabuf: %d)",
  		state->video_info.size.width, state->video_info.size.height,
@@ -421,7 +359,7 @@ diff --git a/src/pipewire.cpp b/src/pipewire.cpp
  		state->video_info.format, state->shm_stride, shm_size, state->dmabuf);
  
  #if GAMESCOPE_PIPEWIRE_HDR
-@@ -752,6 +749,7 @@
+@@ -752,6 +749,7 @@ static void stream_handle_add_buffer(void *user_data, struct pw_buffer *pw_buffe
  	struct spa_data *spa_data = &spa_buffer->datas[0];
  
  	struct pipewire_buffer *buffer = new pipewire_buffer();
@@ -429,7 +367,7 @@ diff --git a/src/pipewire.cpp b/src/pipewire.cpp
  	buffer->buffer = pw_buffer;
  	// Associate the two halves NOW, not after the last `goto error` below: every error
  	// path deletes this buffer, and a slot left holding a stale pointer is one the next
-@@ -820,7 +818,7 @@
+@@ -820,7 +818,7 @@ static void stream_handle_add_buffer(void *user_data, struct pw_buffer *pw_buffe
  		else
  			screenshotImageFlags.bLinear = true;
  	}
@@ -438,7 +376,7 @@ diff --git a/src/pipewire.cpp b/src/pipewire.cpp
  	if ( !bImageInitSuccess )
  	{
  		pwr_log.errorf("Failed to initialize pipewire texture");
-@@ -997,72 +995,46 @@
+@@ -997,72 +995,46 @@ static void run_pipewire(struct pipewire_state *state)
  		}
  
  		if (pollfds[EVENT_NUDGE].revents & POLLIN) {
@@ -532,13 +470,13 @@ diff --git a/src/pipewire.cpp b/src/pipewire.cpp
  
  	enum pw_stream_flags flags = (enum pw_stream_flags)(PW_STREAM_FLAG_DRIVER | PW_STREAM_FLAG_ALLOC_BUFFERS);
  	int ret = pw_stream_connect(state->stream, PW_DIRECTION_OUTPUT, PW_ID_ANY, flags, format_params.data(), format_params.size());
-@@ -1085,7 +1057,51 @@
+@@ -1085,7 +1057,51 @@ bool init_pipewire(void)
  		pwr_log.errorf("pw_loop_iterate failed");
  		return false;
  	}
 +	return true;
 +}
- 
++
 +bool init_pipewire(void)
 +{
 +	struct pipewire_state *state = stream_state(PipewireStream::Public);
@@ -578,13 +516,13 @@ diff --git a/src/pipewire.cpp b/src/pipewire.cpp
 +
 +	if (!connect_stream(state) || !connect_stream(priv))
 +		return false;
-+
+ 
 +	// Private first: a host that reads the public line has the private one too.
 +	pwr_log.infof("private capture stream on node ID: %u", priv->stream_node_id);
  	pwr_log.infof("stream available on node ID: %u", state->stream_node_id);
  
  	std::thread thread(run_pipewire, state);
-@@ -1096,29 +1112,28 @@
+@@ -1096,29 +1112,28 @@ bool init_pipewire(void)
  
  uint32_t get_pipewire_stream_node_id(void)
  {
@@ -621,10 +559,94 @@ diff --git a/src/pipewire.cpp b/src/pipewire.cpp
  	if ( old != nullptr )
  	{
  		pwr_log.debugf("push_pipewire_buffer: recycling a buffer the PipeWire thread had not taken");
+diff --git a/src/pipewire.hpp b/src/pipewire.hpp
+index 1129da89..6ea4e3db 100644
+--- a/src/pipewire.hpp
++++ b/src/pipewire.hpp
+@@ -1,5 +1,7 @@
+ #pragma once
+ 
++#include <atomic>
++#include <chrono>
+ #include <memory>
+ #include <pipewire/pipewire.h>
+ #include <spa/param/video/format-utils.h>
+@@ -7,6 +9,18 @@
+ #include "rendervulkan.hpp"
+ #include "pipewire_gamescope.hpp"
+ 
++// Public: the node the gamescope_pipewire protocol announces. Steam's Game Recording and Remote
++// Play read it and steer it (focus appid, requested size). Private: a reliable node no protocol
++// names, for a streaming host. PipeWire 1.6 hands a reliable frame to one link only, so a host
++// sharing the public node with Steam gets no frames.
++enum class PipewireStream {
++	Public,
++	Private,
++	Count,
++};
++
++struct pipewire_buffer;
++
+ struct pipewire_state {
+ 	struct pw_loop *loop;
+ 	struct pw_context *context;
+@@ -24,6 +38,23 @@ struct pipewire_state {
+ 	uint64_t modifier;
+ 	int shm_stride;
+ 	uint64_t seq;
++
++	// node.name, or nullptr for the application's own.
++	const char *node_name;
++	bool reliable;
++	struct spa_hook stream_hook;
++	// Pending buffer for PipeWire → steamcompmgr
++	std::atomic<struct pipewire_buffer *> out_buffer;
++	// Pending buffer for steamcompmgr → PipeWire
++	std::atomic<struct pipewire_buffer *> in_buffer;
++	uint32_t requested_width, requested_height;
++	uint32_t capture_width, capture_height;
++	uint32_t output_width, output_height;
++	// See request_buffer.
++	std::atomic<bool> pump_cycle;
++	std::chrono::steady_clock::time_point last_pump;
++	// See fixate_modifier.
++	int fixate_rounds;
+ };
+ 
+ /**
+@@ -32,6 +63,8 @@ struct pipewire_state {
+  * push_pipewire_buffer) for copying.
+  */
+ struct pipewire_buffer {
++	// The stream this buffer belongs to.
++	struct pipewire_state *state = nullptr;
+ 	enum spa_data_type type; // SPA_DATA_MemFd or SPA_DATA_DmaBuf
+ 	struct spa_video_info_raw video_info;
+ 	struct spa_gamescope gamescope_info;
+@@ -64,14 +97,15 @@ struct pipewire_buffer {
+ };
+ 
+ bool init_pipewire(void);
++// The public node, for the gamescope_pipewire protocol.
+ uint32_t get_pipewire_stream_node_id(void);
+-struct pipewire_buffer *dequeue_pipewire_buffer(void);
+-bool pipewire_is_streaming();
++struct pipewire_buffer *dequeue_pipewire_buffer(PipewireStream stream);
++bool pipewire_is_streaming(PipewireStream stream);
+ void pipewire_destroy_buffer(struct pipewire_buffer *buffer);
+ // Destroy textures queued by the PipeWire thread. Must run on steamcompmgr —
+ // CVulkanTexture's dtor talks to the Vulkan device.
+ void pipewire_reap_dead_buffers(void);
+-// Returns the buffer this push displaced, which the PipeWire thread never took; the caller owns
++// Pushes onto the buffer's own stream. Returns the buffer this push displaced, which the PipeWire thread never took; the caller owns
+ // it again. nullptr when the slot was empty.
+ struct pipewire_buffer *push_pipewire_buffer(struct pipewire_buffer *buffer);
+ void nudge_pipewire(void);
 diff --git a/src/steamcompmgr.cpp b/src/steamcompmgr.cpp
+index 96950000..7acd15ba 100644
 --- a/src/steamcompmgr.cpp
 +++ b/src/steamcompmgr.cpp
-@@ -2911,10 +2911,31 @@
+@@ -3036,9 +3036,30 @@ gamescope::ConVar<bool> cv_pipewire_composite_external_overlay{ "pipewire_compos
  	"node has never carried it, and a consumer showing the stream to the same person already "
  	"looking at the screen would get two." };
  
@@ -632,8 +654,7 @@ diff --git a/src/steamcompmgr.cpp b/src/steamcompmgr.cpp
 +// What one node holds and last pushed. Each node repaints on its own: the public one may follow
 +// a focus appid while the private one shows the whole session.
 +struct PipewirePaint_t
- {
--	static struct pipewire_buffer *s_pPipewireBuffer = nullptr;
++{
 +	struct pipewire_buffer *pBuffer = nullptr;
 +	uint64_t ulLastFocusAppId = 0;
 +	uint64_t ulLastFocusCommitId = 0;
@@ -649,16 +670,16 @@ diff --git a/src/steamcompmgr.cpp b/src/steamcompmgr.cpp
 +	uint64_t ulNextPushNs = 0;
 +};
 +static PipewirePaint_t s_PipewirePaint[ (size_t) PipewireStream::Count ];
- 
++
 +static void paint_pipewire( PipewireStream eStream )
-+{
+ {
+-	static struct pipewire_buffer *s_pPipewireBuffer = nullptr;
 +	PipewirePaint_t &paint = s_PipewirePaint[ (size_t) eStream ];
 +	struct pipewire_buffer *&s_pPipewireBuffer = paint.pBuffer;
-+
+ 
  	// If the stream stopped/changed, and the underlying pw_buffer was thus
  	// destroyed, then destroy this buffer and grab a new one.
- 	if ( s_pPipewireBuffer && s_pPipewireBuffer->IsStale() )
-@@ -2925,7 +2946,7 @@
+@@ -3050,7 +3071,7 @@ static void paint_pipewire()
  
  	// Queue up a buffer with some metadata.
  	if ( !s_pPipewireBuffer )
@@ -667,7 +688,7 @@ diff --git a/src/steamcompmgr.cpp b/src/steamcompmgr.cpp
  
  	if ( !s_pPipewireBuffer || !s_pPipewireBuffer->texture )
  		return;
-@@ -2970,7 +2991,7 @@
+@@ -3095,7 +3116,7 @@ static void paint_pipewire()
  	global_focus_t *pFocus = nullptr;
  	if ( ulFocusAppId )
  	{
@@ -676,7 +697,7 @@ diff --git a/src/steamcompmgr.cpp b/src/steamcompmgr.cpp
  
  		bool bAppIdChange = ulFocusAppId != s_ulLastFocusAppId;
  		if ( bAppIdChange )
-@@ -3006,14 +3027,14 @@
+@@ -3131,14 +3152,14 @@ static void paint_pipewire()
  		return;
  
  	// If the commits are the same as they were last time, don't repaint and don't push a new buffer on the stream.
@@ -699,7 +720,7 @@ diff --git a/src/steamcompmgr.cpp b/src/steamcompmgr.cpp
  
  	uint64_t ulFocusCommitId = window_last_done_commit_id( pFocus->focusWindow );
  	uint64_t ulOverrideCommitId = window_last_done_commit_id( pFocus->overrideWindow );
-@@ -3060,7 +3081,7 @@
+@@ -3185,7 +3206,7 @@ static void paint_pipewire()
  	// ONLY view of the session is this node could not see the overlay the user had turned on.
  	// Gated on the focus-appid for the same reason the Steam overlay above is: a consumer that
  	// asked for one specific app is asking for that app, not for the session's chrome.
@@ -708,7 +729,7 @@ diff --git a/src/steamcompmgr.cpp b/src/steamcompmgr.cpp
  	steamcompmgr_win_t *pExternalOverlay = nullptr;
  	if ( cv_pipewire_composite_external_overlay && !ulFocusAppId &&
  	     pFocus->externalOverlayWindow && pFocus->externalOverlayWindow->opacity )
-@@ -3072,7 +3093,7 @@
+@@ -3197,7 +3218,7 @@ static void paint_pipewire()
  
  	// The Steam overlay's commits join the test too. A game that stops presenting while the
  	// overlay holds input would otherwise never push it: the menu sound plays, the stream stays put.
@@ -717,7 +738,7 @@ diff --git a/src/steamcompmgr.cpp b/src/steamcompmgr.cpp
  	steamcompmgr_win_t *pOverlay = ( !ulFocusAppId && pFocus->overlayWindow && pFocus->overlayWindow->opacity )
  		? pFocus->overlayWindow : nullptr;
  	const uint64_t ulOverlayCommitId = window_last_done_commit_id( pOverlay );
-@@ -3097,7 +3118,7 @@
+@@ -3222,7 +3243,7 @@ static void paint_pipewire()
  		const struct spa_fraction &maxFramerate = s_pPipewireBuffer->video_info.max_framerate;
  		if ( maxFramerate.num > 0 && maxFramerate.denom > 0 )
  		{
@@ -726,7 +747,7 @@ diff --git a/src/steamcompmgr.cpp b/src/steamcompmgr.cpp
  			const uint64_t ulIntervalNs = ( 1'000'000'000ull * maxFramerate.denom ) / maxFramerate.num;
  			const uint64_t ulNow = get_time_in_nanos();
  			if ( ulNow + ulIntervalNs / 2 < s_ulNextPushNs )
-@@ -11019,8 +11040,11 @@
+@@ -11600,8 +11621,11 @@ steamcompmgr_main(int argc, char **argv)
  		if ( vblank )
  		{
  			pipewire_reap_dead_buffers();
@@ -740,19 +761,3 @@ diff --git a/src/steamcompmgr.cpp b/src/steamcompmgr.cpp
  		}
  #endif
  
-diff --git a/src/meson.build b/src/meson.build
---- a/src/meson.build
-+++ b/src/meson.build
-@@ -218,7 +218,8 @@
- #   +pfhdr31 — …and each uploaded constant block meets the device's uniform offset alignment
- #   +pfhdr32 — …and a planar capture dmabuf on NVIDIA carries DRM_FORMAT_MOD_LINEAR's layout
- #   +pfhdr33 — …written into a storage buffer, so its bytes sit where the export says
--version_tag = vcs_tag + '+pfhdr33' + ' (' + compiler_name + ' ' + compiler_version + ')'
-+#   +pfhdr34 — …and a private reliable capture node beside the public one Steam reads
-+version_tag = vcs_tag + '+pfhdr34' + ' (' + compiler_name + ' ' + compiler_version + ')'
- 
- gamescope_version_conf = configuration_data()
- gamescope_version_conf.set('VCS_TAG', version_tag)
--- 
-2.47.0
-

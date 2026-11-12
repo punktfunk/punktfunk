@@ -23,8 +23,9 @@
 # access unless the checkout already carries them — hence `--recurse-submodules` below.
 set -euo pipefail
 
-# The pinned upstream, 3.16.31. Bump together with the patches and the wraps in subprojects/.
-GAMESCOPE_REV="6867f509874f9bc52e12d6f4c4596cdf0d5be6b4"
+# The pinned upstream, 12 commits past 3.17.0. Bump together with the patches and the wraps in
+# subprojects/.
+GAMESCOPE_REV="865a71c4048b5137f03b0711bbd80c1d24bc6915"
 GAMESCOPE_REPO="https://github.com/ValveSoftware/gamescope.git"
 
 REV="$GAMESCOPE_REV" PREFIX=/usr DESTDIR="" SRCDIR="" JOBS="" SETCAP=1 EXTRA_FALLBACK=""
@@ -115,6 +116,25 @@ if [ "${#BUNDLED[@]}" -gt 0 ]; then
     -Dpixman:gtk=disabled -Dpixman:libpng=disabled -Dpixman:openmp=disabled
   )
 fi
+
+# The WSI layer needs VK_EXT_present_timing revision 3: Vulkan-Headers 1.4.335, newer than
+# Debian 13's. Below that the layer compiles against this pinned release. Headers only: nothing
+# is linked, so a game keeps its own Vulkan loader.
+VULKAN_HEADERS_REV="2fa203425eb4af9dfc6b03f97ef72b0b5bcb8350" # v1.4.335
+LAYER_CXXFLAGS="${CXXFLAGS:-}"
+# shellcheck disable=SC2046 # the pkg-config flags must split
+if ! printf '#include <vulkan/vulkan.h>\n#if VK_EXT_PRESENT_TIMING_SPEC_VERSION < 3\n#error old\n#endif\n' \
+    | ${CC:-cc} $(pkg-config --cflags vulkan) -E -x c - >/dev/null 2>&1; then
+  VKH="$SRCDIR/subprojects/Vulkan-Headers"
+  echo "==> Vulkan headers below 1.4.335: the WSI layer builds against a pinned copy"
+  if [ "$(git -C "$VKH" rev-parse HEAD 2>/dev/null)" != "$VULKAN_HEADERS_REV" ]; then
+    rm -rf "$VKH"
+    git init -q "$VKH"
+    git -C "$VKH" fetch -q --depth 1 https://github.com/KhronosGroup/Vulkan-Headers.git "$VULKAN_HEADERS_REV"
+    git -C "$VKH" checkout -q FETCH_HEAD
+  fi
+  LAYER_CXXFLAGS+=" -I$VKH/include"
+fi
 echo "==> configuring"
 # We ship ONE binary out of this tree, so build only what leads to it:
 #   -Denable_tests=false        gamescope's own unit tests want Catch2 **v3**
@@ -171,7 +191,7 @@ meson setup "$BUILD" "$SRCDIR" \
   -Denable_tests=false \
   -Denable_openvr_support=false \
   -Denable_gamescope_wsi_layer=false
-meson setup "$LAYER_BUILD" "$SRCDIR" \
+CXXFLAGS="$LAYER_CXXFLAGS" meson setup "$LAYER_BUILD" "$SRCDIR" \
   --prefix="$PREFIX" \
   --buildtype=release \
   -Dforce_fallback_for=libliftoff,vkroots \
