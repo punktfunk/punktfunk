@@ -1,19 +1,14 @@
 // What a game's exit does to the stream of a profile whose seat has a host of its own. It is the
 // profile's own session setting, which the box stores and that seat's host plays with; absent,
 // the seat follows the host's choice for every seat.
-import {
-	QueryClientProvider,
-	useMutation,
-	useQueryClient,
-} from "@tanstack/react-query";
+import { QueryClientProvider, useQueryClient } from "@tanstack/react-query";
 import { toast } from "@unom/ui/toast";
 import type { FC, ReactNode } from "react";
-import { apiFetch } from "@/api/fetcher";
 import type { ProfileAdmin } from "@/api/gen/model/profileAdmin";
 import type { SessionSettingsState } from "@/api/gen/model/sessionSettingsState";
 import {
 	getGetSessionSettingsQueryKey,
-	getGetSessionSettingsUrl,
+	useClearSessionSettings,
 	useGetSessionSettings,
 	useSetSessionSettings,
 } from "@/api/gen/session/session";
@@ -57,12 +52,7 @@ const GameExitQuery: FC<{ id: string }> = ({ id }) => {
 	const q = useGetSessionSettings(as);
 	const save = useSetSessionSettings();
 	// Drops the profile's own setting; the host answers what applies then, the host's.
-	const drop = useMutation({
-		mutationFn: () =>
-			apiFetch<SessionSettingsState>(getGetSessionSettingsUrl(as), {
-				method: "DELETE",
-			}),
-	});
+	const drop = useClearSessionSettings();
 	const state = q.data;
 	const done = {
 		onSuccess: (next: SessionSettingsState) => {
@@ -89,7 +79,7 @@ const GameExitQuery: FC<{ id: string }> = ({ id }) => {
 						},
 						done,
 					);
-				else if (state.configured) drop.mutate(undefined, done);
+				else if (state.configured) drop.mutate({ params: as }, done);
 			}}
 		/>
 	);
