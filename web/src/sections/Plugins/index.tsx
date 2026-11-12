@@ -2,13 +2,11 @@
 // first and only mount the iframe when it answers — otherwise the iframe would show the proxy's raw
 // 502.
 //
-// The iframe is CROSS-ORIGIN: plugin UIs are served from their own origin (same scheme and host,
-// its own port — see nitro-entry/bun-https.mjs and 2026-08-05 review H-3). The plugin can still talk
-// to its own loopback REST with the operator's session, because that origin is same-SITE and the
-// `SameSite=Lax` cookie reaches it; what it can no longer do is read or drive the console. It may
-// still keep the address bar in sync by posting `{ type: "pf-ui:navigate", path }` to the parent —
-// now verified against the plugin origin before it is honoured. The proxy-injected receiver asks
-// for the console's palette with `pf-ui:theme-request`.
+// Plugin UIs are served from their own listener (nitro-entry/bun-https.mjs), and every page there
+// is sandboxed into an opaque origin of its own. The health probe hands back the page's path, whose
+// first segment is the page's credential; relative URLs carry it to the plugin's own REST. The frame
+// keeps the address bar in sync by posting `{ type: "pf-ui:navigate", path }` to the parent, and the
+// proxy-injected receiver asks for the console's palette with `pf-ui:theme-request`.
 import { useQuery } from "@tanstack/react-query";
 import { getRouteApi, useNavigate } from "@tanstack/react-router";
 import { ExternalLink, Pin, PinOff, RefreshCw } from "lucide-react";
@@ -100,9 +98,9 @@ export const SectionPlugin: FC = () => {
 	const { data: uiConfig } = useUiConfig();
 	const pluginOrigin = pluginOriginFrom(uiConfig);
 
-	// The console probes the plugin server-side; the plugin origin is cross-origin to the page.
-	// A redirect or non-2xx is a failure, so a bounced session never reads as a healthy plugin.
-	// One miss is routine while the runner restarts: retry, then keep probing.
+	// The console probes the plugin server-side and gets back the page path. A redirect or non-2xx
+	// is a failure, so a bounced session never reads as a healthy plugin. One miss is routine while
+	// the runner restarts: retry, then keep probing.
 	const health = useQuery({
 		queryKey: ["plugin-health", pluginId],
 		queryFn: async () => {
@@ -112,7 +110,7 @@ export const SectionPlugin: FC = () => {
 			});
 			const failure = healthFailure(r);
 			if (failure) throw new Error(failure);
-			return true;
+			return ((await r.json()) as { path: string }).path;
 		},
 		retry: 2,
 		refetchInterval: (q) => healthIntervalMs(q.state.status),
@@ -139,26 +137,28 @@ export const SectionPlugin: FC = () => {
 	// for the connect timeout, which would leave an empty panel with no explanation.
 	const body = pluginBody(pluginOrigin, reachable, health);
 
-	// The iframe src stays at the initial deep-link path. The plugin's navigation drives the
-	// console URL by postMessage, never the src, so the frame does not reload.
+	// The latest page path; before the first health answer, the bare path the listener refuses.
+	const pagePath = health.data ?? `/plugin-ui/${pluginId}/`;
+
+	// The iframe src stays at the initial deep-link path and the first page path it got, which
+	// lives as long as the session. The plugin's navigation drives the console URL by postMessage,
+	// never the src, so the frame does not reload.
 	// biome-ignore lint/correctness/useExhaustiveDependencies: intentionally pinned to the initial path
 	const initialSrc = useMemo(
-		() => `${pluginOrigin ?? ""}/plugin-ui/${pluginId}/${_splat ?? ""}`,
-		[pluginId, pluginOrigin],
+		() => `${pluginOrigin ?? ""}${pagePath}${_splat ?? ""}`,
+		[pluginId, pluginOrigin, health.data === undefined],
 	);
 
 	// Keeps the console address bar in step with the plugin's routing, and hands the frame the
-	// console palette when it asks and whenever the root's theme attributes change.
+	// console palette when it asks and whenever the root's theme attributes change. The frame's
+	// opaque origin can't be named as a target, so the palette, which holds nothing secret, goes
+	// to "*".
 	useEffect(() => {
-		// An empty `pluginOrigin` is the vite-dev same-origin arrangement.
-		const expected = pluginOrigin || window.location.origin;
 		const postTheme = () =>
-			iframeRef.current?.contentWindow?.postMessage(themeMessage(), expected);
+			iframeRef.current?.contentWindow?.postMessage(themeMessage(), "*");
 		const onMessage = (e: MessageEvent) => {
 			const action = frameAction(
 				e.source === iframeRef.current?.contentWindow,
-				e.origin,
-				expected,
 				e.data,
 			);
 			if (action?.kind === "theme") postTheme();
@@ -179,7 +179,7 @@ export const SectionPlugin: FC = () => {
 			window.removeEventListener("message", onMessage);
 			observer.disconnect();
 		};
-	}, [pluginId, navigate, pluginOrigin]);
+	}, [pluginId, navigate]);
 
 	return (
 		<div className="flex h-[calc(100dvh-7rem)] min-h-[480px] flex-col gap-3 sm:h-[calc(100dvh-5rem)]">
@@ -215,7 +215,7 @@ export const SectionPlugin: FC = () => {
 				{/* Full-window, on the plugin origin: never a top-level page on the console's. */}
 				{pluginOrigin != null && (
 					<a
-						href={`${pluginOrigin}/plugin-ui/${pluginId}/`}
+						href={`${pluginOrigin}${pagePath}`}
 						target="_blank"
 						rel="noreferrer"
 						aria-label={m.plugin_open_new_tab()}
@@ -232,7 +232,7 @@ export const SectionPlugin: FC = () => {
 				<UnavailableCard />
 			) : body === "untrusted" ? (
 				<UntrustedOriginCard
-					href={`${pluginOrigin}/plugin-ui/${pluginId}/`}
+					href={`${pluginOrigin}${pagePath}`}
 					onRetry={() => reachable.refetch()}
 				/>
 			) : body === "offline" ? (
@@ -243,10 +243,9 @@ export const SectionPlugin: FC = () => {
 					src={initialSrc}
 					title={title}
 					className="w-full flex-1 rounded-lg border bg-card"
-					// `allow-same-origin` grants the plugin its own origin (storage, fetches). Without it the
-					// frame has an opaque origin and loses the SameSite=Lax session cookie. Isolation comes
-					// from the separate plugin listener (nitro-entry/bun-https.mjs), not this attribute.
-					sandbox="allow-scripts allow-forms allow-popups allow-same-origin allow-modals"
+					// No `allow-same-origin`: the page gets an opaque origin, as the listener's CSP
+					// `sandbox` also forces. Links it opens leave the sandbox, like any other tab.
+					sandbox="allow-scripts allow-forms allow-popups allow-popups-to-escape-sandbox allow-modals"
 					allow="fullscreen"
 				/>
 			) : (

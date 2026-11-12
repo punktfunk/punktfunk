@@ -75,8 +75,7 @@ test("a plugin that is down is probed every five seconds, a live one every twent
 	expect(healthIntervalMs("pending")).toBe(20_000);
 });
 
-const act = (data: unknown, fromFrame = true, from = origin) =>
-	frameAction(fromFrame, from, origin, data);
+const act = (data: unknown, fromFrame = true) => frameAction(fromFrame, data);
 
 test("the frame asks for the palette", () => {
 	expect(act({ type: "pf-ui:theme-request" })).toEqual({ kind: "theme" });
@@ -97,13 +96,9 @@ test("the frame moves the address bar, minus one leading slash", () => {
 	expect(nav(undefined)).toBeNull();
 });
 
-test("messages from another window or origin are ignored", () => {
-	const theme = { type: "pf-ui:theme-request" };
-	const nav = { type: "pf-ui:navigate", path: "/x" };
-	expect(act(theme, false)).toBeNull();
-	expect(act(nav, false)).toBeNull();
-	expect(act(theme, true, "https://host:47992")).toBeNull();
-	expect(act(nav, true, "https://evil.test")).toBeNull();
+test("messages from another window are ignored", () => {
+	expect(act({ type: "pf-ui:theme-request" }, false)).toBeNull();
+	expect(act({ type: "pf-ui:navigate", path: "/x" }, false)).toBeNull();
 });
 
 test("anything that is not a known request is ignored", () => {
