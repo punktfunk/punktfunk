@@ -914,6 +914,9 @@ public final class PunktfunkConnection: @unchecked Sendable {
     public static let grantPower = UInt32(PUNKTFUNK_GRANT_POWER)
     /// Pause and remove a title's download (`design/plugin-downloads.md`); route-gated, never input.
     public static let grantManageGames = UInt32(PUNKTFUNK_GRANT_MANAGE_GAMES)
+    /// Choosing the screen this device streams and what the host's monitors do meanwhile;
+    /// route-gated and read in the Hello, never input.
+    public static let grantDisplay = UInt32(PUNKTFUNK_GRANT_DISPLAY)
     /// Every defined grant — full control, today's behavior and what an old host's Welcome
     /// decodes to.
     public static let grantAll = UInt32(PUNKTFUNK_GRANT_ALL)
@@ -921,12 +924,16 @@ public final class PunktfunkConnection: @unchecked Sendable {
     public static let grantAllPrePower = UInt32(PUNKTFUNK_GRANT_ALL_PRE_POWER)
     /// `grantAll` before Manage games existed — see ``normalizedGrants(_:)``.
     public static let grantAllPreManage = UInt32(PUNKTFUNK_GRANT_ALL_PRE_MANAGE)
+    /// `grantAll` before Choose its screen existed — see ``normalizedGrants(_:)``.
+    public static let grantAllPreDisplay = UInt32(PUNKTFUNK_GRANT_ALL_PRE_DISPLAY)
 
-    /// The legacy-full read rule (host-actions §4.3): exactly an older full mask — an old
-    /// host's "Full control" — reads as the current ``grantAll``, so a Full session against an
-    /// old host neither wears a chip nor labels "Custom". Any other mask passes through.
+    /// The wire reader's legacy-full rule: exactly an older full mask reads as the current
+    /// ``grantAll``, so a Full session against an old host neither wears a chip nor labels
+    /// "Custom". A current host's "all but the screen choice" reads as Full too; the host card
+    /// says who decides the screen. Any other mask passes through.
     public static func normalizedGrants(_ grants: UInt32) -> UInt32 {
-        grants == grantAllPrePower || grants == grantAllPreManage ? grantAll : grants
+        grants == grantAllPrePower || grants == grantAllPreManage || grants == grantAllPreDisplay
+            ? grantAll : grants
     }
 
     /// The three user-facing access presets plus "Custom", DERIVED from the mask (never

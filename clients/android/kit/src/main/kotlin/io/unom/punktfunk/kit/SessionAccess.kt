@@ -35,8 +35,11 @@ object SessionAccess {
     /** Pause and remove a title's download (`design/plugin-downloads.md`); route-gated, never input. */
     const val MANAGE_GAMES = 1 shl 7
 
+    /** Choosing the screen this device streams and what the host's monitors do; route-gated, never input. */
+    const val DISPLAY = 1 shl 8
+
     /** Every defined grant — full control, and what an old host's Welcome decodes to. */
-    const val ALL = GAMEPAD or POINTER or KEYBOARD or CLIPBOARD or MIC or LAUNCH or POWER or MANAGE_GAMES
+    const val ALL = GAMEPAD or POINTER or KEYBOARD or CLIPBOARD or MIC or LAUNCH or POWER or MANAGE_GAMES or DISPLAY
 
     /** `ALL` before POWER existed (hosts ≤ 0.32.x) — see [normalizeLegacyFull]. */
     private const val ALL_PRE_POWER = GAMEPAD or POINTER or KEYBOARD or CLIPBOARD or MIC or LAUNCH
@@ -44,13 +47,16 @@ object SessionAccess {
     /** `ALL` before MANAGE_GAMES existed — see [normalizeLegacyFull]. */
     private const val ALL_PRE_MANAGE = ALL_PRE_POWER or POWER
 
+    /** `ALL` before DISPLAY existed — see [normalizeLegacyFull]. */
+    private const val ALL_PRE_DISPLAY = ALL_PRE_MANAGE or MANAGE_GAMES
+
     /**
-     * The legacy-full read rule (host-actions §4.3): exactly an older full mask (an old
-     * host's "Full control") reads as the current [ALL], so it labels "Full control", not
-     * "Custom". Any other mask passes through.
+     * The wire reader's legacy-full rule: exactly an older full mask reads as the current [ALL],
+     * so it labels "Full control", not "Custom". A current host's "all but the screen choice"
+     * reads as Full too; the host card says who decides the screen. Any other mask passes through.
      */
     fun normalizeLegacyFull(grants: Int): Int =
-        if (grants == ALL_PRE_POWER || grants == ALL_PRE_MANAGE) ALL else grants
+        if (grants == ALL_PRE_POWER || grants == ALL_PRE_MANAGE || grants == ALL_PRE_DISPLAY) ALL else grants
 
     /**
      * The string resource a mask displays as — §3.2's rule: three levels people actually reason

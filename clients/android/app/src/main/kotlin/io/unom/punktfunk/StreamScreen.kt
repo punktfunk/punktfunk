@@ -722,7 +722,8 @@ fun StreamScreen(
                     val accessLevel = stringResource(SessionAccess.label(ui.accessGrants))
                     val accessChip = when {
                         ui.statsVerbosity == StatsVerbosity.OFF -> null
-                        ui.accessGrants and SessionAccess.ALL == SessionAccess.ALL && ui.accessRemaining == 0 -> null
+                        SessionAccess.normalizeLegacyFull(ui.accessGrants) and SessionAccess.ALL == SessionAccess.ALL &&
+                            ui.accessRemaining == 0 -> null
                         ui.accessRemaining > 0 ->
                             "$accessLevel · " + if (ui.accessRemaining < 60) {
                                 stringResource(R.string.grant_chip_ends_soon)
