@@ -21,7 +21,7 @@ No stream needs to be running.
 | Client | Where |
 | --- | --- |
 | Linux, Windows, Android | The host card's menu → **Send logs to host** |
-| iPhone, iPad, Mac, Apple TV | Long-press (or right-click) the host card → **Host Details…** → **Send Logs to Host** |
+| iPhone, iPad, Mac, Apple TV | Long-press (or right-click) the host card → **Host details…** → **Send logs to host** |
 | Console home (Steam Deck Gaming Mode, TV, controller) | The host's options → **Send logs to host** |
 
 The item shows only for a **paired** host that is **online** (Apple: paired is enough). It sends the

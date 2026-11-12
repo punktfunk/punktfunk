@@ -47,8 +47,8 @@ the account, so a device can't lock its person out at the desk.
 
 - **Opens it:** the account's password, typed in the app on a paired device, and the devices on
   its [signed-in list](#signed-in-devices). At the machine itself, the person logs in as always.
-- **Can't:** the console password, the card's **Start**, **Wake**, a browser, a paired device
-  without the password, and any other profile.
+- **Can't:** the console password, the card's **Start**, a browser, a paired device without the
+  password, and any other profile.
 
 ## Signed-in devices
 

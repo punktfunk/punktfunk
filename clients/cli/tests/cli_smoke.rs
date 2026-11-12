@@ -377,6 +377,24 @@ fn hosts_add_reports_what_it_did() {
     std::fs::remove_dir_all(&store).ok();
 }
 
+/// `device-code` prints sixteen upper-case hex digits in fours, the same on every run, and the
+/// same as JSON: the Decky panel reads it there.
+#[test]
+fn the_device_code_is_stable_and_spelled_in_fours() {
+    let store = scratch_store("device-code", "");
+    let plain = stdout_of(&punktfunk_in(&store, &["device-code"]));
+    let code = plain.trim();
+    let groups: Vec<&str> = code.split(' ').collect();
+    assert_eq!(groups.len(), 4, "{code:?}");
+    assert!(groups.iter().all(|g| g.len() == 4
+        && g.bytes()
+            .all(|b| b.is_ascii_digit() || (b'A'..=b'F').contains(&b))));
+    let out = punktfunk_in(&store, &["device-code", "--json"]);
+    assert_eq!(out.status.code(), Some(0), "{}", stderr_of(&out));
+    assert_eq!(stdout_of(&out).trim(), format!("{{\"code\":\"{code}\"}}"));
+    std::fs::remove_dir_all(&store).ok();
+}
+
 /// A request with no fingerprint to hold the host to refuses before it dials: no `--fp`, and
 /// nothing saved at the address.
 #[test]

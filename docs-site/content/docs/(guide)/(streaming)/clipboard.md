@@ -16,7 +16,7 @@ Copy on your device and paste on the host, or the other way round, once three sw
 
 | Client | Where | Switch |
 |---|---|---|
-| Mac, iPhone, iPad | Host card menu → **Host Details…** → **Connection** | **Share clipboard** |
+| Mac, iPhone, iPad | Host card menu → **Host details…** → **Connection** | **Share clipboard** |
 | Windows | Host tile menu → **Edit…** | **Share clipboard** |
 | Linux | Host card ⓘ → **Connection** | **Share clipboard** |
 | Android | Host card menu → **Edit…** | **Share clipboard** |

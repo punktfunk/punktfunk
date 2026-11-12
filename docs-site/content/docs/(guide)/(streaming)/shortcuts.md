@@ -27,9 +27,8 @@ advanced setting, turns it off.
 
 Press the release shortcut again, or click the stream, to capture again. Switching to another app
 releases input and takes it back when you return. Keys and buttons you were holding are let go on
-the host, so nothing sticks. A key press or release the network drops is sent again, so a bad
-Wi-Fi moment doesn't leave a key held either. On Linux and Windows, controllers stop reaching the
-host too until you capture again.
+the host, so nothing sticks. On Linux and Windows, controllers stop reaching the host too until
+you capture again.
 
 ### Keyboard shortcuts
 
@@ -77,7 +76,7 @@ Hold **Select** (Back, View) first, then press the second button.
 | Chord | What it does | Clients |
 |---|---|---|
 | **Select + A** | Opens the [quick-action dial](#the-quick-action-dial). The host never sees the A | All |
-| **Select + X** | Cycles the [stats overlay](/docs/stats) | All |
+| **Select + X** | Cycles the [stats overlay](/docs/stats) | Linux, Windows, Android, Apple |
 | **Select + Y** | Mutes or unmutes your microphone | Android |
 | **Hold Select** alone | Presses the host's guide button ([below](#the-guide-button-xbox--ps--steam-and-quick-access)) | iPhone, iPad, Apple TV, Gaming Mode |
 | **L1 + R1 + Start + Select** | Leaves the stream ([below](#leaving-with-a-controller)) | All |
@@ -169,14 +168,13 @@ What the dial can hold:
 | Key combinations | Keys you add, such as Alt+F4. A modifier alone works too: **Win** opens the host's Start menu |
 
 A button a client can't serve is dimmed and says why. **Send text** works on Android against a
-host that takes typed text. **Controller type** works on the desktop clients: each press re-plugs
-your controllers as the next type (Automatic, Xbox 360, Xbox One, DualSense, DualShock 4, Steam
-Deck) for this stream. The next stream starts from your settings. See also
-[Controller mouse](/docs/input#controller-mouse).
+host that takes typed text. Each press of **Controller type** re-plugs your controllers as the
+next type (Automatic, Xbox 360, Xbox One, DualSense, DualShock 4, Steam Deck) for this stream. The
+next stream starts from your settings. See also [Controller mouse](/docs/input#controller-mouse).
 
 ## Changing a shortcut
 
-1. Open **Settings → Input → Shortcuts** (**Preferences** on Linux). Choose a row or **Add shortcut**.
+1. Open **Settings → Input → Shortcuts**. Choose a row or **Add shortcut**.
 2. **Does**: a quick action, a host action, a key combination, or **Quick actions** (the dial).
 3. **Press**: choose **Record** and press the buttons or keys, or **Choose** them from a grid.
 4. **Fires on**: **Press**, or **Hold** for a second.

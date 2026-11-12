@@ -33,7 +33,7 @@ and the host's layout picks the character.
 
 The host can't open `/dev/uinput`, where it creates virtual pads. The console's
 **Troubleshooting** page flags it under **Virtual controller support**. Join the `input` group, then
-log out and back in:
+restart the computer:
 
 ```sh
 sudo usermod -aG input "$USER"    # Bazzite: ujust add-user-to-input-group
@@ -42,11 +42,11 @@ sudo usermod -aG input "$USER"    # Bazzite: ujust add-user-to-input-group
 ### The pad works, but arrives as an Xbox 360 controller instead of a Steam Deck
 
 The virtual Steam Deck pad attaches through `vhci_hcd`, and only members of the `punktfunk` group may
-attach it. The console's **Troubleshooting** page names what's missing under **Virtual Steam Deck
-controller**. Usually it's the group:
+attach it. The console's **Troubleshooting** page names what's missing under **USB/IP
+controllers**. Usually it's the group:
 
 ```sh
-sudo usermod -aG punktfunk "$USER"    # then log out and back in
+sudo usermod -aG punktfunk "$USER"    # then restart the computer
 sudo modprobe vhci-hcd                # only if the check says the module isn't loaded
 ```
 
@@ -72,8 +72,8 @@ On a layered or bootc host, install the drop-in yourself:
 Only Steam reads this pad, through its `hidraw` node, so the pad does nothing until Steam can open
 it.
 
-- Windows host: reinstall the gamepad driver from an elevated PowerShell:
-  `punktfunk-host driver install --gamepad`.
+- Windows host: run the Punktfunk installer again with **Controller drivers** on; it reinstalls
+  the gamepad driver.
 - Linux host: no `attached via usbip` in the host log means the pad never attached; fix
   [the Steam Deck pad](#the-pad-works-but-arrives-as-an-xbox-360-controller-instead-of-a-steam-deck)
   first. `attached via usbip` without a later `answering feature GET` means Steam can't open the
@@ -91,10 +91,8 @@ Bluetooth settings by holding Y while you press the Steam button.
 
 The PC's host marks every controller plugged into it for the console session, so seats don't
 list it. If a seat still does, the host isn't running on the PC: restart it from the console.
-Two things are Windows, not the mark: Windows.Gaming.Input on a seat lists a plugged-in Xbox
-controller without delivering its input, and a seat's own controller is player 2 in XInput games
-if an Xbox controller was plugged into the PC after the seat's controller appeared, until the
-seat's next connection.
+What Windows does past that mark is under
+[Seats](/docs/windows-seats#a-controller-plugged-into-the-pc-appears-on-a-seat).
 
 ## Clipboard
 

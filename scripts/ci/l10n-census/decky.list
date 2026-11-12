@@ -1,6 +1,6 @@
-clients/decky/src/play-from.tsx	Play from
-clients/decky/src/play-from.tsx	Play from
-clients/decky/src/play-from.tsx	Stream from: %s
-clients/decky/src/play-from.tsx	Stream from: %s
-clients/decky/src/play-from.tsx	This device
-clients/decky/src/steam.ts	client path can't ride Steam's launch options: {}
+clients/decky/src/game-page/play-from.tsx	Play from
+clients/decky/src/game-page/play-from.tsx	Play from
+clients/decky/src/game-page/play-from.tsx	Stream from: %s
+clients/decky/src/game-page/play-from.tsx	Stream from: %s
+clients/decky/src/game-page/play-from.tsx	This device
+clients/decky/src/steam/launch-options.ts	client path can't ride Steam's launch options: {}

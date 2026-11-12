@@ -9,11 +9,12 @@ its own after that. There are no accounts and nothing leaves your network.
 ## Approve it from the console (no PIN)
 
 1. On the new device, pick the host and choose **Request access**.
-2. In the console, open **Devices**. The device is listed under **Waiting for approval**. If the
-   device shows a **device code** while it waits, check that the console shows the same code.
-3. Click **Approve**, set its [access](#choosing-access-when-you-admit-a-device), enter your
-   **Console password** and click **Approve**. The device is now paired, even while another
-   device is streaming. Pick the host on it to start streaming.
+2. In the console, open **Devices**. The device is listed under **Waiting for approval**.
+3. Click **Approve**. If the device shows a **Device code** while it waits, check that
+   **Approve this device** shows the same code.
+4. Set its [access](#choosing-access-when-you-admit-a-device), enter your **Console password** and
+   click **Approve**. The device is now paired, even while another device is streaming. Pick the
+   host on it to start streaming.
 
 **Deny** only dismisses the request; the device can ask again. Requests expire after 10 minutes.
 
@@ -24,8 +25,8 @@ its own after that. There are no accounts and nothing leaves your network.
 
 1. In the console, open **Devices**, click **Pair a device**, enter your console password and
    click **Show PIN**. It shows a 4-digit PIN for two minutes.
-2. On the device, pick the host, choose **Pair with PIN…** or **Use a PIN instead…**, and type
-   the PIN.
+2. On the device, pick the host, choose **Pair with PIN…** (**Or pair with a PIN** in the
+   controller interface, **Use a PIN instead…** on a Steam Deck), and type the PIN.
 3. The host now shows as paired. Pick it again to start streaming.
 
 If the PIN runs out, click **Pair a device** again. A `punktfunk://` link can't pair a device.
@@ -35,7 +36,7 @@ See [Connect with Moonlight → Pair](/docs/moonlight#3-pair).
 
 ## Choosing access when you admit a device
 
-![Approve this device: name, access level, expiry, and the one-click Approve as guest](/img/console-approve-device.png)
+![Approve this device: device code, name, access level, expiry, console password, and the one-click Approve as guest](/img/console-approve-device.png)
 
 - **Access level**: **Full control**, **Controller only** or **View only**. **Advanced** opens the
   individual permissions ([Access levels](/docs/access-levels)).
@@ -67,8 +68,8 @@ Can't pair at all? See [Troubleshooting → Pairing is rejected](/docs/troublesh
 
 ## How it works
 
-The host has a stable certificate; each side pins the other's fingerprint. The PIN exchange is
-SPAKE2: someone without the PIN gets one online guess and nothing to attack offline. If a host's
-fingerprint changes, the client refuses it and asks you to pair again. To run without pairing on a
+The host has a stable certificate; each side pins the other's fingerprint. Someone without the PIN
+gets one online guess and nothing to attack offline. If a host's fingerprint changes, the client
+refuses it and asks you to pair again. To run without pairing on a
 fully trusted network, see [Security → Pairing policy](/docs/security#pairing-policy-open-hosts-and-trust-on-first-use).
 To pair from a script, use [`punktfunk pair`](/docs/clients#scripting-the-punktfunk-cli).

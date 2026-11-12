@@ -7,7 +7,7 @@
 // subclass's first render watches defineProperty for its own `render`. A plain function wrapper
 // around a class would throw at construction. Function, memo and forwardRef components get
 // wrapped copies. Originals are never mutated; one wrapper per type keeps React's type stable.
-import { diag } from "./diag";
+import { diag } from "../lib/diag";
 
 /** A short name for a React element, for the trace. */
 export function describe(el: any): string {
