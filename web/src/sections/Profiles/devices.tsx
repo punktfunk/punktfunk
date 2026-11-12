@@ -176,6 +176,7 @@ export const DevicesList: FC<{
 								<p className="text-xs text-muted-foreground">
 									{[
 										KIND_WORD[d.kind]?.(),
+										d.moonlight && m.pairing_protocol_moonlight(),
 										m.profiles_device_last_used({
 											when: fmtDateTimeSecs(d.last_unix),
 										}),
