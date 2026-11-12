@@ -49,6 +49,7 @@ import io.unom.punktfunk.kit.ProfilePick
 import io.unom.punktfunk.kit.R
 import io.unom.punktfunk.kit.Say
 import io.unom.punktfunk.kit.SeatGate
+import io.unom.punktfunk.kit.UnlockChallenge
 import io.unom.punktfunk.kit.UnlockNeed
 import io.unom.punktfunk.kit.initials
 import io.unom.punktfunk.kit.library.MgmtReply

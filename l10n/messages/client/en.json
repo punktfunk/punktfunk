@@ -157,6 +157,7 @@
 	"unlock_starting": "Starting your desktop on {host}…",
 	"unlock_stay_signed_in": "Stay signed in on this device",
 	"unlock_title": "Sign in as {name}",
+	"unlock_use_pin": "Use PIN",
 	"unlock_with_biometry": "Unlock with {method} on this device",
 	"hosts_tab": "Hosts",
 	"hosts_tab_library": "Library",

@@ -7,7 +7,7 @@ use jni::sys::{jboolean, jint, jlong};
 use jni::EnvUnowned;
 use punktfunk_core::client::{ConnectParams, NativeClient};
 use punktfunk_core::config::{CompositorPref, GamepadPref, Mode};
-use punktfunk_core::quic::v2::msg::{ProfileUnlock, Zeroizing};
+use punktfunk_core::quic::v2::msg::{self, ProfileUnlock, Zeroizing};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -610,15 +610,46 @@ pub extern "system" fn Java_io_unom_punktfunk_kit_NativeBridge_nativeConnectWith
 pub extern "system" fn Java_io_unom_punktfunk_kit_NativeBridge_nativeProfileUnlockMessage<
     'local,
 >(
-    mut env: EnvUnowned<'local>,
+    env: EnvUnowned<'local>,
     _this: JObject<'local>,
     challenge: JByteArray<'local>,
     seat_id: JString<'local>,
     device_fp: JByteArray<'local>,
     box_fp: JByteArray<'local>,
 ) -> JByteArray<'local> {
+    unlock_message(env, challenge, seat_id, device_fp, box_fp, false)
+}
+
+/// `NativeBridge.nativeLockedProfileUnlockMessage(challenge, profileId, deviceFp, boxFp):
+/// ByteArray?` — the 187 bytes a locked profile's unlock key signs, with SHA-256 as the digest
+/// ([`msg::profile_unlock_signed_message`]). `profileId` is 1 to 64 of `[A-Za-z0-9_-]`; the three
+/// arrays are 32 bytes each. Null for anything else.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_io_unom_punktfunk_kit_NativeBridge_nativeLockedProfileUnlockMessage<
+    'local,
+>(
+    env: EnvUnowned<'local>,
+    _this: JObject<'local>,
+    challenge: JByteArray<'local>,
+    profile_id: JString<'local>,
+    device_fp: JByteArray<'local>,
+    box_fp: JByteArray<'local>,
+) -> JByteArray<'local> {
+    unlock_message(env, challenge, profile_id, device_fp, box_fp, true)
+}
+
+/// The message a key signs for seat `id`, or for locked profile `id` when `profile`, as a Java
+/// array. Null for an array that is not 32 bytes, or an id the message refuses.
+fn unlock_message<'local>(
+    mut env: EnvUnowned<'local>,
+    challenge: JByteArray<'local>,
+    id: JString<'local>,
+    device_fp: JByteArray<'local>,
+    box_fp: JByteArray<'local>,
+    profile: bool,
+) -> JByteArray<'local> {
     env.with_env(|env| -> jni::errors::Result<JByteArray<'local>> {
-        let seat = seat_id.try_to_string(env)?;
+        let id = id.try_to_string(env)?;
         let fp = |a: &JByteArray| -> jni::errors::Result<Option<[u8; 32]>> {
             Ok(env.convert_byte_array(a)?.try_into().ok())
         };
@@ -626,7 +657,11 @@ pub extern "system" fn Java_io_unom_punktfunk_kit_NativeBridge_nativeProfileUnlo
         let (Some(c), Some(d), Some(b)) = (c, d, b) else {
             return Ok(JByteArray::default());
         };
-        match punktfunk_core::quic::v2::msg::unlock_signed_message(&c, &seat, &d, &b) {
+        let built = match profile {
+            false => msg::unlock_signed_message(&c, &id, &d, &b).map(|m| m.to_vec()),
+            true => msg::profile_unlock_signed_message(&c, &id, &d, &b).map(|m| m.to_vec()),
+        };
+        match built {
             Ok(m) => env.byte_array_from_slice(&m),
             Err(_) => Ok(JByteArray::default()),
         }

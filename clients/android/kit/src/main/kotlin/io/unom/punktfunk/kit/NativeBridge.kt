@@ -54,6 +54,18 @@ object NativeBridge {
     ): ByteArray?
 
     /**
+     * The 187 bytes a locked profile's unlock key signs (SHA-256 digest): [challenge], [profileId]
+     * (1 to 64 of `[A-Za-z0-9_-]`) zero-padded to 64 bytes, then this device's and the pinned box's
+     * certificate SHA-256. The three arrays are 32 bytes each. Null for anything else.
+     */
+    external fun nativeLockedProfileUnlockMessage(
+        challenge: ByteArray,
+        profileId: String,
+        deviceFp: ByteArray,
+        boxFp: ByteArray,
+    ): ByteArray?
+
+    /**
      * True while the dial [nativeConnect] is blocked on has been parked by the host for its
      * operator's approval. The dial then waits for the verdict; show the approval wait.
      */
