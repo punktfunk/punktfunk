@@ -213,6 +213,142 @@
         "x-scope": "box"
       }
     },
+    "/api/v1/auth/person/session": {
+      "post": {
+        "tags": [
+          "host"
+        ],
+        "summary": "Open a person session",
+        "description": "On a seat host, from loopback: trade the one-time ticket `ctl console-url` wrote into the\npage it opened for a session token. The ticket is signed with this host's person token, at\nmost 60 s old, used once, and for this host's own profile. Every other host refuses it. Ten\nrefused tickets in a minute make the next wait out that minute.",
+        "operationId": "openPersonSession",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PersonTicket"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "A session for the person lane of this seat host",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PersonGrant"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not a ticket this host takes, or not from loopback",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many refused tickets in the last minute",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {}
+        ],
+        "x-scope": "box"
+      },
+      "delete": {
+        "tags": [
+          "host"
+        ],
+        "summary": "End a person session",
+        "description": "From loopback, the session's own token as the bearer. Answers the same whether it was live.",
+        "operationId": "closePersonSession",
+        "responses": {
+          "204": {
+            "description": "The session, if it was one, is over"
+          },
+          "401": {
+            "description": "Not from loopback",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {}
+        ],
+        "x-scope": "box"
+      }
+    },
+    "/api/v1/auth/person/verify": {
+      "post": {
+        "tags": [
+          "host"
+        ],
+        "summary": "Whose a person session is",
+        "description": "Admin lane, on a seat host: whether `token` is a live person session here, and for which\nprofile. The box asks before it takes a person session's word for that profile.",
+        "operationId": "verifyPersonSession",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PersonSessionToken"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "A live session, and its profile",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PersonOf"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No live session with that token here",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "x-scope": "box"
+      }
+    },
     "/api/v1/client-logs": {
       "get": {
         "tags": [
@@ -2828,7 +2964,7 @@
           "hooks"
         ],
         "summary": "Get the hook configuration",
-        "description": "Empty document when none is stored.",
+        "description": "Empty document when none is stored. On a seat host on a person's own account, empty on\nevery lane but that person's own: their hooks may carry their webhooks' secrets.",
         "operationId": "getHooks",
         "responses": {
           "200": {
@@ -2859,7 +2995,7 @@
           "hooks"
         ],
         "summary": "Replace the hook configuration",
-        "description": "Whole-document PUT, not a patch. Applies from the next event. Commands run as the host\nuser (the interactive session on Windows). An `elevated` hook is refused until an\nadministrator turns elevated commands on at the host (`HostInfo.elevated_commands`). A\nseat host on a person's own account refuses every hook and runs none.",
+        "description": "Whole-document PUT, not a patch. Applies from the next event. Commands run as the host\nuser (the interactive session on Windows). An `elevated` hook is refused until an\nadministrator turns elevated commands on at the host (`HostInfo.elevated_commands`). A\nseat host on a person's own account takes hooks from that person's own session alone, and\nruns only those.",
         "operationId": "setHooks",
         "requestBody": {
           "content": {
@@ -2903,7 +3039,7 @@
             }
           },
           "403": {
-            "description": "A seat host on a person's own account, which takes no hooks",
+            "description": "A seat host on a person's own account, from any lane but that person's",
             "content": {
               "application/json": {
                 "schema": {
@@ -3282,7 +3418,7 @@
           "library"
         ],
         "summary": "Create a custom title",
-        "description": "A user-curated entry. The host assigns a stable id, returned in the body. On a seat host it is\nthat host's own title, under an `own:` id, kept in its own config folder and run as its\naccount; the box lists its name and picture for the seat's profile. A profile that uses an\nexisting account takes none.",
+        "description": "A user-curated entry. The host assigns a stable id, returned in the body. On a seat host it is\nthat host's own title, under an `own:` id, kept in its own config folder and run as its\naccount; the box lists its name and picture for the seat's profile. On a profile that uses an\nexisting account only that person adds one, from their own session.",
         "operationId": "createCustomGame",
         "requestBody": {
           "content": {
@@ -3355,7 +3491,7 @@
           "library"
         ],
         "summary": "One custom entry as stored, `detect` and `prep` included",
-        "description": "Operator lane only: the hint names host paths, which is why the catalog read\nmodel leaves it out. The paired-cert allowlist names `GET /library` exactly.",
+        "description": "Operator lane only: the hint names host paths, which is why the catalog read\nmodel leaves it out. The paired-cert allowlist names `GET /library` exactly. On a person's\nown account a title of its own is that person's alone to read: any other lane gets the 404.",
         "operationId": "getCustomGame",
         "parameters": [
           {
@@ -12447,6 +12583,11 @@
                 "$ref": "#/components/schemas/OnWindow",
                 "description": "Which workspace this title opens on ([`crate::library::OnWindow`]).\nAbsent follows the host's display policy."
               },
+              "person": {
+                "type": "boolean",
+                "description": "A seat host's own title its person wrote, in their own session. On a person's own account\na title without it is neither listed nor started. Set by the host, never from a body.",
+                "readOnly": true
+              },
               "prep": {
                 "type": "array",
                 "items": {
@@ -17045,6 +17186,67 @@
           },
           "write": {
             "type": "boolean"
+          }
+        }
+      },
+      "PersonGrant": {
+        "type": "object",
+        "description": "A session a ticket opened.",
+        "required": [
+          "token",
+          "expires_at",
+          "profile"
+        ],
+        "properties": {
+          "expires_at": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Unix seconds; it ends sooner when this host stops or the session is closed."
+          },
+          "profile": {
+            "type": "string",
+            "description": "The profile it is for: this seat host's own."
+          },
+          "token": {
+            "type": "string",
+            "description": "Present as `Authorization: Bearer <token>` to this seat host, or as\n`X-Punktfunk-Person-Session` to the box. 64 lowercase hex."
+          }
+        }
+      },
+      "PersonOf": {
+        "type": "object",
+        "description": "Whose a live session is.",
+        "required": [
+          "profile"
+        ],
+        "properties": {
+          "profile": {
+            "type": "string"
+          }
+        }
+      },
+      "PersonSessionToken": {
+        "type": "object",
+        "description": "A session token the box asks about.",
+        "required": [
+          "token"
+        ],
+        "properties": {
+          "token": {
+            "type": "string"
+          }
+        }
+      },
+      "PersonTicket": {
+        "type": "object",
+        "description": "The ticket `ctl console-url` wrote into the page it opened.",
+        "required": [
+          "ticket"
+        ],
+        "properties": {
+          "ticket": {
+            "type": "string",
+            "description": "`<unix seconds>.<nonce>.<profile id>.<HMAC-SHA256>`, as the page's `ticket` carries it."
           }
         }
       },
