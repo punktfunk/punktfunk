@@ -49,7 +49,8 @@ const STAGE_ROOT: &str = "/run/punktfunk/libraries";
 pub(super) const VIEW: &str = "/run/media/punktfunk";
 
 /// Filesystems that take an idmapped mount. A library elsewhere (exFAT, NTFS, FUSE) is skipped.
-const IDMAP_FS: [&str; 4] = ["btrfs", "ext4", "xfs", "f2fs"];
+/// ZFS takes one from OpenZFS 2.2; an older one fails the mount, which [`unmounted`] reports.
+const IDMAP_FS: [&str; 5] = ["btrfs", "ext4", "xfs", "f2fs", "zfs"];
 
 /// `pf_host_config::seat_defaults::FILE`, which the box writes into its config dir.
 const DEFAULTS: &str = "seat-defaults.json";
