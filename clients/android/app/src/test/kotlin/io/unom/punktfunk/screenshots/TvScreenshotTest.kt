@@ -46,6 +46,11 @@ class TvScreenshotTest {
     fun stream() =
         shootRoot("stream") { StreamScene(io.unom.punktfunk.StatsVerbosity.COMPACT, loss = false) }
 
+    // The picture alone, for a store frame.
+    @Test
+    fun streamClean() =
+        shootRoot("stream-clean") { StreamScene(io.unom.punktfunk.StatsVerbosity.OFF, loss = false) }
+
     @Test
     fun streamDetailed() =
         shootRoot("stream-detailed") { StreamScene(io.unom.punktfunk.StatsVerbosity.DETAILED, loss = false) }
