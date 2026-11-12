@@ -247,7 +247,8 @@ session by design, and display activation fails while its session is inactive.
   session settings; the owner's host applies the layer of the profile a session resolved to,
   sharing the owner's desktop or taking turns, at launch and for game overrides. On the box,
   `?as=<profile id>` on the library routes and `session/settings` reads and writes that layer, and
-  a profile with a seat of its own lists there what its seat lists.
+  a profile with a seat of its own lists there what its seat lists. `DELETE session/settings?as=`
+  drops the profile's own session settings, so its seat takes the Seat defaults again.
 - **One connector, one lock.** A seat host creates its virtual display on its own connector only
   and holds the mutex `Global\punktfunk-vdisplay-manager-seat-<slot>`; the console host holds
   `Global\punktfunk-vdisplay-manager`. Hosts on different connectors start independently. A second

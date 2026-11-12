@@ -642,7 +642,7 @@ fn plays_on_the_host() -> Response {
 )]
 pub(crate) async fn get_session_settings(
     State(st): State<Arc<MgmtState>>,
-    Query(who): Query<super::library::AsProfile>,
+    who: super::library::AsProfile,
 ) -> Response {
     use super::library::Whose;
     let scoped = match who.scope(&st).await {
@@ -675,13 +675,14 @@ pub(crate) async fn get_session_settings(
         (status = BAD_REQUEST, description = "Malformed settings body", body = ApiError),
         (status = INTERNAL_SERVER_ERROR, description = "Couldn't save the session settings", body = ApiError),
         (status = UNAUTHORIZED, description = "Missing or invalid bearer token", body = ApiError),
+        (status = FORBIDDEN, description = "`as` on a lane other than the operator's", body = ApiError),
         (status = NOT_FOUND, description = "`as` names no profile on this host", body = ApiError),
         (status = CONFLICT, description = "A seat's own host, or `as` names a profile that plays on the host's own desktop", body = ApiError),
     )
 )]
 pub(crate) async fn set_session_settings(
     State(st): State<Arc<MgmtState>>,
-    Query(who): Query<super::library::AsProfile>,
+    who: super::library::AsProfile,
     ApiJson(settings): ApiJson<crate::session_settings::SessionSettings>,
 ) -> Response {
     use super::library::Whose;
@@ -721,6 +722,66 @@ pub(crate) async fn set_session_settings(
         "management API: session⇄game lifetime settings updated"
     );
     Json(state).into_response()
+}
+
+/// Drop a profile's own session settings
+///
+/// Its seat plays with the box's Seat defaults again; the answer is what `GET` with the same
+/// `as` answers, `configured: false`. Dropping settings a profile never had is the same answer.
+/// `as` is required: the host's own settings are changed with `PUT`, never dropped.
+#[utoipa::path(
+    delete,
+    path = "/session/settings",
+    tag = "session",
+    operation_id = "clearSessionSettings",
+    params(("as" = String, Query, description = "Profile id: the profile whose own settings to drop")),
+    responses(
+        (status = OK, description = "Dropped; the profile's state", body = SessionSettingsState),
+        (status = BAD_REQUEST, description = "No `as`, or `as` names the owner", body = ApiError),
+        (status = UNAUTHORIZED, description = "Missing or invalid bearer token", body = ApiError),
+        (status = FORBIDDEN, description = "`as` on a lane other than the operator's", body = ApiError),
+        (status = NOT_FOUND, description = "`as` names no profile on this host", body = ApiError),
+        (status = CONFLICT, description = "A seat's own host, or `as` names a profile that plays on the host's own desktop", body = ApiError),
+        (status = INTERNAL_SERVER_ERROR, description = "Couldn't remove the settings file", body = ApiError),
+    )
+)]
+pub(crate) async fn clear_session_settings(
+    State(st): State<Arc<MgmtState>>,
+    who: super::library::AsProfile,
+) -> Response {
+    use super::library::Whose;
+    if pf_paths::seat::role().follows_contract() {
+        return api_error_coded(
+            StatusCode::CONFLICT,
+            "seat_session_settings_read_only",
+            "A seat's session settings can't be changed here. Change the Seat defaults on the box.",
+        );
+    }
+    let scoped = match who.scope(&st).await {
+        Ok(s) => s,
+        Err(refused) => return refused,
+    };
+    let own_account =
+        match scoped.whose {
+            Whose::Seat { own_account } => own_account,
+            Whose::Shares => return plays_on_the_host(),
+            Whose::Here | Whose::Owner => return api_error_coded(
+                StatusCode::BAD_REQUEST,
+                "session_settings_need_profile",
+                "Couldn't remove the host's own session settings. Change them instead, or pick a \
+                 profile.",
+            ),
+        };
+    if let Err(e) = crate::session_settings::clear_profile(&scoped.view) {
+        return api_error_logged(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "session_settings_not_saved",
+            "Couldn't save the session settings",
+            &format!("{e:#}"),
+        );
+    }
+    tracing::info!(profile = ?scoped.view.layer(), "management API: profile session settings dropped");
+    Json(seat_profile_state(&scoped.view, own_account)).into_response()
 }
 
 #[utoipa::path(

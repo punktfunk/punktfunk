@@ -2048,6 +2048,103 @@ fn unknown_launch_reaches_the_client_as_a_refusal() {
     host.join().unwrap().unwrap();
 }
 
+/// Set on the refused-prep test's child only.
+#[cfg(unix)]
+const PREP_CHILD: &str = "PF_REFUSED_PREP_TEST_CHILD";
+
+/// A title the session can't launch runs none of its prep: one the box hides, and one the
+/// session's profile hides, are refused before a step runs. The library is the config dir,
+/// process config, so the body runs in a child of this test binary with a config dir of its own.
+#[cfg(unix)]
+#[test]
+fn a_refused_launch_runs_none_of_its_prep() {
+    if std::env::var_os(PREP_CHILD).is_none() {
+        let dir = tempfile::tempdir().unwrap();
+        let module = module_path!().split_once("::").expect("crate::module").1;
+        let test = format!("{module}::a_refused_launch_runs_none_of_its_prep");
+        let mut child =
+            std::process::Command::new(std::env::current_exe().expect("this test binary"));
+        child.args(["--exact", &test, "--nocapture"]);
+        for (key, _) in std::env::vars_os() {
+            if key.to_string_lossy().starts_with("PUNKTFUNK_") {
+                child.env_remove(key);
+            }
+        }
+        let out = child
+            .env(PREP_CHILD, "1")
+            .env("PUNKTFUNK_CONFIG_DIR", dir.path())
+            .output()
+            .expect("run the child");
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(out.status.success(), "{stdout}{stderr}");
+        assert!(
+            stdout.contains("1 passed"),
+            "the child ran no test: {stdout}"
+        );
+        return;
+    }
+    use crate::library::{set_entry_hidden, Reach, View};
+    let dir = pf_paths::config_dir();
+    let marker = |title: &str| dir.join(format!("{title}.prep"));
+    let add = |title: &str| {
+        let touch = format!("touch {}", marker(title).display());
+        let input = serde_json::json!({"title": title, "prep": [{"do": touch}]});
+        let entry = crate::library::add_custom(serde_json::from_value(input).unwrap()).unwrap();
+        format!("custom:{}", entry.id)
+    };
+    let (boxed, own, shown) = (add("boxed"), add("own"), add("shown"));
+    const KID: &str = "a1b2c3d4e5f6";
+    set_entry_hidden(&View::here(), &boxed, true).unwrap();
+    set_entry_hidden(&View::of(KID, false, Reach::default()), &own, true).unwrap();
+    let resolved = |id: &str, owner: bool| crate::profiles::Resolved {
+        id: id.into(),
+        display_name: id.into(),
+        os_account: crate::profiles::OsAccount::Operator,
+        home: Default::default(),
+        via: crate::profiles::ResolveVia::Asked,
+        owner,
+    };
+    let owner = crate::session_launch::LaunchOwner {
+        client: "prep-test".into(),
+        fingerprint: None,
+        plane: crate::events::Plane::Native,
+        preset: None,
+        profile: None,
+        pad: punktfunk_core::config::GamepadPref::Xbox360,
+        pad_slots: None,
+    };
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    for (id, profile) in [
+        (&boxed, resolved("0f0f0f0f0f0f", true)),
+        (&own, resolved(KID, false)),
+    ] {
+        assert!(!crate::library::prep_for(id).is_empty(), "{id} has prep");
+        let mut hello = plain_hello(None, Default::default()).hello;
+        hello.launch = Some(id.clone());
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        let stop = std::sync::atomic::AtomicBool::new(false);
+        let (target, _, prepared) = rt
+            .block_on(super::launch::prepare_launch(
+                &hello, false, &profile, &owner, &tx, &stop,
+            ))
+            .unwrap();
+        assert!(target.is_none() && prepared.prep.is_none(), "{id}");
+        let refusal = rx.try_recv().expect("a refusal");
+        assert_eq!(
+            refusal.kind,
+            punktfunk_core::quic::LaunchOutcomeKind::Refused
+        );
+    }
+    assert!(!marker("boxed").exists() && !marker("own").exists());
+    // The same step runs for a title nobody hides.
+    let _prep = crate::hooks::run_prep(&crate::library::prep_for(&shown), &[]);
+    assert!(marker("shown").exists());
+}
+
 /// Expired record knocks into pending; re-approval is the re-grant on the held connection.
 #[test]
 fn expired_record_knocks_into_pending_and_reapproval_regrants() {

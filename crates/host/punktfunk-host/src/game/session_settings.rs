@@ -221,6 +221,20 @@ pub fn set_profile(view: &crate::library::View, settings: SessionSettings) -> Re
     Ok(())
 }
 
+/// Drops the profile in `view`'s own settings, so its seat takes the box's Seat defaults again.
+/// Refused with no profile in view; an absent file is already dropped.
+pub fn clear_profile(view: &crate::library::View) -> Result<()> {
+    let path = view
+        .own_file(PROFILE_FILE)
+        .ok_or_else(|| anyhow::anyhow!("no profile in view"))?;
+    match std::fs::remove_file(&path) {
+        Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
+            Err(anyhow::Error::new(e).context(format!("remove {}", path.display())))
+        }
+        _ => Ok(()),
+    }
+}
+
 /// The seat defaults the box hands its seats: the box's own, or on a seat host its trust copy.
 pub fn box_seat_defaults() -> Option<pf_host_config::seat_defaults::SeatDefaults> {
     use pf_host_config::seat_defaults::{of_box, SeatDefaults};

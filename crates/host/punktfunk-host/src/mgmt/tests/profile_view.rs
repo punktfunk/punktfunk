@@ -270,14 +270,15 @@ async fn a_profile_s_layer_adds_and_narrows_never_widens() {
         })
         .collect();
     let want = |id: &str, on: bool, by: Option<&str>| (id.into(), on.into(), by.map(Into::into));
-    assert_eq!(
-        states,
-        [
-            want("lutris", false, Some("box")),
-            want("romm", false, Some("profile")),
-            want("steam", true, None),
-        ]
-    );
+    // A Linux seat lists no source it can play nothing of: Lutris starts from the owner's home.
+    let mut wanted = vec![
+        want("romm", false, Some("profile")),
+        want("steam", true, None),
+    ];
+    if !cfg!(target_os = "linux") {
+        wanted.insert(0, want("lutris", false, Some("box")));
+    }
+    assert_eq!(states, wanted);
 
     let path = format!("/api/v1/library/overrides?as={SEAT_P}");
     let (_, doc) = send(&app, get_req(&path)).await;
@@ -448,6 +449,97 @@ async fn writes_with_as_land_in_the_profile_s_own_files() {
     assert_eq!(stored["session_on_game_exit"], true);
 }
 
+/// Dropping a profile's own session settings answers what `GET` then answers, `configured`
+/// false, and again when there is nothing left to drop. Only a profile with a seat of its own
+/// has settings to drop.
+#[tokio::test]
+async fn a_profile_s_own_session_settings_drop() {
+    let tmp = ConfigDirOverride::new();
+    write_fixture(tmp.path());
+    let app = test_app(profiles_state(tmp.path(), profiles()), None);
+    let drop = |query: &str| {
+        axum::http::Request::delete(format!("/api/v1/session/settings{query}"))
+            .body(Body::empty())
+            .unwrap()
+    };
+    let file = tmp
+        .path()
+        .join(format!("library-profiles/{SEAT_P}/session-settings.json"));
+    assert!(file.exists());
+    let get = format!("/api/v1/session/settings?as={SEAT_P}");
+    for _ in 0..2 {
+        let (s, dropped) = send(&app, drop(&format!("?as={SEAT_P}"))).await;
+        assert_eq!(s, StatusCode::OK, "{dropped}");
+        assert_eq!(dropped["configured"], false);
+        assert_eq!(dropped, send(&app, get_req(&get)).await.1);
+        assert!(!file.exists());
+    }
+    let need = (StatusCode::BAD_REQUEST, "session_settings_need_profile");
+    for (query, (status, code)) in [
+        (String::new(), need),
+        ("?as=".into(), need),
+        (format!("?as={OWNER}"), need),
+        (
+            format!("?as={SHARER}"),
+            (StatusCode::CONFLICT, "profile_session_settings_host"),
+        ),
+        (
+            "?as=0123456789ab".into(),
+            (StatusCode::NOT_FOUND, "profile_unknown"),
+        ),
+    ] {
+        let (s, j) = send(&app, drop(&query)).await;
+        assert_eq!((s, j["code"].as_str()), (status, Some(code)), "{query}");
+    }
+}
+
+/// A profile's entry naming a shared override the box then deletes sets nothing: the box's
+/// entry applies, and the row does not call it the profile's. Its `none` still wins.
+#[tokio::test]
+async fn a_profile_s_entry_on_a_deleted_shared_override_leaves_the_box_s() {
+    let tmp = ConfigDirOverride::new();
+    write_fixture(tmp.path());
+    let app = test_app(profiles_state(tmp.path(), profiles()), None);
+    let set = serde_json::json!({"name": "4K", "lines": 2160});
+    let (s, set) = send(
+        &app,
+        json_req(Method::POST, "/api/v1/library/overrides/sets", set),
+    )
+    .await;
+    assert_eq!(s, StatusCode::CREATED, "{set}");
+    let set = set["id"].as_str().unwrap().to_string();
+    for (id, entry) in [
+        ("steam:400", serde_json::json!({"set": set})),
+        ("steam:70", serde_json::json!({"none": true})),
+    ] {
+        let path = format!("/api/v1/library/overrides/games/{id}?as={SHARER}");
+        let (s, j) = send(&app, json_req(Method::PUT, &path, entry)).await;
+        assert_eq!(s, StatusCode::OK, "{id}: {j}");
+    }
+    let delete = axum::http::Request::delete(format!("/api/v1/library/overrides/sets/{set}"))
+        .body(Body::empty())
+        .unwrap();
+    let (s, j) = send(&app, delete).await;
+    assert!(s.is_success(), "{s}: {j}");
+
+    let (_, json) = send(&app, get_req(&format!("/api/v1/library/page?as={SHARER}"))).await;
+    let portal = row(&json, "Portal");
+    assert_eq!(
+        portal["overrides"],
+        serde_json::json!({"hz": 60}),
+        "the box's"
+    );
+    assert!(portal.get("profile").is_none(), "{portal}");
+    let half_life = row(&json, "Half-Life");
+    assert!(half_life["overrides"].is_null(), "{half_life}");
+    assert_eq!(half_life["profile"], serde_json::json!({"overrides": true}));
+    let hz = crate::library::overrides_for(
+        &crate::library::View::of(SHARER, false, Default::default()),
+        "steam:400",
+    );
+    assert_eq!(hz.and_then(|o| o.hz), Some(60), "a launch takes the box's");
+}
+
 /// `as` is a profile the box holds, by a minted id, or 404 before it reaches a path.
 #[tokio::test]
 async fn as_names_a_minted_profile_or_nothing() {
@@ -577,6 +669,11 @@ async fn a_seat_host_lists_what_the_box_lists_as_its_profile() {
         serde_json::json!({}),
     );
     assert_eq!(send(&app, put).await.0, StatusCode::CONFLICT);
+    let drop = axum::http::Request::delete(format!("/api/v1/session/settings?as={SEAT_P}"))
+        .body(Body::empty())
+        .unwrap();
+    assert_eq!(send(&app, drop).await.0, StatusCode::CONFLICT);
+    assert!(crate::session_settings::of_profile(&here).is_some());
 }
 
 /// The box's answers for [`SEAT_P`], then the seat's half of the test in a child.
