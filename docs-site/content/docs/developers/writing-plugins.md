@@ -175,6 +175,12 @@ tell when the game quits.
 Keep Effect values inside the plugin: the runner bundles its own copy of Effect, so the default
 export must be a plain async `main`. `definePluginKit` and `defineLibraryPlugin` build that for you.
 
+A console page runs sandboxed, with an origin of its own: no cookies, `localStorage` or
+`indexedDB`, and no access to the console or another plugin's page. Its address carries its
+credential in the first path segment, so reach your API with relative URLs or through
+`resolvePluginBase()` from `@punktfunk/plugin-kit/react`, never a hand-written `/plugin-ui/<id>/`.
+Keep state in your plugin's backend, and don't send `fetch` with `credentials: "include"`.
+
 ## A tab on each game's page
 
 Something a plugin keeps per game, like the files it swaps or a per-game switch, belongs on that

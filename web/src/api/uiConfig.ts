@@ -39,8 +39,7 @@ export const useUiConfig = () =>
  *
  * Built from the CURRENT location's scheme and hostname, so it follows whatever address the
  * operator actually browsed to — an IP, an mDNS name, a hostname — and only the port differs. That
- * matters for more than cosmetics: it keeps the origin same-SITE with the console, which is what
- * lets the `SameSite=Lax` session cookie reach the plugin listener at all.
+ * is the name the operator's certificate exception and the listener's `frame-ancestors` match.
  */
 export function pluginOriginFrom(
 	config: UiConfig | undefined,

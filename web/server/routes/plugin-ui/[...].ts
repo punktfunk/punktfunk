@@ -1,12 +1,11 @@
-// /plugin-ui/<id>/** → a plugin's loopback UI server (plugin-ui-surface §5). By the time we get
-// here the gate (middleware/auth.ts) has confirmed a session — a plugin UI is reachable only by the
-// logged-in operator, on the console's own origin, with no separate password. We look up the
-// plugin's `{port, secret}` server-side, inject the secret as a bearer, strip the browser's cookie,
-// and stream the response through (SSE included). An HTML page is buffered to carry the theme
-// receiver. The plugin only ever gets dialed on 127.0.0.1.
+// /plugin-ui/<id>-<exp>-<mac>/** → a plugin's loopback UI server (plugin-ui-surface §5), on the
+// plugin listener only. The gate (middleware/auth.ts) has checked the page path; it is checked
+// again here, since the path names the plugin. We look up the plugin's `{port, secret}`
+// server-side, inject the secret as a bearer, strip the browser's cookie, and stream the response
+// through (SSE included). An HTML page is buffered to carry the theme receiver. The prefix the
+// plugin sees keeps the credential segment. The plugin only ever gets dialed on 127.0.0.1.
 //
-// This route runs in the built Bun/Nitro server. In `vite dev` a small middleware in vite.config.ts
-// handles `/plugin-ui` instead (it intercepts before this route, like the /api dev proxy).
+// In `vite dev` a middleware in vite.config.ts handles `/plugin-ui` instead, with the same rules.
 import {
 	defineEventHandler,
 	getProxyRequestHeaders,
@@ -15,23 +14,17 @@ import {
 	sendWebResponse,
 	setResponseStatus,
 } from "h3";
-import {
-	callPlugin,
-	injectThemeReceiver,
-	PLUGIN_ID_RE,
-} from "../../util/pluginProxy";
+import { pluginPage } from "../../util/pluginPage";
+import { callPlugin, injectThemeReceiver } from "../../util/pluginProxy";
 
 export default defineEventHandler(async (event) => {
 	const { pathname, search } = getRequestURL(event);
-	// /plugin-ui/<id>/<rest…>
-	const m = pathname.match(/^\/plugin-ui\/([^/]+)(\/.*)?$/);
-	const id = m?.[1];
-	if (!id || !PLUGIN_ID_RE.test(id)) {
-		setResponseStatus(event, 404);
-		return { error: "not a valid plugin-ui path" };
+	const page = pluginPage(pathname);
+	if (!page) {
+		setResponseStatus(event, 401);
+		return { error: "unauthorized" };
 	}
-	const rest = m?.[2] ?? "/";
-	const prefix = `/plugin-ui/${id}`;
+	const { id, prefix, rest } = page;
 
 	// Forwardable request headers (h3 strips hop-by-hop + host); we set our own auth and drop the
 	// session cookie so plugin code never sees it.
@@ -41,8 +34,7 @@ export default defineEventHandler(async (event) => {
 	headers["x-forwarded-prefix"] = prefix;
 	const method = event.method;
 	// Only read a body for the methods that can carry one. `readRawBody` asserts a payload method,
-	// so calling it for OPTIONS (a plugin UI's CORS preflight, or any client probing Allow) threw
-	// 405 out of the CONSOLE before the plugin was ever dialed.
+	// so an OPTIONS the gate does not answer as a preflight would 405 before the plugin is dialed.
 	const body = BODY_METHODS.has(method)
 		? ((await readRawBody(event, false)) as Uint8Array | undefined)
 		: undefined;
