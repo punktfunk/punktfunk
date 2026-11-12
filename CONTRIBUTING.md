@@ -3,9 +3,11 @@
 Thanks for your interest in contributing! Building, testing and sending a change are in the
 [developer docs](https://docs.punktfunk.unom.io/docs/developers). The short version:
 
-- **Discuss features first.** Talk a new feature or design through with the maintainer, for
-  example on [Discord](https://discord.gg/wzEGg9y45z), before you open an issue or a pull
-  request. Security reports go to security@punktfunk.com ([SECURITY.md](SECURITY.md)).
+- **Discuss features first.** Talk a new feature or design through with the maintainer, on
+  [Discord](https://discord.gg/wzEGg9y45z) or as an idea on
+  [improve unom](https://improve.unom.io/p/punktfunk), before you open an issue or a pull
+  request. Bugs go on improve unom too. Security reports go to security@punktfunk.com
+  ([SECURITY.md](SECURITY.md)).
 - **Enable the hooks** once per clone: `git config core.hooksPath scripts/git-hooks`
   ([what they run](https://docs.punktfunk.unom.io/docs/developers/contributing#git-hooks)).
 - **Run the full pass** before you push, plus the

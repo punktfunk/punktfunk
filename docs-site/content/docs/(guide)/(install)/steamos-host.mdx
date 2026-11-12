@@ -7,13 +7,13 @@ Stream *from* a Steam Deck or any SteamOS 3 box to your other devices. To stream
 instead, see [Install a Client](/docs/install-client).
 
 SteamOS is read-only, so the host isn't a package: a script builds it on the device inside a
-distrobox and runs it as user services, and a check at boot rebuilds it if a SteamOS update breaks
-it. A host is remote control of the machine, so keep it on a trusted LAN or VPN
-([Security & Safe Use](/docs/security)).
+distrobox and runs it as user services. If a SteamOS update breaks it, a check at boot rebuilds it,
+and that start takes a few minutes longer. A host is remote control of the machine, so keep it on a
+trusted LAN or VPN ([Security & Safe Use](/docs/security)).
 
 ## What you need
 
-- **SteamOS 3**, such as a Steam Deck (LCD or OLED). A wired dock beats Wi-Fi.
+- **SteamOS 3**, such as a Steam Deck (LCD or OLED).
 - **A `sudo` password.** A stock `deck` account has none, so set one once with `passwd`. Without
   it the installer skips every root step: gamepad passthrough, UDP buffers, surviving OS updates,
   and running without a login.
@@ -59,13 +59,8 @@ controller.
 
 ## 2. Pair
 
-1. Open `https://<device-ip>:47992` from a browser on your network. It warns once about the
-   self-signed certificate; continue.
-2. Sign in with the `PUNKTFUNK_UI_PASSWORD` in `~/.config/punktfunk/web.env`. Read it before your
-   first sign-in: the console then keeps only a hash. To set your own, see
-   [Login password](/docs/web-console#login-password).
-3. Go to **Devices** → **Pair a device** and enter the PIN on your client
-   ([Pairing](/docs/pairing)).
+**Next:** [Quick Start, step 3](/docs/quickstart#3-open-the-web-console): open the console and pair
+a device.
 
 Check the host with `systemctl --user status punktfunk-host`, and watch a client connect with
 `journalctl --user -u punktfunk-host -f`. The host streams Game Mode or the KDE desktop, whichever
@@ -107,21 +102,10 @@ git -C ~/punktfunk fetch && git -C ~/punktfunk switch main
 bash ~/punktfunk/scripts/steamdeck/update.sh --pull
 ```
 
-`switch stable` goes back. `update.sh` takes no `--channel`; that flag belongs to the
-[guided installer](/docs/install#guided-install-preview), which makes the same switch. More in
-[Updating](/docs/updating).
+`switch stable` goes back. More in [Updating](/docs/updating).
 
 ## Good to know
 
-- **SteamOS updates.** The system tuning is on SteamOS's atomic-update keep list, and
-  `punktfunk-rebuild-check` rebuilds the host at boot only if an update broke it. That first start
-  takes a few minutes longer.
-- **Profiles with a desktop of their own.** Reachable without logging in runs from `/opt/punktfunk`
-  and keeps its files and every seat's home in `/home/.steamos/offload/var/lib`, so SteamOS updates
-  keep both. The boot rebuild refreshes it with the host.
-- **Encoder.** Picked automatically: Vulkan Video on the Deck's AMD GPU with VAAPI as fallback,
-  NVENC on NVIDIA. The installer writes `RADV_PERFTEST=video_encode` to `host.env`; without it the
-  Deck uses VAAPI. `PUNKTFUNK_VULKAN_ENCODE=0` forces VAAPI.
 - **Wi-Fi.** A Deck's Wi-Fi sends about 250 Mbps at best: enough for 1080p or 1440p60, not 4K.
   A wired dock lifts it.
 - **Keep it awake.** Game Mode suspends on idle and drops the host off the network. Turn
@@ -138,4 +122,4 @@ bash ~/punktfunk/scripts/steamdeck/update.sh --pull
 ## Uninstalling
 
 There is no uninstall script. The steps are in
-[Uninstall → SteamOS](/docs/uninstall#steamos--steam-deck-host-on-device-build).
+[Uninstall → SteamOS](/docs/uninstall-steamos).

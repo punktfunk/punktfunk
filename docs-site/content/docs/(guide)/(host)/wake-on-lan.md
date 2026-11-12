@@ -12,14 +12,11 @@ see [Arming the machine](#arming-the-machine). To put the host to sleep, see
 
 - **The client has to see the host awake once.** It learns the host's network card address (MAC)
   from the host's local-network announcement and keeps it. Open the client on the same network
-  while the host is on (`punktfunk discover` on the command line). Every client except the Linux
-  app also takes a MAC typed in by hand.
+  while the host is on (`punktfunk discover` on the command line). The Linux, Windows, Apple and
+  Android apps also take a MAC typed in by hand.
 - **Client and host share a network.** Magic packets don't cross subnets, a VPN or a mesh network.
 - **Wired Ethernet is the sure thing.** Wi-Fi works when the adapter supports Wake on Wireless LAN
   (WoWLAN).
-
-The packet isn't authenticated. A wrong address only makes the wake fail; the host's certificate
-still guards the connection ([Security](/docs/security)).
 
 ## Waking from a client
 
@@ -27,23 +24,21 @@ still guards the connection ([Security](/docs/security)).
 Opening a saved host that doesn't answer then:
 
 1. Sends a magic packet and dials anyway: a host reached over a VPN never announces itself.
-2. If the dial fails, shows **Waking…**, re-sends every 6 seconds and checks every second.
-3. Connects when the host answers, for up to 90 seconds. The Apple and Android apps and Punktfunk
-   Console then wait with **Try Again**; the Linux and Windows apps say the host didn't come
-   online.
+2. If the dial fails, shows **Waking ⟨host⟩…**, re-sends every 6 seconds and checks every second.
+3. Connects when the host answers, for up to 90 seconds. After that the app says **⟨host⟩ didn't
+   wake** and offers **Retry**.
 
-A host that wakes on a new address is updated in the saved record (Linux, Windows and Android
-apps). Turn auto-wake off for hosts behind a VPN, which look asleep when they aren't.
+Turn auto-wake off for hosts behind a VPN, which look asleep when they aren't.
 
-A saved host's menu also has an explicit wake while it is offline and its MAC is known:
+A saved host's menu also has **Wake host** while it is offline and its MAC is known:
 
-| Client | Explicit wake | Type a MAC by hand |
+| Client | **Wake host** | **Wake-on-LAN MAC** field |
 |---|---|---|
-| Linux | **Wake Host** sends the packet | **Wake-on-LAN MAC addresses** on the host page (ⓘ) |
-| Windows | **Wake host** sends the packet | **MAC (Wake-on-LAN)** under **Edit…** |
-| macOS · iOS · iPadOS · tvOS | **Wake Host** waits on the **Waking…** screen | **MAC address** in **Edit Host** |
-| Android · Android TV | **Wake host** waits on the **Waking…** screen | **Wake-on-LAN MAC** in **Edit host** |
-| Punktfunk Console | **Wake host** in the host's options; the confirm button reads **Wake & Connect** | not offered |
+| Linux | Sends the packet | On the host's page |
+| Windows | Sends the packet | Under **Edit…** |
+| macOS · iOS · iPadOS · tvOS | Waits on the waking screen | On the host's page |
+| Android · Android TV | Waits on the waking screen | Under **Edit…** |
+| Punktfunk Console | In the host's options; on an asleep host's card the hint bar reads **Wake & connect** | Not offered |
 
 - The Apple apps add a **Wake Host** action to Shortcuts; on iPhone and iPad say *"Wake ⟨host⟩
   with Punktfunk"*.
@@ -54,8 +49,7 @@ A saved host's menu also has an explicit wake while it is offline and its MAC is
 
 ### From the command line
 
-`punktfunk`, the client command, ships with the Linux `punktfunk-client` packages and the Windows
-client. In the Flatpak it is `flatpak run --command=punktfunk io.unom.punktfunk`.
+With the [`punktfunk` command](/docs/clients#scripting-the-punktfunk-cli):
 
 ```bash
 punktfunk wake <host-ref> [--wait]
@@ -72,8 +66,7 @@ seconds.
 | `5` | No saved host matches, the name is ambiguous, or no MAC is known yet |
 | `6` | That address isn't a saved host: pair it first |
 
-`punktfunk launch` wakes the host by itself when auto-wake is on. See [Host CLI](/docs/host-cli)
-for the other commands.
+`punktfunk launch` wakes the host by itself when auto-wake is on.
 
 ## Arming the machine
 
@@ -95,8 +88,8 @@ Wake-on-WLAN is NOT armed on this host's Wi-Fi NIC — clients cannot wake it fr
 
 The warning names the interface and the command that fixes it. No line means the host couldn't
 tell (`ethtool` or `iw` missing, no answer from the driver) or local discovery is off. Read it
-on the console's **Troubleshooting** page or with `journalctl --user -u punktfunk-host`. Windows
-hosts don't run this check.
+in the console under **Diagnostics** → **Troubleshooting**, or with
+`journalctl --user -u punktfunk-host`. Windows hosts don't run this check.
 
 ### Linux (wired)
 

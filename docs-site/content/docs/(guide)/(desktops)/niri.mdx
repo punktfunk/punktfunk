@@ -13,24 +13,15 @@ Stream a niri session. Stock niri can't create a virtual output, so the host nee
   removed when the client leaves. A resize mid-stream works.
 - The host captures it straight from the compositor on the GPU, or through niri's built-in
   screencast. No chooser appears.
-- Keyboard and mouse go in through the wlroots virtual pointer and keyboard protocols. The
-  clipboard goes through `ext-data-control`.
+- Keyboard and mouse go in through the wlroots virtual pointer and keyboard protocols.
 - Library launches open on the streamed output's own workspace. The host can move a game's window
   there and make it full-screen: see
   [Automation](/docs/automation#a-launch-on-its-own-workspace).
-- **Turn off** under [Your monitors while streaming](/docs/virtual-displays#topology) switches your
-  monitors off while you stream and back on afterwards. Monitors set to **Stay on** stay lit.
 - A device's **Scale its screen at** applies to its output.
-
-It needs a niri session running biri. It finds that niri on every connect; you don't export
-`NIRI_SOCKET`.
 
 ## Get biri [#get-biri]
 
-niri's IPC has no request that adds an output, so stock niri can't give each client a display. biri
-is a niri fork that adds the request. The host asks niri whether it can create one rather than
-checking its name. Everything else in niri's own docs applies, and biri's extra features are off
-until you configure them.
+niri's own docs apply to biri, and biri's extra features are off until you configure them.
 
 biri ships no release binaries:
 
@@ -59,7 +50,7 @@ On the next connect the log says `niri: virtual outputs available`.
 
 ## host.env
 
-Nothing is required: the host finds niri on every connect.
+Nothing is required: the host finds niri on every connect, so you don't export `NIRI_SOCKET`.
 
 Leave `PUNKTFUNK_COMPOSITOR` unset: a pin turns off detection and session following. It accepts
 `niri` (alias `biri`) if you need it. Every other option is in
@@ -89,11 +80,10 @@ manager, and enable lingering so the host starts at boot:
 
 - Only biri can host. On stock niri the host can stream a monitor you pin, never a virtual screen:
   see [below](#stock-niri).
-- SDR only: niri has no colour management. HDR on Linux needs
-  [gamescope](/docs/gamescope#hdr-on-gamescope) or [Hyprland](/docs/hyprland) — see
-  [HDR](/docs/hdr#other-linux-desktops).
-- Under **Turn off**, a host that dies mid-stream leaves your monitors dark until the next host
-  start lights them.
+- SDR only. HDR on Linux needs [gamescope](/docs/gamescope#hdr-on-gamescope) or
+  [Hyprland](/docs/hyprland) — see [HDR](/docs/hdr#other-linux-desktops).
+- Under **Turn off** in [Your monitors while streaming](/docs/virtual-displays#topology), a host
+  that dies mid-stream leaves your monitors dark until the next host start lights them.
 
 ## Troubleshooting
 
@@ -101,12 +91,12 @@ manager, and enable lingering so the host starts at boot:
 
 The host logs `this niri has no virtual outputs — install biri, the niri fork that adds them`.
 Your niri is stock. The client is told the host can't create a display, and the web console's
-**Troubleshooting** page shows a failed **niri virtual outputs** check. [Get biri](#get-biri) and
-restart the host.
+**Troubleshooting** page shows a failed **Virtual displays on niri** check.
+[Get biri](#get-biri) and restart the host.
 
 To stream meanwhile, click **Stream this monitor** on a monitor's row in **Screens**, or set
 `PUNKTFUNK_CAPTURE_MONITOR` to its connector. That works on stock niri:
-[Stream a real monitor instead](/docs/virtual-displays#stream-a-real-monitor-instead).
+[Stream a real monitor instead](/docs/stream-a-monitor).
 
 ### "find the niri IPC socket (no NIRI_SOCKET, no niri.*.sock)"
 

@@ -23,8 +23,10 @@ regenerates the header from
 with cbindgen; the header is checked in, and CI fails when it is stale.
 
 Compile your code with `-DPUNKTFUNK_FEATURE_QUIC`. The whole client API (`punktfunk_connect*`,
-`punktfunk_connection_*`, `punktfunk_pair`, `punktfunk_probe`) sits behind that define. Without it
-the header declares only the raw loopback session (`punktfunk_session_*`), which the tests use.
+`punktfunk_connection_*`, `punktfunk_pair`, `punktfunk_probe`, `punktfunk_generate_identity`) sits
+behind that define. Without it the header declares only the version check, logging,
+`punktfunk_wake_on_lan`, the decode helpers and the in-process loopback pair the tests use
+(`punktfunk_test_loopback_pair`).
 
 ```sh
 cc -std=c11 -DPUNKTFUNK_FEATURE_QUIC -I include -c myclient.c
@@ -51,8 +53,9 @@ Do this before any other call: structs without a size prefix (`PunktfunkHidOutpu
 `PunktfunkAudioPcm`) rely on it to stop an older binary passing a slot that is too small. Structs
 that start with `struct_size` (`PunktfunkConnectOpts`, `PunktfunkRichInputEx`, `PunktfunkConfig`)
 are zero-initialised, then `struct_size = sizeof(T)`; the core rejects a size below its minimum.
-`PUNKTFUNK_WIRE_VERSION` is the protocol, which the core checks against the host itself. ABI
-changes per release: [`CHANGELOG.md`](https://git.unom.io/unom/punktfunk/src/branch/main/CHANGELOG.md).
+The wire protocol is versioned apart from the ABI, by ALPN, and the core checks it against the
+host itself. ABI changes per release:
+[`CHANGELOG.md`](https://git.unom.io/unom/punktfunk/src/branch/main/CHANGELOG.md).
 
 ## Rules for every call
 
@@ -80,10 +83,10 @@ changes per release: [`CHANGELOG.md`](https://git.unom.io/unom/punktfunk/src/bra
    PEM (4096-byte buffers are enough). Store both securely and pass them to every pair and connect.
    Hosts require pairing unless started with `--open`, so an anonymous connect gets refused.
 3. **Admission.** Either connect with the identity and let the operator click **Approve** in the
-   console (the connect waits up to `timeout_ms`; the host holds the request for 3 minutes), or
-   call `punktfunk_pair` with the PIN the host shows (`CRYPTO` means a wrong PIN). See
-   [Pairing](/docs/pairing). Store the host fingerprint you get back and pass it as `pin_sha256` on
-   every later connect.
+   console (the connect waits up to `timeout_ms`, or for the verdict with `on_pending`; the host
+   holds the request for 3 minutes), or call `punktfunk_pair` with the PIN the host shows (`CRYPTO`
+   means a wrong PIN). See [Pairing](/docs/pairing). Store the host fingerprint you get back and
+   pass it as `pin_sha256` on every later connect.
 4. **Connect** with `punktfunk_connect_opts` (below), read the resolved session, and start one
    thread per plane you use. On NULL, `status_out` says why.
 5. **Tear down.** Stop your pull threads, call `punktfunk_connection_disconnect_quit` only when the
@@ -119,7 +122,8 @@ you set the bit. `video_codecs = 0` means HEVC only.
 | `profile_id` | The profile to play as; null lets the host choose. `punktfunk_connection_profile` reads which it resolved. |
 | `unlock` | A `PunktfunkProfileUnlock` for a profile on a person's own account: the password as typed, or a key proof signed over `punktfunk_profile_unlock_message`. It goes only to a pinned host: without `pin_sha256` the connect fails with `INVALID_ARG`. The core copies the secret; wipe yours after the call. |
 | `prompts_unlock` | 1 if you ask for the password and connect again after `REJECTED_PROFILE_LOCKED`. A non-null `unlock` implies it. |
-| `timeout_ms` | Bounds the whole connect, including a wait for approval. |
+| `timeout_ms` | Bounds the whole connect, including a wait for approval unless `on_pending` is set. |
+| `on_pending`, `on_pending_ctx` | Called once, on the connecting thread, when the host's operator is deciding about this device: show "waiting for approval". The connect then waits for the host's verdict, not `timeout_ms`. |
 
 The positional `punktfunk_connect` to `punktfunk_connect_ex12` stay for existing callers and are
 frozen; new options land only in the struct.

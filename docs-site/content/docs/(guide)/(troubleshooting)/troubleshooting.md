@@ -81,6 +81,7 @@ It opens the streaming ports on Public networks; the console's ports keep their 
 - [Capture fails: "Session creation inhibited" (GNOME)](/docs/troubleshooting-stream#capture-fails-session-creation-inhibited-gnome)
 - [Games open on a physical monitor, not on the stream (Hyprland, sway, niri)](/docs/troubleshooting-stream#games-from-my-library-open-on-a-physical-monitor-not-on-the-stream-hyprland--sway--niri)
 - [Game Mode: black screen, or stuck at the box's resolution](/docs/troubleshooting-stream#game-mode-black-screen-on-connect-or-the-stream-is-stuck-at-the-boxs-resolution)
+- [Stutter while NVIDIA Instant Replay is on (Windows)](/docs/troubleshooting-stream#stutter-while-nvidia-instant-replay-is-on-windows)
 - [The picture freezes for a moment, over and over (Windows)](/docs/troubleshooting-stream#the-picture-freezes-for-a-moment-over-and-over-windows)
 - [Stutter, drops, or high latency](/docs/troubleshooting-stream#stutter-drops-or-high-latency)
 - [The stream doesn't use the codec or HDR I picked](/docs/troubleshooting-stream#the-stream-doesnt-use-the-codec-or-hdr-i-picked)
@@ -93,6 +94,7 @@ It opens the streaming ports on Public networks; the console's ports keep their 
 - [The pad arrives as an Xbox 360 controller instead of a Steam Deck](/docs/troubleshooting-input#the-pad-works-but-arrives-as-an-xbox-360-controller-instead-of-a-steam-deck)
 - [Stream lags, then freezes, with a DualSense pad (Bazzite, SELinux)](/docs/troubleshooting-input#stream-lags-then-freezes-with-a-dualsense-pad-bazzite-selinux)
 - [A Steam Controller 2 is captured, but Steam doesn't list it](/docs/troubleshooting-input#a-steam-controller-2-is-captured-but-steams-controller-list-stays-empty)
+- [A controller plugged into the PC shows up on a seat (Windows)](/docs/troubleshooting-input#a-controller-plugged-into-the-pc-shows-up-on-a-seat-windows)
 - [Copy and paste between host and client does nothing](/docs/troubleshooting-input#copy-and-paste-between-host-and-client-does-nothing)
 
 ## Audio

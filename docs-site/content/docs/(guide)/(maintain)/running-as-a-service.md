@@ -8,23 +8,18 @@ box.
 
 ## What the unit starts
 
-The service runs `punktfunk-host serve`: the Punktfunk plane (`punktfunk/2`) and the management
-API. Two more planes stay off until you turn them on under **Host** in the
+The service runs `punktfunk-host serve`: the Punktfunk plane and the management API. Two more
+planes stay off until you turn them on under **Host** in the
 [web console](/docs/web-console), or in `~/.config/punktfunk/host.env`:
 
 | Plane | Setting | `host.env` | Firewall |
 |---|---|---|---|
 | Stock [Moonlight](/docs/moonlight) (GameStream) | **GameStream** | `PUNKTFUNK_GAMESTREAM=1` | open the `punktfunk-gamestream` service |
-| Browser client (preview) | **Browser streaming** | `PUNKTFUNK_WEBTRANSPORT=1` | UDP 9778, in `punktfunk-native` (`PUNKTFUNK_WEBTRANSPORT_PORT` moves it) |
+| [Browser client](/docs/browser-client) (preview) | **Browser streaming** | `PUNKTFUNK_WEBTRANSPORT=1` | UDP 9778, in `punktfunk-native` (`PUNKTFUNK_WEBTRANSPORT_PORT` moves it) |
 
 Both take effect after a host restart. GameStream pairs over plain HTTP with weaker encryption, so
 turn it on only on a LAN you trust ([Security](/docs/security)).
 `systemctl --user cat punktfunk-host` shows the unit in effect, drop-ins included.
-
-### The browser client (preview)
-
-Set it up with [Browser Client](/docs/browser-client). `PUNKTFUNK_WEBTRANSPORT_BIND` keeps the
-plane on one interface.
 
 ## A desktop you log into [#a-a-desktop-you-log-into]
 
@@ -60,10 +55,10 @@ systemctl --user restart punktfunk-host
 
 On NixOS set `services.punktfunk.host.desktopSession = true;` instead.
 
-Skip it on a headless box (below). Sway and Hyprland never reach systemd's
-`graphical-session.target`, so the drop-in does nothing there: leave the unit disabled and start the
-host from the compositor config —
-`exec systemctl --user start punktfunk-host` (sway) or
+Skip it on a headless box (below). Sway, and Hyprland started without uwsm (the Universal Wayland
+Session Manager), never reach systemd's `graphical-session.target`, so the drop-in does nothing
+there. To restart the host with those sessions, disable the unit and start it from the compositor
+config instead: `exec systemctl --user start punktfunk-host` (sway) or
 `exec-once = systemctl --user start punktfunk-host` (Hyprland). `niri-session` and `start-umbriel`
 do reach it, so the drop-in works under [niri](/docs/niri) and [Umbriel](/docs/umbriel).
 

@@ -13,9 +13,11 @@ monitors.
 [How it works](https://docs.punktfunk.unom.io/docs/how-it-works) ·
 [Quick start](https://docs.punktfunk.unom.io/docs/quickstart) ·
 [Support matrix](https://docs.punktfunk.unom.io/docs/support-matrix) (what works where) ·
-[Roadmap](https://docs.punktfunk.unom.io/docs/roadmap)
+[Roadmap](https://improve.unom.io/p/punktfunk/roadmap)
 
 💬 [Discord](https://discord.gg/wzEGg9y45z) · [r/Punktfunk](https://www.reddit.com/r/Punktfunk/)
+
+🐛 Bugs and ideas go on **[improve unom](https://improve.unom.io/p/punktfunk)**, where you can vote and follow them.
 
 🔒 Vulnerabilities go privately to **security@punktfunk.com**, not to an issue — [SECURITY.md](SECURITY.md).
 
@@ -77,7 +79,7 @@ uninstalling are [/docs/updating](https://docs.punktfunk.unom.io/docs/updating) 
 | Steam Deck | The **Decky plugin** in Gaming Mode; the Flatpak in Desktop Mode |
 | Android phone or TV | The **Android app** on Google Play |
 | Windows | Native **`punktfunk-client`** — signed installer (portable zip and MSIX too) |
-| LG webOS TV | **`pf-webos`**, a community client in its own repo |
+| LG webOS TV | **`client-webos`**, in its own repo |
 | Scripts and launchers | **`punktfunk`**, the headless CLI in the Linux client packages |
 | Anything else | **Moonlight** over GameStream |
 

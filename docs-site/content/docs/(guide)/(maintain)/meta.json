@@ -4,6 +4,9 @@
     "running-as-a-service",
     "updating",
     "channels",
-    "uninstall"
+    "uninstall",
+    "uninstall-steamos",
+    "uninstall-windows",
+    "uninstall-client"
   ]
 }

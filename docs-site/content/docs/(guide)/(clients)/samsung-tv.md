@@ -19,9 +19,8 @@ same by hand.
 2. Leave **Browser origins** as it is. The list is a rule for browser pages; the TV app is not one
    and is admitted either way. Pairing is what lets it stream.
 3. Click **Restart Punktfunk**.
-4. The TV reaches the host on TCP 47990 (the management port, where it first asks for the browser
-   plane) and UDP 9778 (the plane itself, in the `punktfunk-native` firewall profile — see
-   [Ports](/docs/ports)).
+4. Open TCP 47990 and UDP 9778 on the host. On Linux both are in the `punktfunk-native` firewall
+   profile; on Windows the host opens them ([Ports](/docs/ports)).
 
 ## 2. Put the TV in Developer Mode
 
@@ -49,16 +48,12 @@ makes the certificate for your set and installs apps on it.
    [client-tizen release](https://github.com/punktfunk/client-tizen/releases/latest). It is
    unsigned.
 2. Clone [client-tizen](https://github.com/punktfunk/client-tizen) and build its Tizen CLI image:
-   `docker build --platform linux/amd64 -t punktfunk-tizen-cli:10.0 tools/toolchain`. It holds
-   Tizen SDK 10.0's `web-cli` (`tizen`, `sdb`) and the Samsung certificate extension; `sdb` is
-   Intel-only, which is why it is an amd64 image.
+   `docker build --platform linux/amd64 -t punktfunk-tizen-cli:10.0 tools/toolchain`.
 3. Make a Samsung distributor certificate for your set: `sdb connect <tv address>:26101`, read the
    DUID with `sdb shell 0 getduid`, and run `samsung-tv-cert --duid <DUID> --profile punktfunk`
    (a browser login to your Samsung account is the one manual step).
 4. Sign and install: `tools/sign.sh punktfunk-tizen-<version>.wgt`, then
-   `TV=<tv address> tools/sign.sh install`. The script's header lists the three signing traps it
-   handles: no keyring in the container, a `.p12` Java cannot read, and a password that looks like
-   base64.
+   `TV=<tv address> tools/sign.sh install`.
 
 ## 4. Pair and stream
 
@@ -78,13 +73,9 @@ app; a reinstall keeps the pairing too.
 
 ## What the TV app does and does not do
 
-- Video: H.264 and HEVC at the set's own resolution, up to 1080p60 on the first sets measured. No
-  AV1, no HDR, no 4K yet: a measured stream decides each, and the list here follows it.
-- The set's game mode is on while the app runs, which is the latency setting you would otherwise
-  have to find.
+- Video: H.264 and HEVC at the set's own resolution, up to 1080p60. No AV1, no HDR, no 4K.
+- The set's game mode is on while the app runs.
 - No host discovery: type the address. No Wake-on-LAN from the TV.
-- The management API rides the streaming connection, so the TV needs the host's browser plane on,
-  and nothing else of the host's network is reachable from it.
 
 ## Troubleshooting
 
