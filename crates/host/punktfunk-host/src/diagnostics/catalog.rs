@@ -756,8 +756,9 @@ fn hyprland_permissions() -> HostCheck {
                module it includes; on hyprlang they are `permission = …` lines."
             .to_string(),
         command: Some(
-            "o.permission(\"/usr/bin/punktfunk-host\", \"screencopy\", \"allow\")\n\
-             o.permission(\"/usr/bin/punktfunk-host\", \"plugin\", \"allow\")"
+            "hl.permission(\"/usr/bin/punktfunk-host\", \"screencopy\", \"allow\")\n\
+             hl.permission(\"/usr/(lib|libexec|lib64)/xdg-desktop-portal-hyprland\", \
+             \"screencopy\", \"allow\")"
                 .to_string(),
         ),
         relogin_required: false,
