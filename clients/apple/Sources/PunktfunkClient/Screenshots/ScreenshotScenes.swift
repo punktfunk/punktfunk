@@ -474,7 +474,7 @@ private struct ShotTVTabs: View {
                 .tabItem { Label(L10n.hostsTabLibrary, systemImage: "square.grid.2x2") }
                 .tag(TouchTab.library)
             NavigationStack { settings }
-                .tabItem { Label("Settings", systemImage: "gearshape") }
+                .tabItem { Label(L10n.hostsTabSettings, systemImage: "gearshape") }
                 .tag(TouchTab.settings)
         }
         .onAppear { ShotMock.installPresets() }
