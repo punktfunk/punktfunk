@@ -349,10 +349,15 @@ fn run(
             pad: punktfunk_core::config::GamepadPref::Xbox360,
             pad_slots: None,
         };
-        // The entry's own `apps.json` prep, then its library entry's. `PF_APP_TITLE` and the
-        // `PF_STREAM_*` names the native plane's prep env and the marker file use.
+        // The entry's own `apps.json` prep, then its library entry's when that entry is what
+        // launches: a hidden title's steps don't run. `PF_APP_TITLE` and the `PF_STREAM_*`
+        // names the native plane's prep env and the marker file use.
         let mut prep_cmds = app.map(|a| a.prep.clone()).unwrap_or_default();
-        if let Some(lib_id) = app.and_then(|a| a.library_id.as_deref()) {
+        let launched = target.as_ref().and_then(|t| t.game.id.as_deref());
+        if let Some(lib_id) = app
+            .and_then(|a| a.library_id.as_deref())
+            .filter(|id| launched == Some(*id))
+        {
             prep_cmds.extend(crate::library::prep_for(lib_id));
         }
         let mut prep_env = vec![(
