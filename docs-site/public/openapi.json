@@ -7134,7 +7134,7 @@
           "profiles"
         ],
         "summary": "List the profiles a device can pick",
-        "description": "Every profile on the box, the owner first. A client shows this as its picker. Each row's\n`unlock` says what the asking device sends with its connect: a profile on a person's own\nLinux account needs the account's password, or a key proof from a device that enrolled one,\nuntil the device is signed in to its running desktop.",
+        "description": "The profiles the asking device may open, the owner first, and the locked ones that take a\nPIN; the console lists every profile. A client shows this as its picker. Each row's `unlock`\nsays what the asking device sends with its connect: a profile on a person's own Linux account\nneeds the account's password, or a key proof from a device that enrolled one, until the\ndevice is signed in to its running desktop; a locked profile whose list lacks the device\nneeds its PIN.",
         "operationId": "enumerateProfiles",
         "responses": {
           "200": {
@@ -19250,11 +19250,12 @@
       },
       "UnlockNeed": {
         "type": "string",
-        "description": "What a device sends with its connect to open a profile on a person's own Linux account.",
+        "description": "What a device sends with its connect to open a profile: a profile on a person's own Linux\naccount, or a locked one. A client that doesn't know a word reads it as `password`.",
         "enum": [
           "none",
           "password",
-          "key"
+          "key",
+          "pin"
         ]
       },
       "UnpairAllResult": {

@@ -2,18 +2,19 @@
 //!
 //! Four routes are on the cert lane, for every paired device: the list a client's picker
 //! shows, a profile's picture, waking its seat and a key unlock's challenge. Everything that
-//! changes a profile is the console's, among them turning seats on and signing devices out. Any
-//! paired device may pick any profile, but starting another profile's seat takes the launch
-//! grant. A profile on a person's own Linux account is the exception: only the seat supervisor
-//! lets a device onto it, through the unlock at connect (`native/unlock.rs`), and nothing here
-//! starts it.
+//! changes a profile is the console's, among them turning seats on, locking a profile and
+//! signing devices out. A paired device may pick an open profile, and a locked one whose list
+//! holds it or whose PIN it brings (`profiles/locks.rs`); starting another profile's seat takes
+//! the launch grant. A profile on a person's own Linux account is the exception: only the seat
+//! supervisor lets a device onto it, through the unlock at connect (`native/unlock.rs`), and
+//! nothing here starts it.
 
 use super::auth::{AuthLane, PairedDevice};
 use super::owner::{LiveSeats, Seats};
 use super::shared::*;
 use crate::profiles::take_turns::{self, LocalAccount};
 use crate::profiles::{
-    EditError, Home, OsAccount, Profile, ProfileCreate, ProfileUpdate, Profiles,
+    EditError, Home, Opens, OsAccount, Profile, ProfileCreate, ProfileUpdate, Profiles,
 };
 use crate::seats::Snapshot;
 use axum::http::header;
@@ -53,16 +54,20 @@ pub(crate) struct ProfilePublic {
     unlock: Option<UnlockNeed>,
 }
 
-/// What a device sends with its connect to open a profile on a person's own Linux account.
+/// What a device sends with its connect to open a profile: a profile on a person's own Linux
+/// account, or a locked one. A client that doesn't know a word reads it as `password`.
 #[derive(Serialize, ToSchema, Clone, Copy, PartialEq, Eq, Debug)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum UnlockNeed {
-    /// Nothing: any other profile, or a device already signed in to a running desktop.
+    /// Nothing: an open profile, a locked one that lists this device, or a device already
+    /// signed in to a running desktop.
     None,
     /// The account's password.
     Password,
     /// A signature from this device's unlock key over a fresh `unlock-challenge`.
     Key,
+    /// A locked profile's PIN, 4 to 8 digits, sent as the unlock's secret.
+    Pin,
 }
 
 impl From<Needs> for UnlockNeed {
@@ -943,10 +948,12 @@ fn edit_error(e: EditError) -> Response {
 
 /// List the profiles a device can pick
 ///
-/// Every profile on the box, the owner first. A client shows this as its picker. Each row's
-/// `unlock` says what the asking device sends with its connect: a profile on a person's own
-/// Linux account needs the account's password, or a key proof from a device that enrolled one,
-/// until the device is signed in to its running desktop.
+/// The profiles the asking device may open, the owner first, and the locked ones that take a
+/// PIN; the console lists every profile. A client shows this as its picker. Each row's `unlock`
+/// says what the asking device sends with its connect: a profile on a person's own Linux account
+/// needs the account's password, or a key proof from a device that enrolled one, until the
+/// device is signed in to its running desktop; a locked profile whose list lacks the device
+/// needs its PIN.
 #[utoipa::path(
     get,
     path = "/profiles/enumerate",
@@ -974,16 +981,26 @@ pub(crate) async fn enumerate_profiles(
     let needs = unlock_needs(&st, &seats, &list, device.as_deref()).await;
     let rows: Vec<ProfilePublic> = list
         .iter()
-        .map(|p| ProfilePublic {
-            unlock: Some(needs.get(&p.id).copied().unwrap_or(UnlockNeed::None)),
-            ..public(
+        .filter_map(|p| {
+            let need = needs.get(&p.id).copied().unwrap_or(UnlockNeed::None);
+            let unlock = match profiles.opens(&p.id, device.as_deref()) {
+                _ if operator => need,
+                Opens::Yes => need,
+                Opens::Pin => UnlockNeed::Pin,
+                Opens::No => return None,
+            };
+            let row = public(
                 &st,
                 p,
                 owner.as_deref(),
                 device.as_deref(),
                 &seats,
                 operator,
-            )
+            );
+            Some(ProfilePublic {
+                unlock: Some(unlock),
+                ..row
+            })
         })
         .collect();
     Json(rows).into_response()
@@ -1125,7 +1142,7 @@ fn may_wake(st: &MgmtState, profiles: &Profiles, id: &str, fp: Option<&str>) -> 
     let Some(fp) = fp else {
         return false;
     };
-    if profiles.opens(id, Some(fp)) != crate::profiles::Opens::Yes {
+    if profiles.opens(id, Some(fp)) != Opens::Yes {
         return false;
     }
     let own = profiles.pick(Some(fp), None).is_ok_and(|r| r.id == id);

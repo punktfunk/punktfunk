@@ -495,6 +495,89 @@ async fn a_knock_shows_the_profile_it_named() {
     assert!(b[1].get("profile").is_none(), "{b}");
 }
 
+/// A device's picker lists the profiles it may open, and a locked one with a PIN marked `pin`; a
+/// locked one with no PIN is absent unless the device is on its list. The console lists all.
+#[tokio::test]
+async fn the_picker_lists_what_the_device_may_open() {
+    let np = Arc::new(
+        crate::native_pairing::NativePairing::load_with(
+            Some(crate::test_support::scratch().join("pf-mgmt-picker-lock.json")),
+            None,
+            false,
+        )
+        .unwrap(),
+    );
+    let (listed, other) = ("ab".repeat(32), "cd".repeat(32));
+    np.add("listed", &listed).unwrap();
+    np.add("other", &other).unwrap();
+    let state = state_with_profiles("picker-lock");
+    let profiles = state.profiles.get().unwrap().clone();
+    let owner = profiles.owner_id().unwrap();
+    let app = test_app_native(state, np);
+    let mut ids = Vec::new();
+    for name in ["Kid", "Teen"] {
+        let body = serde_json::json!({ "display_name": name, "seat": false });
+        let (status, made) = send(&app, json_req(Method::POST, "/api/v1/profiles", body)).await;
+        assert_eq!(status, StatusCode::CREATED, "{made}");
+        ids.push(made["id"].as_str().unwrap().to_string());
+    }
+    let (kid, teen) = (ids[0].clone(), ids[1].clone());
+    let device = pf_seats::ipc::Device {
+        fingerprint: listed.clone(),
+        name: "listed".into(),
+    };
+    profiles
+        .locks()
+        .edit(&kid, |lock, now| {
+            lock.locked = true;
+            lock.admit(&device, now, true)
+        })
+        .unwrap();
+    profiles
+        .locks()
+        .edit(&teen, |lock, _| {
+            lock.locked = true;
+            lock.pin = pf_seats::locks::PinHash::new("2468");
+        })
+        .unwrap();
+    let rows = |body: serde_json::Value| {
+        let rows = body.as_array().unwrap().iter();
+        rows.map(|r| (r["id"].as_str().unwrap().to_string(), r["unlock"].clone()))
+            .collect::<Vec<_>>()
+    };
+    let picker = |fp: String| {
+        let app = app.clone();
+        async move {
+            let mut req = get_req("/api/v1/profiles/enumerate");
+            req.extensions_mut().insert(PeerCertFingerprint(Some(fp)));
+            let resp = app.oneshot(req).await.unwrap();
+            let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+                .await
+                .unwrap();
+            rows(serde_json::from_slice(&body).unwrap())
+        }
+    };
+    let none = serde_json::json!("none");
+    let pin = serde_json::json!("pin");
+    assert_eq!(
+        picker(listed).await,
+        [
+            (owner.clone(), none.clone()),
+            (kid.clone(), none.clone()),
+            (teen.clone(), pin.clone()),
+        ]
+    );
+    assert_eq!(
+        picker(other).await,
+        [(owner.clone(), none.clone()), (teen.clone(), pin)]
+    );
+    let (status, all) = send(&app, get_req("/api/v1/profiles/enumerate")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(rows(all).len(), 3, "the console sees every profile");
+    let (_, console) = send(&app, get_req("/api/v1/profiles")).await;
+    assert_eq!(console.as_array().unwrap().len(), 3);
+}
+
 /// Enumerate marks the profile the asking device's old seat became, and only for that device.
 #[tokio::test]
 async fn enumerate_marks_the_devices_old_seat() {
