@@ -93,13 +93,15 @@ const HAIRLINE = "1px";
 const SQUARE: CSSProperties = { borderRadius: 0, minWidth: 0 };
 
 /** The rows of one group, drawn as a single list. */
-export const HostList: FC<{ children: ReactNode }> = ({ children }) => (
-  <PanelSectionRow>
-    <div style={{ display: "flex", flexDirection: "column", gap: HAIRLINE, borderRadius: "3px", overflow: "hidden" }}>
-      {children}
-    </div>
-  </PanelSectionRow>
-);
+export const HostList: FC<{ children: ReactNode }> = ({ children }) => {
+  return (
+    <PanelSectionRow>
+      <div style={{ display: "flex", flexDirection: "column", gap: HAIRLINE, borderRadius: "3px", overflow: "hidden" }}>
+        {children}
+      </div>
+    </PanelSectionRow>
+  );
+};
 
 /** A profile row: a check on the one this Deck plays as, its picture, its name, its note. */
 const ProfileItem: FC<{ profile: HostProfile; picked: boolean }> = ({ profile: p, picked }) => {
