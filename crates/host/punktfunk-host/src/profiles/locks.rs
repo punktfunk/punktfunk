@@ -1,0 +1,507 @@
+//! Each profile's lock, in `profile-locks.json` beside `profiles.json` (`pf_seats::locks`). The
+//! box's own host, the plain host or the door, is its one writer, owner-only; a seat host follows
+//! the box's file read only, a Linux one through the supervisor's copy that holds no PIN.
+//!
+//! A file that is there and can't be read locks every profile, refuses every edit, and is logged.
+//! A file that isn't there locks nothing. Wrong PINs count per device as an account password's
+//! do, and [`PROFILE_FAILURES`] per profile over all devices.
+
+use super::{EditError, Profiles};
+use pf_seats::attempts::{Attempts, Outcome, Target};
+use pf_seats::ipc::Device;
+use pf_seats::locks::{Lock, Locks, Opens, PinHash};
+use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex, MutexGuard};
+use std::time::{Duration, Instant, SystemTime};
+
+/// Wrong PINs one profile takes in 15 minutes, over all devices: about 960 tries a day.
+const PROFILE_FAILURES: usize = 10;
+
+pub(crate) struct LockStore {
+    state: Mutex<State>,
+    attempts: Mutex<Attempts>,
+}
+
+struct State {
+    path: PathBuf,
+    /// `unreadable` when the file is there and didn't read.
+    locks: Locks,
+    /// The box's file on a seat host: never written, re-read when its mtime moves.
+    read_only: bool,
+    stamp: Option<SystemTime>,
+}
+
+/// How a PIN try ended.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum PinAnswer {
+    /// Right: the device is on the list.
+    Opened,
+    Wrong,
+    /// Too many wrong PINs, from this device or for this profile: try again after this.
+    Wait(Duration),
+    /// The profile takes no PIN now.
+    NoPin,
+    /// The list is full.
+    Full,
+    /// Right, and the list couldn't be saved.
+    NotSaved,
+}
+
+impl LockStore {
+    /// `path` is the file; `read_only` on a seat host.
+    pub(crate) fn open(path: PathBuf, read_only: bool) -> Self {
+        let locks = read(&path, read_only);
+        LockStore {
+            state: Mutex::new(State {
+                stamp: read_only.then(|| mtime(&path)).flatten(),
+                path,
+                locks,
+                read_only,
+            }),
+            attempts: Mutex::new(Attempts::with_cap(PROFILE_FAILURES)),
+        }
+    }
+
+    /// The state, re-read first on a seat host when the box's file changed.
+    fn lock(&self) -> MutexGuard<'_, State> {
+        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        if state.read_only {
+            let now = mtime(&state.path);
+            if now != state.stamp {
+                state.locks = read(&state.path, true);
+                state.stamp = now;
+            }
+        }
+        state
+    }
+
+    fn attempts(&self) -> MutexGuard<'_, Attempts> {
+        self.attempts.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// What device `fp` needs to open profile `id` now. A seat host never takes a PIN.
+    pub(crate) fn opens(&self, id: &str, fp: Option<&str>) -> Opens {
+        let state = self.lock();
+        match state.locks.opens(id, fp, crate::clock::unix_secs()) {
+            Opens::Pin if state.read_only => Opens::No,
+            opens => opens,
+        }
+    }
+
+    /// Whether any profile is locked, or the file can't be read.
+    pub(crate) fn any_locked(&self) -> bool {
+        let state = self.lock();
+        state.locks.unreadable || state.locks.profiles.values().any(|l| l.locked)
+    }
+
+    /// Profile `id`'s lock as it is now, its expired presence dropped; open when it has none.
+    pub(crate) fn get(&self, id: &str) -> Lock {
+        let mut lock = self
+            .lock()
+            .locks
+            .profiles
+            .get(id)
+            .cloned()
+            .unwrap_or_default();
+        lock.list.expire(crate::clock::unix_secs());
+        lock
+    }
+
+    /// Whether the file is there and can't be read.
+    pub(crate) fn unreadable(&self) -> bool {
+        self.lock().locks.unreadable
+    }
+
+    /// Wrong PINs for profile `id` in the last 15 minutes, over all devices.
+    pub(crate) fn failures(&self, id: &str) -> usize {
+        let target = Target {
+            device: None,
+            account: Some(id),
+        };
+        self.attempts().failures(target, Instant::now()).1
+    }
+
+    /// Applies `change` to profile `id`'s lock, its expired presence dropped, and saves the file
+    /// when that changed it. Refused on a seat host and while the file can't be read.
+    pub(crate) fn edit<T>(
+        &self,
+        id: &str,
+        change: impl FnOnce(&mut Lock, i64) -> T,
+    ) -> Result<T, EditError> {
+        let mut state = self.lock();
+        if state.read_only {
+            return Err(EditError::Store(anyhow::anyhow!(
+                "profile locks are the box's; a seat host never edits them"
+            )));
+        }
+        if state.locks.unreadable {
+            return Err(EditError::Store(anyhow::anyhow!(
+                "{} did not read; fix or remove it before changing a profile's lock",
+                state.path.display()
+            )));
+        }
+        let now = crate::clock::unix_secs();
+        let mut next = state.locks.clone();
+        let lock = next.profiles.entry(id.to_string()).or_default();
+        lock.list.expire(now);
+        let out = change(lock, now);
+        if *lock == Lock::default() {
+            next.profiles.remove(id);
+        }
+        if next != state.locks {
+            next.version = 1;
+            let bytes = serde_json::to_vec_pretty(&next).map_err(|e| EditError::Store(e.into()))?;
+            pf_paths::replace_secret_file(&state.path, &bytes).map_err(|e| {
+                EditError::Store(anyhow::anyhow!("save {}: {e}", state.path.display()))
+            })?;
+            state.locks = next;
+        }
+        Ok(out)
+    }
+
+    /// Drops profile `id`'s lock: the profile is gone.
+    pub(crate) fn forget(&self, id: &str) {
+        let known = self.lock().locks.profiles.contains_key(id);
+        if known {
+            if let Err(e) = self.edit(id, |lock, _| *lock = Lock::default()) {
+                tracing::warn!(profile = %id, error = %e, "removed profile's lock not dropped");
+            }
+        }
+    }
+
+    /// Checks `pin` for `device` on profile `id` within the attempt limits; right, the device
+    /// joins the list, for now or, with `stay`, until it is signed out. Blocking: the hash is
+    /// slow. Nothing logged holds the PIN.
+    pub(crate) fn try_pin(&self, id: &str, device: &Device, pin: &str, stay: bool) -> PinAnswer {
+        let hash = {
+            let state = self.lock();
+            let lock = state.locks.profiles.get(id).filter(|l| l.locked);
+            let usable = !state.read_only && !state.locks.unreadable;
+            match lock.and_then(|l| l.pin.clone()).filter(|_| usable) {
+                Some(hash) => hash,
+                None => return PinAnswer::NoPin,
+            }
+        };
+        let fp = device.fingerprint.as_str();
+        let target = Target {
+            device: Some((id, fp)),
+            account: Some(id),
+        };
+        let admitted = self.attempts().admit(target, Instant::now());
+        let ticket = match admitted {
+            Ok(ticket) => ticket,
+            Err(wait) => {
+                audit(
+                    id,
+                    fp,
+                    "locked_out",
+                    self.attempts().failures(target, Instant::now()),
+                );
+                return PinAnswer::Wait(wait);
+            }
+        };
+        let right = hash.verify(pin);
+        let outcome = if right {
+            Outcome::Passed
+        } else {
+            Outcome::Failed
+        };
+        let counts = {
+            let mut attempts = self.attempts();
+            attempts.settle(target, ticket, outcome, Instant::now());
+            attempts.failures(target, Instant::now())
+        };
+        if !right {
+            audit(id, fp, "wrong_pin", counts);
+            return PinAnswer::Wrong;
+        }
+        let granted = self.edit(id, |lock, now| {
+            // The PIN changed while this one was checked: it opens nothing.
+            if lock.pin.as_ref() != Some(&hash) || !lock.locked {
+                return PinAnswer::NoPin;
+            }
+            match lock.admit(device, now, stay) {
+                true => PinAnswer::Opened,
+                false => PinAnswer::Full,
+            }
+        });
+        let answer = granted.unwrap_or_else(|e| {
+            tracing::warn!(profile = %id, error = %e, "device a PIN let in not saved");
+            PinAnswer::NotSaved
+        });
+        let result = match answer {
+            PinAnswer::Opened => "opened",
+            PinAnswer::Full => "list_full",
+            _ => "not_saved",
+        };
+        audit(id, fp, result, counts);
+        answer
+    }
+
+    /// `fp` connects again to profile `id`: a presence that was ending lasts again. Whether the
+    /// profile is locked and lists the device, so its leaving is to be told.
+    pub(crate) fn rejoin(&self, id: &str, fp: &str) -> bool {
+        let listed = {
+            let state = self.lock();
+            let lock = state.locks.profiles.get(id).filter(|l| l.locked);
+            !state.read_only
+                && lock.is_some_and(|l| l.admitted(crate::clock::unix_secs()).contains(fp))
+        };
+        listed
+            && self
+                .edit(id, |lock, now| lock.list.rejoin(fp, now))
+                .unwrap_or_else(|e| {
+                    tracing::warn!(profile = %id, error = %e, "returning device not saved");
+                    true
+                })
+    }
+
+    /// `fp` left profile `id`: a presence from a PIN ends after its grace.
+    fn left(&self, id: &str, fp: &str) {
+        let edited = self.edit(id, |lock, now| lock.list.left(fp, now));
+        if let Err(e) = edited {
+            tracing::warn!(profile = %id, error = %e, "departed device not saved");
+        }
+    }
+}
+
+/// One line per PIN try: the profile, the device, how it ended and the failures counted. Never
+/// the PIN.
+fn audit(id: &str, fp: &str, result: &str, (device, profile): (u32, usize)) {
+    tracing::info!(
+        target: "punktfunk::audit",
+        profile = %id,
+        device = %fp,
+        result,
+        device_failures = device,
+        profile_failures = profile,
+        "profile PIN checked"
+    );
+}
+
+fn mtime(path: &Path) -> Option<SystemTime> {
+    std::fs::metadata(path).and_then(|m| m.modified()).ok()
+}
+
+/// The file at `path`: none when it isn't there, every profile locked when it can't be read. A
+/// file a non-admin planted before the box host's first run is quarantined: none.
+fn read(path: &Path, read_only: bool) -> Locks {
+    if !read_only && crate::planted::quarantine_planted_secret(path) {
+        return Locks::default();
+    }
+    let read = match std::fs::read(path) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Locks::default(),
+        Err(e) => Err(e.to_string()),
+        Ok(bytes) => Locks::parse(&bytes).ok_or_else(|| "not a lock file".to_string()),
+    };
+    read.unwrap_or_else(|error| {
+        tracing::error!(path = %path.display(), %error,
+            "profile lock file unreadable; every profile is locked until it is fixed");
+        Locks {
+            unreadable: true,
+            ..Locks::default()
+        }
+    })
+}
+
+/// Each (profile, device) a session holds a presence on, and how many sessions. The last to go
+/// starts the device's grace, under this lock, so a grace never lands after the rejoin that
+/// followed it.
+static HELD: Mutex<BTreeMap<(String, String), u32>> = Mutex::new(BTreeMap::new());
+
+fn held() -> MutexGuard<'static, BTreeMap<(String, String), u32>> {
+    HELD.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// A session's hold on a device's place in a locked profile. Dropped by the last session, the
+/// device's presence from a PIN ends after its grace. Drop writes the file: blocking.
+pub(crate) struct Presence {
+    profiles: Arc<Profiles>,
+    key: (String, String),
+}
+
+impl Presence {
+    /// `fp`'s hold on profile `id`, when the profile is locked and lists it: its presence lasts
+    /// while this is held.
+    pub(crate) fn join(profiles: &Arc<Profiles>, id: &str, fp: &str) -> Option<Presence> {
+        let fp = fp.to_ascii_lowercase();
+        let key = (id.to_string(), fp);
+        let mut held = held();
+        if !profiles.locks.rejoin(&key.0, &key.1) {
+            return None;
+        }
+        *held.entry(key.clone()).or_insert(0) += 1;
+        Some(Presence {
+            profiles: Arc::clone(profiles),
+            key,
+        })
+    }
+}
+
+impl Drop for Presence {
+    fn drop(&mut self) {
+        let mut held = held();
+        match held.get_mut(&self.key) {
+            Some(n) if *n > 1 => *n -= 1,
+            _ => {
+                held.remove(&self.key);
+                self.profiles.locks.left(&self.key.0, &self.key.1);
+            }
+        }
+    }
+}
+
+/// `pin` hashed for storing, or why not. Blocking: the hash is slow.
+pub(crate) fn hash_pin(pin: &str) -> Result<PinHash, EditError> {
+    if !pf_seats::locks::valid_pin(pin) {
+        return Err(EditError::Invalid("A PIN is 4 to 8 digits".into()));
+    }
+    PinHash::new(pin).ok_or_else(|| EditError::Store(anyhow::anyhow!("draw a salt for the PIN")))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const KID: &str = "c1d000000001";
+
+    fn device(n: u8) -> Device {
+        Device {
+            fingerprint: hex::encode([n; 32]),
+            name: format!("Device {n}"),
+        }
+    }
+
+    /// The box's store and its file in a dir of its own.
+    fn store() -> (LockStore, PathBuf) {
+        let path = crate::test_support::scratch().join(pf_seats::locks::FILE);
+        (LockStore::open(path.clone(), false), path)
+    }
+
+    /// No file locks nothing. A locked profile opens for its list alone, and the file the box
+    /// writes is its user's alone.
+    #[test]
+    fn a_locked_profile_opens_for_its_list_alone() {
+        let (locks, path) = store();
+        let (tv, phone) = (device(1), device(2));
+        assert_eq!(locks.opens(KID, Some(&tv.fingerprint)), Opens::Yes);
+        assert!(!path.exists(), "an open profile writes nothing");
+        locks
+            .edit(KID, |lock, now| {
+                lock.locked = true;
+                lock.admit(&tv, now, true)
+            })
+            .unwrap();
+        assert_eq!(locks.opens(KID, Some(&tv.fingerprint)), Opens::Yes);
+        assert_eq!(locks.opens(KID, Some(&phone.fingerprint)), Opens::No);
+        let other = locks.opens("0123456789ab", Some(&phone.fingerprint));
+        assert_eq!(other, Opens::Yes);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(&path).unwrap().permissions().mode();
+            assert_eq!(mode & 0o777, 0o600);
+        }
+        let again = LockStore::open(path, false);
+        assert_eq!(again.opens(KID, Some(&phone.fingerprint)), Opens::No);
+        locks.forget(KID);
+        assert_eq!(locks.opens(KID, Some(&phone.fingerprint)), Opens::Yes);
+    }
+
+    /// A file that is there and doesn't read locks every profile and takes no edit.
+    #[test]
+    fn a_file_that_does_not_read_locks_everything() {
+        let bad: [&[u8]; 2] = [
+            b"not json",
+            br#"{"profiles":{"x":{"devices":[{"fingerprint":"AB"}]}}}"#,
+        ];
+        for bytes in bad {
+            let path = crate::test_support::scratch().join(pf_seats::locks::FILE);
+            std::fs::write(&path, bytes).unwrap();
+            let locks = LockStore::open(path.clone(), false);
+            assert!(locks.unreadable() && locks.any_locked());
+            assert_eq!(locks.opens(KID, Some(&device(1).fingerprint)), Opens::No);
+            assert!(locks.edit(KID, |lock, _| lock.locked = false).is_err());
+            assert_eq!(std::fs::read(&path).unwrap(), bytes, "kept as it was");
+        }
+    }
+
+    /// A seat host follows the box's file, writes nothing and never takes a PIN.
+    #[test]
+    fn a_seat_follows_the_box_and_takes_no_pin() {
+        let (locks, path) = store();
+        let seat = LockStore::open(path.clone(), true);
+        let tv = device(1).fingerprint;
+        assert_eq!(seat.opens(KID, Some(&tv)), Opens::Yes);
+        locks
+            .edit(KID, |lock, _| {
+                lock.locked = true;
+                lock.pin = PinHash::new("2468");
+            })
+            .unwrap();
+        // A later stamp than the seat read, whatever the filesystem's clock granularity.
+        let later = SystemTime::now() + Duration::from_secs(5);
+        let file = std::fs::File::options().write(true).open(&path).unwrap();
+        file.set_modified(later).unwrap();
+        assert_eq!(locks.opens(KID, Some(&tv)), Opens::Pin);
+        assert_eq!(
+            seat.opens(KID, Some(&tv)),
+            Opens::No,
+            "the box takes the PIN"
+        );
+        assert!(seat.edit(KID, |lock, _| lock.locked = false).is_err());
+        let tried = seat.try_pin(KID, &device(1), "2468", false);
+        assert_eq!(tried, PinAnswer::NoPin);
+    }
+
+    /// A removed profile's lock goes with it, a seat's once its seat is gone; and while
+    /// `profiles.json` doesn't read, the owner's stand-in opens nothing once a profile is locked.
+    #[test]
+    fn a_lock_goes_with_its_profile() {
+        const SHARED: &str = "c1d000000002";
+        let dir = crate::test_support::scratch();
+        let file = serde_json::json!({"version": 1, "profiles": [
+            {"id": "4f1c3a9b0e27", "display_name": "Enrico", "os_account": {"kind": "operator"}},
+            {"id": KID, "display_name": "Kid", "os_account": {"kind": "seat", "seat": "ab".repeat(16)}},
+            {"id": SHARED, "display_name": "Sam", "os_account": {"kind": "operator"}},
+        ]});
+        std::fs::write(dir.join("profiles.json"), file.to_string()).unwrap();
+        let profiles = Profiles::load_with(Some(dir.join("profiles.json")), None);
+        let tv = device(1).fingerprint;
+        for id in [KID, SHARED] {
+            profiles
+                .locks()
+                .edit(id, |lock, _| lock.locked = true)
+                .unwrap();
+            assert_eq!(profiles.opens(id, Some(&tv)), Opens::No);
+        }
+        profiles.delete(SHARED, false).unwrap();
+        assert_eq!(profiles.opens(SHARED, Some(&tv)), Opens::Yes);
+        let seat = profiles.delete(KID, false).unwrap();
+        assert_eq!(
+            profiles.opens(KID, Some(&tv)),
+            Opens::No,
+            "until its seat goes"
+        );
+        profiles.restore(seat, false).unwrap();
+        assert_eq!(profiles.opens(KID, Some(&tv)), Opens::No, "restored locked");
+        profiles.delete(KID, false).unwrap();
+        profiles.erase(KID);
+        assert_eq!(profiles.opens(KID, Some(&tv)), Opens::Yes);
+
+        let stand_in = super::super::OPERATOR_PROFILE_ID;
+        std::fs::write(dir.join("profiles.json"), "not json").unwrap();
+        let garbled = Profiles::load_with(Some(dir.join("profiles.json")), None);
+        assert_eq!(
+            garbled.opens(stand_in, Some(&tv)),
+            Opens::Yes,
+            "nothing locked"
+        );
+        garbled
+            .locks()
+            .edit(KID, |lock, _| lock.locked = true)
+            .unwrap();
+        assert_eq!(garbled.opens(stand_in, Some(&tv)), Opens::No);
+    }
+}
