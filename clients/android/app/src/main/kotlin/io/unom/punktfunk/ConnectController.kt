@@ -421,6 +421,11 @@ internal class ConnectController(
      * streams only for a link. Cancel returns the UI at once; a late answer is dropped.
      */
     fun requestAccess(target: PendingTrust) {
+        // A request names the fingerprint the host must show. A typed host has none: PIN.
+        val pinHex = target.advertisedFp?.takeIf { it.isNotBlank() } ?: run {
+            pendingTrust = target.copy(kind = PendingTrust.Kind.PAIR)
+            return
+        }
         pendingTrust = null
         val id = requireIdentity() ?: return
         val req = RequestAccessState(target)
@@ -428,9 +433,7 @@ internal class ConnectController(
         connecting = true
         status = null
         scope.launch {
-            // Pin the advertised fingerprint for a discovered host (defence against an impostor while
-            // we wait); a manually-typed host has none, so trust-on-first-use.
-            val pinHex = target.advertisedFp ?: ""
+            // The advertised fingerprint is the pin: an impostor cannot answer while we wait.
             val paired = withContext(Dispatchers.IO) {
                 services.requestAccess(target.host, target.port, id, pinHex, deviceName(context))
             }
