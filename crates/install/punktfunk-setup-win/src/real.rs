@@ -36,13 +36,8 @@ impl PayloadSource for DirPayload {
         let host = crate::payload::manifest_at(&self.root)?.artifact == Artifact::Host;
         let program_files = std::env::var("ProgramFiles").ok();
         if host && crate::pack::needs_own_acl(&dest.to_string_lossy(), program_files.as_deref()) {
-            crate::bootstrap::lock_dir(dest, HOST_DIR_SDDL, &HOST_DIR_GRANTS).map_err(|e| {
-                format!(
-                    "Couldn't make {} writable by administrators only. Pick another folder, \
-                     then run setup again — {e}",
-                    dest.display()
-                )
-            })?;
+            crate::bootstrap::lock_dir(dest, HOST_DIR_SDDL, &HOST_DIR_GRANTS)
+                .map_err(|e| pf_l10n::tools::setup_win_install_dir_failed(dest.display(), e))?;
         }
         let mut deferred = Vec::new();
         crate::pack::deploy_tree(&app, dest, &mut deferred)?;

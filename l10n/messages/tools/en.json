@@ -286,6 +286,8 @@
 		}
 	],
 	"setup_win_app_runtime_failed": "Couldn't install the Windows App Runtime — install it manually: {url}",
+	"setup_win_data_dir_failed": "Couldn't make {dir} writable by administrators only. If another account put things there before Punktfunk was installed, delete it, then run setup again — {cause}",
+	"setup_win_install_dir_failed": "Couldn't make {dir} writable by administrators only. Pick another folder, then run setup again — {cause}",
 	"wizard_step_welcome": "Welcome",
 	"wizard_step_configure": "Configure",
 	"wizard_step_network": "Network",
