@@ -54,6 +54,7 @@
 	"apierr_plugin_needs_platform": "Store refusal. {platforms} is a list of OS names joined by the app (e.g. \"linux, windows\").",
 	"apierr_profile_limit": "Refusal to add a profile. {count} is PROFILES_MAX.",
 	"apierr_profile_lock_shared": "Refusal to lock a profile that plays the owner's desktop. {owner} is the owner profile's name (data). \"That profile\" is the owner's.",
+	"apierr_screen_choice_not_granted": "Refusal when a device picks which host screen it streams, or how it uses the host's monitors, without the access 'Choose its screen'. The operator decides for it.",
 	"apierr_title_in_use": "Refusal to uninstall a game that is running. {title} is the game's title (data).",
 	"apierr_unlock_locked_out_device_minutes": "Profile unlock lockout. {count} is seconds or minutes left, rounded up.",
 	"apierr_unlock_locked_out_device_seconds": "Profile unlock lockout. {count} is seconds or minutes left, rounded up.",

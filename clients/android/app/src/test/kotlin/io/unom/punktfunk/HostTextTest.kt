@@ -50,6 +50,25 @@ class HostTextTest {
         }
     }
 
+    /**
+     * The file's `screen_wish` rows: the stream-start line for the preset's wish and the echo's
+     * reason, or nothing. A shared screen is the one line whatever the echo says.
+     */
+    @Test
+    fun aLostScreenWishWordsAsItsSentence() {
+        val reasons = listOf("as_asked", "not_allowed", "monitors_held", "unavailable", "no_monitors")
+        val rows = JSONObject(File("../../shared/host-text-vectors.json").readText()).getJSONArray("screen_wish")
+        assertTrue(rows.length() >= 4)
+        for (i in 0 until rows.length()) {
+            val row = rows.getJSONObject(i)
+            val wish = if (row.isNull("wish")) null else row.getString("wish")
+            val reason = reasons.indexOf(row.getString("reason"))
+            val want = if (row.isNull("sentence")) null else row.getString("sentence")
+            assertEquals(row.toString(), want, DisplayTargets.startLine(false, wish, reason, res))
+        }
+        assertEquals(res.getString(R.string.notice_shared_screen), DisplayTargets.startLine(true, "second", 1, res))
+    }
+
     /** A newer host may send more values than this build's message holds, or fewer. */
     @Test
     fun valuesThatDoNotFitTheMessageReadAsTheHostsEnglish() {

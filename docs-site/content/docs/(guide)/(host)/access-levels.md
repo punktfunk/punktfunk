@@ -17,7 +17,7 @@ device's level and time left. Pairing a device again keeps its access.
 
 | Access level | The device can |
 |---|---|
-| **Full control** | Do everything: keyboard, mouse, controllers, clipboard, microphone, launching games, host power, managing games. A plain **Approve** gives this. |
+| **Full control** | Do everything: keyboard, mouse, controllers, clipboard, microphone, launching games, host power, managing games, choosing its screen. A plain **Approve** gives this. |
 | **Controller only** | Send controller input. Its pads appear as extra controllers, with rumble and pad audio. |
 | **View only** | Watch and listen, and send nothing. |
 
@@ -37,6 +37,7 @@ Under **Advanced** in the access dialog:
 | **Launch games** | Starting a title from the [library](/docs/game-library) when connecting. Without it, such a connect is refused with a message; the library stays visible. |
 | **Host power** | Sleep, restart and shut down the host from the client ([Host power](/docs/host-power)). |
 | **Manage games** | Pausing a title's download and removing a downloaded title from the client's library. **Launch games** already starts a download. |
+| **Choose its screen** | Picking the screen the device streams, in its own app ([Screen](/docs/client-settings#screen)). Without it the device gets what **Displays** or its **Display settings…** say. |
 
 **Controller only** leaves out **Launch games**, so you choose what runs. Tick it to let a guest
 pick games.

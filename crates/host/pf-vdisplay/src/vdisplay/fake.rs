@@ -31,6 +31,7 @@ pub(crate) enum Call {
     SetGamescopeRoute(Option<crate::GamescopeRoute>),
     SetSessionIsolation(Option<crate::SessionIsolation>),
     SetClientIdentity(Option<[u8; 32]>),
+    SetTopology(Option<crate::policy::Topology>),
     SetJoinLive(bool),
     SetQuitFlag,
     SetClientHdr(Option<pf_frame::HdrMeta>),
@@ -90,6 +91,8 @@ pub(crate) struct Script {
     pub(crate) client_fp: Option<[u8; 32]>,
     /// `join_live`; `join_cast` then casts the node it names.
     pub(crate) join_live: bool,
+    /// `topology`: what the next create applies.
+    pub(crate) topology: Option<crate::policy::Topology>,
 }
 
 struct Shared {
@@ -150,6 +153,7 @@ impl FakeDisplay {
                     identity_slot: None,
                     client_fp: None,
                     join_live: false,
+                    topology: None,
                 },
                 calls: Vec::new(),
                 nodes: 0,
@@ -283,6 +287,14 @@ impl VirtualDisplay for FakeDisplay {
 
     fn set_client_identity(&mut self, fingerprint: Option<[u8; 32]>) {
         self.log(Call::SetClientIdentity(fingerprint));
+    }
+
+    fn set_topology(&mut self, topology: Option<crate::policy::Topology>) {
+        self.log(Call::SetTopology(topology));
+    }
+
+    fn topology(&self) -> Option<crate::policy::Topology> {
+        self.answer(|s| s.topology)
     }
 
     fn set_join_live(&mut self, on: bool) {
@@ -534,6 +546,8 @@ mod tests {
             mic_source: None,
         };
         let params = crate::SessionParams {
+            screen: None,
+            topology: Some(crate::policy::Topology::Extend),
             client_fp: Some([7; 32]),
             client_hdr: Some(pf_frame::HdrMeta::default()),
             hdr: true,
@@ -549,6 +563,7 @@ mod tests {
         let calls = fake.take_calls();
         let want = [
             Call::SetClientIdentity(Some([7; 32])),
+            Call::SetTopology(Some(crate::policy::Topology::Extend)),
             Call::SetJoinLive(true),
             Call::SetClientHdr(Some(pf_frame::HdrMeta::default())),
             Call::SetHdr(true),

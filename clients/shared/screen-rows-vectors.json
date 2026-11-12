@@ -1,0 +1,298 @@
+{
+  "$comment": "GET /display/targets answers -> the Screen section every client draws, pinned by pf-client-core display_targets (Targets::rows, note, card_line) and the Swift and Kotlin copies. `rows` is in draw order. `put` is the PUT /display/clients/{fp} body picking the row sends, null when it sends nothing: the row is checked or not pickable. `header` heads a group from that row on. Under a `note` only the checked row is left, greyed. `card` is the host card's line.",
+  "$text": "A text slot (label, hint, header, reason, note, card): null is nothing; a string is the host's own words, shown as sent; {\"key\": k} is the client message k; \"args\" fills its placeholders by name.",
+  "cases": [
+    {
+      "name": "three roles, the device's pick a role, a taken and an off monitor",
+      "targets": {"locked": false, "may_choose": true, "host_default": "own", "yours": "own", "targets": [{"id": "own", "label": "Own screen"}, {"id": "HDMI-A-1", "label": "LG TV", "connector": "HDMI-A-1", "mode": "3840x2160@60", "primary": true, "enabled": true, "in_use_by": null}, {"id": "DP-1", "label": "DELL U2723QE", "connector": "DP-1", "mode": "2560x1440@60", "primary": false, "enabled": true, "in_use_by": "Ben's Apple TV"}, {"id": "DP-2", "label": "Samsung Odyssey", "connector": "DP-2", "mode": "3840x2160@60", "primary": false, "enabled": false, "in_use_by": null}], "role": {"yours": "second", "host_default": "only", "offered": ["only", "main", "second"]}},
+      "rows": [
+        {"kind": "role", "id": "only", "label": {"key": "screen_role_only"}, "hint": {"key": "screen_role_only_hint"}, "detail": "", "header": null, "checked": false, "pickable": true, "reason": null, "put": {"screen": "own", "topology": "exclusive"}},
+        {"kind": "role", "id": "main", "label": {"key": "screen_role_main"}, "hint": {"key": "screen_role_main_hint"}, "detail": "", "header": null, "checked": false, "pickable": true, "reason": null, "put": {"screen": "own", "topology": "primary"}},
+        {"kind": "role", "id": "second", "label": {"key": "screen_role_second"}, "hint": {"key": "screen_role_second_hint"}, "detail": "", "header": null, "checked": true, "pickable": true, "reason": null, "put": null},
+        {"kind": "monitor", "id": "HDMI-A-1", "label": "LG TV", "hint": null, "detail": "HDMI-A-1 · 3840x2160@60", "header": {"key": "screen_show_monitor"}, "checked": false, "pickable": true, "reason": null, "put": {"screen": {"monitor": "HDMI-A-1"}}},
+        {"kind": "monitor", "id": "DP-1", "label": "DELL U2723QE", "hint": null, "detail": "DP-1 · 2560x1440@60", "header": null, "checked": false, "pickable": false, "reason": {"key": "screen_in_use", "args": {"device": "Ben's Apple TV"}}, "put": null},
+        {"kind": "monitor", "id": "DP-2", "label": "Samsung Odyssey", "hint": null, "detail": "DP-2 · 3840x2160@60", "header": null, "checked": false, "pickable": false, "reason": {"key": "screen_off"}, "put": null}
+      ],
+      "note": null,
+      "card": {"key": "screen_role_second"}
+    },
+    {
+      "name": "two roles offered, no main, following the host",
+      "targets": {"may_choose": true, "host_default": "own", "yours": null, "targets": [{"id": "own", "label": "Own screen"}, {"id": "HDMI-A-1", "label": "LG TV", "connector": "HDMI-A-1", "mode": "3840x2160@60", "primary": true, "enabled": true, "in_use_by": null}], "role": {"yours": null, "host_default": "only", "offered": ["only", "second"]}},
+      "rows": [
+        {"kind": "role", "id": "only", "label": {"key": "screen_role_only"}, "hint": {"key": "screen_role_only_hint"}, "detail": "", "header": null, "checked": true, "pickable": true, "reason": null, "put": null},
+        {"kind": "role", "id": "second", "label": {"key": "screen_role_second"}, "hint": {"key": "screen_role_second_hint"}, "detail": "", "header": null, "checked": false, "pickable": true, "reason": null, "put": {"screen": "own", "topology": "extend"}},
+        {"kind": "monitor", "id": "HDMI-A-1", "label": "LG TV", "hint": null, "detail": "HDMI-A-1 · 3840x2160@60", "header": {"key": "screen_show_monitor"}, "checked": false, "pickable": true, "reason": null, "put": {"screen": {"monitor": "HDMI-A-1"}}}
+      ],
+      "note": null,
+      "card": null
+    },
+    {
+      "name": "the device streams a monitor",
+      "targets": {"may_choose": true, "host_default": "own", "yours": {"monitor": "HDMI-A-1"}, "targets": [{"id": "own", "label": "Own screen"}, {"id": "HDMI-A-1", "label": "LG TV", "connector": "HDMI-A-1", "mode": "3840x2160@60", "primary": true, "enabled": true, "in_use_by": null}, {"id": "DP-2", "label": "Samsung Odyssey", "connector": "DP-2", "mode": "3840x2160@60", "primary": false, "enabled": false, "in_use_by": null}], "role": {"yours": null, "host_default": "only", "offered": ["only", "main", "second"]}},
+      "rows": [
+        {"kind": "role", "id": "only", "label": {"key": "screen_role_only"}, "hint": {"key": "screen_role_only_hint"}, "detail": "", "header": null, "checked": false, "pickable": true, "reason": null, "put": {"screen": "own", "topology": "exclusive"}},
+        {"kind": "role", "id": "main", "label": {"key": "screen_role_main"}, "hint": {"key": "screen_role_main_hint"}, "detail": "", "header": null, "checked": false, "pickable": true, "reason": null, "put": {"screen": "own", "topology": "primary"}},
+        {"kind": "role", "id": "second", "label": {"key": "screen_role_second"}, "hint": {"key": "screen_role_second_hint"}, "detail": "", "header": null, "checked": false, "pickable": true, "reason": null, "put": {"screen": "own", "topology": "extend"}},
+        {"kind": "monitor", "id": "HDMI-A-1", "label": "LG TV", "hint": null, "detail": "HDMI-A-1 · 3840x2160@60", "header": {"key": "screen_show_monitor"}, "checked": true, "pickable": true, "reason": null, "put": null},
+        {"kind": "monitor", "id": "DP-2", "label": "Samsung Odyssey", "hint": null, "detail": "DP-2 · 3840x2160@60", "header": null, "checked": false, "pickable": false, "reason": {"key": "screen_off"}, "put": null}
+      ],
+      "note": null,
+      "card": {"key": "screen_streams", "args": {"screen": "LG TV"}}
+    },
+    {
+      "name": "yours null follows the host's main screen; offered in any order",
+      "targets": {"host_default": "own", "yours": null, "targets": [{"id": "own", "label": "Own screen"}, {"id": "HDMI-A-1", "label": "LG TV", "connector": "HDMI-A-1", "mode": "3840x2160@60", "primary": true, "enabled": true, "in_use_by": null}], "role": {"yours": null, "host_default": "main", "offered": ["second", "main", "only"]}},
+      "rows": [
+        {"kind": "role", "id": "only", "label": {"key": "screen_role_only"}, "hint": {"key": "screen_role_only_hint"}, "detail": "", "header": null, "checked": false, "pickable": true, "reason": null, "put": {"screen": "own", "topology": "exclusive"}},
+        {"kind": "role", "id": "main", "label": {"key": "screen_role_main"}, "hint": {"key": "screen_role_main_hint"}, "detail": "", "header": null, "checked": true, "pickable": true, "reason": null, "put": null},
+        {"kind": "role", "id": "second", "label": {"key": "screen_role_second"}, "hint": {"key": "screen_role_second_hint"}, "detail": "", "header": null, "checked": false, "pickable": true, "reason": null, "put": {"screen": "own", "topology": "extend"}},
+        {"kind": "monitor", "id": "HDMI-A-1", "label": "LG TV", "hint": null, "detail": "HDMI-A-1 · 3840x2160@60", "header": {"key": "screen_show_monitor"}, "checked": false, "pickable": true, "reason": null, "put": {"screen": {"monitor": "HDMI-A-1"}}}
+      ],
+      "note": null,
+      "card": {"key": "screen_role_main"}
+    },
+    {
+      "name": "may_choose false: the checked row alone, greyed",
+      "targets": {"may_choose": false, "host_default": "own", "yours": "own", "targets": [{"id": "own", "label": "Own screen"}, {"id": "HDMI-A-1", "label": "LG TV", "connector": "HDMI-A-1", "mode": "3840x2160@60", "primary": true, "enabled": true, "in_use_by": null}, {"id": "DP-1", "label": "DELL U2723QE", "connector": "DP-1", "mode": "2560x1440@60", "primary": false, "enabled": true, "in_use_by": "Ben's Apple TV"}], "role": {"yours": "second", "host_default": "only", "offered": ["only", "main", "second"]}},
+      "rows": [
+        {"kind": "role", "id": "second", "label": {"key": "screen_role_second"}, "hint": {"key": "screen_role_second_hint"}, "detail": "", "header": null, "checked": true, "pickable": false, "reason": null, "put": null}
+      ],
+      "note": {"key": "screen_host_decides"},
+      "card": {"key": "screen_role_second"}
+    },
+    {
+      "name": "locked outranks may_choose; the pinned monitor stays, greyed",
+      "targets": {"locked": true, "may_choose": false, "host_default": {"monitor": "HDMI-A-1"}, "yours": null, "targets": [{"id": "own", "label": "Own screen"}, {"id": "HDMI-A-1", "label": "LG TV", "connector": "HDMI-A-1", "mode": "3840x2160@60", "primary": true, "enabled": true, "in_use_by": null}], "role": {"yours": null, "host_default": "only", "offered": ["only", "main", "second"]}},
+      "rows": [
+        {"kind": "monitor", "id": "HDMI-A-1", "label": "LG TV", "hint": null, "detail": "HDMI-A-1 · 3840x2160@60", "header": null, "checked": true, "pickable": false, "reason": null, "put": null}
+      ],
+      "note": {"key": "screen_locked_hint"},
+      "card": {"key": "screen_streams", "args": {"screen": "LG TV"}}
+    },
+    {
+      "name": "the host decides and lists nothing checked: the note alone",
+      "targets": {"may_choose": false, "host_default": "own", "yours": {"monitor": "HDMI-A-2"}, "targets": [{"id": "own", "label": "Own screen"}, {"id": "HDMI-A-1", "label": "LG TV", "connector": "HDMI-A-1", "mode": "3840x2160@60", "primary": true, "enabled": true, "in_use_by": null}], "role": {"yours": null, "host_default": "only", "offered": ["only", "main", "second"]}},
+      "rows": [],
+      "note": {"key": "screen_host_decides"},
+      "card": {"key": "screen_streams", "args": {"screen": "HDMI-A-2"}}
+    },
+    {
+      "name": "no role: an older host's rows as the host lists them",
+      "targets": {"locked": false, "host_default": "own", "yours": null, "targets": [{"id": "own", "label": "Own screen"}, {"id": "HDMI-A-1", "label": "LG TV", "connector": "HDMI-A-1", "mode": "3840x2160@60", "primary": true, "enabled": true, "in_use_by": null}, {"id": "DP-1", "label": "DELL U2723QE", "connector": "DP-1", "mode": "2560x1440@60", "primary": false, "enabled": true, "in_use_by": "Ben's Apple TV"}, {"id": "DP-2", "label": "Samsung Odyssey", "connector": "DP-2", "mode": "3840x2160@60", "primary": false, "enabled": false, "in_use_by": null}]},
+      "rows": [
+        {"kind": "own", "id": "own", "label": {"key": "screen_own"}, "hint": null, "detail": "", "header": null, "checked": true, "pickable": true, "reason": null, "put": null},
+        {"kind": "monitor", "id": "HDMI-A-1", "label": "LG TV", "hint": null, "detail": "HDMI-A-1 · 3840x2160@60", "header": null, "checked": false, "pickable": true, "reason": null, "put": {"screen": {"monitor": "HDMI-A-1"}}},
+        {"kind": "monitor", "id": "DP-1", "label": "DELL U2723QE", "hint": null, "detail": "DP-1 · 2560x1440@60", "header": null, "checked": false, "pickable": false, "reason": {"key": "screen_in_use", "args": {"device": "Ben's Apple TV"}}, "put": null},
+        {"kind": "monitor", "id": "DP-2", "label": "Samsung Odyssey", "hint": null, "detail": "DP-2 · 3840x2160@60", "header": null, "checked": false, "pickable": false, "reason": {"key": "screen_off"}, "put": null}
+      ],
+      "note": null,
+      "card": null
+    },
+    {
+      "name": "no role, locked",
+      "targets": {"locked": true, "host_default": "own", "yours": {"monitor": "HDMI-A-1"}, "targets": [{"id": "own", "label": "Own screen"}, {"id": "HDMI-A-1", "label": "LG TV", "connector": "HDMI-A-1", "mode": "3840x2160@60", "primary": true, "enabled": true, "in_use_by": null}]},
+      "rows": [
+        {"kind": "monitor", "id": "HDMI-A-1", "label": "LG TV", "hint": null, "detail": "HDMI-A-1 · 3840x2160@60", "header": null, "checked": true, "pickable": false, "reason": null, "put": null}
+      ],
+      "note": {"key": "screen_locked_hint"},
+      "card": {"key": "screen_streams", "args": {"screen": "LG TV"}}
+    },
+    {
+      "name": "the device's monitor is gone from the list: nothing checked",
+      "targets": {"host_default": "own", "yours": {"monitor": "HDMI-A-2"}, "targets": [{"id": "own", "label": "Own screen"}, {"id": "HDMI-A-1", "label": "LG TV", "connector": "HDMI-A-1", "mode": "3840x2160@60", "primary": true, "enabled": true, "in_use_by": null}], "role": {"yours": null, "host_default": "only", "offered": ["only", "second"]}},
+      "rows": [
+        {"kind": "role", "id": "only", "label": {"key": "screen_role_only"}, "hint": {"key": "screen_role_only_hint"}, "detail": "", "header": null, "checked": false, "pickable": true, "reason": null, "put": {"screen": "own", "topology": "exclusive"}},
+        {"kind": "role", "id": "second", "label": {"key": "screen_role_second"}, "hint": {"key": "screen_role_second_hint"}, "detail": "", "header": null, "checked": false, "pickable": true, "reason": null, "put": {"screen": "own", "topology": "extend"}},
+        {"kind": "monitor", "id": "HDMI-A-1", "label": "LG TV", "hint": null, "detail": "HDMI-A-1 · 3840x2160@60", "header": {"key": "screen_show_monitor"}, "checked": false, "pickable": true, "reason": null, "put": {"screen": {"monitor": "HDMI-A-1"}}}
+      ],
+      "note": null,
+      "card": {"key": "screen_streams", "args": {"screen": "HDMI-A-2"}}
+    },
+    {
+      "name": "role words this build doesn't know",
+      "targets": {"host_default": "own", "yours": "own", "targets": [{"id": "own", "label": "Own screen"}, {"id": "HDMI-A-1", "label": "LG TV", "connector": "HDMI-A-1", "mode": "3840x2160@60", "primary": true, "enabled": true, "in_use_by": null}], "role": {"yours": "tablet", "host_default": "desk", "offered": ["second", "fourth", "only", "second"]}},
+      "rows": [
+        {"kind": "role", "id": "only", "label": {"key": "screen_role_only"}, "hint": {"key": "screen_role_only_hint"}, "detail": "", "header": null, "checked": true, "pickable": true, "reason": null, "put": null},
+        {"kind": "role", "id": "second", "label": {"key": "screen_role_second"}, "hint": {"key": "screen_role_second_hint"}, "detail": "", "header": null, "checked": false, "pickable": true, "reason": null, "put": {"screen": "own", "topology": "extend"}},
+        {"kind": "monitor", "id": "HDMI-A-1", "label": "LG TV", "hint": null, "detail": "HDMI-A-1 · 3840x2160@60", "header": {"key": "screen_show_monitor"}, "checked": false, "pickable": true, "reason": null, "put": {"screen": {"monitor": "HDMI-A-1"}}}
+      ],
+      "note": null,
+      "card": null
+    },
+    {
+      "name": "a role that is not an object is no role",
+      "targets": {"host_default": "own", "yours": "own", "targets": [{"id": "own", "label": "Own screen"}, {"id": "HDMI-A-1", "label": "LG TV", "connector": "HDMI-A-1", "mode": "3840x2160@60", "primary": true, "enabled": true, "in_use_by": null}], "role": "second"},
+      "rows": [
+        {"kind": "own", "id": "own", "label": {"key": "screen_own"}, "hint": null, "detail": "", "header": null, "checked": true, "pickable": true, "reason": null, "put": null},
+        {"kind": "monitor", "id": "HDMI-A-1", "label": "LG TV", "hint": null, "detail": "HDMI-A-1 · 3840x2160@60", "header": null, "checked": false, "pickable": true, "reason": null, "put": {"screen": {"monitor": "HDMI-A-1"}}}
+      ],
+      "note": null,
+      "card": null
+    }
+  ],
+  "$preset": "preset_cases: the Screen section of a card that connects with a preset pinning host_screen (Targets::rows_under, note_under, card_line_under). The preset decides when the host offers roles, leaves the pick to this device, and has what the preset names: a role it offers, or that monitor free now. Then its row alone shows, checked and greyed, under the preset's note; otherwise the section reads as without the preset. host_screen_cases: a preset editor's Host screen row (host_screen_choices) over each known host's last answer, `value` being what the overlay stores, null to clear it. starter_cases: the Second screen starter (StreamPreset::second_screen), named after the role unless a name in `taken` has it, any case, else \"Second screen N\" from 2; English.",
+  "preset_cases": [
+    {
+      "name": "the preset's role decides: its row alone, greyed, with the preset's note",
+      "targets": {"locked": false, "may_choose": true, "host_default": "own", "yours": "own", "targets": [{"id": "own", "label": "Own screen"}, {"id": "HDMI-A-1", "label": "LG TV", "connector": "HDMI-A-1", "mode": "3840x2160@60", "primary": true, "enabled": true, "in_use_by": null}, {"id": "DP-1", "label": "DELL U2723QE", "connector": "DP-1", "mode": "2560x1440@60", "primary": false, "enabled": true, "in_use_by": "Ben's Apple TV"}, {"id": "DP-2", "label": "Samsung Odyssey", "connector": "DP-2", "mode": "3840x2160@60", "primary": false, "enabled": false, "in_use_by": null}], "role": {"yours": "second", "host_default": "only", "offered": ["only", "main", "second"]}},
+      "preset": {"name": "Couch", "host_screen": "main"},
+      "rows": [
+        {"kind": "role", "id": "main", "label": {"key": "screen_role_main"}, "hint": {"key": "screen_role_main_hint"}, "detail": "", "header": null, "checked": true, "pickable": false, "reason": null, "put": null}
+      ],
+      "note": {"key": "screen_preset_decides", "args": {"preset": "Couch"}},
+      "card": {"key": "screen_role_main"}
+    },
+    {
+      "name": "the preset's free monitor decides",
+      "targets": {"locked": false, "may_choose": true, "host_default": "own", "yours": "own", "targets": [{"id": "own", "label": "Own screen"}, {"id": "HDMI-A-1", "label": "LG TV", "connector": "HDMI-A-1", "mode": "3840x2160@60", "primary": true, "enabled": true, "in_use_by": null}, {"id": "DP-1", "label": "DELL U2723QE", "connector": "DP-1", "mode": "2560x1440@60", "primary": false, "enabled": true, "in_use_by": "Ben's Apple TV"}, {"id": "DP-2", "label": "Samsung Odyssey", "connector": "DP-2", "mode": "3840x2160@60", "primary": false, "enabled": false, "in_use_by": null}], "role": {"yours": "second", "host_default": "only", "offered": ["only", "main", "second"]}},
+      "preset": {"name": "Couch", "host_screen": "monitor:HDMI-A-1"},
+      "rows": [
+        {"kind": "monitor", "id": "HDMI-A-1", "label": "LG TV", "hint": null, "detail": "HDMI-A-1 · 3840x2160@60", "header": null, "checked": true, "pickable": false, "reason": null, "put": null}
+      ],
+      "note": {"key": "screen_preset_decides", "args": {"preset": "Couch"}},
+      "card": {"key": "screen_streams", "args": {"screen": "LG TV"}}
+    },
+    {
+      "name": "the preset's only screen decides; the card's line stays silent",
+      "targets": {"locked": false, "may_choose": true, "host_default": "own", "yours": "own", "targets": [{"id": "own", "label": "Own screen"}, {"id": "HDMI-A-1", "label": "LG TV", "connector": "HDMI-A-1", "mode": "3840x2160@60", "primary": true, "enabled": true, "in_use_by": null}, {"id": "DP-1", "label": "DELL U2723QE", "connector": "DP-1", "mode": "2560x1440@60", "primary": false, "enabled": true, "in_use_by": "Ben's Apple TV"}, {"id": "DP-2", "label": "Samsung Odyssey", "connector": "DP-2", "mode": "3840x2160@60", "primary": false, "enabled": false, "in_use_by": null}], "role": {"yours": "second", "host_default": "only", "offered": ["only", "main", "second"]}},
+      "preset": {"name": "Couch", "host_screen": "only"},
+      "rows": [
+        {"kind": "role", "id": "only", "label": {"key": "screen_role_only"}, "hint": {"key": "screen_role_only_hint"}, "detail": "", "header": null, "checked": true, "pickable": false, "reason": null, "put": null}
+      ],
+      "note": {"key": "screen_preset_decides", "args": {"preset": "Couch"}},
+      "card": null
+    },
+    {
+      "name": "the preset's monitor is taken now: the card's own rows",
+      "targets": {"locked": false, "may_choose": true, "host_default": "own", "yours": "own", "targets": [{"id": "own", "label": "Own screen"}, {"id": "HDMI-A-1", "label": "LG TV", "connector": "HDMI-A-1", "mode": "3840x2160@60", "primary": true, "enabled": true, "in_use_by": null}, {"id": "DP-1", "label": "DELL U2723QE", "connector": "DP-1", "mode": "2560x1440@60", "primary": false, "enabled": true, "in_use_by": "Ben's Apple TV"}, {"id": "DP-2", "label": "Samsung Odyssey", "connector": "DP-2", "mode": "3840x2160@60", "primary": false, "enabled": false, "in_use_by": null}], "role": {"yours": "second", "host_default": "only", "offered": ["only", "main", "second"]}},
+      "preset": {"name": "Couch", "host_screen": "monitor:DP-1"},
+      "rows": [
+        {"kind": "role", "id": "only", "label": {"key": "screen_role_only"}, "hint": {"key": "screen_role_only_hint"}, "detail": "", "header": null, "checked": false, "pickable": true, "reason": null, "put": {"screen": "own", "topology": "exclusive"}},
+        {"kind": "role", "id": "main", "label": {"key": "screen_role_main"}, "hint": {"key": "screen_role_main_hint"}, "detail": "", "header": null, "checked": false, "pickable": true, "reason": null, "put": {"screen": "own", "topology": "primary"}},
+        {"kind": "role", "id": "second", "label": {"key": "screen_role_second"}, "hint": {"key": "screen_role_second_hint"}, "detail": "", "header": null, "checked": true, "pickable": true, "reason": null, "put": null},
+        {"kind": "monitor", "id": "HDMI-A-1", "label": "LG TV", "hint": null, "detail": "HDMI-A-1 · 3840x2160@60", "header": {"key": "screen_show_monitor"}, "checked": false, "pickable": true, "reason": null, "put": {"screen": {"monitor": "HDMI-A-1"}}},
+        {"kind": "monitor", "id": "DP-1", "label": "DELL U2723QE", "hint": null, "detail": "DP-1 · 2560x1440@60", "header": null, "checked": false, "pickable": false, "reason": {"key": "screen_in_use", "args": {"device": "Ben's Apple TV"}}, "put": null},
+        {"kind": "monitor", "id": "DP-2", "label": "Samsung Odyssey", "hint": null, "detail": "DP-2 · 3840x2160@60", "header": null, "checked": false, "pickable": false, "reason": {"key": "screen_off"}, "put": null}
+      ],
+      "note": null,
+      "card": {"key": "screen_role_second"}
+    },
+    {
+      "name": "the preset's main screen where the host offers none: the card's own rows",
+      "targets": {"may_choose": true, "host_default": "own", "yours": null, "targets": [{"id": "own", "label": "Own screen"}, {"id": "HDMI-A-1", "label": "LG TV", "connector": "HDMI-A-1", "mode": "3840x2160@60", "primary": true, "enabled": true, "in_use_by": null}], "role": {"yours": null, "host_default": "only", "offered": ["only", "second"]}},
+      "preset": {"name": "Couch", "host_screen": "main"},
+      "rows": [
+        {"kind": "role", "id": "only", "label": {"key": "screen_role_only"}, "hint": {"key": "screen_role_only_hint"}, "detail": "", "header": null, "checked": true, "pickable": true, "reason": null, "put": null},
+        {"kind": "role", "id": "second", "label": {"key": "screen_role_second"}, "hint": {"key": "screen_role_second_hint"}, "detail": "", "header": null, "checked": false, "pickable": true, "reason": null, "put": {"screen": "own", "topology": "extend"}},
+        {"kind": "monitor", "id": "HDMI-A-1", "label": "LG TV", "hint": null, "detail": "HDMI-A-1 · 3840x2160@60", "header": {"key": "screen_show_monitor"}, "checked": false, "pickable": true, "reason": null, "put": {"screen": {"monitor": "HDMI-A-1"}}}
+      ],
+      "note": null,
+      "card": null
+    },
+    {
+      "name": "the host decides: its note outranks the preset",
+      "targets": {"may_choose": false, "host_default": "own", "yours": "own", "targets": [{"id": "own", "label": "Own screen"}, {"id": "HDMI-A-1", "label": "LG TV", "connector": "HDMI-A-1", "mode": "3840x2160@60", "primary": true, "enabled": true, "in_use_by": null}, {"id": "DP-1", "label": "DELL U2723QE", "connector": "DP-1", "mode": "2560x1440@60", "primary": false, "enabled": true, "in_use_by": "Ben's Apple TV"}], "role": {"yours": "second", "host_default": "only", "offered": ["only", "main", "second"]}},
+      "preset": {"name": "Couch", "host_screen": "only"},
+      "rows": [
+        {"kind": "role", "id": "second", "label": {"key": "screen_role_second"}, "hint": {"key": "screen_role_second_hint"}, "detail": "", "header": null, "checked": true, "pickable": false, "reason": null, "put": null}
+      ],
+      "note": {"key": "screen_host_decides"},
+      "card": {"key": "screen_role_second"}
+    },
+    {
+      "name": "an older host without roles reads no wish",
+      "targets": {"locked": false, "host_default": "own", "yours": null, "targets": [{"id": "own", "label": "Own screen"}, {"id": "HDMI-A-1", "label": "LG TV", "connector": "HDMI-A-1", "mode": "3840x2160@60", "primary": true, "enabled": true, "in_use_by": null}, {"id": "DP-1", "label": "DELL U2723QE", "connector": "DP-1", "mode": "2560x1440@60", "primary": false, "enabled": true, "in_use_by": "Ben's Apple TV"}, {"id": "DP-2", "label": "Samsung Odyssey", "connector": "DP-2", "mode": "3840x2160@60", "primary": false, "enabled": false, "in_use_by": null}]},
+      "preset": {"name": "Couch", "host_screen": "second"},
+      "rows": [
+        {"kind": "own", "id": "own", "label": {"key": "screen_own"}, "hint": null, "detail": "", "header": null, "checked": true, "pickable": true, "reason": null, "put": null},
+        {"kind": "monitor", "id": "HDMI-A-1", "label": "LG TV", "hint": null, "detail": "HDMI-A-1 · 3840x2160@60", "header": null, "checked": false, "pickable": true, "reason": null, "put": {"screen": {"monitor": "HDMI-A-1"}}},
+        {"kind": "monitor", "id": "DP-1", "label": "DELL U2723QE", "hint": null, "detail": "DP-1 · 2560x1440@60", "header": null, "checked": false, "pickable": false, "reason": {"key": "screen_in_use", "args": {"device": "Ben's Apple TV"}}, "put": null},
+        {"kind": "monitor", "id": "DP-2", "label": "Samsung Odyssey", "hint": null, "detail": "DP-2 · 3840x2160@60", "header": null, "checked": false, "pickable": false, "reason": {"key": "screen_off"}, "put": null}
+      ],
+      "note": null,
+      "card": null
+    },
+    {
+      "name": "a value that is no wish: the card's own rows",
+      "targets": {"may_choose": true, "host_default": "own", "yours": null, "targets": [{"id": "own", "label": "Own screen"}, {"id": "HDMI-A-1", "label": "LG TV", "connector": "HDMI-A-1", "mode": "3840x2160@60", "primary": true, "enabled": true, "in_use_by": null}], "role": {"yours": null, "host_default": "only", "offered": ["only", "second"]}},
+      "preset": {"name": "Couch", "host_screen": "tablet"},
+      "rows": [
+        {"kind": "role", "id": "only", "label": {"key": "screen_role_only"}, "hint": {"key": "screen_role_only_hint"}, "detail": "", "header": null, "checked": true, "pickable": true, "reason": null, "put": null},
+        {"kind": "role", "id": "second", "label": {"key": "screen_role_second"}, "hint": {"key": "screen_role_second_hint"}, "detail": "", "header": null, "checked": false, "pickable": true, "reason": null, "put": {"screen": "own", "topology": "extend"}},
+        {"kind": "monitor", "id": "HDMI-A-1", "label": "LG TV", "hint": null, "detail": "HDMI-A-1 · 3840x2160@60", "header": {"key": "screen_show_monitor"}, "checked": false, "pickable": true, "reason": null, "put": {"screen": {"monitor": "HDMI-A-1"}}}
+      ],
+      "note": null,
+      "card": null
+    }
+  ],
+  "host_screen_cases": [
+    {
+      "name": "nothing pinned: each connector once, named by the first host, with every host that lists it",
+      "hosts": [{"name": "Tower", "targets": {"targets": [{"id": "own", "label": "Own screen"}, {"id": "HDMI-A-1", "label": "LG TV", "connector": "HDMI-A-1", "mode": "3840x2160@60", "primary": false, "enabled": true, "in_use_by": null}, {"id": "DP-1", "label": "DELL U2723QE", "connector": "DP-1", "mode": "2560x1440@60", "primary": false, "enabled": true, "in_use_by": null}]}}, {"name": "Laptop", "targets": {"targets": [{"id": "own", "label": "Own screen"}, {"id": "eDP-1", "label": "eDP-1", "connector": "eDP-1", "mode": "2880x1800@120", "primary": false, "enabled": true, "in_use_by": null}, {"id": "HDMI-A-1", "label": "Sony TV", "connector": "HDMI-A-1", "mode": "1920x1080@60", "primary": false, "enabled": true, "in_use_by": null}]}}],
+      "pinned": null,
+      "choices": [
+        {"value": null, "label": {"key": "preset_host_screen_inherit"}, "hint": null, "header": null, "checked": true},
+        {"value": "only", "label": {"key": "screen_role_only"}, "hint": {"key": "screen_role_only_hint"}, "header": null, "checked": false},
+        {"value": "main", "label": {"key": "screen_role_main"}, "hint": {"key": "screen_role_main_hint"}, "header": null, "checked": false},
+        {"value": "second", "label": {"key": "screen_role_second"}, "hint": {"key": "screen_role_second_hint"}, "header": null, "checked": false},
+        {"value": "monitor:HDMI-A-1", "label": "LG TV · HDMI-A-1 — Tower, Laptop", "hint": null, "header": {"key": "screen_show_monitor"}, "checked": false},
+        {"value": "monitor:DP-1", "label": "DELL U2723QE · DP-1 — Tower", "hint": null, "header": null, "checked": false},
+        {"value": "monitor:eDP-1", "label": "eDP-1 — Laptop", "hint": null, "header": null, "checked": false}
+      ]
+    },
+    {
+      "name": "a pinned role, no host answered yet",
+      "hosts": [],
+      "pinned": "second",
+      "choices": [
+        {"value": null, "label": {"key": "preset_host_screen_inherit"}, "hint": null, "header": null, "checked": false},
+        {"value": "only", "label": {"key": "screen_role_only"}, "hint": {"key": "screen_role_only_hint"}, "header": null, "checked": false},
+        {"value": "main", "label": {"key": "screen_role_main"}, "hint": {"key": "screen_role_main_hint"}, "header": null, "checked": false},
+        {"value": "second", "label": {"key": "screen_role_second"}, "hint": {"key": "screen_role_second_hint"}, "header": null, "checked": true}
+      ]
+    },
+    {
+      "name": "a pinned connector no host lists still shows, by itself",
+      "hosts": [{"name": "Tower", "targets": {"targets": [{"id": "own", "label": "Own screen"}, {"id": "HDMI-A-1", "label": "LG TV", "connector": "HDMI-A-1", "mode": "3840x2160@60", "primary": false, "enabled": true, "in_use_by": null}, {"id": "DP-1", "label": "DELL U2723QE", "connector": "DP-1", "mode": "2560x1440@60", "primary": false, "enabled": true, "in_use_by": null}]}}],
+      "pinned": "monitor:DP-3",
+      "choices": [
+        {"value": null, "label": {"key": "preset_host_screen_inherit"}, "hint": null, "header": null, "checked": false},
+        {"value": "only", "label": {"key": "screen_role_only"}, "hint": {"key": "screen_role_only_hint"}, "header": null, "checked": false},
+        {"value": "main", "label": {"key": "screen_role_main"}, "hint": {"key": "screen_role_main_hint"}, "header": null, "checked": false},
+        {"value": "second", "label": {"key": "screen_role_second"}, "hint": {"key": "screen_role_second_hint"}, "header": null, "checked": false},
+        {"value": "monitor:HDMI-A-1", "label": "LG TV · HDMI-A-1 — Tower", "hint": null, "header": {"key": "screen_show_monitor"}, "checked": false},
+        {"value": "monitor:DP-1", "label": "DELL U2723QE · DP-1 — Tower", "hint": null, "header": null, "checked": false},
+        {"value": "monitor:DP-3", "label": "DP-3", "hint": null, "header": null, "checked": true}
+      ]
+    },
+    {
+      "name": "a pinned monitor a host lists is checked there",
+      "hosts": [{"name": "Tower", "targets": {"targets": [{"id": "own", "label": "Own screen"}, {"id": "HDMI-A-1", "label": "LG TV", "connector": "HDMI-A-1", "mode": "3840x2160@60", "primary": false, "enabled": true, "in_use_by": null}, {"id": "DP-1", "label": "DELL U2723QE", "connector": "DP-1", "mode": "2560x1440@60", "primary": false, "enabled": true, "in_use_by": null}]}}],
+      "pinned": "monitor:DP-1",
+      "choices": [
+        {"value": null, "label": {"key": "preset_host_screen_inherit"}, "hint": null, "header": null, "checked": false},
+        {"value": "only", "label": {"key": "screen_role_only"}, "hint": {"key": "screen_role_only_hint"}, "header": null, "checked": false},
+        {"value": "main", "label": {"key": "screen_role_main"}, "hint": {"key": "screen_role_main_hint"}, "header": null, "checked": false},
+        {"value": "second", "label": {"key": "screen_role_second"}, "hint": {"key": "screen_role_second_hint"}, "header": null, "checked": false},
+        {"value": "monitor:HDMI-A-1", "label": "LG TV · HDMI-A-1 — Tower", "hint": null, "header": {"key": "screen_show_monitor"}, "checked": false},
+        {"value": "monitor:DP-1", "label": "DELL U2723QE · DP-1 — Tower", "hint": null, "header": null, "checked": true}
+      ]
+    },
+    {
+      "name": "a value that is no wish reads as the host card's pick",
+      "hosts": [],
+      "pinned": "tablet",
+      "choices": [
+        {"value": null, "label": {"key": "preset_host_screen_inherit"}, "hint": null, "header": null, "checked": true},
+        {"value": "only", "label": {"key": "screen_role_only"}, "hint": {"key": "screen_role_only_hint"}, "header": null, "checked": false},
+        {"value": "main", "label": {"key": "screen_role_main"}, "hint": {"key": "screen_role_main_hint"}, "header": null, "checked": false},
+        {"value": "second", "label": {"key": "screen_role_second"}, "hint": {"key": "screen_role_second_hint"}, "header": null, "checked": false}
+      ]
+    }
+  ],
+  "starter_cases": [
+    {"taken": [], "name": "Second screen", "overrides": {"host_screen": "second"}},
+    {"taken": ["second SCREEN", "Second screen 2"], "name": "Second screen 3", "overrides": {"host_screen": "second"}}
+  ]
+}

@@ -1619,6 +1619,7 @@ fn plain_hello(
         access_only: false,
         screens: Vec::new(),
         view: None,
+        screen_wish: None,
     }
 }
 
@@ -1994,6 +1995,55 @@ fn a_profile_is_resolved_in_the_handshake() {
     }
     let _ = std::fs::remove_file(&store);
     let _ = std::fs::remove_file(&file);
+    host.join().unwrap().unwrap();
+}
+
+/// A synthetic source has no monitors, so the `ServerHello` answers a wish with "no monitors
+/// here", or "not allowed" to a device without the screen choice. No wish, no role.
+#[test]
+fn the_server_hello_answers_a_screen_wish() {
+    let _registry = crate::session_status::tests::registry_lock();
+    let _serial = SESSION_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    use punktfunk_core::client::{ConnectParams, NativeClient};
+    use punktfunk_core::quic::endpoint;
+    use punktfunk_core::quic::v2::hello::{RoleEcho, RoleReason, ScreenWish};
+
+    let store = access_store_path("screen-wish");
+    let _ = std::fs::remove_file(&store);
+    let np = Arc::new(NativePairing::load_with(Some(store.clone()), None, false).unwrap());
+    let (cert, key) = endpoint::generate_identity().unwrap();
+    let fp_hex = hex::encode(endpoint::fingerprint_of_pem(&cert).unwrap());
+    np.add_with_access("Tablet", &fp_hex, None).unwrap();
+    let host = spawn_access_host(19799, 3, np.clone());
+    std::thread::sleep(std::time::Duration::from_millis(500));
+    let role = |screen_wish| {
+        let mode = punktfunk_core::Mode {
+            width: 1280,
+            height: 720,
+            refresh_hz: 60,
+        };
+        let timeout = std::time::Duration::from_secs(10);
+        let client = NativeClient::connect(ConnectParams {
+            name: Some("Tablet".into()),
+            identity: Some((cert.clone(), key.clone())),
+            screen_wish,
+            ..ConnectParams::new("127.0.0.1", 19799, mode, timeout)
+        })
+        .expect("admitted");
+        client.role()
+    };
+    let echo = |reason| Some(RoleEcho { role: None, reason });
+
+    assert_eq!(role(Some(ScreenWish::Second)), echo(RoleReason::NoMonitors));
+    assert_eq!(role(None), None);
+    let controller_only = crate::native_pairing::Access {
+        grants: punktfunk_core::quic::GRANT_PRESET_CONTROLLER_ONLY,
+        expires_unix: None,
+        until_disconnect: false,
+    };
+    assert!(np.set_access(&fp_hex, controller_only).unwrap());
+    assert_eq!(role(Some(ScreenWish::Only)), echo(RoleReason::NotAllowed));
+    let _ = std::fs::remove_file(&store);
     host.join().unwrap().unwrap();
 }
 

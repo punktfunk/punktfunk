@@ -489,6 +489,8 @@ pub(super) mod tests {
                 #[cfg(target_os = "linux")]
                 no_overlay_means_off_output: false,
                 vd_params: crate::vdisplay::SessionParams {
+                    screen: None,
+                    topology: None,
                     client_fp: None,
                     client_hdr: None,
                     hdr: false,

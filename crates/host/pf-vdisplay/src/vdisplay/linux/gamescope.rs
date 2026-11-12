@@ -69,6 +69,8 @@ pub struct GamescopeDisplay {
     /// Whose display this is. Set by `set_client_identity` before `create`, so the
     /// per-device topology (`design/web-console-overhaul.md` §6.1) can be resolved here.
     client_fp: Option<[u8; 32]>,
+    /// The session's topology ([`VirtualDisplay::set_topology`]).
+    topology: Option<crate::policy::Topology>,
 
     /// Bare-spawn command. Not the process-global `PUNKTFUNK_GAMESCOPE_APP`.
     cmd: Option<String>,
@@ -158,6 +160,10 @@ impl VirtualDisplay for GamescopeDisplay {
     /// topology be resolved from inside it (§6.1).
     fn set_client_identity(&mut self, fingerprint: Option<[u8; 32]>) {
         self.client_fp = fingerprint;
+    }
+
+    fn set_topology(&mut self, topology: Option<crate::policy::Topology>) {
+        self.topology = topology;
     }
 
     fn name(&self) -> &'static str {
@@ -262,8 +268,8 @@ impl VirtualDisplay for GamescopeDisplay {
 
     fn create(&mut self, mode: Mode) -> Result<VirtualOutput> {
         // Sampled once so managed hold, exclusive session-free, and spawn darken cannot disagree.
-        let exclusive =
-            crate::effective_topology(self.client_fp) == crate::policy::Topology::Exclusive;
+        let exclusive = crate::create_topology(self.topology, self.client_fp)
+            == crate::policy::Topology::Exclusive;
         // This session's route — never the process env, or a second connect retargets this one.
         let route = self.route.clone();
         launch_tracked(|| match route {

@@ -33,13 +33,14 @@ class SessionAccessTest {
             "LAUNCH" to SessionAccess.LAUNCH,
             "POWER" to SessionAccess.POWER,
             "MANAGE_GAMES" to SessionAccess.MANAGE_GAMES,
+            "DISPLAY" to SessionAccess.DISPLAY,
         )
         assertEquals(bits.keys().asSequence().toSet(), mine.keys)
         mine.forEach { (name, bit) -> assertEquals(name, bits.getInt(name), bit) }
         assertEquals(vectors.getInt("all"), SessionAccess.ALL)
     }
 
-    /** The legacy-full read and the derived preset, per mask, as core computes them. */
+    /** The wire reader's legacy-full read and the derived preset, per mask, as core computes them. */
     @Test
     fun `labels match the core vectors`() {
         val masks = vectors.getJSONArray("masks")

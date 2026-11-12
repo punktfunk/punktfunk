@@ -289,6 +289,14 @@ pub(crate) fn live_identity_slots() -> std::collections::BTreeSet<u32> {
     linux::live_identity_slots()
 }
 
+/// Identity slots of the pooled displays, live or kept, in a group one of whose members was made
+/// `exclusive`: the group keeps the host's monitors off until it empties
+/// ([`crate::monitors_off_by`]).
+#[cfg(target_os = "linux")]
+pub(crate) fn dark_slots() -> Vec<Option<u32>> {
+    linux::dark_slots()
+}
+
 /// Linux displays [`admission`](crate::admission) counts against `max_displays` for `req`: live
 /// and pinned, less the pinned ones `req` owns, which its create reuses or retires. A lingering
 /// display is left out: [`acquire`] reuses it or evicts it, so it never holds a new session out.
@@ -336,6 +344,9 @@ mod pool {
         /// Identity slot at create (`None` = anonymous). Kept across reuse; keys
         /// group arrangement and `/display/state`.
         pub(super) identity_slot: Option<u32>,
+        /// Topology at create ([`crate::VirtualDisplay::topology`]). Reuse requires an exact
+        /// match; a kept display a claimant would take under another one is retired instead.
+        pub(super) topology: Option<crate::policy::Topology>,
         /// Per-group topology restore: re-enable physicals that `exclusive`
         /// disabled. At most one entry per group holds it; teardown hands it to
         /// a sibling, and it runs only when the last member drops.
@@ -887,6 +898,7 @@ mod pool {
                 },
                 backend,
                 identity_slot: None,
+                topology: None,
                 topology_restore: restore,
                 undo_seqs: Vec::new(),
                 ownership: DisplayOwnership::Owned,
@@ -1764,6 +1776,20 @@ mod linux {
         es.iter().filter_map(|e| e.identity_slot).collect()
     }
 
+    /// [`super::dark_slots`]. Takes the pool lock — never call while holding it.
+    pub(super) fn dark_slots() -> Vec<Option<u32>> {
+        let Some(r) = REG.get() else {
+            return Vec::new();
+        };
+        let es = r.entries.lock().unwrap();
+        let exclusive = |e: &&Entry| e.topology == Some(policy::Topology::Exclusive);
+        let dark: Vec<String> = es.iter().filter(exclusive).map(Entry::group).collect();
+        es.iter()
+            .filter(|e| dark.contains(&e.group()))
+            .map(|e| e.identity_slot)
+            .collect()
+    }
+
     /// [`budget_count`] of the pool for `req`, whose own displays their slot owner names. `0`
     /// before the first acquire (registry not initialised).
     pub(super) fn budget_display_count(req: Option<[u8; 32]>) -> u32 {
@@ -1997,7 +2023,9 @@ mod linux {
     /// Reuse a kept display that matches this acquire and that the backend accepts (who may take
     /// it is [`VirtualDisplay::accepts_kept`]'s answer), resizing it in place when the mode is
     /// the only mismatch. `None` means create: nothing matched, the kept one refused the mode,
-    /// its compositor was dead (torn down here, restore handed on), or the recast failed.
+    /// was made under another topology (retired here, so its group's restore gives the monitors
+    /// back first), its compositor was dead (torn down here, restore handed on), or the recast
+    /// failed.
     ///
     /// Liveness and resize may block (`pw-dump`, the compositor), so they run outside the pool
     /// lock: snapshot the candidate, probe, then re-find it by generation. A concurrent reuse
@@ -2027,10 +2055,11 @@ mod linux {
                 lifecycle::State::Lingering { .. } | lifecycle::State::Pinned
             )
         };
-        let (cand_gen, node_id, pid, cand_mode, cand_seat) = {
+        let topology = vd.topology();
+        let (cand_gen, node_id, pid, cand_mode, cand_seat, cand_topology) = {
             let es = r.entries.lock().unwrap();
             es.iter()
-                .find(|e| {
+                .filter(|e| {
                     kept(e)
                         && reuse_keys_match(
                             e,
@@ -2044,8 +2073,17 @@ mod linux {
                         )
                         && vd.accepts_kept(e.identity_slot, e.output_name.as_deref())
                 })
-                .map(|e| (e.generation, e.node_id, e.pid, e.mode, e.seat.clone()))
+                // One made under this acquire's topology first.
+                .min_by_key(|e| e.topology != topology)
+                .map(|e| {
+                    let seat = e.seat.clone();
+                    (e.generation, e.node_id, e.pid, e.mode, seat, e.topology)
+                })
         }?;
+        if cand_topology != topology {
+            release_kept(Some(cand_gen), "retired (made under another topology)");
+            return None;
+        }
         // A dead compositor is dead whatever PipeWire still lists under its node id.
         let alive = pid.is_none_or(crate::proc::pid_alive) && vd.kept_display_alive(node_id);
         // A kept display whose only mismatch is the mode moves to it instead of being retired,
@@ -2219,6 +2257,7 @@ mod linux {
             mode,
             backend,
             identity_slot,
+            topology: vd.topology(),
             topology_restore,
             undo_seqs,
             ownership: real.ownership,

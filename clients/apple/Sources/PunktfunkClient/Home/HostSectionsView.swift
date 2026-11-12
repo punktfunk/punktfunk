@@ -144,7 +144,7 @@ struct HostSectionsView: View {
     /// device no screens has no Screen row.
     private var sections: [HostSection] {
         let offersScreens = store.hosts.first { $0.id == hostID }
-            .flatMap(hostScreens.targets(for:)) != nil
+            .flatMap(hostScreens.targets(for:))?.hasSection == true
         return HostSection.allCases.filter {
             ($0 != .speedTest || hostID != DemoMode.hostID) && ($0 != .screen || offersScreens)
         }

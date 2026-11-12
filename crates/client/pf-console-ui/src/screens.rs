@@ -531,6 +531,8 @@ pub(crate) enum Screen {
     Search(search::SearchScreen),
     /// A preset's menu: edit, rename, pin, delete. Raised by its Presets row.
     PresetMenu(preset::PresetMenu),
+    /// Where a new preset starts: empty, or a starter. Raised by New preset.
+    PresetStarter(preset::PresetStarter),
     /// A preset's name, new or renamed.
     PresetName(preset::PresetName),
     /// A preset's settings over the global ones.
@@ -632,6 +634,7 @@ impl Screen {
             Screen::Licenses(s) => s,
             Screen::Search(s) => s,
             Screen::PresetMenu(s) => s,
+            Screen::PresetStarter(s) => s,
             Screen::PresetName(s) => s,
             Screen::PresetEdit(s) => s,
             Screen::InputTest(s) => s,
@@ -663,6 +666,7 @@ impl Screen {
             Screen::Licenses(s) => s,
             Screen::Search(s) => s,
             Screen::PresetMenu(s) => s,
+            Screen::PresetStarter(s) => s,
             Screen::PresetName(s) => s,
             Screen::PresetEdit(s) => s,
             Screen::InputTest(s) => s,

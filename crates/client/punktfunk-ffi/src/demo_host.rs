@@ -309,6 +309,7 @@ async fn serve(
         profile: client.profile.clone(),
         screen: None,
         picture: None,
+        role: None,
     };
     v2io::send(&mut send, &server).await?;
     let (ty, body) = recv.read_frame().await?;

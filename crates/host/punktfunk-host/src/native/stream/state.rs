@@ -938,6 +938,8 @@ fn display_request(
         );
     }
     let params = crate::vdisplay::SessionParams {
+        screen: ctx.screen.clone(),
+        topology: ctx.topology,
         client_fp: ctx.conn.peer_fingerprint(),
         client_hdr: ctx.client_hdr,
         hdr: ctx.display_hdr,
@@ -1098,7 +1100,11 @@ fn open_display(
         Some(p) => (p.vd, Some(p.pipeline)),
         None => {
             // Open first: Windows `open` inits the manager; `vdm()` before that panics.
-            let mut vd = crate::vdisplay::open_for(compositor, vd_params.client_fp)?;
+            let mut vd = crate::vdisplay::open_for(
+                compositor,
+                vd_params.client_fp,
+                vd_params.screen.clone(),
+            )?;
             vd_params.apply(&mut *vd);
             (vd, None)
         }

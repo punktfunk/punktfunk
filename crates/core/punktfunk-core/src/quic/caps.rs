@@ -562,6 +562,7 @@ mod tests {
                 profile: None,
                 screen: None,
                 picture: None,
+                role: None,
             };
             ServerHello::from_body(&sh.fields().into_body())
                 .unwrap()

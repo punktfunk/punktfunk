@@ -318,15 +318,17 @@ fun ConnectScreen(
         }
     }
 
-    // A Screen row: write this device's row on the host, then show what the host answers.
-    fun pickScreen(kh: KnownHost, t: DisplayTargets.Target) {
+    // A Screen row: write its pick on the host, then show what the host answers. The checked
+    // row and a greyed one carry no pick and write nothing.
+    fun pickScreen(kh: KnownHost, row: DisplayTargets.ScreenRow) {
+        val pick = row.pick ?: return
         val id = ctl.requireIdentity() ?: return
         val res = context.resources
         ctl.status = null
         scope.launch {
             val (refused, found) = withContext(Dispatchers.IO) {
-                DisplayTargets.setScreen(
-                    id, kh.address, kh.effectiveMgmtPort, kh.fpHex, t.target(), t.name(res), kh.port,
+                DisplayTargets.setPick(
+                    id, kh.address, kh.effectiveMgmtPort, kh.fpHex, pick, row.label, kh.port,
                 ) to DisplayTargets.fetch(id, kh.address, kh.effectiveMgmtPort, kh.fpHex, kh.port)
             }
             recordScreens(kh.fpHex, found)

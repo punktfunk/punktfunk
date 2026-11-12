@@ -368,6 +368,33 @@
 #define PUNKTFUNK_SC1_BLE_STATE_LEN 160
 #endif
 
+// [`punktfunk_connection_screen_role`]: no role, or a host that does not say.
+#define PUNKTFUNK_SCREEN_ROLE_NONE 0
+
+// [`punktfunk_connection_screen_role`]: the only screen; the host's monitors are off.
+#define PUNKTFUNK_SCREEN_ROLE_ONLY 1
+
+// [`punktfunk_connection_screen_role`]: the main screen beside the host's monitors.
+#define PUNKTFUNK_SCREEN_ROLE_MAIN 2
+
+// [`punktfunk_connection_screen_role`]: one more screen beside the host's monitors.
+#define PUNKTFUNK_SCREEN_ROLE_SECOND 3
+
+// [`punktfunk_connection_screen_role_reason`]: as asked, or a host that does not say.
+#define PUNKTFUNK_SCREEN_ROLE_REASON_AS_ASKED 0
+
+// [`punktfunk_connection_screen_role_reason`]: this device may not choose its screen there.
+#define PUNKTFUNK_SCREEN_ROLE_REASON_NOT_ALLOWED 1
+
+// [`punktfunk_connection_screen_role_reason`]: an earlier session decided the monitors.
+#define PUNKTFUNK_SCREEN_ROLE_REASON_MONITORS_HELD 2
+
+// [`punktfunk_connection_screen_role_reason`]: the monitor asked for is off, taken or missing.
+#define PUNKTFUNK_SCREEN_ROLE_REASON_UNAVAILABLE 3
+
+// [`punktfunk_connection_screen_role_reason`]: the host's desktop has no monitors.
+#define PUNKTFUNK_SCREEN_ROLE_REASON_NO_MONITORS 4
+
 // [`PunktfunkClipEvent::kind`]: host announced clipboard content
 // (`transfer_id` = offer `seq`; `data`/`len` = `\n`-separated `"<mime>\t<size_hint>"`).
 // Fetch lazily on local paste via [`punktfunk_connection_clipboard_fetch`].
@@ -426,7 +453,7 @@
 //
 // The wire is versioned by ALPN, not by this. Pin the integer in `punktfunk-ffi`
 // (`abi_version_is_pinned`). Per-bump notes live in `CHANGELOG.md`.
-#define PUNKTFUNK_ABI_VERSION 69
+#define PUNKTFUNK_ABI_VERSION 71
 
 // This client silenced its own speakers (`client::NativeClient::set_audio_muted`). The host
 // keeps sending, so a session joined to the same sink still hears the game.
@@ -703,14 +730,23 @@
 // Starting one is [`GRANT_LAUNCH`]: launching a missing title installs it anyway.
 #define PUNKTFUNK_GRANT_MANAGE_GAMES 128
 
+// Choosing the screen this device streams and what the host's monitors do meanwhile: its
+// own pick on the mgmt cert lane and a preset's wish in the Hello. Without it the operator's
+// answer applies.
+#define PUNKTFUNK_GRANT_DISPLAY 256
+
 // An omitted Welcome or registry mask reads as this: every bit above.
-#define PUNKTFUNK_GRANT_ALL 255
+#define PUNKTFUNK_GRANT_ALL 511
 
 // Stored "Full control" before [`GRANT_POWER`]. [`normalize_legacy_full`] lifts it.
 #define PUNKTFUNK_GRANT_ALL_PRE_POWER 63
 
 // Stored "Full control" before [`GRANT_MANAGE_GAMES`]. [`normalize_legacy_full`] lifts it.
 #define PUNKTFUNK_GRANT_ALL_PRE_MANAGE 127
+
+// "Full control" before [`GRANT_DISPLAY`]. [`normalize_legacy_full`] lifts it; a store that
+// can tell it from "all but the screen choice" uses [`lift_pre_manage`] instead.
+#define PUNKTFUNK_GRANT_ALL_PRE_DISPLAY 255
 
 // The management API rejects these; it never silently clears unknown bits
 // (that would grant less than the caller asked).
@@ -1839,6 +1875,10 @@ typedef struct {
     // Each asked screen's view, read for `screen_count` records beside `screens` during the
     // call; null, which a shorter prefix defaults to, names none.
     const PunktfunkScreenView *screen_views;
+    // The screen this dial's preset asks for, as a preset spells it: `only`, `main`, `second`
+    // or `monitor:<connector>`. Null, empty, which a shorter prefix defaults to, or any other
+    // spelling asks for none. [`punktfunk_connection_screen_role`] reads what the session got.
+    const char *host_screen;
 } PunktfunkConnectOpts;
 #endif
 
@@ -3665,6 +3705,25 @@ PunktfunkStatus punktfunk_connection_profile(const PunktfunkConnection *c,
 // # Safety
 // `c` is a valid connection handle; `shared` is writable (NULL is skipped).
 PunktfunkStatus punktfunk_connection_shares_screen(const PunktfunkConnection *c, bool *shared);
+#endif
+
+#if defined(PUNKTFUNK_FEATURE_QUIC)
+// The role this session got among the host's screens, `PUNKTFUNK_SCREEN_ROLE_*`. As the
+// session started.
+//
+// # Safety
+// `c` is a valid connection handle; `role` is writable (NULL is skipped).
+PunktfunkStatus punktfunk_connection_screen_role(const PunktfunkConnection *c, uint8_t *role);
+#endif
+
+#if defined(PUNKTFUNK_FEATURE_QUIC)
+// Why this session's role is not the one its connect asked for,
+// `PUNKTFUNK_SCREEN_ROLE_REASON_*`. As the session started.
+//
+// # Safety
+// `c` is a valid connection handle; `reason` is writable (NULL is skipped).
+PunktfunkStatus punktfunk_connection_screen_role_reason(const PunktfunkConnection *c,
+                                                        uint8_t *reason);
 #endif
 
 #if defined(PUNKTFUNK_FEATURE_QUIC)

@@ -92,4 +92,17 @@ class HostRowVectorTest {
             }
         }
     }
+
+    /** A preset chip carries the host screen it pins, for the console's card under that preset. */
+    @Test
+    fun aPresetChipCarriesItsHostScreen() {
+        val couch = StreamPreset("couch", "Couch", overrides = SettingsOverlay(hostScreen = "second"))
+        val desk = KnownHost(
+            "10.0.0.2", 9777, "Desk", "ab12", paired = true,
+            presetId = "couch", pinnedPresetIds = listOf("couch"),
+        )
+        val rows = JSONArray(ConsoleJson.hostRows(listOf(desk), emptyList(), emptySet(), listOf(couch)))
+        assertEquals("second", rows.getJSONObject(0).getJSONObject("bound_preset").getString("host_screen"))
+        assertEquals("second", rows.getJSONObject(1).getJSONObject("pin").getString("host_screen"))
+    }
 }

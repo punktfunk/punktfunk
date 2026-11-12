@@ -1,4 +1,5 @@
-//! Display: the stream's size and rate, the picture, and the advanced encode and present rows.
+//! Display: the stream's size and rate, the picture, a preset's host screen, and the advanced
+//! encode and present rows.
 
 use super::{Build, PageB};
 use crate::settings::choice::{set_row_subtitle, ChoiceRow};
@@ -7,6 +8,7 @@ use crate::settings::spec::{self, Page};
 use crate::settings::tables::*;
 use crate::trust::Settings;
 use adw::prelude::*;
+use pf_client_core::display_targets::{self, host_screen_choices, Targets};
 use pf_l10n::{client, common, desktop};
 use std::cell::Cell;
 use std::rc::Rc;
@@ -60,6 +62,10 @@ pub fn display(b: &mut Build) {
             s.screens = at(SCREENS, i).to_string()
         }),
     );
+    if b.preset_scope {
+        let host_screen = host_screen_row(b);
+        b.put(&mut p, Some(&picture), host_screen);
+    }
     let (field, _) = Field::switch(&spec::HDR, |s| s.hdr_enabled, |s, v| s.hdr_enabled = v);
     b.put(&mut p, Some(&picture), field);
     // The buffer only means something under Smoothness, so it hides the rest of the time.
@@ -153,6 +159,44 @@ pub fn display(b: &mut Build) {
     );
     hardware(b, &mut p);
     b.finish(p);
+}
+
+/// Host screen, a preset's alone: As on the host card, the roles, then each monitor the paired
+/// hosts list, from core's choices over their last Screen answers. The caption is the picked
+/// role's hint. Opening asks each paired host again; an answer that lands later shows on the
+/// next open.
+fn host_screen_row(b: &Build) -> Field {
+    let known = b.store.hosts().hosts.clone();
+    let mut answers = Vec::new();
+    for k in known.iter().filter(|k| k.paired && !k.fp_hex.is_empty()) {
+        let mgmt = k
+            .mgmt_port
+            .unwrap_or(pf_client_core::library::DEFAULT_MGMT_PORT);
+        display_targets::refresh(&k.addr, mgmt, k.port, &k.fp_hex);
+        answers.extend(display_targets::cached(&k.fp_hex).map(|t| (k.name.as_str(), t)));
+    }
+    let hosts: Vec<(&str, &Targets)> = answers.iter().map(|(n, t)| (*n, t)).collect();
+    let choices = host_screen_choices(&hosts, Some(&b.seed.host_screen));
+    let labels: Vec<&str> = choices.iter().map(|c| c.label.as_str()).collect();
+    let row = b.choice(&spec::HOST_SCREEN, &labels);
+    let hints: Vec<&'static str> = choices.iter().map(|c| c.hint.unwrap_or_default()).collect();
+    let w = row.widget().clone();
+    row.connect_changed(move |i| {
+        set_row_subtitle(&w, hints.get(i as usize).copied().unwrap_or_default())
+    });
+    // Empty is the host card's pick: the binder's pin of it is no pin.
+    let values: Rc<Vec<String>> = Rc::new(
+        (choices.into_iter())
+            .map(|c| c.value.unwrap_or_default())
+            .collect(),
+    );
+    let v = values.clone();
+    Field::choice(
+        &spec::HOST_SCREEN,
+        &row,
+        move |s| v.iter().position(|x| *x == s.host_screen).unwrap_or(0) as u32,
+        move |s, i| s.host_screen = values.get(i as usize).cloned().unwrap_or_default(),
+    )
 }
 
 /// Decoder, GPU and the screen's own saver: facts about this device, never a preset's.

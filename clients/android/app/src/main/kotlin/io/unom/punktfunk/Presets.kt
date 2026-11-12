@@ -54,6 +54,9 @@ data class SettingsOverlay(
     val micEnabled: Boolean? = null,
     val echoCancel: Boolean? = null,
     val keepHostAudio: Boolean? = null,
+    /** The role or monitor a connect with this preset asks for ([Settings.hostScreen]); null is
+     *  the pick on the host's card. */
+    val hostScreen: String? = null,
     val touchMode: TouchMode? = null,
     val mouseMode: MouseMode? = null,
     val invertScroll: Boolean? = null,
@@ -322,6 +325,14 @@ fun nextAccent(existing: List<StreamPreset>): String {
  */
 fun newPreset(name: String, accent: String? = null): StreamPreset =
     StreamPreset(id = newPresetId(), name = name, accent = accent)
+
+/** The Second screen starter: a new preset with the second screen pinned and nothing else. */
+fun secondScreenPreset(name: String, accent: String? = null): StreamPreset =
+    newPreset(name, accent).copy(overrides = SettingsOverlay(hostScreen = DisplayTargets.Role.SECOND.id))
+
+/** [base] while [taken] lets it through, else the first free "base N" from 2. */
+fun freeName(base: String, taken: (String) -> Boolean): String =
+    (sequenceOf(base) + generateSequence(2) { it + 1 }.map { "$base $it" }).first { !taken(it) }
 
 private val PRESET_ID_RNG = SecureRandom()
 

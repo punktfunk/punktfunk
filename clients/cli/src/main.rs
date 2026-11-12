@@ -22,6 +22,7 @@
 #[cfg(any(target_os = "linux", windows))]
 mod cli {
     use pf_client_core::deeplink::{self, DeepLink, HostResolution};
+    use pf_client_core::display_targets::{self, BoundPreset, Pick, RowKind, Targets};
     use pf_client_core::orchestrate::{
         self, ConnectOutcome, ConnectPlan, PlanOutcome, SessionEvent, WakeOutcome, WakeTick,
         WAKE_TIMEOUT_SECS,
@@ -62,6 +63,7 @@ punktfunk — the Punktfunk client, headless
   punktfunk library [<host-ref>] [--json]
   punktfunk end-game [<host-ref>] --game ID
   punktfunk actions [<host-ref>] [--json] [--run ID]
+  punktfunk screen [<host-ref>] [--json] [--pick ID]
   punktfunk launch [<host-ref>] [--game ID] [--preset REF] [--as PROFILE]
                                 [--request-access] [--exec] [--fullscreen]
   punktfunk profiles <host-ref> [--json] [--pick PROFILE | --clear]
@@ -217,6 +219,25 @@ none. Needs a paired host (exit 6 otherwise).
   --run ID   run one, by id (`power.sleep`, `power.reboot`, …). The host ends
              every stream and acts about a second later. Prints the outcome on
              stdout; exit 0 when the host accepted it, 2 when it didn't."
+            }
+            "screen" => {
+                "\
+punktfunk screen [<host-ref>] [--json] [--pick ID] — this device's host screen
+
+Lists the host card's Screen section as id TAB label TAB detail TAB why it is
+greyed or what it does, with `*` on what a connect gets now: the roles `only`,
+`main` and `second`, then the host's monitors by connector. When the host, or
+the preset bound to it, decides the screen, only that row is listed and the
+reason follows on a line of its own. --json emits {\"rows\":[{\"kind\",\"id\",
+\"label\",\"detail\",\"header\",\"checked\",\"pickable\",\"in_use_by\",\"off\"}],
+\"note\",\"preset\",\"may_choose\"}; note is null, locked, host_decides or preset.
+An unreachable host lists none. Needs a paired host (exit 6 otherwise).
+
+  --pick ID  use that row from the next session on, then list the rows again.
+             Exit 5 when there is no such row; 2 when it is already picked,
+             can't be picked now, or the host refused it or didn't answer, with
+             the reason on stdout. Picking needs Choose its screen in this
+             device's access."
             }
             "launch" => {
                 "\
@@ -528,6 +549,7 @@ from the config directory for a true factory reset."
             "library" => library_cmd(&rest),
             "end-game" => end_game_cmd(&rest),
             "actions" => actions_cmd(&rest),
+            "screen" => screen_cmd(&rest),
             "launch" => launch(&rest),
             "open" => open(&rest),
             "reachable" => reachable(&rest),
@@ -1252,6 +1274,158 @@ from the config directory for a true factory reset."
             }
         }
         OK
+    }
+
+    /// `screen [<host-ref>] [--json] [--pick ID]` — the host card's Screen section, under the
+    /// host's preset when that pins the screen, or `--pick` one row. A host that doesn't
+    /// answer lists none, as in every host menu.
+    fn screen_cmd(args: &[String]) -> u8 {
+        let usage = "punktfunk screen [<host-ref>] [--json] [--pick ID]";
+        let (known, i) = match resolve_or_default(args, usage) {
+            Ok(v) => v,
+            Err(code) => return code,
+        };
+        let host = &known.hosts[i];
+        let Some(pin) = trust::parse_hex32(&host.fp_hex) else {
+            eprintln!(
+                "{} isn't paired yet — punktfunk pair {}",
+                host.name, host.addr
+            );
+            return NEEDS_INTERACTION;
+        };
+        if lacks_value(args, "--pick") {
+            eprintln!("usage: {usage}");
+            return UNRESOLVED;
+        }
+        let identity = match trust::load_or_create_identity() {
+            Ok(id) => id,
+            Err(e) => {
+                eprintln!("client identity: {e:#}");
+                return CONNECT_FAILED;
+            }
+        };
+        let catalog = PresetsFile::load();
+        let bound = host.preset_id.as_deref().and_then(|id| {
+            let p = catalog.find_by_id(id)?;
+            Some(BoundPreset {
+                name: &p.name,
+                host_screen: p.overrides.host_screen.as_deref()?,
+            })
+        });
+        let (addr, mgmt) = (host.addr.as_str(), host.effective_mgmt_port());
+        let fetched = display_targets::fetch_targets(addr, mgmt, host.port, &identity, Some(pin));
+        let answered = fetched.is_some();
+        let mut t = fetched.unwrap_or_default();
+        if let Some(id) = value(args, "--pick") {
+            if !answered {
+                println!("Couldn't ask {} for its screens", host.name);
+                return CONNECT_FAILED;
+            }
+            let (pick, label) = match screen_pick(&t, bound, &id) {
+                Ok(v) => v,
+                Err((code, said)) => {
+                    println!("{said}");
+                    return code;
+                }
+            };
+            let fp = &host.fp_hex;
+            if let Err(e) = display_targets::set_pick(addr, mgmt, host.port, &identity, fp, &pick) {
+                println!("{label} failed — {e}");
+                return CONNECT_FAILED;
+            }
+            // `set_pick` read the host's rows back; a miss lists none rather than the old check.
+            t = display_targets::cached(fp).unwrap_or_default();
+        }
+        if has(args, "--json") {
+            println!("{}", screen_json(&t, bound));
+        } else {
+            for line in screen_lines(&t, bound) {
+                println!("{line}");
+            }
+        }
+        OK
+    }
+
+    /// What `--pick ID` writes, with the row's label; else the exit code and the sentence that
+    /// refuses it. A row the host or a preset greys says that note, a busy monitor its reason.
+    fn screen_pick(
+        t: &Targets,
+        preset: Option<BoundPreset>,
+        id: &str,
+    ) -> Result<(Pick, String), (u8, String)> {
+        let note = t.note_under(preset);
+        let Some(row) = t.rows_under(preset).into_iter().find(|r| r.id == id) else {
+            return Err(match note {
+                Some(note) => (CONNECT_FAILED, note),
+                None => (UNRESOLVED, format!("no screen called \"{id}\"")),
+            });
+        };
+        let label = row.label;
+        match (row.pick, note, row.reason) {
+            (Some(pick), ..) => Ok((pick, label)),
+            (None, Some(note), _) => Err((CONNECT_FAILED, note)),
+            (None, None, Some(why)) => {
+                let said = format!("{label} can't be picked now — {why}");
+                Err((CONNECT_FAILED, said))
+            }
+            (None, None, None) => Err((CONNECT_FAILED, format!("{label} is already picked"))),
+        }
+    }
+
+    /// `screen --json`: each row as data for a plugin to word, a busy monitor's reason as
+    /// `in_use_by` or `off`, and why nothing can be picked as `note`, the preset named in
+    /// `preset` when it decides.
+    fn screen_json(t: &Targets, preset: Option<BoundPreset>) -> serde_json::Value {
+        let rows: Vec<serde_json::Value> = t
+            .rows_under(preset)
+            .iter()
+            .map(|r| {
+                let kind = match r.kind {
+                    RowKind::Role(_) => "role",
+                    RowKind::Monitor => "monitor",
+                    RowKind::Own => "own",
+                };
+                let target = (kind != "role")
+                    .then(|| t.targets.iter().find(|x| x.id == r.id))
+                    .flatten();
+                serde_json::json!({
+                    "kind": kind,
+                    "id": r.id,
+                    "label": matches!(r.kind, RowKind::Monitor).then_some(&r.label),
+                    "detail": r.detail,
+                    "header": r.header.is_some(),
+                    "checked": r.checked,
+                    "pickable": r.pickable,
+                    "in_use_by": target.and_then(|x| x.in_use_by.as_deref()),
+                    "off": target.is_some_and(|x| x.in_use_by.is_none() && !x.enabled),
+                })
+            })
+            .collect();
+        // `Targets::note` and `note_under` in code form, in their order.
+        let note = if t.locked {
+            Some("locked")
+        } else if !t.may_choose {
+            Some("host_decides")
+        } else {
+            t.note_under(preset).map(|_| "preset")
+        };
+        serde_json::json!({
+            "rows": rows,
+            "note": note,
+            "preset": preset.filter(|_| note == Some("preset")).map(|p| p.name),
+            "may_choose": t.may_choose,
+        })
+    }
+
+    /// `screen` as text: id, label, detail, then why the row is greyed or what it does, tab
+    /// separated, `*` on what a connect gets now. The note why nothing can be picked comes last.
+    fn screen_lines(t: &Targets, preset: Option<BoundPreset>) -> Vec<String> {
+        let rows = t.rows_under(preset).into_iter().map(|r| {
+            let why = r.reason.or(r.hint.map(String::from)).unwrap_or_default();
+            let mark = if r.checked { "\t*" } else { "" };
+            format!("{}\t{}\t{}\t{why}{mark}", r.id, r.label, r.detail)
+        });
+        rows.chain(t.note_under(preset)).collect()
     }
 
     /// `launch <host-ref> [--game ID] [--preset REF] [--exec]` — start a stream, wake included.
@@ -2094,6 +2268,7 @@ from the config directory for a true factory reset."
                 "wake",
                 "library",
                 "actions",
+                "screen",
                 "launch",
                 "open",
                 "reachable",
@@ -2442,6 +2617,131 @@ from the config directory for a true factory reset."
             assert_eq!(v["slow"], serde_json::Value::Null);
             assert_eq!(v["legs"], serde_json::json!([]));
             assert_eq!(v["wall"], false);
+        }
+
+        /// A desk host's answer: two roles offered, this device on the second screen, and three
+        /// monitors, one free, one streamed by another device, one off.
+        fn desk(extra: serde_json::Value) -> Targets {
+            let mut v = serde_json::json!({
+                "host_default": "own",
+                "targets": [
+                    {"id": "own", "label": "Own screen"},
+                    {"id": "HDMI-A-1", "label": "LG TV", "connector": "HDMI-A-1",
+                     "mode": "3840x2160@60"},
+                    {"id": "DP-1", "label": "Dell", "in_use_by": "Deck", "enabled": false},
+                    {"id": "DP-2", "label": "DP-2", "enabled": false},
+                ],
+                "role": {"yours": "second", "host_default": "only", "offered": ["only", "second"]},
+            });
+            v.as_object_mut()
+                .unwrap()
+                .extend(extra.as_object().unwrap().clone());
+            serde_json::from_value(v).unwrap()
+        }
+
+        const COUCH: Option<BoundPreset> = Some(BoundPreset {
+            name: "Couch",
+            host_screen: "only",
+        });
+
+        /// The plugin words every row itself: roles by id, a monitor by the host's label, the
+        /// first monitor heading its group, and why one is greyed as data.
+        #[test]
+        fn screen_json_carries_rows_as_data() {
+            let v = screen_json(&desk(serde_json::json!({})), None);
+            let rows = v["rows"].as_array().unwrap();
+            let ids: Vec<&str> = rows.iter().map(|r| r["id"].as_str().unwrap()).collect();
+            assert_eq!(ids, ["only", "second", "HDMI-A-1", "DP-1", "DP-2"]);
+            assert_eq!(
+                rows[1],
+                serde_json::json!({
+                    "kind": "role", "id": "second", "label": null, "detail": "",
+                    "header": false, "checked": true, "pickable": true,
+                    "in_use_by": null, "off": false,
+                })
+            );
+            assert_eq!(rows[2]["label"], "LG TV");
+            assert_eq!(rows[2]["detail"], "HDMI-A-1 \u{b7} 3840x2160@60");
+            assert_eq!(rows[2]["header"], true);
+            assert_eq!(rows[3]["in_use_by"], "Deck");
+            assert_eq!(
+                rows[3]["off"], false,
+                "a taken head says who, not that it is off"
+            );
+            assert_eq!(rows[4]["off"], true);
+            assert_eq!(rows[4]["pickable"], false);
+            assert_eq!(v["note"], serde_json::Value::Null);
+            assert_eq!(v["preset"], serde_json::Value::Null);
+            assert_eq!(v["may_choose"], true);
+        }
+
+        /// `note` names who decides as a code, in the order the card says it.
+        #[test]
+        fn screen_json_names_who_decides() {
+            let locked = desk(serde_json::json!({"locked": true, "may_choose": false}));
+            assert_eq!(screen_json(&locked, COUCH)["note"], "locked");
+            let held = desk(serde_json::json!({"may_choose": false}));
+            let v = screen_json(&held, COUCH);
+            assert_eq!(v["note"], "host_decides");
+            assert_eq!(v["preset"], serde_json::Value::Null);
+            assert_eq!(v["may_choose"], false);
+            let v = screen_json(&desk(serde_json::json!({})), COUCH);
+            assert_eq!(v["note"], "preset");
+            assert_eq!(v["preset"], "Couch");
+            assert_eq!(v["rows"].as_array().unwrap().len(), 1);
+            assert_eq!(v["rows"][0]["id"], "only");
+            assert_eq!(v["rows"][0]["pickable"], false);
+        }
+
+        /// A pickable row writes its pair; the checked one, a busy monitor, a missing row and a
+        /// host that decides are refused with a sentence.
+        #[test]
+        fn screen_pick_refuses_what_cannot_change() {
+            let t = desk(serde_json::json!({}));
+            let (pick, label) = screen_pick(&t, None, "only").unwrap();
+            assert_eq!(label, "Only screen");
+            assert_eq!(pick.topology.as_deref(), Some("exclusive"));
+            let (pick, _) = screen_pick(&t, None, "HDMI-A-1").unwrap();
+            assert_eq!(
+                pick.screen,
+                display_targets::DisplayTarget::Monitor("HDMI-A-1".into())
+            );
+            assert_eq!(
+                screen_pick(&t, None, "second").unwrap_err(),
+                (CONNECT_FAILED, "Second screen is already picked".into())
+            );
+            assert_eq!(
+                screen_pick(&t, None, "DP-1").unwrap_err(),
+                (
+                    CONNECT_FAILED,
+                    "Dell can't be picked now \u{2014} Streamed by Deck".into()
+                )
+            );
+            assert_eq!(screen_pick(&t, None, "main").unwrap_err().0, UNRESOLVED);
+            let decided = "Set by the preset Couch".to_string();
+            assert_eq!(
+                screen_pick(&t, COUCH, "second").unwrap_err(),
+                (CONNECT_FAILED, decided)
+            );
+            let held = desk(serde_json::json!({"may_choose": false}));
+            let note = "This host decides the screen for this device.".to_string();
+            assert_eq!(
+                screen_pick(&held, None, "only").unwrap_err(),
+                (CONNECT_FAILED, note)
+            );
+        }
+
+        /// The text form marks the checked row and ends on the note.
+        #[test]
+        fn screen_lines_end_on_the_note() {
+            let held = desk(serde_json::json!({"may_choose": false}));
+            assert_eq!(
+                screen_lines(&held, None),
+                [
+                    "second\tSecond screen\t\tOne more screen beside the host's monitors.\t*",
+                    "This host decides the screen for this device.",
+                ]
+            );
         }
     }
 }

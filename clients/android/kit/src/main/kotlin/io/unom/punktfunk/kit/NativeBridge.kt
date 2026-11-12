@@ -65,6 +65,11 @@ object NativeBridge {
     /** The session on [handle] started on a screen another device opened and sized. */
     external fun nativeSharesScreen(handle: Long): Boolean
 
+    /** Why the session on [handle] did not get the screen it asked for, as the host's echo says:
+     *  `0` as asked (also with no echo), `1` not allowed, `2` monitors held, `3` unavailable,
+     *  `4` no monitors. */
+    external fun nativeScreenRoleReason(handle: Long): Int
+
     /**
      * Has the underlying QUIC session ended? `true` once the connection closed — a host suspend /
      * crash / network drop idle-timed it out (~8 s), or the host closed it — from then on no frame

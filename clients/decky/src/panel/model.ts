@@ -2,6 +2,7 @@
 // under plain node. Each function returns a kind; the sections turn kinds into words, which keeps
 // every `t("…")` literal where the l10n test reads it. The host split lives beside `needsPair` in
 // hosts/model.ts and the update rows beside the update predicates in update/model.ts.
+import type { ScreenRow } from "../backend";
 import type { HostView } from "../hosts/model";
 
 export type RowStatus = "online" | "offline" | "offline-wakes";
@@ -24,15 +25,26 @@ export function sharedNames(views: HostView[]): Set<string> {
 
 /**
  * What a host row's ▾ menu lists, or null for a row without one. Profiles count from two: a host
- * with a single profile always streams as it. `power` counts Wake and the host's own actions.
+ * with a single profile always streams as it. `power` counts Wake and the host's own actions;
+ * `screen` counts the Screen rows and the note why none can be picked.
  */
 export function rowMenu(
   presets: number,
   profiles: number,
   power: number,
-): { profiles: boolean; presets: boolean; power: boolean } | null {
-  const menu = { profiles: profiles >= 2, presets: presets > 0, power: power > 0 };
-  return menu.profiles || menu.presets || menu.power ? menu : null;
+  screen: number,
+): { profiles: boolean; presets: boolean; power: boolean; screen: boolean } | null {
+  const menu = { profiles: profiles >= 2, presets: presets > 0, power: power > 0, screen: screen > 0 };
+  return menu.profiles || menu.presets || menu.power || menu.screen ? menu : null;
+}
+
+/**
+ * What pressing a Screen row does: `pick` it, nothing for the `current` one, or say why it is
+ * `greyed`, which wins over current when the host or a preset decides.
+ */
+export function screenPress(row: ScreenRow): "pick" | "current" | "greyed" {
+  if (!row.pickable) return "greyed";
+  return row.checked ? "current" : "pick";
 }
 
 /**

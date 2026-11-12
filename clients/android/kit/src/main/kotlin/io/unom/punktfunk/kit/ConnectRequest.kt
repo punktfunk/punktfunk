@@ -100,6 +100,9 @@ data class ConnectRequest(
      *  that reads it encodes this instead. `0`×`0` names none. An older host ignores it. */
     val viewWidth: Int = 0,
     val viewHeight: Int = 0,
+    /** A preset's screen wish, as `host_screen` spells it (`second`, `monitor:HDMI-A-1`); empty
+     *  asks for none. Rides the Hello; the host may not grant it. */
+    val hostScreen: String = "",
 ) {
     fun toJson(): String = JSONObject()
         .put("host", host)
@@ -138,5 +141,6 @@ data class ConnectRequest(
         .put("studio_range", studioRange)
         .put("view_width", viewWidth)
         .put("view_height", viewHeight)
+        .put("host_screen", hostScreen)
         .toString()
 }

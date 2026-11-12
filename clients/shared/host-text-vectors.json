@@ -81,5 +81,17 @@
     {"id": "seatline_switching", "params": {"profile": "Kid"}, "english": "The host's own English.", "sentence": "Switching to Kid…"},
     {"id": "apierr_from_a_newer_host", "params": {"account": "jdoe"}, "english": "A newer host said this.", "sentence": "A newer host said this."},
     {"id": "player_stats_scale_pct", "params": {}, "english": "Not a host message.", "sentence": "Not a host message."}
+  ],
+  "$screen_wish": "The stream-start line for a screen the session did not get as asked: `wish` is the preset's host_screen as sent (null for none), `reason` the ServerHello echo's reason as serde spells it, `id` the client message it words with ({role} is the wished role's name or the monitor's connector), and `sentence` what the player reads, null for nothing. Pinned by pf-client-core host_text::screen_wish_line.",
+  "screen_wish": [
+    {"wish": "second", "reason": "not_allowed", "id": "screen_wish_not_allowed", "sentence": "Second screen wasn't applied: this host decides the screen for this device."},
+    {"wish": "monitor:HDMI-A-1", "reason": "not_allowed", "id": "screen_wish_not_allowed", "sentence": "HDMI-A-1 wasn't applied: this host decides the screen for this device."},
+    {"wish": "only", "reason": "monitors_held", "id": "screen_wish_monitors_held", "sentence": "The host's monitors stayed as they were: another device was streaming first."},
+    {"wish": null, "reason": "monitors_held", "id": "screen_wish_monitors_held", "sentence": "The host's monitors stayed as they were: another device was streaming first."},
+    {"wish": "monitor:HDMI-A-1", "reason": "unavailable", "id": "screen_wish_unavailable", "sentence": "HDMI-A-1 wasn't applied: that monitor can't be streamed now."},
+    {"wish": "main", "reason": "no_monitors", "id": "screen_wish_no_monitors", "sentence": "Main screen wasn't applied: this desktop has no monitors."},
+    {"wish": "second", "reason": "as_asked", "id": null, "sentence": null},
+    {"wish": null, "reason": "not_allowed", "id": null, "sentence": null},
+    {"wish": "tablet", "reason": "no_monitors", "id": null, "sentence": null}
   ]
 }

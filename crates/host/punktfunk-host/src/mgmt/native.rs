@@ -2,7 +2,7 @@
 //! clients, and approve pending knocks.
 
 use super::shared::*;
-use crate::native_pairing::{Access, PairedClient};
+use crate::native_pairing::{stored_grants, Access, PairedClient};
 use punktfunk_core::quic::{
     GRANT_ALL, GRANT_PRESET_CONTROLLER_ONLY, GRANT_PRESET_FULL, GRANT_PRESET_VIEW_ONLY,
     GRANT_RESERVED,
@@ -132,7 +132,9 @@ pub(crate) struct NativeClient {
     name: String,
     /// Hex SHA-256 of the client certificate — the stable id.
     fingerprint: String,
-    /// `GRANT_*` bits 0–5. `null` is a pre-grants record, which means full.
+    /// `GRANT_*` bits 0–8 (`0x100` is choosing its screen), as this host reads the record: an
+    /// older host's Full reads `0x1FF`, and `0xFF` is everything but the screen choice. `null`
+    /// is a pre-grants record, which means full.
     #[schema(example = 1)]
     grants: Option<u32>,
     /// Absolute expiry, unix seconds on the host clock. `null` = permanent.
@@ -155,13 +157,15 @@ pub(crate) struct NativeClient {
 }
 
 impl NativeClient {
-    /// One place derives `access_level`, so list / approve / PATCH never disagree.
+    /// One place derives `grants` and `access_level` ([`stored_grants`]), so list / approve /
+    /// PATCH never disagree.
     fn from_record(c: PairedClient) -> NativeClient {
+        let grants = c.grants.map(|_| stored_grants(&c));
         NativeClient {
-            access_level: Some(access_level(c.grants).to_string()),
+            access_level: Some(access_level(grants).to_string()),
             name: c.name,
             fingerprint: c.fingerprint,
-            grants: c.grants,
+            grants,
             expires_unix: c.expires_unix,
             granted_unix: c.granted_unix,
             until_disconnect: c.until_disconnect,
@@ -514,9 +518,9 @@ pub(crate) async fn update_native_client_access(
     let access = Access {
         grants: match req.grants {
             Some(g) => g,
-            // Same reading as enforcement (absent = full, reserved bits off) so
-            // an expiry-only PATCH re-stores what is in force.
-            None => current.grants.unwrap_or(GRANT_ALL) & GRANT_ALL,
+            // Enforcement's reading, so an expiry-only PATCH re-stores what is in force: the
+            // write marks the record, and an older Full must not land as all but the screen.
+            None => stored_grants(&current),
         },
         expires_unix: if req.clear_expiry == Some(true) {
             None
@@ -549,6 +553,7 @@ pub(crate) async fn update_native_client_access(
                     name: current.name,
                     fingerprint: current.fingerprint,
                     grants: Some(access.grants),
+                    grants_rev: Some(crate::native_pairing::GRANTS_REV),
                     expires_unix: access.expires_unix,
                     granted_unix: Some(crate::clock::unix_secs()),
                     until_disconnect: access.until_disconnect,
@@ -650,15 +655,16 @@ pub(crate) async fn list_pending_devices(
                 let stored = paired
                     .iter()
                     .find(|c| c.fingerprint.eq_ignore_ascii_case(&p.fingerprint));
+                let grants = stored.and_then(|c| c.grants.map(|_| stored_grants(c)));
                 PendingDevice {
                     id: p.id,
                     name: p.name,
                     fingerprint: p.fingerprint,
                     age_secs: p.age_secs,
-                    grants: stored.and_then(|c| c.grants),
+                    grants,
                     expires_unix: stored.and_then(|c| c.expires_unix),
                     granted_unix: stored.and_then(|c| c.granted_unix),
-                    access_level: stored.map(|c| access_level(c.grants).to_string()),
+                    access_level: stored.map(|_| access_level(grants).to_string()),
                     until_disconnect: stored.is_some_and(|c| c.until_disconnect),
                     source: match p.source {
                         crate::native_pairing::KnockSource::Lan => "lan".into(),
