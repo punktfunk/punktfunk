@@ -24,7 +24,8 @@ pub(super) async fn prepare_launch(
     Option<String>,
     crate::session_launch::Prepared,
 )> {
-    let target = match resolve_launch(hello.launch.as_deref(), outcome).await? {
+    let view = crate::library::View::session(profile);
+    let target = match resolve_launch(hello.launch.as_deref(), view, outcome).await? {
         Some(t) => Some(t),
         None => home_launch(hello.launch.as_deref(), profile),
     };
@@ -49,19 +50,20 @@ pub(super) async fn prepare_launch(
     }
 }
 
-/// One library lookup: command, title, process identity. The client picks an existing id,
-/// never a command. An id this host can't start is refused onto `outcome`. Clients list the
-/// box's whole library, so a seat is asked for titles it never could. Blocking: plugin entries
-/// ask over loopback from this async context.
+/// One library lookup in the session profile's `view`: command, title, process identity. The
+/// client picks an existing id, never a command. An id this host can't start, or one the profile
+/// hides, is refused onto `outcome`. Clients list the box's whole library, so a seat is asked for
+/// titles it never could. Blocking: plugin entries ask over loopback from this async context.
 async fn resolve_launch(
     launch: Option<&str>,
+    view: crate::library::View,
     outcome: &crate::gamelease::OutcomeTx,
 ) -> Result<Option<crate::library::LaunchTarget>> {
     let Some(id) = launch else {
         return Ok(None);
     };
     let owned = id.to_string();
-    let found = tokio::task::spawn_blocking(move || crate::library::resolve_launch(&owned))
+    let found = tokio::task::spawn_blocking(move || crate::library::resolve_launch(&view, &owned))
         .await
         .context("resolve the session's library launch")?;
     match &found {

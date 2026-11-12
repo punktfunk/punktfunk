@@ -3069,7 +3069,7 @@
           "library"
         ],
         "summary": "List every title this host knows, sorted by title.",
-        "description": "Plugin-synced entries plus custom ones. Art the host can serve is rewritten to this API's\nart proxy, local paths and remote URLs alike; a URL the proxy already refused passes\nthrough. `?provider=` / `?platform=` (case-insensitive) narrow. `?as=` names the\nasking device's profile: each title it has launched carries its own numbers in `stats.mine`.\n\nThe operator lane sees hidden titles (`hidden: true`) so the console can un-hide them.\nEvery other lane is filtered upstream and cannot tell they exist.",
+        "description": "Plugin-synced entries plus custom ones. Art the host can serve is rewritten to this API's\nart proxy, local paths and remote URLs alike; a URL the proxy already refused passes\nthrough. `?provider=` / `?platform=` (case-insensitive) narrow. `?as=` names a profile: the\nlibrary as it plays it, the box's with the profile's own layer on top, and each title it has\nlaunched carries its own numbers in `stats.mine`.\n\nThe operator lane sees hidden titles (`hidden: true`) so the console can un-hide them; with\n`as`, those the profile hides, and none the box hides. Every other lane is filtered upstream\nand cannot tell they exist.",
         "operationId": "getLibrary",
         "parameters": [
           {
@@ -3093,7 +3093,7 @@
           {
             "name": "as",
             "in": "query",
-            "description": "Profile id whose own play stats fill `stats.mine`",
+            "description": "Profile id: the library as that profile plays it, its own play stats in `stats.mine`",
             "required": false,
             "schema": {
               "type": "string"
@@ -3123,6 +3123,16 @@
                 }
               }
             }
+          },
+          "404": {
+            "description": "`as` names no profile on this host",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
           }
         }
       }
@@ -3133,7 +3143,7 @@
           "library"
         ],
         "summary": "Stream one cover-art image for a library entry.",
-        "description": "Resolves `kind` (`portrait` | `hero` | `logo` | `header`) for a catalog id and returns the\nbytes: a launcher's cover cache on the host disk, or a remote URL the host fetches once on\nthe first miss and then serves from its own store. Unknown id or kind is 404 so the client\ncan try the next candidate, and so is a URL the fetch refused — `GET /library` advertises\nthat one verbatim again. The response carries `Cache-Control` and an `ETag` of the bytes; a\nrequest whose `If-None-Match` names that tag gets 304 with no body. On a Linux door the\ncovers are in the owner's home, and the owner's host serves them while it runs.",
+        "description": "Resolves `kind` (`portrait` | `hero` | `logo` | `header`) for a catalog id and returns the\nbytes: a launcher's cover cache on the host disk, or a remote URL the host fetches once on\nthe first miss and then serves from its own store. Unknown id or kind is 404 so the client\ncan try the next candidate, and so is a URL the fetch refused — `GET /library` advertises\nthat one verbatim again. The response carries `Cache-Control` and an `ETag` of the bytes; a\nrequest whose `If-None-Match` names that tag gets 304 with no body. On a Linux door the\ncovers are in the owner's home, and the owner's host serves them while it runs. With `as`,\nthe art as that profile sees it: its own picks first.",
         "operationId": "getLibraryArt",
         "parameters": [
           {
@@ -3150,6 +3160,15 @@
             "in": "path",
             "description": "`portrait` | `hero` | `logo` | `header`",
             "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "as",
+            "in": "query",
+            "description": "Profile id: the art as that profile sees it",
+            "required": false,
             "schema": {
               "type": "string"
             }
@@ -3188,7 +3207,7 @@
             }
           },
           "404": {
-            "description": "No art of that kind for that id",
+            "description": "No art of that kind for that id, or `as` names no profile on this host",
             "content": {
               "application/json": {
                 "schema": {
@@ -3472,7 +3491,7 @@
           "library"
         ],
         "summary": "Hide or un-hide one library title.",
-        "description": "Curation, not access control: the title leaves every play surface and launch resolution\nbut is not deleted. The operator console still lists it (`hidden: true`) so it can return.\nThe id is not required to exist now — a plugin mid-sync or an unmounted drive would\notherwise refuse a choice that should stick. Emits `library.changed` only on a real change.",
+        "description": "Curation, not access control: the title leaves every play surface and launch resolution\nbut is not deleted. The operator console still lists it (`hidden: true`) so it can return.\nThe id is not required to exist now — a plugin mid-sync or an unmounted drive would\notherwise refuse a choice that should stick. With `as`, the hide is that profile's own; it\ncannot bring back a title the box hides. Emits `library.changed` only on a real change.",
         "operationId": "setLibraryEntryHidden",
         "parameters": [
           {
@@ -3480,6 +3499,15 @@
             "in": "path",
             "description": "The library entry id (e.g. `steam:70`)",
             "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "as",
+            "in": "query",
+            "description": "Profile id: hide it for that profile only",
+            "required": false,
             "schema": {
               "type": "string"
             }
@@ -3518,6 +3546,16 @@
           },
           "401": {
             "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`as` names no profile on this host",
             "content": {
               "application/json": {
                 "schema": {
@@ -4089,8 +4127,19 @@
           "library"
         ],
         "summary": "Read the game overrides",
-        "description": "The shared overrides, each game's entry and each source's, as `library-overrides.json`\nholds them. `GET /library` carries what each title resolves to.",
+        "description": "The shared overrides, each game's entry and each source's, as `library-overrides.json`\nholds them. `GET /library` carries what each title resolves to. With `as`, the profile's own\nfile: where it has an entry for a game or its source, that entry wins over the box's.",
         "operationId": "getLibraryOverrides",
+        "parameters": [
+          {
+            "name": "as",
+            "in": "query",
+            "description": "Profile id: that profile's own overrides",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "description": "The shared overrides and every game's and source's entry",
@@ -4111,6 +4160,16 @@
                 }
               }
             }
+          },
+          "404": {
+            "description": "`as` names no profile on this host",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
           }
         }
       }
@@ -4121,7 +4180,7 @@
           "library"
         ],
         "summary": "Set one game's overrides",
-        "description": "`{ \"set\": id }` points the game at a shared override; fields alone are its own values;\n`{ \"none\": true }` leaves it to the device, whatever the source sets; `{}` clears its entry,\nand the game takes its source's. The id is not required to exist now, as with hiding.\nEmits `library.changed`.",
+        "description": "`{ \"set\": id }` points the game at a shared override; fields alone are its own values;\n`{ \"none\": true }` leaves it to the device, whatever the source sets; `{}` clears its entry,\nand the game takes its source's. The id is not required to exist now, as with hiding.\nWith `as`, the entry is that profile's own and `set` may name the box's shared override or\nthe profile's; `{}` hands the game back to the box's entry. Emits `library.changed`.",
         "operationId": "setGameOverrides",
         "parameters": [
           {
@@ -4129,6 +4188,15 @@
             "in": "path",
             "description": "The library entry id (e.g. `steam:70`)",
             "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "as",
+            "in": "query",
+            "description": "Profile id: set it for that profile only",
+            "required": false,
             "schema": {
               "type": "string"
             }
@@ -4176,7 +4244,7 @@
             }
           },
           "404": {
-            "description": "`set` names no shared override",
+            "description": "`set` names no shared override, or `as` names no profile on this host",
             "content": {
               "application/json": {
                 "schema": {
@@ -4204,8 +4272,19 @@
           "library"
         ],
         "summary": "Create a shared override",
-        "description": "A named set of stream settings that games and sources point at. The host assigns its id.",
+        "description": "A named set of stream settings that games and sources point at. The host assigns its id.\nWith `as`, it is that profile's own.",
         "operationId": "createOverrideSet",
+        "parameters": [
+          {
+            "name": "as",
+            "in": "query",
+            "description": "Profile id: create it for that profile",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -4247,6 +4326,16 @@
               }
             }
           },
+          "404": {
+            "description": "`as` names no profile on this host",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
           "409": {
             "description": "Another shared override has this name",
             "content": {
@@ -4276,7 +4365,7 @@
           "library"
         ],
         "summary": "Change a shared override",
-        "description": "A field left out keeps its value; `null` clears it. Every game and source that uses it\nfollows. Emits `library.changed` for each source they belong to.",
+        "description": "A field left out keeps its value; `null` clears it. Every game and source that uses it\nfollows. With `as`, one of that profile's own. Emits `library.changed` for each source they\nbelong to.",
         "operationId": "updateOverrideSet",
         "parameters": [
           {
@@ -4284,6 +4373,15 @@
             "in": "path",
             "description": "The shared override's id",
             "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "as",
+            "in": "query",
+            "description": "Profile id: one of that profile's own",
+            "required": false,
             "schema": {
               "type": "string"
             }
@@ -4331,7 +4429,7 @@
             }
           },
           "404": {
-            "description": "No shared override with that id",
+            "description": "No shared override with that id, or `as` names no profile on this host",
             "content": {
               "application/json": {
                 "schema": {
@@ -4367,7 +4465,7 @@
           "library"
         ],
         "summary": "Delete a shared override",
-        "description": "The games and sources that used it lose their entry and go back to what the device\ndecides. The answer counts them. Emits `library.changed` for each source they belong to.",
+        "description": "The games and sources that used it lose their entry and go back to what the device\ndecides. The answer counts them. With `as`, one of that profile's own, and only its entries\nlose theirs. Emits `library.changed` for each source they belong to.",
         "operationId": "deleteOverrideSet",
         "parameters": [
           {
@@ -4375,6 +4473,15 @@
             "in": "path",
             "description": "The shared override's id",
             "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "as",
+            "in": "query",
+            "description": "Profile id: one of that profile's own",
+            "required": false,
             "schema": {
               "type": "string"
             }
@@ -4402,7 +4509,7 @@
             }
           },
           "404": {
-            "description": "No shared override with that id",
+            "description": "No shared override with that id, or `as` names no profile on this host",
             "content": {
               "application/json": {
                 "schema": {
@@ -4430,7 +4537,7 @@
           "library"
         ],
         "summary": "Set one source's overrides",
-        "description": "The same body as a game's, without `none`: `{}` clears the source's entry. Each title of\nthe source without an entry of its own takes it. Emits `library.changed`.",
+        "description": "The same body as a game's, without `none`: `{}` clears the source's entry. Each title of\nthe source without an entry of its own takes it. With `as`, the entry is that profile's own.\nEmits `library.changed`.",
         "operationId": "setSourceOverrides",
         "parameters": [
           {
@@ -4438,6 +4545,15 @@
             "in": "path",
             "description": "The source, the store part of a library id (e.g. `lutris`)",
             "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "as",
+            "in": "query",
+            "description": "Profile id: set it for that profile only",
+            "required": false,
             "schema": {
               "type": "string"
             }
@@ -4485,7 +4601,7 @@
             }
           },
           "404": {
-            "description": "`set` names no shared override",
+            "description": "`set` names no shared override, or `as` names no profile on this host",
             "content": {
               "application/json": {
                 "schema": {
@@ -4593,7 +4709,7 @@
           {
             "name": "as",
             "in": "query",
-            "description": "Profile id whose own play stats fill `stats.mine`",
+            "description": "Profile id: the library as that profile plays it, its own play stats in `stats.mine`",
             "required": false,
             "schema": {
               "type": "string"
@@ -4630,6 +4746,16 @@
                 }
               }
             }
+          },
+          "404": {
+            "description": "`as` names no profile on this host",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
           }
         }
       }
@@ -4640,7 +4766,7 @@
           "library"
         ],
         "summary": "Pick the art for one slot of a library entry",
-        "description": "The operator's choice beats the entry's own art and every metadata source, and survives\nthe provider's next reconcile. `url: null` clears the pick. The id is not required to\nexist now, as with hiding. Emits `library.changed`.",
+        "description": "The operator's choice beats the entry's own art and every metadata source, and survives\nthe provider's next reconcile. `url: null` clears the pick. The id is not required to\nexist now, as with hiding. With `as`, the pick is that profile's own and beats the box's for\nthe same slot. Emits `library.changed`.",
         "operationId": "setLibraryArtPick",
         "parameters": [
           {
@@ -4648,6 +4774,15 @@
             "in": "path",
             "description": "The library entry id (e.g. `steam:70`)",
             "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "as",
+            "in": "query",
+            "description": "Profile id: pick it for that profile only",
+            "required": false,
             "schema": {
               "type": "string"
             }
@@ -4686,6 +4821,16 @@
           },
           "401": {
             "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`as` names no profile on this host",
             "content": {
               "application/json": {
                 "schema": {
@@ -5018,8 +5163,19 @@
           "library"
         ],
         "summary": "List library sources",
-        "description": "One row per installed library plugin, with its enable state. Sources default to\nenabled; disabling hides titles from the next read. The custom store is not a\nsource and is always on. Every row is\n`origin: \"plugin\"`.",
+        "description": "One row per installed library plugin, with its enable state. Sources default to\nenabled; disabling hides titles from the next read. The custom store is not a\nsource and is always on. Every row is\n`origin: \"plugin\"`. With `as`, a source is off when the box or the profile turned it off, and\n`off_by` says which.",
         "operationId": "listLibraryScanners",
+        "parameters": [
+          {
+            "name": "as",
+            "in": "query",
+            "description": "Profile id: the sources as that profile has them",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "description": "This host's scanners with their enable state",
@@ -5043,6 +5199,16 @@
                 }
               }
             }
+          },
+          "404": {
+            "description": "`as` names no profile on this host",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
           }
         }
       }
@@ -5053,7 +5219,7 @@
           "library"
         ],
         "summary": "Enable or disable a library source.",
-        "description": "Takes effect on the next library read. Disabling hides titles; the plugin may keep\nreconciling while off. Nothing is deleted. Emits `library.changed` when the state changes.",
+        "description": "Takes effect on the next library read. Disabling hides titles; the plugin may keep\nreconciling while off. Nothing is deleted. With `as`, the switch is that profile's own: it\nturns a source off for the profile, and cannot turn on one the box turned off. Emits\n`library.changed` when the state changes.",
         "operationId": "setLibraryScanner",
         "parameters": [
           {
@@ -5061,6 +5227,15 @@
             "in": "path",
             "description": "The scanner id (e.g. `steam`)",
             "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "as",
+            "in": "query",
+            "description": "Profile id: switch it for that profile only",
+            "required": false,
             "schema": {
               "type": "string"
             }
@@ -5111,7 +5286,7 @@
             }
           },
           "404": {
-            "description": "No such scanner on this platform",
+            "description": "No such scanner on this platform, or `as` names no profile on this host",
             "content": {
               "application/json": {
                 "schema": {
@@ -8073,6 +8248,17 @@
           "session"
         ],
         "operationId": "getSessionSettings",
+        "parameters": [
+          {
+            "name": "as",
+            "in": "query",
+            "description": "Profile id: what that profile's own seat plays with",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "description": "Stored settings + which axes this build enforces",
@@ -8093,6 +8279,26 @@
                 }
               }
             }
+          },
+          "404": {
+            "description": "`as` names no profile on this host",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`as` names a profile that plays on the host's own desktop",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
           }
         }
       },
@@ -8101,8 +8307,19 @@
           "session"
         ],
         "summary": "Set the session policy",
-        "description": "Persisted clamped. Takes effect on the next decision, including a session\nalready streaming — policy is read at session end, not start.",
+        "description": "Persisted clamped. Takes effect on the next decision, including a session\nalready streaming — policy is read at session end, not start. With `as`, the settings of\nthat profile's own seat; a profile on the host's own desktop has none of its own.",
         "operationId": "setSessionSettings",
+        "parameters": [
+          {
+            "name": "as",
+            "in": "query",
+            "description": "Profile id: set what that profile's own seat plays with",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -8136,6 +8353,26 @@
           },
           "401": {
             "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`as` names no profile on this host",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "A seat's own host, or `as` names a profile that plays on the host's own desktop",
             "content": {
               "application/json": {
                 "schema": {
@@ -14529,6 +14766,14 @@
           }
         }
       },
+      "Layer": {
+        "type": "string",
+        "description": "Whose file a value came from.",
+        "enum": [
+          "box",
+          "profile"
+        ]
+      },
       "Layout": {
         "type": "object",
         "properties": {
@@ -15309,7 +15554,18 @@
             "properties": {
               "hidden": {
                 "type": "boolean",
-                "description": "Set by [`set_entry_hidden`]. Omitted when false so the shape only grows for hidden titles."
+                "description": "Set by [`set_entry_hidden`]. Omitted when false so the shape only grows for hidden titles.\nWith a profile in view (`as`), the profile hid it: a title the box hides is not listed."
+              },
+              "profile": {
+                "oneOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "$ref": "#/components/schemas/ProfileValues",
+                    "description": "With a profile in view, the values on this row that are the profile's own."
+                  }
+                ]
               }
             }
           }
@@ -16540,6 +16796,23 @@
           }
         }
       },
+      "ProfileValues": {
+        "type": "object",
+        "description": "The values on a row that the profile in view (`as`) set itself.",
+        "properties": {
+          "overrides": {
+            "type": "boolean",
+            "description": "`overrides` is the profile's: its entry for the game, or for the game's source."
+          },
+          "picks": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The art slots the profile picked: `portrait`, `hero`, `logo`, `header`."
+          }
+        }
+      },
       "ProviderEntryInput": {
         "allOf": [
           {
@@ -17070,6 +17343,17 @@
           "label": {
             "type": "string",
             "example": "Steam"
+          },
+          "off_by": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/Layer",
+                "description": "With a profile in view (`as`), who turned the source off. Only the box turns on what the\nbox turned off."
+              }
+            ]
           },
           "origin": {
             "$ref": "#/components/schemas/SourceOrigin",

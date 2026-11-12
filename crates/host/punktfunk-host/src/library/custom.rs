@@ -283,31 +283,41 @@ pub(crate) fn source_id_for(e: &CustomEntry) -> Option<&str> {
     e.store.as_deref().or(e.provider.as_deref())
 }
 
-/// Gated like [`super::collect_games`]: a source switched off, or left out on a seat, must not
-/// serve art (`GET /library/art` is on the paired-cert allowlist). Per-entry hide is not applied
-/// here — the console draws a dimmed cover, and this resolver cannot see the caller's lane.
+/// [`entry_in`] this host's own view.
 pub fn entry_for_library_id(library_id: &str) -> Option<CustomEntry> {
-    let off = disabled_scanners();
+    entry_in(&View::here(), library_id)
+}
+
+/// Gated like [`super::collect_games`]: a source switched off in `view`, or left out on a seat,
+/// must not serve art (`GET /library/art` is on the paired-cert allowlist). Per-entry hide is not
+/// applied here — the console draws a dimmed cover, and this resolver cannot see the caller's lane.
+fn entry_in(view: &View, library_id: &str) -> Option<CustomEntry> {
+    let off = disabled_scanners(view);
     catalog()
         .entries
         .iter()
         .find(|e| library_id_for(e) == library_id)
-        .filter(|e| !source_off(e, &off))
+        .filter(|e| !source_off(e, &off, view.reach))
         .cloned()
 }
 
-/// The entry's art as `GET /library` lists it: its own, merged with picks and metadata sources.
-pub(crate) fn merged_art(library_id: &str) -> Option<Artwork> {
-    let mut g = GameEntry::from(entry_for_library_id(library_id)?);
-    Fills::load().apply(&mut g);
+/// The entry's art as `GET /library` lists it in `view`: its own, merged with picks and
+/// metadata sources.
+pub(crate) fn merged_art(view: &View, library_id: &str) -> Option<Artwork> {
+    let mut g = GameEntry::from(entry_in(view, library_id)?);
+    Fills::load(view).apply(&mut g);
     Some(g.art)
 }
 
-/// Art bytes for one [`ArtKind`], or `None` — no row, no such field, or art the proxy may not
-/// serve. A remote URL comes from the host's store, which fetches it on the first miss.
+/// Art bytes for one [`ArtKind`] in `view`, or `None` — no row, no such field, or art the proxy
+/// may not serve. A remote URL comes from the host's store, which fetches it on the first miss.
 /// Blocking IO — call off the async runtime.
-pub fn library_art_bytes(library_id: &str, kind: ArtKind) -> Option<(Vec<u8>, String)> {
-    let field = art_field(&merged_art(library_id)?, kind)?;
+pub fn library_art_bytes(
+    view: &View,
+    library_id: &str,
+    kind: ArtKind,
+) -> Option<(Vec<u8>, String)> {
+    let field = art_field(&merged_art(view, library_id)?, kind)?;
     resolve_art_bytes(&field)
 }
 

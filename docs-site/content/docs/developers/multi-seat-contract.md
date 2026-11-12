@@ -188,7 +188,9 @@ session by design, and display activation fails while its session is inactive.
 - **The Seat defaults.** The box writes `seat-defaults.json` into its config directory at start and
   after each settings change: `end_on_game_exit` (a seat's stream ends when its game exits) and
   `max_mode` (the largest mode a seat grants a device without a cap of its own). The seat re-reads
-  it when it changes, so a change reaches the seat's next session. The box itself applies
+  it when it changes, so a change reaches the seat's next session. Session settings the seat's
+  profile holds in its own layer (below) come first; `end_on_game_exit` applies where it holds
+  none. On a person's own Linux account a game's exit always returns to the desktop. The box itself applies
   **Seats kept warm** and **Stop idle seats**. On Linux the file also carries `library_writable`,
   which the daemon reads from the box's copy when a seat starts (see the owner's libraries below),
   and `dualsense_usbip`, the box's own **DualSense over USB/IP** switch: a seat's DualSense is a
@@ -231,6 +233,21 @@ session by design, and display activation fails while its session is inactive.
   profile, the owner's included, is refused as an unknown profile; one that names none plays as
   this seat's profile. The owner's row alone also serves the owner and the profiles that share the
   owner's desktop.
+- **A profile's own layer.** Each profile but the owner may keep a layer of its own over the box's
+  library, in the library directory at `library-profiles/<profile id>/`: `library-hidden.json`,
+  `library-scanners.json`, `library-overrides.json`, `library-picks.json` and
+  `session-settings.json`, each the shape of the box's file. Only the host-minted id (12 lowercase
+  hex) names a folder. Nothing in a layer runs: no custom entry, command, `prep` or hook. The
+  host that writes the library writes the layers, and removing a profile removes its folder. A
+  layer adds and narrows, never widens: a title is hidden, or a source off, when the box or the
+  profile says so; the profile's game override (for the game or its source) and its art pick for
+  a slot win over the box's. Session settings are the profile's file when it has one, and only a
+  profile with a seat of its own has them. A seat reads its own profile's folder, found from the
+  box's `profiles.json` in its trust directory, for its list, launches, art, game overrides and
+  session settings; the owner's host applies the layer of the profile a session resolved to,
+  sharing the owner's desktop or taking turns, at launch and for game overrides. On the box,
+  `?as=<profile id>` on the library routes and `session/settings` reads and writes that layer, and
+  a profile with a seat of its own lists there what its seat lists.
 - **One connector, one lock.** A seat host creates its virtual display on its own connector only
   and holds the mutex `Global\punktfunk-vdisplay-manager-seat-<slot>`; the console host holds
   `Global\punktfunk-vdisplay-manager`. Hosts on different connectors start independently. A second

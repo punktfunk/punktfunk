@@ -171,6 +171,8 @@
 	"apierr_profile_owner_not_removable": "The owner profile can't be removed",
 	"apierr_profile_picture_invalid": "Couldn't save the picture. Use a PNG or JPEG under 1 MB.",
 	"apierr_profile_seat_needs_door": "Turn on Reachable without logging in before adding a profile with a desktop of its own.",
+	"apierr_profile_session_settings_host": "This profile plays on the host's own desktop, so it uses the host's session settings.",
+	"apierr_profile_unknown": "That profile is gone from this host. Pick another one.",
 	"apierr_proof_invalid": "Couldn't confirm it's you on this device. Type the account password.",
 	"apierr_proof_invalid_identity_changed": "This host's identity changed, so this device can't unlock with its key. Type the account password.",
 	"apierr_rdp_firewall_close": "Couldn't close Remote Desktop to the network.",

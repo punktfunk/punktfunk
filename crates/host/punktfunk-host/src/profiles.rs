@@ -125,6 +125,8 @@ pub struct Resolved {
     pub os_account: OsAccount,
     pub home: Home,
     pub via: ResolveVia,
+    /// The owner: the box's own session, which plays the box's library as it is.
+    pub owner: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -423,7 +425,9 @@ impl Profiles {
     }
 
     /// Removes `id`. `erase` also deletes its Steam home and picture ([`Self::erase`]); without it
-    /// the home stays for the console to list. Sessions playing as it hear [`removed`].
+    /// the home stays for the console to list. Its library layer goes too, a seat's only in
+    /// [`Self::erase`]: a seat that won't stop is [`Self::restore`]d. Sessions playing as it hear
+    /// [`removed`].
     pub fn delete(&self, id: &str, erase: bool) -> Result<Profile, EditError> {
         let mut gone = None;
         self.edit(|file| {
@@ -450,13 +454,16 @@ impl Profiles {
         let gone = gone.ok_or(EditError::NotFound)?;
         if erase {
             self.erase(id);
+        } else if !matches!(gone.os_account, OsAccount::Seat { seat: Some(_) }) {
+            crate::library::forget_profile(id);
         }
         announce_removed(id);
         Ok(gone)
     }
 
-    /// Deletes the Steam home and picture of `id`, which the store no longer holds.
+    /// Deletes the Steam home, picture and library layer of `id`, which the store no longer holds.
     pub fn erase(&self, id: &str) {
+        crate::library::forget_profile(id);
         if !safe_id(id) {
             return;
         }
@@ -484,8 +491,9 @@ impl Profiles {
     }
 
     /// A seat host's copy follows the box's file, so a profile the box deletes never runs
-    /// [`Self::delete`] here. Sends [`removed`] for each id that left the file since `known`,
-    /// then keeps the ids as they are. A file that is empty or doesn't parse says nothing.
+    /// [`Self::delete`] here. Sends [`removed`] for each id that left the file since `known`, and
+    /// on the owner's host, which writes the library, removes its layer. Then keeps the ids as
+    /// they are. A file that is empty or doesn't parse says nothing.
     pub fn announce_removals(&self, known: &mut std::collections::HashSet<ProfileId>) {
         let now: std::collections::HashSet<ProfileId> = {
             let state = self.lock();
@@ -496,6 +504,7 @@ impl Profiles {
         };
         for gone in known.difference(&now) {
             announce_removed(gone);
+            crate::library::forget_profile(gone);
         }
         *known = now;
     }
@@ -782,14 +791,17 @@ impl Profiles {
                 os_account: OsAccount::Operator,
                 home: Home::Desktop,
                 via,
+                owner: true,
             });
         };
+        let owner = file.profiles.iter().find(|p| is_owner(p)).map(|p| &p.id);
         Ok(Resolved {
             id: profile.id.clone(),
             display_name: profile.display_name.clone(),
             os_account: profile.os_account.clone(),
             home: profile.home,
             via,
+            owner: owner == Some(&profile.id),
         })
     }
 

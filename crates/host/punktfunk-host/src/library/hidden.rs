@@ -20,18 +20,25 @@ struct HiddenSettings {
     hidden: Vec<String>,
 }
 
-fn settings_path() -> PathBuf {
-    pf_paths::seat::library_dir().join("library-hidden.json")
-}
+const FILE: &str = "library-hidden.json";
 
 /// Malformed or absent file → nothing hidden. A bad parse must show too much,
 /// not an empty library.
-fn load_settings() -> HiddenSettings {
-    read_json_or_default(&settings_path())
+fn load_settings(view: &View) -> HiddenSettings {
+    read_json_or_default(&view.path(FILE))
 }
 
+/// The ids the box hides.
 pub(crate) fn hidden_ids() -> HashSet<String> {
-    load_settings().ids()
+    load_settings(&View::default()).ids()
+}
+
+/// The ids the box hides, and those the profile in view hides itself.
+pub(crate) fn hidden_layers(view: &View) -> (HashSet<String>, HashSet<String>) {
+    let own = view
+        .own_file(FILE)
+        .map(|path| read_json_or_default::<HiddenSettings>(&path).ids());
+    (hidden_ids(), own.unwrap_or_default())
 }
 
 impl HiddenSettings {
@@ -50,10 +57,10 @@ pub(super) fn store_of(id: &str) -> &str {
     id.split_once(':').map_or(id, |(store, _)| store)
 }
 
-/// Not checked against the live catalog: a title can be absent (launcher closed,
-/// disk unmounted) and the hide must still stick when it returns.
-pub fn set_entry_hidden(id: &str, hidden: bool) -> Result<bool> {
-    let mut settings = load_settings();
+/// Hides `id` in `view`'s layer. Not checked against the live catalog: a title can be absent
+/// (launcher closed, disk unmounted) and the hide must still stick when it returns.
+pub fn set_entry_hidden(view: &View, id: &str, hidden: bool) -> Result<bool> {
+    let mut settings = load_settings(view);
     let was_hidden = settings.hidden.iter().any(|h| h == id);
     if was_hidden == hidden {
         return Ok(hidden);
@@ -65,7 +72,7 @@ pub fn set_entry_hidden(id: &str, hidden: bool) -> Result<bool> {
     } else {
         settings.hidden.retain(|h| h != id);
     }
-    save_json(&settings_path(), &serde_json::to_string_pretty(&settings)?)?;
+    save_json(&view.path(FILE), &serde_json::to_string_pretty(&settings)?)?;
     crate::events::emit(crate::events::EventKind::LibraryChanged {
         source: store_of(id).to_string(),
     });
