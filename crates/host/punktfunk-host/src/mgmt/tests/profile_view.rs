@@ -197,6 +197,51 @@ async fn with_no_profile_in_view_the_box_reads_as_today() {
     assert!(crate::library::resolve_launch(&crate::library::View::here(), "steam:70").is_some());
 }
 
+/// A box with no seats writes its custom entries where it always did, under its 12-hex ids, and
+/// a profile's published titles never reach its own view or the owner's.
+#[tokio::test]
+async fn the_box_s_own_library_reads_and_writes_as_today() {
+    let tmp = ConfigDirOverride::new();
+    write_fixture(tmp.path());
+    let titles = serde_json::json!({"titles": [{"id": "own:0123456789ab", "title": "Theirs"}]});
+    let layer = tmp.path().join(format!("library-profiles/{SEAT_P}"));
+    std::fs::write(layer.join("own-titles.json"), titles.to_string()).unwrap();
+    let app = test_app(profiles_state(tmp.path(), profiles()), None);
+    let (_, before) = send(&app, get_req("/api/v1/library")).await;
+    let (_, owner) = send(&app, get_req(&format!("/api/v1/library?as={OWNER}"))).await;
+    assert_eq!(owner, before);
+    assert!(!listed(&before).iter().any(|(t, _)| t == "Theirs"));
+
+    let entry =
+        serde_json::json!({"title": "Mine", "launch": {"kind": "command", "value": "true"}});
+    let (s, made) = send(
+        &app,
+        json_req(Method::POST, "/api/v1/library/custom", entry),
+    )
+    .await;
+    assert_eq!(s, StatusCode::CREATED, "{made}");
+    let id = made["id"].as_str().unwrap().to_string();
+    assert!(crate::library::is_profile_id(&id), "{id}");
+    let stored = std::fs::read_to_string(tmp.path().join("library.json")).unwrap();
+    assert!(stored.contains(&id), "{stored}");
+    let (_, after) = send(&app, get_req("/api/v1/library")).await;
+    let mine = row(&after, "Mine");
+    assert_eq!(mine["id"], format!("custom:{id}"));
+    assert!(mine.get("own").is_none(), "{mine}");
+    let path = format!("/api/v1/library/custom/{id}");
+    let (s, _) = send(
+        &app,
+        json_req(Method::PUT, &path, serde_json::json!({"title": "Ours"})),
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK);
+    let delete = axum::http::Request::delete(&path)
+        .body(Body::empty())
+        .unwrap();
+    assert_eq!(send(&app, delete).await.0, StatusCode::NO_CONTENT);
+    assert_eq!(send(&app, get_req("/api/v1/library")).await.1, before);
+}
+
 /// `GET` on the paired-cert lane, with its body.
 async fn get_cert(app: &Router, path: &str, fp: &str) -> (StatusCode, serde_json::Value) {
     let mut req = get_req(path);
