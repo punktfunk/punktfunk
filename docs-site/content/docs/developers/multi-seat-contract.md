@@ -269,8 +269,9 @@ session by design, and display activation fails while its session is inactive.
   drops the profile's own session settings, so its seat takes the Seat defaults again.
 - **A profile's own titles.** A seat host keeps titles of its own, launch and `prep` included, in
   `library.json` in its own config directory. The custom-entry routes write there on a seat host,
-  under `own:<12 hex>` ids the box never mints; a write naming any other id answers 409, and a
-  seat on a person's own account takes none (403 `library_own_account`). Its list carries them on
+  under `own:<12 hex>` ids the box never mints; a write naming any other id answers 409. On a
+  person's own account only [their own session](#the-persons-own-session) writes one; any other
+  lane answers 403 `library_own_account`. Its list carries them on
   top of its profile's view, marked `own`, and they launch, run `prep` and serve art as the seat's
   user, past the rules for what a seat lists of the box's. `GET library/own` answers each one's
   id, title, platform and `http(s)` art, never how it starts. The box asks for that when a seat's
@@ -761,6 +762,43 @@ and it is a contract seat's host, not the owner's.
 - **What it does not take.** The owner's `host.env` and settings, the box's library as its own
   (it plays the box's, from its trust copy), the door, and the owner's user host. The trust copy
   is readable by the person alone.
+
+#### The person's own session
+
+A Linux seat's own host, made or on a person's own account, runs as the seat's account, so what
+it writes into its config folder only that account and root read. The console password never
+reaches this lane.
+
+- **The token.** At start the seat host writes 32 random bytes as hex to `person-token` in
+  `PUNKTFUNK_CONFIG_DIR`, mode `0600`, owned by its uid, in a folder it owns; it refuses a folder
+  that is a link, another uid's, or open to group or others, and the lane stays closed. No copy
+  list of the supervisor names the file. The owner's row, the door, a plain host and a Windows
+  seat write none and take no ticket.
+- **The ticket.** `punktfunk-host ctl console-url`, run as the person in the seat, signs
+  `<unix s>.<32 hex nonce>.<profile id>.<HMAC-SHA256 hex>` over
+  `pf-person-session:v1:<unix s>:<nonce>:<profile id>` with the token, and writes a page opening
+  `https://127.0.0.1:47992/_auth/person?ticket=<ticket>`.
+- **The session.** `POST /api/v1/auth/person/session` with `{"ticket"}`, from loopback, answers
+  `{token, expires_at, profile}`. The host takes a ticket at most 60 s from its stamp, once, for
+  its own profile; otherwise 401 `person_ticket_refused`, and 429 `person_ticket_wait` after ten
+  refusals in a minute. A session lasts 12 hours, 16 at most, and ends with the host or on
+  `DELETE` with its token as the bearer. A call with an expired one answers 401
+  `person_session_ended`.
+- **On the seat host.** `Authorization: Bearer <session>`, from loopback, reaches every route
+  scoped `profile-data` or `profile-exec` and `GET host` and `GET status`; anything else is 403.
+  An `as` naming another profile is 403.
+- **On the box.** The console sends `X-Punktfunk-Person-Session` and `X-Punktfunk-Person-Profile`
+  with no bearer, and `?as=` naming that profile, to the door from loopback. The door asks the
+  profile's seat host `POST /api/v1/auth/person/verify` `{"token"}` with its admin token, and
+  takes the call only when the answer names that profile. It reaches `mgmt_routes::PERSON` and
+  the reads `GET library`, `library/page`, `library/art/{id}/{kind}`, `library/scanners`,
+  `library/overrides` and `session/settings`, never for the owner. The owner's host takes the
+  door's word with `X-Punktfunk-Person` and its admin token, as for a device's person.
+- **What only it writes, on a person's own account.** `PUT hooks` and the custom-entry writes.
+  The host marks each with `person: true`, and runs only hooks and lists only own titles so
+  marked: a file planted without the mark runs nothing. A `prep` step runs only when an own title the person
+  wrote names it. Any other lane is refused, reads no hooks there, and reads a marked title as
+  404. Plugins and emulators stay refused, emulators with `emulators_own_account_yet`.
 
 #### Who opens a person's seat
 
