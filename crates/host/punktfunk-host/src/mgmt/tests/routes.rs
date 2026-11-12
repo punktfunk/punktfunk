@@ -173,10 +173,11 @@ fn every_route_is_classified_for_the_plugin_and_cert_lanes() {
         // for a 250 Hz input tap.
         ("GET", "/api/v1/session/{id}/pads", false, false),
         ("GET", "/api/v1/session/settings", true, false),
-        ("PUT", "/api/v1/session/settings", true, false),
+        // A locked profile's person sets and drops that profile's own game-exit choice.
+        ("PUT", "/api/v1/session/settings", true, true),
         // Drops a profile's own settings. The plugin gate admits it as `session/{id}`; the
         // handler refuses a plugin's `as` (`only_the_operator_writes_a_profile_s_layer`).
-        ("DELETE", "/api/v1/session/settings", true, false),
+        ("DELETE", "/api/v1/session/settings", true, true),
         // A device ends only games it launched; the handler scopes it.
         ("POST", "/api/v1/game/end", true, true),
         // A seat's held launch: only the host with the plugins lets it go.

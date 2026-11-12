@@ -225,7 +225,8 @@ async fn a_device_without_as_and_a_plugin_change_no_profile() {
     }
 }
 
-/// A route not on the lane yet: a device that names a profile changes nothing through it.
+/// A profile's own route left off the lane, an art pick, takes no device that names a profile:
+/// the host fetches a pick's URL itself.
 #[tokio::test]
 async fn a_route_off_the_lane_takes_no_device() {
     let tmp = ConfigDirOverride::new();

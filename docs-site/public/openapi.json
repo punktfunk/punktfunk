@@ -9082,7 +9082,7 @@
           "session"
         ],
         "summary": "Set the session policy",
-        "description": "Persisted clamped. Takes effect on the next decision, including a session\nalready streaming — policy is read at session end, not start. With `as`, the settings of\nthat profile's own seat; a profile on the host's own desktop has none of its own.",
+        "description": "Persisted clamped. Takes effect on the next decision, including a session\nalready streaming — policy is read at session end, not start. With `as`, the settings of\nthat profile's own seat; a profile on the host's own desktop has none of its own. A paired\ndevice that is that locked profile's person may set them too.",
         "operationId": "setSessionSettings",
         "parameters": [
           {
@@ -9137,7 +9137,7 @@
             }
           },
           "403": {
-            "description": "`as` on a lane other than the operator's",
+            "description": "`as` on a plugin's lane, or a device that isn't the person of the profile `as` names",
             "content": {
               "application/json": {
                 "schema": {
@@ -9184,7 +9184,7 @@
           "session"
         ],
         "summary": "Drop a profile's own session settings",
-        "description": "Its seat plays with the box's Seat defaults again; the answer is what `GET` with the same\n`as` answers, `configured: false`. Dropping settings a profile never had is the same answer.\n`as` is required: the host's own settings are changed with `PUT`, never dropped.",
+        "description": "Its seat plays with the box's Seat defaults again; the answer is what `GET` with the same\n`as` answers, `configured: false`. Dropping settings a profile never had is the same answer.\n`as` is required: the host's own settings are changed with `PUT`, never dropped. A paired\ndevice that is that locked profile's person may drop them too.",
         "operationId": "clearSessionSettings",
         "parameters": [
           {
@@ -9229,7 +9229,7 @@
             }
           },
           "403": {
-            "description": "`as` on a lane other than the operator's",
+            "description": "`as` on a plugin's lane, or a device that isn't the person of the profile `as` names",
             "content": {
               "application/json": {
                 "schema": {

@@ -75,6 +75,8 @@ pub(crate) const DEVICE: &[(&str, &str, Side)] = &[
     ("PUT", "library/hidden/*", Side::Owner),
     ("PUT", "library/overrides/games/*", Side::Owner),
     ("PUT", "library/scanners/*", Side::Owner),
+    ("PUT", "session/settings", Side::Owner),
+    ("DELETE", "session/settings", Side::Owner),
     ("GET", "display/targets", Side::Seat),
     ("PUT", "display/clients/*", Side::Seat),
     ("GET", "compositors", Side::Seat),

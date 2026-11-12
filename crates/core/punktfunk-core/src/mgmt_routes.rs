@@ -40,6 +40,8 @@ pub const PERSON: &[(&str, &str)] = &[
     ("PUT", "/api/v1/library/hidden/{id}"),
     ("PUT", "/api/v1/library/overrides/games/{id}"),
     ("PUT", "/api/v1/library/scanners/{id}"),
+    ("PUT", "/api/v1/session/settings"),
+    ("DELETE", "/api/v1/session/settings"),
 ];
 
 /// A route in [`PERSON`].
@@ -127,6 +129,8 @@ mod tests {
             ("PUT", "/api/v1/library/hidden/steam:70"),
             ("PUT", "/api/v1/library/overrides/games/steam:70"),
             ("PUT", "/api/v1/library/scanners/steam"),
+            ("PUT", "/api/v1/session/settings"),
+            ("DELETE", "/api/v1/session/settings"),
         ];
         assert_eq!(PERSON.len(), reached.len());
         for (method, path) in reached {
@@ -136,8 +140,6 @@ mod tests {
         for (method, path) in [
             // A pick is a URL the host fetches itself: a device would aim it at the host's LAN.
             ("PUT", "/api/v1/library/picks/steam:70"),
-            ("PUT", "/api/v1/session/settings"),
-            ("DELETE", "/api/v1/session/settings"),
             ("DELETE", "/api/v1/library/hidden/steam:70"),
             ("PUT", "/api/v1/library/hidden/a/b"),
             ("PUT", "/api/v1/library/overrides/sources/steam"),
