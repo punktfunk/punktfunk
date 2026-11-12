@@ -3,22 +3,29 @@
 //! the box's file read only, a Linux one through the supervisor's copy that holds no PIN.
 //!
 //! A file that is there and can't be read locks every profile, refuses every edit, and is logged.
-//! A file that isn't there locks nothing. Wrong PINs count per device in memory, as an account
-//! password's do, and per profile in the file ([`pf_seats::locks::PIN_FAILURES`]), so a restart
-//! clears no profile's count.
+//! A file that isn't there locks nothing. Wrong PINs and key proofs count per device in memory,
+//! as an account password's do; wrong PINs also per profile in the file
+//! ([`pf_seats::locks::PIN_FAILURES`]), so a restart clears no profile's count. A key proof
+//! answers a challenge from memory, as the seat supervisor's does.
 
 use super::{EditError, Profiles};
 use pf_seats::attempts::{Attempts, Outcome, Target};
-use pf_seats::ipc::Device;
+use pf_seats::ipc::{Device, UnlockKey};
 use pf_seats::locks::{Lock, Locks, Opens};
+use pf_seats::unlock::Challenges;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant, SystemTime};
 
+// A device's entry holds a key for every profile that can share one lock.
+const _: () = assert!(pf_seats::unlock::MAX_KEYS >= super::PROFILES_MAX);
+
 pub(crate) struct LockStore {
     state: Mutex<State>,
     attempts: Mutex<Attempts>,
+    /// Each device's live challenge, by the profile id the connect names.
+    challenges: Mutex<Challenges<String>>,
 }
 
 struct State {
@@ -44,6 +51,9 @@ pub(crate) enum PinAnswer {
     Full,
     /// Right, and the list couldn't be saved.
     NotSaved,
+    /// The key proof didn't prove the device: no live challenge, no key on the list for it, or
+    /// a signature over anything else.
+    KeyFailed,
 }
 
 impl LockStore {
@@ -58,6 +68,7 @@ impl LockStore {
                 read_only,
             }),
             attempts: Mutex::new(Attempts::default()),
+            challenges: Mutex::new(Challenges::default()),
         }
     }
 
@@ -78,13 +89,109 @@ impl LockStore {
         self.attempts.lock().unwrap_or_else(|e| e.into_inner())
     }
 
-    /// What device `fp` needs to open profile `id` now. A seat host never takes a PIN.
-    pub(crate) fn opens(&self, id: &str, fp: Option<&str>) -> Opens {
+    fn challenges(&self) -> MutexGuard<'_, Challenges<String>> {
+        self.challenges.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// What device `fp` needs to open profile `asked` under `holder`'s lock now. A seat host
+    /// never takes a proof.
+    pub(crate) fn opens(&self, ways: (&str, &str), fp: Option<&str>) -> Opens {
         let state = self.lock();
-        match state.locks.opens(id, fp, crate::clock::unix_secs()) {
-            Opens::Pin if state.read_only => Opens::No,
+        match state.locks.opens(ways, fp, crate::clock::unix_secs()) {
+            Opens::Pin | Opens::Key if state.read_only => Opens::No,
             opens => opens,
         }
+    }
+
+    /// The unlock key `holder`'s list holds for `fp` to open `asked`, while the profile is
+    /// locked and the box's file reads.
+    fn key_for(&self, (asked, holder): (&str, &str), fp: &str) -> Option<UnlockKey> {
+        let state = self.lock();
+        let usable = !state.read_only && !state.locks.unreadable;
+        let lock = state.locks.profiles.get(holder).filter(|l| l.locked);
+        lock.filter(|_| usable)?.list.key_for(fp, asked).cloned()
+    }
+
+    /// 32 fresh bytes for `fp`'s key to sign when it opens profile `asked`, whose lock is
+    /// `holder`'s; they replace its last. `None` when the list holds no key for it.
+    pub(crate) fn challenge(&self, asked: &str, holder: &str, fp: &str) -> Option<[u8; 32]> {
+        self.key_for((asked, holder), fp)?;
+        let mut bytes = [0_u8; 32];
+        aws_lc_rs::rand::fill(&mut bytes).ok()?;
+        let asked = asked.to_string();
+        self.challenges().mint(&asked, fp, bytes, Instant::now());
+        Some(bytes)
+    }
+
+    /// Checks `signature`, from the key `device` enrolled for `asked`, over `asked`'s live
+    /// challenge and `box_fp`, within the device's attempt limits; right, the device is present on
+    /// `holder`'s list. The challenge is used up whatever the outcome. A failure never counts
+    /// against the profile's PINs. Blocking.
+    pub(crate) fn try_key(
+        &self,
+        (asked, holder): (&str, &str),
+        device: &Device,
+        signature: &[u8],
+        box_fp: &[u8; 32],
+    ) -> PinAnswer {
+        let fp = device.fingerprint.as_str();
+        let challenge = self
+            .challenges()
+            .take(&asked.to_string(), fp, Instant::now());
+        let Some(key) = self.key_for((asked, holder), fp) else {
+            return PinAnswer::KeyFailed;
+        };
+        let target = Target {
+            device: Some((holder, fp)),
+            account: None,
+        };
+        let counts = |store: &Self| {
+            let device = store.attempts().failures(target, Instant::now()).0;
+            (device, store.failures(holder))
+        };
+        let admitted = self.attempts().admit(target, Instant::now());
+        let ticket = match admitted {
+            Ok(ticket) => ticket,
+            Err(wait) => {
+                audit(holder, fp, "key_locked_out", counts(self));
+                return PinAnswer::Wait(wait);
+            }
+        };
+        let device_fp = pf_seats::unlock::fingerprint_bytes(fp);
+        let message = challenge.zip(device_fp).and_then(|(c, d)| {
+            let built = punktfunk_core::quic::v2::msg::profile_unlock_signed_message;
+            built(&c, asked, &d, box_fp).ok()
+        });
+        let right = message.is_some_and(|m| pf_seats::unlock::verify(&key, &m, signature));
+        let outcome = if right {
+            Outcome::Passed
+        } else {
+            Outcome::Failed
+        };
+        self.attempts()
+            .settle(target, ticket, outcome, Instant::now());
+        if !right {
+            audit(holder, fp, "key_invalid", counts(self));
+            return PinAnswer::KeyFailed;
+        }
+        let granted = self.edit(holder, |lock, now| {
+            lock.locked && lock.proved(device, now, (asked, &key))
+        });
+        let answer = match granted {
+            Ok(true) => PinAnswer::Opened,
+            Ok(false) => PinAnswer::KeyFailed,
+            Err(e) => {
+                tracing::warn!(profile = %holder, error = %e, "device a key let in not saved");
+                PinAnswer::NotSaved
+            }
+        };
+        let result = match answer {
+            PinAnswer::Opened => "key_opened",
+            PinAnswer::NotSaved => "not_saved",
+            _ => "key_invalid",
+        };
+        audit(holder, fp, result, counts(self));
+        answer
     }
 
     /// Whether any profile is locked, or the file can't be read.
@@ -154,20 +261,39 @@ impl LockStore {
         Ok(out)
     }
 
-    /// Drops profile `id`'s lock: the profile is gone.
+    /// Drops profile `id`'s lock and the keys devices enrolled for it on any other: the profile
+    /// is gone.
     pub(crate) fn forget(&self, id: &str) {
-        let known = self.lock().locks.profiles.contains_key(id);
-        if known {
-            if let Err(e) = self.edit(id, |lock, _| *lock = Lock::default()) {
+        let holders: Vec<String> = {
+            let state = self.lock();
+            let keyed = |l: &Lock| l.list.devices.iter().any(|e| e.keys.contains_key(id));
+            let profiles = state.locks.profiles.iter();
+            profiles
+                .filter(|(holder, l)| *holder == id || keyed(l))
+                .map(|(holder, _)| holder.clone())
+                .collect()
+        };
+        for holder in holders {
+            let dropped = self.edit(&holder, |lock, _| match holder == id {
+                true => *lock = Lock::default(),
+                false => lock.drop_keys(id),
+            });
+            if let Err(e) = dropped {
                 tracing::warn!(profile = %id, error = %e, "removed profile's lock not dropped");
             }
         }
     }
 
-    /// Checks `pin` for `device` on profile `id` within the attempt limits; right, the device
-    /// joins the list, for now or, with `stay`, until it is signed out. Blocking: the hash is
-    /// slow. Nothing logged holds the PIN.
-    pub(crate) fn try_pin(&self, id: &str, device: &Device, pin: &str, stay: bool) -> PinAnswer {
+    /// Checks `pin` for `device` on profile `id`'s lock within the attempt limits; right, the
+    /// device joins the list, for now or, with `stay`, until it is signed out, or with `enroll`'s
+    /// key for the profile it names. Blocking: the hash is slow. Nothing logged holds the PIN.
+    pub(crate) fn try_pin(
+        &self,
+        id: &str,
+        device: &Device,
+        pin: &str,
+        (stay, enroll): (bool, Option<(&str, UnlockKey)>),
+    ) -> PinAnswer {
         let hash = {
             let state = self.lock();
             let lock = state.locks.profiles.get(id).filter(|l| l.locked);
@@ -232,7 +358,11 @@ impl LockStore {
             if lock.pin.as_ref() != Some(&hash) || !lock.locked {
                 return PinAnswer::NoPin;
             }
-            match lock.admit(device, now, stay) {
+            let joined = match enroll {
+                Some(key) => lock.enrol(device, now, key),
+                None => lock.admit(device, now, stay),
+            };
+            match joined {
                 true => PinAnswer::Opened,
                 false => PinAnswer::Full,
             }
@@ -390,7 +520,7 @@ mod tests {
     fn a_locked_profile_opens_for_its_list_alone() {
         let (locks, path) = store();
         let (tv, phone) = (device(1), device(2));
-        assert_eq!(locks.opens(KID, Some(&tv.fingerprint)), Opens::Yes);
+        assert_eq!(locks.opens((KID, KID), Some(&tv.fingerprint)), Opens::Yes);
         assert!(!path.exists(), "an open profile writes nothing");
         locks
             .edit(KID, |lock, now| {
@@ -398,9 +528,9 @@ mod tests {
                 lock.admit(&tv, now, true)
             })
             .unwrap();
-        assert_eq!(locks.opens(KID, Some(&tv.fingerprint)), Opens::Yes);
-        assert_eq!(locks.opens(KID, Some(&phone.fingerprint)), Opens::No);
-        let other = locks.opens("0123456789ab", Some(&phone.fingerprint));
+        assert_eq!(locks.opens((KID, KID), Some(&tv.fingerprint)), Opens::Yes);
+        assert_eq!(locks.opens((KID, KID), Some(&phone.fingerprint)), Opens::No);
+        let other = locks.opens(("0123456789ab", "0123456789ab"), Some(&phone.fingerprint));
         assert_eq!(other, Opens::Yes);
         #[cfg(unix)]
         {
@@ -409,9 +539,12 @@ mod tests {
             assert_eq!(mode & 0o777, 0o600);
         }
         let again = LockStore::open(path, false);
-        assert_eq!(again.opens(KID, Some(&phone.fingerprint)), Opens::No);
+        assert_eq!(again.opens((KID, KID), Some(&phone.fingerprint)), Opens::No);
         locks.forget(KID);
-        assert_eq!(locks.opens(KID, Some(&phone.fingerprint)), Opens::Yes);
+        assert_eq!(
+            locks.opens((KID, KID), Some(&phone.fingerprint)),
+            Opens::Yes
+        );
     }
 
     /// A file that is there and doesn't read locks every profile and takes no edit.
@@ -426,7 +559,10 @@ mod tests {
             std::fs::write(&path, bytes).unwrap();
             let locks = LockStore::open(path.clone(), false);
             assert!(locks.unreadable() && locks.any_locked());
-            assert_eq!(locks.opens(KID, Some(&device(1).fingerprint)), Opens::No);
+            assert_eq!(
+                locks.opens((KID, KID), Some(&device(1).fingerprint)),
+                Opens::No
+            );
             assert!(locks.edit(KID, |lock, _| lock.locked = false).is_err());
             assert_eq!(std::fs::read(&path).unwrap(), bytes, "kept as it was");
         }
@@ -438,7 +574,7 @@ mod tests {
         let (locks, path) = store();
         let seat = LockStore::open(path.clone(), true);
         let tv = device(1).fingerprint;
-        assert_eq!(seat.opens(KID, Some(&tv)), Opens::Yes);
+        assert_eq!(seat.opens((KID, KID), Some(&tv)), Opens::Yes);
         locks
             .edit(KID, |lock, _| {
                 lock.locked = true;
@@ -449,14 +585,14 @@ mod tests {
         let later = SystemTime::now() + Duration::from_secs(5);
         let file = std::fs::File::options().write(true).open(&path).unwrap();
         file.set_modified(later).unwrap();
-        assert_eq!(locks.opens(KID, Some(&tv)), Opens::Pin);
+        assert_eq!(locks.opens((KID, KID), Some(&tv)), Opens::Pin);
         assert_eq!(
-            seat.opens(KID, Some(&tv)),
+            seat.opens((KID, KID), Some(&tv)),
             Opens::No,
             "the box takes the PIN"
         );
         assert!(seat.edit(KID, |lock, _| lock.locked = false).is_err());
-        let tried = seat.try_pin(KID, &device(1), "2468", false);
+        let tried = seat.try_pin(KID, &device(1), "2468", (false, None));
         assert_eq!(tried, PinAnswer::NoPin);
     }
 
@@ -475,33 +611,39 @@ mod tests {
             })
             .unwrap();
         assert_eq!(
-            locks.try_pin(KID, &device(1), "1357", false),
+            locks.try_pin(KID, &device(1), "1357", (false, None)),
             PinAnswer::Wrong
         );
-        let waits = locks.try_pin(KID, &device(1), "2468", false);
+        let waits = locks.try_pin(KID, &device(1), "2468", (false, None));
         assert!(
             matches!(waits, PinAnswer::Wait(_)),
             "the device waits: {waits:?}"
         );
         for n in 2..=10 {
             assert_eq!(
-                locks.try_pin(KID, &device(n), "0000", false),
+                locks.try_pin(KID, &device(n), "0000", (false, None)),
                 PinAnswer::Wrong
             );
         }
         assert_eq!(locks.failures(KID), 10);
-        let closed = locks.try_pin(KID, &device(11), "2468", false);
+        let closed = locks.try_pin(KID, &device(11), "2468", (false, None));
         let fourteen = Duration::from_secs(14 * 60);
         assert!(
             matches!(closed, PinAnswer::Wait(w) if w > fourteen),
             "{closed:?}"
         );
-        assert_eq!(locks.opens(KID, Some(&listed.fingerprint)), Opens::Yes);
-        assert_eq!(locks.opens(KID, Some(&device(11).fingerprint)), Opens::Pin);
+        assert_eq!(
+            locks.opens((KID, KID), Some(&listed.fingerprint)),
+            Opens::Yes
+        );
+        assert_eq!(
+            locks.opens((KID, KID), Some(&device(11).fingerprint)),
+            Opens::Pin
+        );
         // A restart forgets no wrong PIN: the profile's count lives in its file.
         let restarted = LockStore::open(path, false);
         assert_eq!(restarted.failures(KID), 10);
-        let still = restarted.try_pin(KID, &device(12), "2468", false);
+        let still = restarted.try_pin(KID, &device(12), "2468", (false, None));
         assert!(
             matches!(still, PinAnswer::Wait(w) if w > fourteen),
             "{still:?}"
@@ -515,8 +657,14 @@ mod tests {
             })
             .unwrap();
         let (tv, phone) = (device(1), device(2));
-        assert_eq!(fresh.try_pin(KID, &tv, "2468", true), PinAnswer::Opened);
-        assert_eq!(fresh.try_pin(KID, &phone, "2468", false), PinAnswer::Opened);
+        assert_eq!(
+            fresh.try_pin(KID, &tv, "2468", (true, None)),
+            PinAnswer::Opened
+        );
+        assert_eq!(
+            fresh.try_pin(KID, &phone, "2468", (false, None)),
+            PinAnswer::Opened
+        );
         let kinds: Vec<_> = fresh
             .get(KID)
             .list
@@ -526,7 +674,200 @@ mod tests {
             .collect();
         use pf_seats::ipc::DeviceKind;
         assert_eq!(kinds, [DeviceKind::Stay, DeviceKind::ForNow]);
-        assert_eq!(fresh.opens(KID, Some(&phone.fingerprint)), Opens::Yes);
+        assert_eq!(
+            fresh.opens((KID, KID), Some(&phone.fingerprint)),
+            Opens::Yes
+        );
+    }
+
+    /// A right PIN enrols the key it brings. Once the device left, a signature opens the profile
+    /// only over a live challenge of this profile, this device and this host, and each challenge
+    /// answers once. A failed proof costs the device's allowance, never the profile's PINs.
+    #[test]
+    fn a_key_opens_a_pin_profile_once_per_challenge() {
+        use aws_lc_rs::rand::SystemRandom;
+        use aws_lc_rs::signature::{EcdsaKeyPair, KeyPair as _, ECDSA_P256_SHA256_ASN1_SIGNING};
+        use punktfunk_core::quic::v2::msg::profile_unlock_signed_message;
+        let (locks, path) = store();
+        locks
+            .edit(KID, |lock, _| {
+                lock.locked = true;
+                lock.pin = PinHash::new("2468");
+            })
+            .unwrap();
+        let pair = EcdsaKeyPair::generate(&ECDSA_P256_SHA256_ASN1_SIGNING).unwrap();
+        let key = UnlockKey {
+            alg: pf_seats::ipc::KeyAlg::P256,
+            public: hex::encode(pair.public_key().as_ref()),
+        };
+        let host = [0xbb; 32];
+        let ways = (KID, KID);
+        // Each device on the list with the key, its presence over. The PIN's hash is slow, so
+        // only the first types it.
+        let enrol = |n: u8| {
+            let d = device(n);
+            if n == 1 {
+                let tried = locks.try_pin(KID, &d, "2468", (false, Some((KID, key.clone()))));
+                assert_eq!(tried, PinAnswer::Opened);
+            } else {
+                let listed = locks.edit(KID, |lock, now| lock.enrol(&d, now, (KID, key.clone())));
+                assert!(listed.unwrap());
+            }
+            let gone = |lock: &mut Lock, now: i64| lock.list.left(&d.fingerprint, now - 601);
+            locks.edit(KID, gone).unwrap();
+            assert_eq!(locks.opens((KID, KID), Some(&d.fingerprint)), Opens::Key);
+            d
+        };
+        let sign = |n: u8, id: &str, host: &[u8; 32]| {
+            let c = locks.challenge(KID, KID, &device(n).fingerprint).unwrap();
+            let m = profile_unlock_signed_message(&c, id, &[n; 32], host).unwrap();
+            pair.sign(&SystemRandom::new(), &m)
+                .unwrap()
+                .as_ref()
+                .to_vec()
+        };
+        let tv = enrol(1);
+        let signed = sign(1, KID, &host);
+        assert_eq!(locks.try_key(ways, &tv, &signed, &host), PinAnswer::Opened);
+        assert_eq!(locks.opens((KID, KID), Some(&tv.fingerprint)), Opens::Yes);
+        let again = locks.try_key(ways, &tv, &signed, &host);
+        assert_eq!(again, PinAnswer::KeyFailed, "used up");
+        let phone = enrol(2);
+        let other = sign(2, "0123456789ab", &host);
+        let tried = locks.try_key(ways, &phone, &other, &host);
+        assert_eq!(tried, PinAnswer::KeyFailed, "another profile");
+        let deck = enrol(3);
+        let elsewhere = sign(3, KID, &[0xcc; 32]);
+        let tried = locks.try_key(ways, &deck, &elsewhere, &host);
+        assert_eq!(tried, PinAnswer::KeyFailed, "another host");
+        assert!(matches!(
+            locks.try_key(ways, &deck, &sign(3, KID, &host), &host),
+            PinAnswer::Wait(_)
+        ));
+        assert_eq!(locks.failures(KID), 0, "the profile's PINs are untouched");
+        let stranger = device(9).fingerprint;
+        assert_eq!(locks.challenge(KID, KID, &stranger), None, "no key");
+        let seat = LockStore::open(path, true);
+        assert_eq!(seat.challenge(KID, KID, &tv.fingerprint), None);
+        assert_eq!(seat.opens((KID, KID), Some(&deck.fingerprint)), Opens::No);
+    }
+
+    /// A P-256 key the tests sign with, and the unlock key a lock stores for it.
+    fn keypair() -> (aws_lc_rs::signature::EcdsaKeyPair, UnlockKey) {
+        use aws_lc_rs::signature::{EcdsaKeyPair, KeyPair as _, ECDSA_P256_SHA256_ASN1_SIGNING};
+        let pair = EcdsaKeyPair::generate(&ECDSA_P256_SHA256_ASN1_SIGNING).unwrap();
+        let key = UnlockKey {
+            alg: pf_seats::ipc::KeyAlg::P256,
+            public: hex::encode(pair.public_key().as_ref()),
+        };
+        (pair, key)
+    }
+
+    /// `pair`'s signature over a fresh challenge for device 1 opening `asked` under KID's lock.
+    fn proof(locks: &LockStore, pair: &aws_lc_rs::signature::EcdsaKeyPair, asked: &str) -> Vec<u8> {
+        use punktfunk_core::quic::v2::msg::profile_unlock_signed_message;
+        let c = locks.challenge(asked, KID, &device(1).fingerprint).unwrap();
+        let m = profile_unlock_signed_message(&c, asked, &[1; 32], &[0xbb; 32]).unwrap();
+        let signed = pair
+            .sign(&aws_lc_rs::rand::SystemRandom::new(), &m)
+            .unwrap();
+        signed.as_ref().to_vec()
+    }
+
+    /// A device's presence on KID's list over, its keys kept.
+    fn gone(locks: &LockStore) {
+        let fp = device(1).fingerprint;
+        let left = |lock: &mut Lock, now: i64| lock.list.left(&fp, now - 601);
+        locks.edit(KID, left).unwrap();
+    }
+
+    /// Two profiles sharing KID's lock each keep the key the device enrolled for it, and each key
+    /// opens its own profile alone. Signing the device out drops both.
+    #[test]
+    fn profiles_sharing_a_lock_keep_a_key_each() {
+        const SIB: &str = "5151515151ab";
+        let (locks, _) = store();
+        let tv = device(1);
+        let ((pair_a, key_a), (pair_b, key_b)) = (keypair(), keypair());
+        locks
+            .edit(KID, |lock, now| {
+                lock.locked = true;
+                lock.pin = PinHash::new("2468");
+                assert!(lock.enrol(&tv, now, (KID, key_a)));
+                assert!(lock.enrol(&tv, now, (SIB, key_b)));
+            })
+            .unwrap();
+        gone(&locks);
+        let fp = Some(tv.fingerprint.as_str());
+        assert_eq!(locks.opens((KID, KID), fp), Opens::Key);
+        assert_eq!(locks.opens((SIB, KID), fp), Opens::Key);
+        assert_eq!(locks.opens(("0123456789ab", KID), fp), Opens::Pin, "no key");
+        let host = [0xbb; 32];
+        for (asked, pair) in [(KID, &pair_a), (SIB, &pair_b)] {
+            let signed = proof(&locks, pair, asked);
+            let opened = locks.try_key((asked, KID), &tv, &signed, &host);
+            assert_eq!(opened, PinAnswer::Opened, "{asked}");
+            gone(&locks);
+        }
+        let crossed = proof(&locks, &pair_b, KID);
+        let tried = locks.try_key((KID, KID), &tv, &crossed, &host);
+        assert_eq!(tried, PinAnswer::KeyFailed, "SIB's key for KID");
+        locks
+            .edit(KID, |lock, _| lock.list.sign_out(Some(&tv.fingerprint)))
+            .unwrap();
+        for asked in [KID, SIB] {
+            assert_eq!(locks.opens((asked, KID), fp), Opens::Pin, "{asked}");
+            assert_eq!(locks.challenge(asked, KID, &tv.fingerprint), None);
+        }
+    }
+
+    /// A file from before keys named their profile loads; its one key opens the profile whose
+    /// proof it first answers, and from then on that profile alone.
+    #[test]
+    fn a_key_from_before_keys_named_their_profile_keeps_opening_its_own() {
+        const SIB: &str = "5151515151ab";
+        let (pair, key) = keypair();
+        let tv = device(1);
+        let file = serde_json::json!({"version": 1, "profiles": {KID: {
+            "locked": true,
+            "devices": [{"fingerprint": tv.fingerprint, "name": "TV", "key": key,
+                "added_unix": 1, "last_unix": 1}],
+        }}});
+        let path = crate::test_support::scratch().join(pf_seats::locks::FILE);
+        std::fs::write(&path, file.to_string()).unwrap();
+        let locks = LockStore::open(path, false);
+        assert!(!locks.unreadable());
+        let fp = Some(tv.fingerprint.as_str());
+        assert_eq!(locks.opens((SIB, KID), fp), Opens::Key, "not claimed yet");
+        let signed = proof(&locks, &pair, SIB);
+        let opened = locks.try_key((SIB, KID), &tv, &signed, &[0xbb; 32]);
+        assert_eq!(opened, PinAnswer::Opened);
+        gone(&locks);
+        assert_eq!(locks.opens((SIB, KID), fp), Opens::Key);
+        assert_eq!(locks.opens((KID, KID), fp), Opens::No, "claimed by SIB");
+        let signed = proof(&locks, &pair, SIB);
+        let again = locks.try_key((SIB, KID), &tv, &signed, &[0xbb; 32]);
+        assert_eq!(again, PinAnswer::Opened, "it keeps opening its own");
+    }
+
+    /// A profile's removal drops the keys devices enrolled for it on the lock it shared.
+    #[test]
+    fn a_removed_profile_takes_its_keys_with_it() {
+        const SIB: &str = "5151515151ab";
+        let (locks, _) = store();
+        let tv = device(1);
+        let (_, key) = keypair();
+        let enrolled = |lock: &mut Lock, now: i64| {
+            lock.locked = true;
+            lock.enrol(&tv, now, (SIB, key))
+        };
+        assert!(locks.edit(KID, enrolled).unwrap());
+        gone(&locks);
+        let fp = Some(tv.fingerprint.as_str());
+        assert_eq!(locks.opens((SIB, KID), fp), Opens::Key);
+        locks.forget(SIB);
+        assert_eq!(locks.opens((SIB, KID), fp), Opens::No);
+        assert!(locks.get(KID).locked, "the holder's lock stays");
     }
 
     /// A device signed in for now stays while any of its sessions plays, and leaves ten minutes

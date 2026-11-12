@@ -1,0 +1,447 @@
+{
+  "$comment": "What a device's unlock key signs to open a profile, with SHA-256 as the digest. Every implementation replays these: punktfunk-core msg.rs, pf-client-core unlock.rs, Swift, Kotlin. `seat` form: a profile on a person's own Linux account, `\"punktfunk-seat-unlock-v1\" ‖ challenge ‖ seat id (32 lowercase hex characters) ‖ device ‖ box`, 152 bytes. `profile` form: a locked profile, `\"punktfunk-profile-unlock-v1\" ‖ challenge ‖ profile id (its ASCII, then zero bytes to 64) ‖ device ‖ box`, 187 bytes; a profile id is 1 to 64 of [A-Za-z0-9_-]. `challenge` is the 32 bytes `unlock-challenge` answered, `device` the SHA-256 of this device's certificate, `box` the SHA-256 of the host certificate this device pinned. `message`, where given, is the whole message in hex. `refused` lists ids no message is built for. The other sections are the client's rules. `unlock_words`: enumerate's `unlock` word (null: absent) as the need it reads, and the prompt's form. `gate`: before a dial, for a need and whether this device holds its unlock key for the profile: `dial`, `key` (sign a fresh challenge) or `prompt`, and whether the key is deleted first. `after_refusal`: after a ProfileLocked close, from the profile's fresh row, whether the dial carried an unlock (`sent`). `pins`: what the PIN field holds, as the bytes the wire carries or the error the prompt shows (`empty`, `shape`). `challenge_answers`: unlock-challenge bodies, as what the message names, or refused.",
+  "messages": [
+    {
+      "name": "seat form: the own-account contract vector",
+      "form": "seat",
+      "challenge": "0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20",
+      "seat": "0123456789abcdef0123456789abcdef",
+      "device": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "box": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "sha256": "31de46821f3058729b14c3585ad13159085ecb0d18c87194a34b1bddc8ddc31a"
+    },
+    {
+      "name": "profile form: a profile id as the host mints it",
+      "form": "profile",
+      "challenge": "0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20",
+      "profile": "9a3f1c2b7e40",
+      "device": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "box": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "message": "70756e6b7466756e6b2d70726f66696c652d756e6c6f636b2d76310102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f2039613366316332623765343000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "sha256": "136c555942eca9390851a8b3c95dd34e25dc65a9a185378b8f16000634cdc957"
+    },
+    {
+      "name": "profile form: the seat vector's id as a profile id signs other bytes",
+      "form": "profile",
+      "challenge": "0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20",
+      "profile": "0123456789abcdef0123456789abcdef",
+      "device": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "box": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "message": "70756e6b7466756e6b2d70726f66696c652d756e6c6f636b2d76310102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f2030313233343536373839616263646566303132333435363738396162636465660000000000000000000000000000000000000000000000000000000000000000aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "sha256": "a29e797dd9961efd31e7591934262176fad290e66a1f404239674e37419a005f"
+    },
+    {
+      "name": "profile form: the shortest id",
+      "form": "profile",
+      "challenge": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "profile": "k",
+      "device": "0101010101010101010101010101010101010101010101010101010101010101",
+      "box": "0202020202020202020202020202020202020202020202020202020202020202",
+      "message": "70756e6b7466756e6b2d70726f66696c652d756e6c6f636b2d7631ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff6b00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001010101010101010101010101010101010101010101010101010101010101010202020202020202020202020202020202020202020202020202020202020202",
+      "sha256": "fb78c7a645333b15e73aceb831909a9c0713da8d43d488b9ade5602e9fc584ab"
+    },
+    {
+      "name": "profile form: the longest id, every character it may hold",
+      "form": "profile",
+      "challenge": "201f1e1d1c1b1a191817161514131211100f0e0d0c0b0a090807060504030201",
+      "profile": "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ_-",
+      "device": "5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a",
+      "box": "a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5",
+      "message": "70756e6b7466756e6b2d70726f66696c652d756e6c6f636b2d7631201f1e1d1c1b1a191817161514131211100f0e0d0c0b0a090807060504030201303132333435363738396162636465666768696a6b6c6d6e6f707172737475767778797a4142434445464748494a4b4c4d4e4f505152535455565758595a5f2d5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5aa5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5",
+      "sha256": "3ff50f99d7b1f6d351394c3033d84bce17852b080e09410c1798275ef7c8fcb9"
+    }
+  ],
+  "refused": [
+    {
+      "name": "seat id in capitals",
+      "form": "seat",
+      "id": "0123456789ABCDEF0123456789abcdef"
+    },
+    {
+      "name": "seat id one short",
+      "form": "seat",
+      "id": "0123456789abcdef0123456789abcde"
+    },
+    {
+      "name": "seat id not hex",
+      "form": "seat",
+      "id": "0123456789abcdef0123456789abcdeg"
+    },
+    {
+      "name": "no profile id",
+      "form": "profile",
+      "id": ""
+    },
+    {
+      "name": "profile id of 65",
+      "form": "profile",
+      "id": "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ_-x"
+    },
+    {
+      "name": "profile id with a space",
+      "form": "profile",
+      "id": "kid desk"
+    },
+    {
+      "name": "profile id with a letter outside ASCII",
+      "form": "profile",
+      "id": "kä"
+    },
+    {
+      "name": "profile id with a path",
+      "form": "profile",
+      "id": "../x"
+    },
+    {
+      "name": "profile id with a zero byte",
+      "form": "profile",
+      "id": "k\u0000"
+    }
+  ],
+  "unlock_words": [
+    {
+      "word": null,
+      "need": "none",
+      "form": null
+    },
+    {
+      "word": "none",
+      "need": "none",
+      "form": null
+    },
+    {
+      "word": "password",
+      "need": "password",
+      "form": "password"
+    },
+    {
+      "word": "key",
+      "need": "key",
+      "form": "password"
+    },
+    {
+      "word": "pin",
+      "need": "pin",
+      "form": "pin"
+    },
+    {
+      "word": "pin_key",
+      "need": "pin_key",
+      "form": "pin"
+    },
+    {
+      "word": "passkey",
+      "need": "password",
+      "form": "password"
+    }
+  ],
+  "gate": [
+    {
+      "need": "none",
+      "holds_key": false,
+      "gate": "dial",
+      "delete_key": false
+    },
+    {
+      "need": "none",
+      "holds_key": true,
+      "gate": "dial",
+      "delete_key": false
+    },
+    {
+      "need": "password",
+      "holds_key": false,
+      "gate": "prompt",
+      "delete_key": false
+    },
+    {
+      "need": "password",
+      "holds_key": true,
+      "gate": "prompt",
+      "delete_key": true
+    },
+    {
+      "need": "key",
+      "holds_key": false,
+      "gate": "prompt",
+      "delete_key": false
+    },
+    {
+      "need": "key",
+      "holds_key": true,
+      "gate": "key",
+      "delete_key": false
+    },
+    {
+      "need": "pin",
+      "holds_key": false,
+      "gate": "prompt",
+      "delete_key": false
+    },
+    {
+      "need": "pin",
+      "holds_key": true,
+      "gate": "prompt",
+      "delete_key": true
+    },
+    {
+      "need": "pin_key",
+      "holds_key": false,
+      "gate": "prompt",
+      "delete_key": false
+    },
+    {
+      "need": "pin_key",
+      "holds_key": true,
+      "gate": "key",
+      "delete_key": false
+    }
+  ],
+  "after_refusal": [
+    {
+      "need": "none",
+      "holds_key": false,
+      "sent": false,
+      "gate": "prompt"
+    },
+    {
+      "need": "none",
+      "holds_key": false,
+      "sent": true,
+      "gate": "prompt"
+    },
+    {
+      "need": "none",
+      "holds_key": true,
+      "sent": false,
+      "gate": "prompt"
+    },
+    {
+      "need": "none",
+      "holds_key": true,
+      "sent": true,
+      "gate": "prompt"
+    },
+    {
+      "need": "password",
+      "holds_key": false,
+      "sent": false,
+      "gate": "prompt"
+    },
+    {
+      "need": "password",
+      "holds_key": false,
+      "sent": true,
+      "gate": "prompt"
+    },
+    {
+      "need": "password",
+      "holds_key": true,
+      "sent": false,
+      "gate": "prompt"
+    },
+    {
+      "need": "password",
+      "holds_key": true,
+      "sent": true,
+      "gate": "prompt"
+    },
+    {
+      "need": "key",
+      "holds_key": false,
+      "sent": false,
+      "gate": "prompt"
+    },
+    {
+      "need": "key",
+      "holds_key": false,
+      "sent": true,
+      "gate": "prompt"
+    },
+    {
+      "need": "key",
+      "holds_key": true,
+      "sent": false,
+      "gate": "key"
+    },
+    {
+      "need": "key",
+      "holds_key": true,
+      "sent": true,
+      "gate": "prompt"
+    },
+    {
+      "need": "pin",
+      "holds_key": false,
+      "sent": false,
+      "gate": "prompt"
+    },
+    {
+      "need": "pin",
+      "holds_key": false,
+      "sent": true,
+      "gate": "prompt"
+    },
+    {
+      "need": "pin",
+      "holds_key": true,
+      "sent": false,
+      "gate": "prompt"
+    },
+    {
+      "need": "pin",
+      "holds_key": true,
+      "sent": true,
+      "gate": "prompt"
+    },
+    {
+      "need": "pin_key",
+      "holds_key": false,
+      "sent": false,
+      "gate": "prompt"
+    },
+    {
+      "need": "pin_key",
+      "holds_key": false,
+      "sent": true,
+      "gate": "prompt"
+    },
+    {
+      "need": "pin_key",
+      "holds_key": true,
+      "sent": false,
+      "gate": "key"
+    },
+    {
+      "need": "pin_key",
+      "holds_key": true,
+      "sent": true,
+      "gate": "prompt"
+    }
+  ],
+  "pins": [
+    {
+      "typed": "2468",
+      "sent": "2468"
+    },
+    {
+      "typed": "0000",
+      "sent": "0000"
+    },
+    {
+      "typed": "12345678",
+      "sent": "12345678"
+    },
+    {
+      "typed": "２４６８",
+      "sent": "2468"
+    },
+    {
+      "typed": "",
+      "error": "empty"
+    },
+    {
+      "typed": "123",
+      "error": "shape"
+    },
+    {
+      "typed": "123456789",
+      "error": "shape"
+    },
+    {
+      "typed": "12a4",
+      "error": "shape"
+    },
+    {
+      "typed": " 1234",
+      "error": "shape"
+    },
+    {
+      "typed": "1234 ",
+      "error": "shape"
+    },
+    {
+      "typed": "١٢٣٤",
+      "error": "shape"
+    }
+  ],
+  "challenge_answers": [
+    {
+      "body": {
+        "challenge": "0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a",
+        "seat": "cccccccccccccccccccccccccccccccc"
+      },
+      "seat": "cccccccccccccccccccccccccccccccc"
+    },
+    {
+      "body": {
+        "challenge": "0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a",
+        "profile": "9a3f1c2b7e40"
+      },
+      "profile": "9a3f1c2b7e40"
+    },
+    {
+      "body": {
+        "challenge": "0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a",
+        "seat": "cccccccccccccccccccccccccccccccc",
+        "profile": "9a3f1c2b7e40"
+      },
+      "refused": true
+    },
+    {
+      "body": {
+        "challenge": "0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a"
+      },
+      "refused": true
+    },
+    {
+      "body": {
+        "challenge": "0A0A0A0A0A0A0A0A0A0A0A0A0A0A0A0A0A0A0A0A0A0A0A0A0A0A0A0A0A0A0A0A",
+        "seat": "cccccccccccccccccccccccccccccccc"
+      },
+      "refused": true
+    },
+    {
+      "body": {
+        "challenge": "0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a",
+        "profile": "9a3f1c2b7e40"
+      },
+      "refused": true
+    },
+    {
+      "body": {
+        "challenge": "0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a",
+        "seat": "CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC"
+      },
+      "refused": true
+    },
+    {
+      "body": {
+        "challenge": "0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a",
+        "seat": "ccccccccccccccccccccccccccccccc"
+      },
+      "refused": true
+    },
+    {
+      "body": {
+        "challenge": "0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a",
+        "profile": "kid desk"
+      },
+      "refused": true
+    },
+    {
+      "body": {
+        "challenge": "0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a",
+        "profile": ""
+      },
+      "refused": true
+    },
+    {
+      "body": {
+        "challenge": "0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a",
+        "profile": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "refused": true
+    }
+  ]
+}

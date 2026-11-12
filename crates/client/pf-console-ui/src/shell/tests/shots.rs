@@ -397,9 +397,8 @@ fn dump_console_screens() {
 fn dump_profiles() {
     let dir = std::env::var("PF_CONSOLE_DUMP").expect("set PF_CONSOLE_DUMP to an output dir");
     let fonts = crate::theme::build_fonts().unwrap();
-    let (w, h) = (1280, 800);
     let library = LibraryShared::default();
-    let dump = |shell: &mut Shell, frames: usize, name: &str| {
+    let dump_at = |shell: &mut Shell, frames: usize, name: &str, (w, h): (i32, i32)| {
         shell.fake_clock = Some((shell.fake_clock.map_or(0.0, |(t, _)| t), 0.012));
         let mut surface = skia_safe::surfaces::raster_n32_premul((w, h)).unwrap();
         for _ in 0..frames {
@@ -413,6 +412,8 @@ fn dump_profiles() {
             .unwrap();
         std::fs::write(format!("{dir}/{name}.png"), png.as_bytes()).unwrap();
     };
+    let dump =
+        |shell: &mut Shell, frames: usize, name: &str| dump_at(shell, frames, name, (1280, 800));
     // Who plays: the saved pick's face on the card, then the picker its connect raises
     // because the box no longer lists it.
     {
@@ -530,6 +531,26 @@ fn dump_profiles() {
         dump(&mut s9, 40, "13b-host-and-profile");
         s9.handle_menu(MenuEvent::Move(MenuDir::Down));
         dump(&mut s9, 40, "13c-host-and-profile-faces");
+
+        // A locked profile's PIN, two digits in, on its number pad; then at 800×600, where the
+        // console's scale bottoms out.
+        let mut opts = test_options();
+        opts.profiles = true;
+        opts.prompts_unlock = true;
+        let home = vec![Screen::Home(HomeScreen::new())];
+        let bus = ConsoleBus::default();
+        let mut s10 = Shell::new(console8.clone(), library.clone(), bus, opts, home).unwrap();
+        s10.start_connect(crate::screens::ConnectIntent::to_host(&rows[0], None));
+        let kid = ListedProfile {
+            unlock: pf_client_core::profiles::UnlockNeed::Pin,
+            ..p("kid", "Kid", Some("#5AC18E"), None)
+        };
+        console8.set_profiles("aa11", ProfilesAnswer::Listed(vec![kid]));
+        dump(&mut s10, 40, "_14-settle");
+        s10.handle_menu(MenuEvent::Confirm);
+        s10.text_input("24");
+        dump(&mut s10, 40, "14-unlock-pin-keyboard");
+        dump_at(&mut s10, 40, "14b-unlock-pin-keyboard-small", (800, 600));
     }
 }
 

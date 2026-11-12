@@ -348,7 +348,7 @@ mod abi_version_tests {
     #[test]
     fn abi_version_is_pinned() {
         // Current ABI. A bump must update this pin.
-        assert_eq!(punktfunk_core::ABI_VERSION, 69);
+        assert_eq!(punktfunk_core::ABI_VERSION, 70);
         assert_eq!(super::punktfunk_abi_version(), 69);
     }
 

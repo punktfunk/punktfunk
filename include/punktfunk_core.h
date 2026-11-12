@@ -327,6 +327,9 @@
 // Bytes [`punktfunk_profile_unlock_message`] writes.
 #define PUNKTFUNK_UNLOCK_MESSAGE_LEN 152
 
+// Bytes [`punktfunk_locked_profile_unlock_message`] writes.
+#define PUNKTFUNK_LOCKED_PROFILE_UNLOCK_MESSAGE_LEN 187
+
 #if defined(PUNKTFUNK_FEATURE_QUIC)
 // [`PunktfunkConnectOpts::reformat`]: this caller rebuilds its decoder on a frame flagged
 // [`FRAME_NEW_FORMAT`](punktfunk_core::packet::FRAME_NEW_FORMAT), from the codec, colour and
@@ -426,7 +429,7 @@
 //
 // The wire is versioned by ALPN, not by this. Pin the integer in `punktfunk-ffi`
 // (`abi_version_is_pinned`). Per-bump notes live in `CHANGELOG.md`.
-#define PUNKTFUNK_ABI_VERSION 69
+#define PUNKTFUNK_ABI_VERSION 70
 
 // This client silenced its own speakers (`client::NativeClient::set_audio_muted`). The host
 // keeps sending, so a session joined to the same sink still hears the game.
@@ -2721,6 +2724,24 @@ PunktfunkStatus punktfunk_profile_unlock_message(const uint8_t *challenge,
                                                  const uint8_t *device_sha256,
                                                  const uint8_t *box_sha256,
                                                  uint8_t *out);
+#endif
+
+#if defined(PUNKTFUNK_FEATURE_QUIC)
+// What a locked profile's unlock key signs, with SHA-256 as the digest, into `out`:
+// `"punktfunk-profile-unlock-v1" ‖ challenge ‖ profile id, zero-padded to 64 ‖ device
+// fingerprint ‖ box fingerprint`. `profile_id` is 1 to 64 of `[A-Za-z0-9_-]`; the rest is
+// [`punktfunk_profile_unlock_message`]'s. `INVALID_ARG` for any other id, `NULL_POINTER` for a
+// null argument.
+//
+// # Safety
+// `challenge`, `device_sha256` and `box_sha256` are readable for 32 bytes; `profile_id` is a
+// NUL-terminated string; `out` is writable for [`PUNKTFUNK_LOCKED_PROFILE_UNLOCK_MESSAGE_LEN`]
+// bytes.
+PunktfunkStatus punktfunk_locked_profile_unlock_message(const uint8_t *challenge,
+                                                        const char *profile_id,
+                                                        const uint8_t *device_sha256,
+                                                        const uint8_t *box_sha256,
+                                                        uint8_t *out);
 #endif
 
 #if defined(PUNKTFUNK_FEATURE_QUIC)

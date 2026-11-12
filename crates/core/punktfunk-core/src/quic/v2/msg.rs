@@ -490,6 +490,40 @@ pub fn unlock_signed_message(
     Ok(m)
 }
 
+/// Length of [`profile_unlock_signed_message`].
+pub const PROFILE_UNLOCK_SIGNED_LEN: usize = 187;
+/// First bytes of [`profile_unlock_signed_message`].
+pub const PROFILE_UNLOCK_SIGNED_LABEL: &[u8; 27] = b"punktfunk-profile-unlock-v1";
+
+/// What a locked profile's unlock key signs, with SHA-256 as the digest:
+/// `"punktfunk-profile-unlock-v1" ‖ challenge ‖ profile id ‖ device fingerprint ‖ box
+/// fingerprint`. The id is its ASCII, zero bytes after it to [`PROFILE_ID_MAX`]; the rest is
+/// [`unlock_signed_message`]'s. `InvalidArg` for an id that is not 1 to 64 of `[A-Za-z0-9_-]`.
+pub fn profile_unlock_signed_message(
+    challenge: &[u8; 32],
+    profile_id: &str,
+    device_fp: &[u8; 32],
+    box_fp: &[u8; 32],
+) -> Result<[u8; PROFILE_UNLOCK_SIGNED_LEN]> {
+    let ok = |b: u8| b.is_ascii_alphanumeric() || b == b'-' || b == b'_';
+    if !(1..=PROFILE_ID_MAX).contains(&profile_id.len()) || !profile_id.bytes().all(ok) {
+        return Err(PunktfunkError::InvalidArg(
+            "profile id is not 1 to 64 of [A-Za-z0-9_-]",
+        ));
+    }
+    let mut m = [0u8; PROFILE_UNLOCK_SIGNED_LEN];
+    for (at, part) in [
+        (0, &PROFILE_UNLOCK_SIGNED_LABEL[..]),
+        (27, &challenge[..]),
+        (59, profile_id.as_bytes()),
+        (123, &device_fp[..]),
+        (155, &box_fp[..]),
+    ] {
+        m[at..at + part.len()].copy_from_slice(part);
+    }
+    Ok(m)
+}
+
 v2_message!(ClipControl = reg::MSG_CLIP_CONTROL, { 1 => enabled, 2 => flags });
 v2_message!(ClipState = reg::MSG_CLIP_STATE, { 1 => enabled, 2 => policy, 3 => reason });
 v2_message!(ClipFetch = reg::MSG_CLIP_FETCH, { 1 => seq, 2 => file_index, 3 => mime },
@@ -1485,6 +1519,48 @@ mod tests {
             "0123456789abcdef0123456789abcdeg",
         ] {
             assert!(unlock_signed_message(&challenge, bad, &[0; 32], &[0; 32]).is_err());
+        }
+    }
+
+    /// `clients/shared/profile-unlock-vectors.json`, which every client replays.
+    #[test]
+    fn the_unlock_messages_match_the_shared_vectors() {
+        use sha2::Digest;
+        let raw = include_str!("../../../../../../clients/shared/profile-unlock-vectors.json");
+        let v: serde_json::Value = serde_json::from_str(raw).unwrap();
+        let bytes = |s: &serde_json::Value| -> Vec<u8> {
+            let s = s.as_str().unwrap();
+            (0..s.len())
+                .step_by(2)
+                .map(|i| u8::from_str_radix(&s[i..i + 2], 16).unwrap())
+                .collect()
+        };
+        let b32 = |s: &serde_json::Value| -> [u8; 32] { bytes(s).try_into().unwrap() };
+        let build = |form: &str, c: &[u8; 32], id: &str, d: &[u8; 32], b: &[u8; 32]| match form {
+            "seat" => unlock_signed_message(c, id, d, b).map(|m| m.to_vec()),
+            "profile" => profile_unlock_signed_message(c, id, d, b).map(|m| m.to_vec()),
+            form => panic!("form {form}"),
+        };
+        for case in v["messages"].as_array().unwrap() {
+            let (name, form) = (&case["name"], case["form"].as_str().unwrap());
+            let id = case[form].as_str().unwrap();
+            let (c, d, b) = (
+                b32(&case["challenge"]),
+                b32(&case["device"]),
+                b32(&case["box"]),
+            );
+            let m = build(form, &c, id, &d, &b).unwrap();
+            if !case["message"].is_null() {
+                assert_eq!(m, bytes(&case["message"]), "{name}");
+            }
+            let digest = crate::fp::hex(&sha2::Sha256::digest(&m).into());
+            assert_eq!(digest, case["sha256"].as_str().unwrap(), "{name}");
+        }
+        for case in v["refused"].as_array().unwrap() {
+            let form = case["form"].as_str().unwrap();
+            let id = case["id"].as_str().unwrap();
+            let built = build(form, &[1; 32], id, &[2; 32], &[3; 32]);
+            assert!(built.is_err(), "{}", case["name"]);
         }
     }
 

@@ -201,6 +201,41 @@ fn a_host_without_the_prompt_dials_as_it_stands() {
     assert!(prompt(&s).is_none() && s.toast.is_some());
 }
 
+/// A profile locked with a PIN, or listed with a key the console doesn't hold, prompts for its
+/// PIN; the digits ride the dial, and a refusal reopens the PIN form with the host's sentence.
+#[test]
+fn a_pin_profile_prompts_for_its_pin() {
+    for need in [UnlockNeed::Pin, UnlockNeed::PinKey] {
+        let (mut s, console, _bus, row) = shell_for(Some("kid"), true);
+        s.start_connect(ConnectIntent::to_host(&row, None));
+        let kid = ListedProfile {
+            id: "kid".into(),
+            display_name: "Kid".into(),
+            unlock: need,
+            ..Default::default()
+        };
+        console.set_profiles("aa11", ProfilesAnswer::Listed(vec![kid]));
+        s.sync();
+        let p = prompt(&s).expect("the prompt is up");
+        assert_eq!(p.edit_field(), None);
+        sign_in(&mut s, "2468");
+        assert_eq!(launched(&mut s), Some(Some("kid".into())), "{need:?}");
+        let u = console.take_unlock().expect("the PIN rides the dial");
+        assert_eq!(u.secret.as_slice(), b"2468");
+        finish_motion(&mut s);
+        s.profile_locked();
+        s.session_phase(SessionPhase::Failed("That isn't this profile's PIN."));
+        let p = prompt(&s).expect("the prompt is back");
+        assert_eq!(p.error(), Some("That isn't this profile's PIN."));
+        finish_motion(&mut s);
+        s.handle_menu(MenuEvent::Confirm);
+        let field = prompt(&s)
+            .and_then(|p| p.edit_field())
+            .expect("the field is open");
+        assert!(field.digits && field.label == "PIN", "{need:?}");
+    }
+}
+
 /// Picked from the circles, a locked profile's prompt takes the picker's place.
 #[test]
 fn the_picker_hands_a_locked_pick_to_the_prompt() {
