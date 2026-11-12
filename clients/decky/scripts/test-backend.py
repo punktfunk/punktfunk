@@ -528,6 +528,44 @@ with tempfile.TemporaryDirectory(dir="/tmp") as _run:
           asyncio.run(main.Plugin().stream_running()) == {"running": False})
     session._ctl_sockets = _real_ctl_sockets
 
+# ---- kill_stream: a native client is found by its executable, never by name ---------------
+import os  # noqa: E402
+
+with tempfile.TemporaryDirectory(dir="/tmp") as _fake:
+    _bin, _proc = Path(_fake) / "usr/bin", Path(_fake) / "proc"
+    for _pid, _exe in (
+        ("101", _bin / "punktfunk-session"),
+        ("102", f"{_bin / 'punktfunk-client'} (deleted)"),
+        ("103", _bin / "punktfunk"),
+        ("104", _bin / "punktfunk-host"),
+        ("105", "/opt/other/bin/punktfunk-session"),
+    ):
+        (_proc / _pid).mkdir(parents=True)
+        os.symlink(str(_exe), _proc / _pid / "exe")
+    (_proc / "106").mkdir()  # another user's process: no readable exe
+    (_proc / "self").mkdir()
+    check("kill: the session, the shell and the CLI in the client's bindir, nothing else",
+          session._native_pids(_bin, _proc) == [101, 102, 103])
+    check("kill: the session's name is past what the kernel keeps of one",
+          len("punktfunk-session") > 15 and len(client.NATIVE_BIN) > 15)
+
+_victim = subprocess.Popen(["sleep", "30"])
+_real_native_pids, _real_argv, _real_flatpak = session._native_pids, client._client_argv, client._flatpak
+session._native_pids = lambda bindir, proc=None: [_victim.pid]
+client._client_argv = lambda: ["/usr/bin/punktfunk-client"]
+client._flatpak = lambda: "/usr/bin/flatpak"
+got = asyncio.run(main.Plugin().kill_stream())
+try:
+    _rc = _victim.wait(timeout=5)
+except subprocess.TimeoutExpired:
+    _victim.kill()
+    _rc = None
+check("kill: a native client's process gets SIGTERM", got == {"ok": True} and _rc == -15)
+client._client_argv = lambda: None
+check("kill: no client installed is an error",
+      asyncio.run(main.Plugin().kill_stream()) == {"ok": False, "error": "client-not-found"})
+session._native_pids, client._client_argv, client._flatpak = _real_native_pids, _real_argv, _real_flatpak
+
 print()
 if failures:
     print(f"{failures} check(s) FAILED")
