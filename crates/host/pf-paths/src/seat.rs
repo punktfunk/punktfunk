@@ -33,8 +33,8 @@ pub enum HostRole {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SeatRole {
     /// A seat of its own. Its desktop follows the seat contract: one virtual screen, never a
-    /// real monitor, the box's Seat defaults and no settings of its own
-    /// (`design/web-console-structure-2026-10.md` §2.1).
+    /// real monitor, the box's Seat defaults under what its profile's layer of the box's library
+    /// sets (`design/web-console-structure-2026-10.md` §2.1).
     Contract,
     /// `PUNKTFUNK_SEAT_OWNER=1`: the box owner's own host behind the door, at the desk. It
     /// serves the owner profile and the light-seat profiles that play inside the owner's host.

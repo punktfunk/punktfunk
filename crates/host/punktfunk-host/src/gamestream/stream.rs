@@ -722,7 +722,7 @@ fn open_gs_mirror_source(
 fn resolve_gs_app(app: Option<&super::apps::AppEntry>) -> Option<crate::library::LaunchTarget> {
     let app = app?;
     if let Some(id) = app.library_id.as_deref() {
-        match crate::library::resolve_launch(id) {
+        match crate::library::resolve_launch(&crate::library::View::here(), id) {
             Some(t) => return Some(t),
             None => tracing::warn!(
                 launch_id = id,

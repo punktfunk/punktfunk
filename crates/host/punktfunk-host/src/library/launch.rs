@@ -88,13 +88,13 @@ pub fn game_mode_launch() -> Option<LaunchTarget> {
     Some(target)
 }
 
-/// Map a store-qualified library id to a [`LaunchTarget`] from the host's library.
-/// `None` = unknown id, or on Linux a title with no runnable recipe.
+/// Map a store-qualified library id to a [`LaunchTarget`] from the library in `view`.
+/// `None` = unknown or hidden id, or on Linux a title with no runnable recipe.
 ///
 /// Shared by both planes. Linux runs the command (nested gamescope or live
 /// session). Windows has no nest: `launch_title` resolves the process later.
-pub fn resolve_launch(id: &str) -> Option<LaunchTarget> {
-    let entry = all_games().into_iter().find(|g| g.id == id)?;
+pub fn resolve_launch(view: &View, id: &str) -> Option<LaunchTarget> {
+    let entry = all_games_for(view).into_iter().find(|g| g.id == id)?;
     let game = GameRef {
         id: Some(entry.id.clone()),
         store: Some(entry.store.clone()),

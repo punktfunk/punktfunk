@@ -186,27 +186,67 @@ pub fn store() -> &'static SessionSettingsStore {
     })
 }
 
-/// The settings in force. A contract seat has none of its own: the built-in defaults, with the
-/// box's choice of what a game's exit does to the stream (`seat_end_on_game_exit`).
+/// The settings in force. A contract seat's are its profile's own file, else the built-in
+/// defaults with the box's choice of what a game's exit does to the stream
+/// (`seat_end_on_game_exit`).
 pub fn get() -> SessionSettings {
     if pf_paths::seat::role().follows_contract() {
         let own_desktop = cfg!(target_os = "linux") && pf_paths::seat::own_account();
-        return contract_settings(pf_host_config::seat_defaults::current(), own_desktop);
+        let own = of_profile(&crate::library::View::here());
+        return contract_settings(own, pf_host_config::seat_defaults::current(), own_desktop);
     }
     store().get()
 }
 
-/// A contract seat's settings. On a person's own desktop (`own_desktop`) a game's exit goes
-/// back to that desktop whatever the box chose: the stream is the person's session.
-fn contract_settings(
+/// The file in a profile's library layer.
+const PROFILE_FILE: &str = "session-settings.json";
+
+/// The profile in `view`'s own settings, sanitized. `None` with no profile in view, and for an
+/// absent or malformed file.
+pub fn of_profile(view: &crate::library::View) -> Option<SessionSettings> {
+    let path = view.own_file(PROFILE_FILE)?;
+    let bytes = std::fs::read(&path).ok()?;
+    serde_json::from_slice::<SessionSettings>(&bytes)
+        .inspect_err(|e| tracing::warn!(path = %path.display(), error = %e, "profile session settings malformed — ignored"))
+        .ok()
+        .map(SessionSettings::sanitized)
+}
+
+/// Stores `settings` as the profile in `view`'s own. Refused with no profile in view.
+pub fn set_profile(view: &crate::library::View, settings: SessionSettings) -> Result<()> {
+    let path = view
+        .own_file(PROFILE_FILE)
+        .ok_or_else(|| anyhow::anyhow!("no profile in view"))?;
+    pf_paths::replace_secret_file(&path, &serde_json::to_vec_pretty(&settings.sanitized())?)?;
+    Ok(())
+}
+
+/// The seat defaults the box hands its seats: the box's own, or on a seat host its trust copy.
+pub fn box_seat_defaults() -> Option<pf_host_config::seat_defaults::SeatDefaults> {
+    use pf_host_config::seat_defaults::{of_box, SeatDefaults};
+    if pf_paths::seat::role().is_seat_host() {
+        return of_box();
+    }
+    Some(SeatDefaults::of(pf_host_config::config()))
+}
+
+/// What a seat's host plays a profile with: its own settings, else the box's seat defaults.
+/// On a person's own desktop (`own_desktop`) a game's exit goes back to that desktop whatever
+/// either chose: the stream is the person's session.
+pub fn contract_settings(
+    own: Option<SessionSettings>,
     defaults: Option<pf_host_config::seat_defaults::SeatDefaults>,
     own_desktop: bool,
 ) -> SessionSettings {
-    let mut settings = SessionSettings::default();
+    let mut settings = own.unwrap_or_else(|| {
+        let mut s = SessionSettings::default();
+        if let Some(d) = defaults {
+            s.session_on_game_exit = d.end_on_game_exit;
+        }
+        s
+    });
     if own_desktop {
         settings.session_on_game_exit = false;
-    } else if let Some(d) = defaults {
-        settings.session_on_game_exit = d.end_on_game_exit;
     }
     settings
 }
@@ -282,12 +322,40 @@ mod tests {
                 background_input: false,
             })
         };
-        assert!(contract_settings(None, false).session_on_game_exit);
-        assert!(contract_settings(ends(true), false).session_on_game_exit);
-        assert!(!contract_settings(ends(false), false).session_on_game_exit);
+        assert!(contract_settings(None, None, false).session_on_game_exit);
+        assert!(contract_settings(None, ends(true), false).session_on_game_exit);
+        assert!(!contract_settings(None, ends(false), false).session_on_game_exit);
         for defaults in [None, ends(true), ends(false)] {
-            assert!(!contract_settings(defaults, true).session_on_game_exit);
+            assert!(!contract_settings(None, defaults, true).session_on_game_exit);
         }
+    }
+
+    /// A profile's own file beats the box's seat defaults; a person's own desktop still forces
+    /// a game's exit back to that desktop.
+    #[test]
+    fn a_profile_s_own_settings_beat_the_seat_defaults() {
+        let ends = Some(pf_host_config::seat_defaults::SeatDefaults {
+            end_on_game_exit: true,
+            max_mode: None,
+            library_writable: false,
+            dualsense_usbip: false,
+            browser: false,
+            browser_origins: Vec::new(),
+            background_input: false,
+        });
+        let own = SessionSettings {
+            session_on_game_exit: false,
+            game_on_session_end: GameOnSessionEnd::OnQuit,
+            ..Default::default()
+        };
+        let got = contract_settings(Some(own.clone()), ends.clone(), false);
+        assert!(!got.session_on_game_exit);
+        assert_eq!(got.game_on_session_end, GameOnSessionEnd::OnQuit);
+        let kept = SessionSettings {
+            session_on_game_exit: true,
+            ..own
+        };
+        assert!(!contract_settings(Some(kept), ends, true).session_on_game_exit);
     }
 
     #[test]

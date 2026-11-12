@@ -1081,9 +1081,9 @@ fn settle_bitrate(hello: &mut Hello, codec_bit: u8) {
     }
 }
 
-/// The operator's cap for this device, then the launched game's overrides, applied before
-/// mode-conflict and before Welcome: the client is told the mode it actually gets, not a yes
-/// to 4K120 and then something else.
+/// The operator's cap for this device, then the launched game's overrides in the session
+/// profile's view, applied before mode-conflict and before Welcome: the client is told the mode
+/// it actually gets, not a yes to 4K120 and then something else.
 fn cap_mode(n: &Negotiation<'_>, hello: &mut Hello, codec: crate::encode::Codec) {
     let fp = crate::vdisplay::policy::fp_hex(n.conn.peer_fingerprint());
     let want = (hello.mode.width, hello.mode.height, hello.mode.refresh_hz);
@@ -1101,7 +1101,8 @@ fn cap_mode(n: &Negotiation<'_>, hello: &mut Hello, codec: crate::encode::Codec)
     let Some(game) = hello.launch.clone() else {
         return;
     };
-    let Some(o) = crate::library::overrides_for(&game) else {
+    let view = crate::library::View::session(&n.resolved);
+    let Some(o) = crate::library::overrides_for(&view, &game) else {
         return;
     };
     let asked = (hello.mode, hello.video_caps, hello.gamepad);

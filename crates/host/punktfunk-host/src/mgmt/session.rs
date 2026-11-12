@@ -588,14 +588,43 @@ pub(crate) struct SessionSettingsState {
     enforced: Vec<String>,
 }
 
+/// What is in force on this host. A contract seat's is its profile's file or the box's defaults.
 fn session_settings_state() -> SessionSettingsState {
-    let store = crate::session_settings::store();
+    let configured = if pf_paths::seat::role().follows_contract() {
+        crate::session_settings::of_profile(&crate::library::View::here()).is_some()
+    } else {
+        crate::session_settings::store().configured()
+    };
     SessionSettingsState {
-        // What is in force: on a contract seat that is not its own file.
         settings: crate::session_settings::get(),
-        configured: store.configured(),
+        configured,
         enforced: crate::session_settings::enforced(),
     }
+}
+
+/// What a seat's host plays the profile in `view` with, `own_account` saying whether that seat
+/// is a person's own. `configured`: the profile has settings of its own.
+fn seat_profile_state(view: &crate::library::View, own_account: bool) -> SessionSettingsState {
+    use crate::session_settings as ss;
+    let own = ss::of_profile(view);
+    SessionSettingsState {
+        configured: own.is_some(),
+        settings: ss::contract_settings(
+            own,
+            ss::box_seat_defaults(),
+            cfg!(target_os = "linux") && own_account,
+        ),
+        enforced: ss::enforced(),
+    }
+}
+
+/// The refusal for session settings `as` a profile that plays on the owner's host.
+fn plays_on_the_host() -> Response {
+    api_error_coded(
+        StatusCode::CONFLICT,
+        "profile_session_settings_host",
+        "This profile plays on the host's own desktop, so it uses the host's session settings.",
+    )
 }
 
 #[utoipa::path(
@@ -603,35 +632,59 @@ fn session_settings_state() -> SessionSettingsState {
     path = "/session/settings",
     tag = "session",
     operation_id = "getSessionSettings",
+    params(("as" = Option<String>, Query, description = "Profile id: what that profile's own seat plays with")),
     responses(
         (status = OK, description = "Stored settings + which axes this build enforces", body = SessionSettingsState),
         (status = UNAUTHORIZED, description = "Missing or invalid bearer token", body = ApiError),
+        (status = NOT_FOUND, description = "`as` names no profile on this host", body = ApiError),
+        (status = CONFLICT, description = "`as` names a profile that plays on the host's own desktop", body = ApiError),
     )
 )]
-pub(crate) async fn get_session_settings() -> Json<SessionSettingsState> {
-    Json(session_settings_state())
+pub(crate) async fn get_session_settings(
+    State(st): State<Arc<MgmtState>>,
+    Query(who): Query<super::library::AsProfile>,
+) -> Response {
+    use super::library::Whose;
+    let scoped = match who.scope(&st).await {
+        Ok(s) => s,
+        Err(refused) => return refused,
+    };
+    match scoped.whose {
+        Whose::Here | Whose::Owner => Json(session_settings_state()).into_response(),
+        Whose::Seat { own_account } => {
+            Json(seat_profile_state(&scoped.view, own_account)).into_response()
+        }
+        Whose::Shares => plays_on_the_host(),
+    }
 }
 
 /// Set the session policy
 ///
 /// Persisted clamped. Takes effect on the next decision, including a session
-/// already streaming — policy is read at session end, not start.
+/// already streaming — policy is read at session end, not start. With `as`, the settings of
+/// that profile's own seat; a profile on the host's own desktop has none of its own.
 #[utoipa::path(
     put,
     path = "/session/settings",
     tag = "session",
     operation_id = "setSessionSettings",
+    params(("as" = Option<String>, Query, description = "Profile id: set what that profile's own seat plays with")),
     request_body = crate::session_settings::SessionSettings,
     responses(
         (status = OK, description = "Settings stored; the new state", body = SessionSettingsState),
         (status = BAD_REQUEST, description = "Malformed settings body", body = ApiError),
         (status = INTERNAL_SERVER_ERROR, description = "Couldn't save the session settings", body = ApiError),
         (status = UNAUTHORIZED, description = "Missing or invalid bearer token", body = ApiError),
+        (status = NOT_FOUND, description = "`as` names no profile on this host", body = ApiError),
+        (status = CONFLICT, description = "A seat's own host, or `as` names a profile that plays on the host's own desktop", body = ApiError),
     )
 )]
 pub(crate) async fn set_session_settings(
+    State(st): State<Arc<MgmtState>>,
+    Query(who): Query<super::library::AsProfile>,
     ApiJson(settings): ApiJson<crate::session_settings::SessionSettings>,
 ) -> Response {
+    use super::library::Whose;
     if pf_paths::seat::role().follows_contract() {
         return api_error_coded(
             StatusCode::CONFLICT,
@@ -639,13 +692,26 @@ pub(crate) async fn set_session_settings(
             "A seat's session settings can't be changed here. Change the Seat defaults on the box.",
         );
     }
-    if let Err(e) = crate::session_settings::store().set(settings) {
+    let scoped = match who.scope(&st).await {
+        Ok(s) => s,
+        Err(refused) => return refused,
+    };
+    let saved = match scoped.whose {
+        Whose::Here | Whose::Owner => crate::session_settings::store().set(settings),
+        Whose::Seat { .. } => crate::session_settings::set_profile(&scoped.view, settings),
+        Whose::Shares => return plays_on_the_host(),
+    };
+    if let Err(e) = saved {
         return api_error_logged(
             StatusCode::INTERNAL_SERVER_ERROR,
             "session_settings_not_saved",
             "Couldn't save the session settings",
             &format!("{e:#}"),
         );
+    }
+    if let Whose::Seat { own_account } = scoped.whose {
+        tracing::info!(profile = ?scoped.view.layer(), "management API: profile session settings updated");
+        return Json(seat_profile_state(&scoped.view, own_account)).into_response();
     }
     let state = session_settings_state();
     tracing::info!(
