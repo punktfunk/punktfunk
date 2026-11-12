@@ -106,9 +106,15 @@ class KeystoreUnlockKeys(context: Context) : UnlockKeys {
 /**
  * The system's biometric sheet over [activity] for [signature], strong biometrics only and no
  * device-credential fallback: the signature once a biometric matched, else `null` (the player
- * chose the password, cancelled, or the sheet failed).
+ * chose the password, cancelled, or the sheet failed). A [pin] profile's sheet offers Cancel in
+ * place of the password, and its prompt follows.
  */
-suspend fun authenticateSigner(activity: FragmentActivity, signature: Signature, profileName: String): Signature? =
+suspend fun authenticateSigner(
+    activity: FragmentActivity,
+    signature: Signature,
+    profileName: String,
+    pin: Boolean = false,
+): Signature? =
     suspendCancellableCoroutine { cont ->
         val callback = object : BiometricPrompt.AuthenticationCallback() {
             override fun onAuthenticationSucceeded(result: BiometricPrompt.AuthenticationResult) {
@@ -122,7 +128,7 @@ suspend fun authenticateSigner(activity: FragmentActivity, signature: Signature,
         val prompt = BiometricPrompt(activity, ContextCompat.getMainExecutor(activity), callback)
         val info = BiometricPrompt.PromptInfo.Builder()
             .setTitle(activity.getString(R.string.unlock_title, profileName))
-            .setNegativeButtonText(activity.getString(R.string.android_unlock_use_password))
+            .setNegativeButtonText(activity.getString(if (pin) R.string.common_cancel else R.string.android_unlock_use_password))
             .setAllowedAuthenticators(BiometricManager.Authenticators.BIOMETRIC_STRONG)
             .build()
         cont.invokeOnCancellation { activity.runOnUiThread { prompt.cancelAuthentication() } }
@@ -139,7 +145,7 @@ fun promptsUnlock(context: Context): Boolean = !isTvDevice(context) && context i
 
 /**
  * The touch shell's [UnlockHooks] for a dial to [host] as [identity]; `null` where it shows no
- * prompt. [ask] shows the password prompt. [sheet] is told while the biometric sheet is up.
+ * prompt. [ask] shows the password or PIN prompt. [sheet] is told while the biometric sheet is up.
  */
 fun touchUnlockHooks(
     context: Context,
@@ -161,13 +167,20 @@ fun touchUnlockHooks(
             }
         },
         message = NativeBridge::nativeProfileUnlockMessage,
-        authenticate = { signature, name ->
+        profileMessage = NativeBridge::nativeLockedProfileUnlockMessage,
+        authenticate = { signature, name, pin ->
             sheet(true)
             try {
-                authenticateSigner(activity, signature, name)
+                authenticateSigner(activity, signature, name, pin)
             } finally {
                 sheet(false)
             }
+        },
+        row = { id ->
+            val answer = withContext(Dispatchers.IO) {
+                HostProfiles.fetch(identity, host.address, host.effectiveMgmtPort, host.fpHex, host.port)
+            }
+            (answer as? ProfilesAnswer.Listed)?.rows?.firstOrNull { it.id == id }
         },
     )
 }

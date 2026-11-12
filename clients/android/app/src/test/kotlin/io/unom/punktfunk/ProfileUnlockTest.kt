@@ -3,6 +3,7 @@ package io.unom.punktfunk
 import io.unom.punktfunk.kit.ListedProfile
 import io.unom.punktfunk.kit.R
 import io.unom.punktfunk.kit.Say
+import io.unom.punktfunk.kit.UnlockChallenge
 import io.unom.punktfunk.kit.UnlockNeed
 import io.unom.punktfunk.kit.say
 import java.security.KeyPair
@@ -242,6 +243,79 @@ class ProfileUnlockTest {
         assertEquals("Unlock(kind=1, 3 bytes)", Unlock(UNLOCK_PASSWORD, "abc".toByteArray()).toString())
     }
 
+    @Test
+    fun a_pin_profile_asks_for_its_pin_and_sends_its_ascii_digits() = runBlocking<Unit> {
+        val short = "１２３".toCharArray()
+        val wide = "２４６８".toCharArray()
+        val answers = ArrayDeque(listOf(PasswordAnswer(short, false), PasswordAnswer(wide, switchOn = true), null))
+        val asked = mutableListOf<PasswordAsk>()
+        val hooks = hooks(SoftKeys(biometric = false), Host(), ask = { asked += it; answers.removeFirst() })
+        val sent = mutableListOf<Unlock>()
+        val refusals = ArrayDeque(listOf(locked("That isn't this profile's PIN.")))
+        val dialed = dialUnlocked(hooks, hostFp, row(UnlockNeed.PIN)) { u ->
+            sent += Unlock(u!!.kind, u.secret.copyOf(), u.staySignedIn, u.enrollKey)
+            refusals.removeFirst()
+        }
+        assertEquals(HostServices.Cancelled, dialed)
+        assertTrue(asked.all { it.pin })
+        // A short PIN is asked again in the prompt's words; the host's refusal shows as it came.
+        assertEquals(
+            listOf(null, say(R.string.unlock_pin_error_shape), Say.Text("That isn't this profile's PIN.")),
+            asked.map { it.error },
+        )
+        val pin = sent.single()
+        assertEquals(UNLOCK_PASSWORD, pin.kind)
+        assertArrayEquals("2468".toByteArray(), pin.secret)
+        assertTrue(pin.staySignedIn)
+        assertTrue(short.all { it == '\u0000' } && wide.all { it == '\u0000' })
+    }
+
+    @Test
+    fun a_pin_key_profile_signs_the_message_bound_to_its_id() = runBlocking<Unit> {
+        val keys = SoftKeys(biometric = true).apply { create(hostFp, "ada") }
+        val host = Host(UnlockChallenge(vectorChallenge, null, "ada"))
+        val sent = mutableListOf<Unlock?>()
+        dialUnlocked(hooks(keys, host, ask = { error("no prompt") }), hostFp, row(UnlockNeed.PIN_KEY)) { u ->
+            sent += u?.let { Unlock(it.kind, it.secret.copyOf()) }
+            HostServices.Cancelled
+        }
+        val proof = sent.single()!!
+        assertEquals(UNLOCK_KEY_PROOF, proof.kind)
+        assertEquals(listOf(true), host.sheets)
+        val verify = Signature.getInstance("SHA256withECDSA").apply { initVerify(keys.pair!!.public) }
+        verify.update(profileMessage(vectorChallenge, "ada", deviceFp, boxFp))
+        assertTrue(verify.verify(proof.secret))
+    }
+
+    @Test
+    fun a_challenge_for_another_profile_signs_nothing_and_asks_for_the_pin() = runBlocking<Unit> {
+        val keys = SoftKeys(biometric = true).apply { create(hostFp, "ada") }
+        val host = Host(UnlockChallenge(vectorChallenge, null, "ben"))
+        val asked = mutableListOf<PasswordAsk>()
+        dialUnlocked(hooks(keys, host, ask = { asked += it; null }), hostFp, row(UnlockNeed.PIN_KEY)) { error("dialed") }
+        assertTrue("no sheet for another profile's challenge", host.sheets.isEmpty())
+        assertTrue(asked.single().pin)
+    }
+
+    @Test
+    fun the_host_asking_for_the_pin_deletes_a_stale_key() = runBlocking<Unit> {
+        val keys = SoftKeys(biometric = true).apply { create(hostFp, "ada") }
+        dialUnlocked(hooks(keys, Host(), ask = { null }), hostFp, row(UnlockNeed.PIN)) { error("dialed") }
+        assertFalse(keys.has(hostFp, "ada"))
+    }
+
+    @Test
+    fun a_bare_refusal_asks_in_the_form_of_the_fresh_row() = runBlocking<Unit> {
+        // A redial knows only the saved pick; the host's fresh row says the profile has a PIN.
+        val host = Host().apply { fresh = ListedProfile(id = "ada", displayName = "Ada", unlock = UnlockNeed.PIN) }
+        val asked = mutableListOf<PasswordAsk>()
+        dialUnlocked(hooks(SoftKeys(biometric = false), host, ask = { asked += it; null }), hostFp, savedRow("ada", null)) {
+            locked("")
+        }
+        assertTrue(asked.single().pin)
+        assertEquals("Ada", asked.single().profileName)
+    }
+
     private fun locked(said: String) = HostServices.Failed(PROFILE_LOCKED, said)
 
     private fun p256(): KeyPair =
@@ -256,17 +330,26 @@ class ProfileUnlockTest {
         keys = keys,
         deviceFp = deviceFp,
         askPassword = ask,
-        challenge = { id -> host.challenged += id; UnlockChallenge(vectorChallenge, vectorSeat) },
+        challenge = { id -> host.challenged += id; host.answer },
         message = { c, s, d, b ->
             assertArrayEquals(deviceFp, d)
             assertArrayEquals(boxFp, b)
             contractMessage(c, s, d, b)
         },
-        authenticate = { signature, _ -> sign(signature) },
+        profileMessage = { c, id, d, b -> profileMessage(c, id, d, b) },
+        authenticate = { signature, _, pin -> host.sheets += pin; sign(signature) },
+        row = { id -> host.fresh?.takeIf { it.id == id } },
     )
 
-    private class Host {
+    /** The contract's 187-byte form for a locked profile: its id zero-padded to 64 bytes. */
+    private fun profileMessage(challenge: ByteArray, id: String, device: ByteArray, box: ByteArray) =
+        "punktfunk-profile-unlock-v1".toByteArray() + challenge + id.toByteArray().copyOf(64) + device + box
+
+    /** What the scripted host answers: a [answer] challenge, and [fresh] as the refused profile's row. */
+    private class Host(val answer: UnlockChallenge = UnlockChallenge(ByteArray(32) { (it + 1).toByte() }, "0123456789abcdef0123456789abcdef")) {
         val challenged = mutableListOf<String>()
+        val sheets = mutableListOf<Boolean>()
+        var fresh: ListedProfile? = null
     }
 
     /** A software P-256 key in place of the Keystore's: the same calls, no biometric behind it. */
