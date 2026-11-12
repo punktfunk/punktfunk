@@ -14,7 +14,7 @@ final class LibraryStatusMissTests: XCTestCase {
             ([up], [HostDownload(appID: "d", state: "downloading")], 3))
         shelf.loading = true
         let load = LibraryLoad(
-            hostID: "host", cache: nil, wake: nil, fetch: { [] }, status: { nil },
+            hostID: "host", cache: nil, wake: nil, fetch: { ([], nil) }, status: { nil },
             retryEvery: 0)
         await load.events { shelf = LibraryShelf.reduce(shelf, $0, autoWake: false, canWake: false) }
         XCTAssertFalse(shelf.loading)

@@ -26,10 +26,12 @@ public struct LibraryLoad {
     static let wakeAttempts = 12
 
     var hostID: String
+    /// The profile the shelf is for: only its own cached catalog goes up.
+    var profile: String? = nil
     var cache: LibraryCache?
     /// Sends the wake; nil asks the host once.
     var wake: (() -> Void)?
-    var fetch: () async throws -> [GameEntry]
+    var fetch: () async throws -> LibraryClient.Catalog
     var status: () async -> (games: [RunningGame], downloads: [HostDownload], grants: UInt32?)?
     var retryEvery: UInt64 = 5 * NSEC_PER_SEC
 
@@ -56,7 +58,7 @@ public struct LibraryLoad {
             }
             : nil
         let load = LibraryLoad(
-            hostID: hostID, cache: LibraryCache.shared, wake: wake,
+            hostID: hostID, profile: profile, cache: LibraryCache.shared, wake: wake,
             fetch: { try await LibraryClient.fetch(target, as: profile) },
             status: { await LibraryClient.statusIfAnswered(target) })
         return AsyncStream { continuation in
@@ -68,9 +70,10 @@ public struct LibraryLoad {
         }
     }
 
-    /// The whole load, each step handed to `emit`. Stops quietly once cancelled.
+    /// The whole load, each step handed to `emit`. Stops quietly once cancelled. A catalog is
+    /// cached as the profile it came back as: a gone profile's fallback is the box's.
     func events(_ emit: (LibraryLoadEvent) -> Void) async {
-        var cached = await cache?.load(hostID: hostID)
+        var cached = await cache?.load(hostID: hostID, profile: profile)
         if var shelf = cached {
             shelf.games = shelf.games.launchersFirst
             cached = shelf
@@ -84,9 +87,10 @@ public struct LibraryLoad {
         for attempt in 0..<attempts {
             if Task.isCancelled { return }
             do {
-                let games = try await fetch().launchersFirst
+                let fetched = try await fetch()
+                let games = fetched.games.launchersFirst
                 emit(.fetched(games))
-                await cache?.store(games, hostID: hostID)
+                await cache?.store(games, hostID: hostID, profile: fetched.profile)
                 break
             } catch {
                 if Task.isCancelled { return }

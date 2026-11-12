@@ -128,7 +128,8 @@ final class LibraryClientTests: XCTestCase {
                 return HTTPResponse(status: status, headers: [:], body: body)
             }
             XCTAssertEqual(asked, expect["asked"] as? [String], "\(name): asked")
-            XCTAssertEqual(shown?.map(\.id), expect["ids"] as? [String], "\(name): ids")
+            XCTAssertEqual(shown?.profile, expect["as"] as? String, "\(name): as")
+            XCTAssertEqual(shown?.games.map(\.id), expect["ids"] as? [String], "\(name): ids")
         }
     }
 

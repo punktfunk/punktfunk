@@ -648,13 +648,17 @@ public enum LibraryClient {
     /// A 404 `profile_unknown`: the host no longer holds the profile a call named.
     private struct ProfileGone: Error {}
 
+    /// The titles of a catalog, and the profile they were fetched as (nil: the box's).
+    public typealias Catalog = (games: [GameEntry], profile: String?)
+
     /// The catalog as `profile` plays it (`as=`), else the box's. `get` answers one path. A host
     /// older than the paged route refuses it, so `GET /api/v1/library` answers whole instead. A
-    /// profile the host no longer holds is asked once more as the box, and that answer stands.
-    /// `clients/shared/library-profile-vectors.json` pins this here, in Rust and in Kotlin.
+    /// profile the host no longer holds is asked once more as the box, and that answer stands,
+    /// as the box's. `clients/shared/library-profile-vectors.json` pins this here, in Rust and
+    /// in Kotlin.
     static func catalog(
         as profile: String?, _ get: (String) async throws -> HTTPResponse
-    ) async throws -> [GameEntry] {
+    ) async throws -> Catalog {
         func walk(_ profile: String?) async throws -> [GameEntry] {
             func body(_ path: String) async throws -> Data {
                 var path = path
@@ -679,9 +683,9 @@ public enum LibraryClient {
             }
         }
         do {
-            return try await walk(profile)
+            return (try await walk(profile), profile)
         } catch is ProfileGone {
-            return try await walk(nil)
+            return (try await walk(nil), nil)
         }
     }
 
@@ -690,17 +694,17 @@ public enum LibraryClient {
 
     /// The host's catalog as `profile` plays it, walked over ``send(_:to:method:body:)``'s lanes
     /// (``catalog(as:_:)``).
-    public static func fetch(_ target: MgmtTarget, as profile: String?) async throws -> [GameEntry] {
+    public static func fetch(_ target: MgmtTarget, as profile: String?) async throws -> Catalog {
         guard let base = URL(
             string: "\(baseURL(address: target.address, port: target.port))/api/v1/library")
         else { throw LibraryError.unreachable("invalid host address") }
-        var games = try await catalog(as: profile) { path in try await send(path, to: target) }
+        var fetched = try await catalog(as: profile) { path in try await send(path, to: target) }
         // Art the host serves arrives as host-relative proxy paths (`/api/v1/library/art/...`).
         // Resolve them against THIS host, so every consumer sees absolute URLs.
-        for i in games.indices {
-            games[i].art = games[i].art.resolved(against: base)
+        for i in fetched.games.indices {
+            fetched.games[i].art = fetched.games[i].art.resolved(against: base)
         }
-        return games
+        return fetched
     }
 
     /// The profiles on this host, from `GET /api/v1/profiles/enumerate`, in host order. nil: the
