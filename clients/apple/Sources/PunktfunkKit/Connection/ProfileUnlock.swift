@@ -1,6 +1,7 @@
-// Opening a profile on a person's own account (CONTRACT §6): the secret a connect carries, the
-// message an unlock key signs, the host's challenge, and the flow that chooses between the key
-// and the password prompt. The Secure Enclave keys live in EnclaveUnlockKeys.swift.
+// Opening a profile on a person's own account (CONTRACT §6) or a locked one: the secret a connect
+// carries, the message an unlock key signs, the host's challenge, and the flow that chooses
+// between the key and the password or PIN prompt. `clients/shared/profile-unlock-vectors.json`
+// pins the rules. The Secure Enclave keys live in EnclaveUnlockKeys.swift.
 
 import Darwin
 import Foundation
@@ -134,6 +135,79 @@ public struct ProfileUnlock: Sendable, CustomStringConvertible {
         }
         return rc == PUNKTFUNK_STATUS_OK.rawValue ? Data(out) : nil
     }
+
+    /// The 187 bytes a locked profile's key proof signs, built by the core:
+    /// `"punktfunk-profile-unlock-v1" ‖ challenge ‖ profile id, zero-padded to 64 ‖ device ‖ box`.
+    /// nil for a wrong shape.
+    public static func message(challenge: Data, profile: String, device: Data, box: Data) -> Data? {
+        // Checked here too: a C string ends at a NUL the id carries.
+        guard isProfileID(profile), challenge.count == 32, device.count == 32, box.count == 32
+        else { return nil }
+        var out = [UInt8](repeating: 0, count: Int(PUNKTFUNK_LOCKED_PROFILE_UNLOCK_MESSAGE_LEN))
+        let rc = challenge.withUnsafeBytes { c in
+            device.withUnsafeBytes { d in
+                box.withUnsafeBytes { b in
+                    profile.withCString { p in
+                        punktfunk_locked_profile_unlock_message(
+                            c.bindMemory(to: UInt8.self).baseAddress, p,
+                            d.bindMemory(to: UInt8.self).baseAddress,
+                            b.bindMemory(to: UInt8.self).baseAddress, &out)
+                    }
+                }
+            }
+        }
+        return rc == PUNKTFUNK_STATUS_OK.rawValue ? Data(out) : nil
+    }
+
+    /// An id a host mints: 1 to 64 of `[A-Za-z0-9_-]`.
+    public static func isProfileID(_ id: String) -> Bool {
+        (1...64).contains(id.utf8.count) && id.utf8.allSatisfy {
+            switch $0 {
+            case UInt8(ascii: "0")...UInt8(ascii: "9"), UInt8(ascii: "a")...UInt8(ascii: "z"),
+                 UInt8(ascii: "A")...UInt8(ascii: "Z"), UInt8(ascii: "_"), UInt8(ascii: "-"):
+                return true
+            default: return false
+            }
+        }
+    }
+
+    /// Why the PIN field's text is no PIN.
+    public enum PinProblem: Error, Equatable {
+        case empty, shape
+
+        /// The prompt's error line.
+        public var line: String {
+            String(localized: self == .empty ? L10n.unlockPinErrorEmpty : L10n.unlockPinErrorShape)
+        }
+    }
+
+    /// `typed` as the PIN the wire carries: 4 to 8 ASCII digits, a full-width digit read as its
+    /// ASCII one. Read in place, so no copy of the digits outlives the secret.
+    public static func pin(_ typed: UnlockSecret) -> Result<UnlockSecret, PinProblem> {
+        guard typed.count > 0 else { return .failure(.empty) }
+        let pin = UnlockSecret(capacity: 8) { out in
+            typed.withBytes { b in
+                var (i, n) = (0, 0)
+                while i < b.count {
+                    guard n < out.count else { return -1 }
+                    if (0x30...0x39).contains(b[i]) {
+                        out[n] = b[i]
+                        i += 1
+                    } else if i + 2 < b.count, b[i] == 0xEF, b[i + 1] == 0xBC,
+                              (0x90...0x99).contains(b[i + 2]) {
+                        // U+FF10..FF19 in UTF-8.
+                        out[n] = b[i + 2] - 0x90 + 0x30
+                        i += 3
+                    } else {
+                        return -1
+                    }
+                    n += 1
+                }
+                return n >= 4 ? n : -1
+            }
+        }
+        return pin.count > 0 ? .success(pin) : .failure(.shape)
+    }
 }
 
 private func withOptionalBytes<R>(_ data: Data?, _ body: (UnsafeBufferPointer<UInt8>?) -> R) -> R {
@@ -141,27 +215,56 @@ private func withOptionalBytes<R>(_ data: Data?, _ body: (UnsafeBufferPointer<UI
     return data.withUnsafeBytes { body($0.bindMemory(to: UInt8.self)) }
 }
 
-/// `POST /api/v1/profiles/{id}/unlock-challenge`: 32 fresh bytes from the host's supervisor and
-/// the seat they are for.
+/// `POST /api/v1/profiles/{id}/unlock-challenge`: 32 fresh bytes from the host, and what the
+/// signed message names.
 public struct UnlockChallenge: Sendable, Equatable {
-    public let challenge: Data
-    /// The seat id: 32 lowercase hex characters.
-    public let seat: String
+    public enum Names: Sendable, Equatable {
+        /// A person's own account: the seat id, 32 lowercase hex characters.
+        case seat(String)
+        /// A locked profile: its id.
+        case profile(String)
+    }
 
-    /// The host's answer, refused unless both fields have exactly their shape.
+    public let challenge: Data
+    public let names: Names
+
+    /// The host's answer, `{challenge, seat}` or `{challenge, profile}`, each field exactly its
+    /// shape. Anything else is refused: both, neither.
     public init?(json: Data) {
         guard json.count <= 4096,
               let object = try? JSONSerialization.jsonObject(with: json) as? [String: Any],
-              let hex = object["challenge"] as? String, let seat = object["seat"] as? String,
-              let challenge = Self.lowerHex(hex, bytes: 32), Self.lowerHex(seat, bytes: 16) != nil
+              let hex = object["challenge"] as? String,
+              let challenge = Self.lowerHex(hex, bytes: 32)
         else { return nil }
+        let field: (String) -> Any? = { key in object[key].flatMap { $0 is NSNull ? nil : $0 } }
+        switch (field("seat"), field("profile")) {
+        case (.some(let seat as String), .none) where Self.lowerHex(seat, bytes: 16) != nil:
+            names = .seat(seat)
+        case (.none, .some(let id as String)) where ProfileUnlock.isProfileID(id):
+            names = .profile(id)
+        default:
+            return nil
+        }
         self.challenge = challenge
-        self.seat = seat
     }
 
-    public init(challenge: Data, seat: String) {
+    public init(challenge: Data, names: Names) {
         self.challenge = challenge
-        self.seat = seat
+        self.names = names
+    }
+
+    /// What the key signs to open profile `id`: the message this challenge names. nil for one
+    /// named for another profile.
+    public func message(for id: String, device: Data, box: Data) -> Data? {
+        switch names {
+        case .seat(let seat):
+            return ProfileUnlock.message(challenge: challenge, seat: seat, device: device, box: box)
+        case .profile(let named) where named == id:
+            return ProfileUnlock.message(
+                challenge: challenge, profile: named, device: device, box: box)
+        case .profile:
+            return nil
+        }
     }
 
     static func lowerHex(_ text: String, bytes: Int) -> Data? {
@@ -208,10 +311,10 @@ public protocol UnlockKeys: Sendable {
     func delete(host: Data, profile: String)
 }
 
-/// The key or the password prompt for one locked profile on one pinned host, as CONTRACT §6 has
-/// it. A cancelled prompt dials nothing, and nothing here retries on its own.
+/// The key, or the password or PIN prompt, for one profile on one pinned host. A cancelled prompt
+/// dials nothing, and nothing here retries on its own.
 public struct ProfileUnlocker: Sendable {
-    /// What the player typed, and the prompt's one switch.
+    /// What the player typed, password or PIN, and the prompt's one switch.
     public struct Entry: Sendable {
         public let password: UnlockSecret
         public let switchOn: Bool
@@ -234,7 +337,7 @@ public struct ProfileUnlocker: Sendable {
     public let keys: (any UnlockKeys)?
     /// The host's pinned certificate fingerprint.
     public let host: Data
-    /// This device's certificate fingerprint; nil leaves only the password.
+    /// This device's certificate fingerprint; nil leaves only the prompt.
     public let device: Data?
     public let hostName: String
     public let challenge: @Sendable (_ profile: String) async throws -> UnlockChallenge
@@ -259,35 +362,72 @@ public struct ProfileUnlocker: Sendable {
             ?? String(localized: L10n.unlockStaySignedIn)
     }
 
-    /// Before the dial, from the row's `unlock`. The host saying `password` for a profile this
-    /// device holds a key for means it signed the device out: the key goes.
-    public func before(_ row: ListedProfile, prompt: Prompt) async -> Outcome {
-        switch row.unlock {
-        case .none:
-            return .dial(nil)
-        case .password:
-            if let keys, keys.has(host: host, profile: row.id) {
-                keys.delete(host: host, profile: row.id)
-            }
-            return await password(row.id, error: nil, prompt: prompt)
-        case .key:
-            if let proof = await keyProof(row) { return .dial(proof) }
-            return await password(row.id, error: nil, prompt: prompt)
+    /// What a dial does first.
+    public enum Gate: Sendable, Equatable {
+        case dial
+        /// Sign a fresh challenge with this device's key; no proof falls to the prompt.
+        case key
+        /// The password prompt, or the PIN prompt where `UnlockNeed.pin`.
+        case prompt
+    }
+
+    /// The gate for a profile `enumerate` lists with `need`. `holdsKey`: this device has its
+    /// unlock key for the profile.
+    public static func gate(_ need: UnlockNeed, holdsKey: Bool) -> Gate {
+        switch need {
+        case .none: return .dial
+        case .key, .pinKey: return holdsKey ? .key : .prompt
+        case .password, .pin: return .prompt
         }
     }
 
-    /// After a `ProfileLocked` close: the prompt again, with the host's sentence.
-    public func refused(profile: String, said: String?, prompt: Prompt) async -> Outcome {
-        await password(profile, error: said, prompt: prompt)
+    /// The host asks for the password or the PIN from a device that holds a key: it signed the
+    /// device out, and the key goes.
+    public static func staleKey(_ need: UnlockNeed, holdsKey: Bool) -> Bool {
+        holdsKey && (need == .password || need == .pin)
     }
 
-    /// The signed challenge, or nil for anything that falls to the password: no key, no
-    /// challenge, a cancelled sheet, a key the system invalidated.
+    /// After a `ProfileLocked` close. `sent`: the dial carried an unlock, so the prompt opens.
+    /// A dial that carried none tries the key first. Never a dial on its own.
+    public static func afterRefusal(_ need: UnlockNeed, holdsKey: Bool, sent: Bool) -> Gate {
+        !sent && gate(need, holdsKey: holdsKey) == .key ? .key : .prompt
+    }
+
+    /// Before the dial, from the row's `unlock`.
+    public func before(_ row: ListedProfile, prompt: Prompt) async -> Outcome {
+        let gate = Self.gate(row.unlock, holdsKey: holdsKey(row))
+        if gate == .dial { return .dial(nil) }
+        if gate == .key, let proof = await keyProof(row) { return .dial(proof) }
+        return await ask(row, error: nil, prompt: prompt)
+    }
+
+    /// After a `ProfileLocked` close, from the profile's fresh row: the key or the prompt, with
+    /// the host's sentence as it arrived. `sent`: the refused dial carried an unlock.
+    public func refused(
+        _ row: ListedProfile, sent: Bool, said: String?, prompt: Prompt
+    ) async -> Outcome {
+        let gate = Self.afterRefusal(row.unlock, holdsKey: holdsKey(row), sent: sent)
+        if gate == .key, let proof = await keyProof(row) { return .dial(proof) }
+        return await ask(row, error: said, prompt: prompt)
+    }
+
+    /// This device holds `row`'s key, once a key the host signed out is deleted. The store is
+    /// asked only for a profile that needs an unlock.
+    func holdsKey(_ row: ListedProfile) -> Bool {
+        guard row.unlock != .none, let keys, keys.has(host: host, profile: row.id) else {
+            return false
+        }
+        guard Self.staleKey(row.unlock, holdsKey: true) else { return true }
+        keys.delete(host: host, profile: row.id)
+        return false
+    }
+
+    /// The signed challenge, or nil for anything that falls to the prompt: no key, no
+    /// challenge, one named for another profile, a cancelled sheet, a key the system invalidated.
     func keyProof(_ row: ListedProfile) async -> ProfileUnlock? {
         guard let keys, let device, keys.has(host: host, profile: row.id),
               let fresh = try? await challenge(row.id),
-              let message = ProfileUnlock.message(
-                  challenge: fresh.challenge, seat: fresh.seat, device: device, box: host),
+              let message = fresh.message(for: row.id, device: device, box: host),
               let signature = try? keys.sign(
                   message, host: host, profile: row.id,
                   reason: L10n.appleUnlockBiometryReason(name: row.displayName, host: hostName))
@@ -295,24 +435,33 @@ public struct ProfileUnlocker: Sendable {
         return ProfileUnlock.keyProof(signature)
     }
 
-    func password(_ profile: String, error: String?, prompt: Prompt) async -> Outcome {
+    /// The prompt `row` needs until it holds what the wire takes: a password, or a PIN sent as
+    /// its ASCII digits. What was typed is wiped once read.
+    func ask(_ row: ListedProfile, error: String?, prompt: Prompt) async -> Outcome {
         var error = error
         while true {
             guard let entry = await prompt(error) else { return .cancelled }
-            guard ProfileUnlock.fits(entry.password) else {
+            var secret: UnlockSecret? = entry.password
+            if row.unlock.pin {
+                switch ProfileUnlock.pin(entry.password) {
+                case .success(let digits): secret = digits
+                case .failure(let problem): (secret, error) = (nil, problem.line)
+                }
                 entry.password.wipe()
-                error = String(localized: L10n.unlockErrorTooLong)
-                continue
+            } else if !ProfileUnlock.fits(entry.password) {
+                entry.password.wipe()
+                (secret, error) = (nil, String(localized: L10n.unlockErrorTooLong))
             }
-            // Key creation failing sends the password without a key, and says nothing.
+            guard let secret else { continue }
+            // Key creation failing sends the secret without a key, and says nothing.
             var enroll: Data?
             if entry.switchOn, biometry != nil {
-                enroll = try? keys?.create(host: host, profile: profile)
+                enroll = try? keys?.create(host: host, profile: row.id)
             }
             let stay = entry.switchOn && biometry == nil
             return .dial(
-                ProfileUnlock.password(entry.password, staySignedIn: stay, enroll: enroll)
-                    ?? ProfileUnlock.password(entry.password, staySignedIn: stay))
+                ProfileUnlock.password(secret, staySignedIn: stay, enroll: enroll)
+                    ?? ProfileUnlock.password(secret, staySignedIn: stay))
         }
     }
 }

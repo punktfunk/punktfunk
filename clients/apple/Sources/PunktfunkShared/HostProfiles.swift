@@ -108,11 +108,16 @@ public struct ProfileSeat: Codable, Hashable, Sendable {
     }
 }
 
-/// What a profile on a person's own account needs from this device before it opens. An old host
-/// sends none, and a word this build doesn't know reads as `.none`: the host refuses a dial that
-/// needs more.
+/// What a profile on a person's own account, or a locked one, needs from this device before it
+/// opens. An old host sends none: `.none`. A word this build doesn't know reads as `.password`,
+/// the prompt every client has.
 public enum UnlockNeed: String, Codable, Sendable {
-    case none, password, key
+    case none, password, key, pin
+    /// This device's unlock key, else the locked profile's PIN.
+    case pinKey = "pin_key"
+
+    /// The prompt asks for the profile's PIN, not an account password.
+    public var pin: Bool { self == .pin || self == .pinKey }
 }
 
 /// One row of `enumerate`. Every field defaults, so a host that adds one never fails the list.
@@ -144,8 +149,8 @@ public struct ListedProfile: Codable, Hashable, Sendable, Identifiable {
         owner = try c.decodeIfPresent(Bool.self, forKey: .owner) ?? false
         seat = try c.decodeIfPresent(ProfileSeat.self, forKey: .seat)
         legacySeat = try c.decodeIfPresent(Bool.self, forKey: .legacySeat) ?? false
-        let word = try c.decodeIfPresent(String.self, forKey: .unlock) ?? ""
-        unlock = UnlockNeed(rawValue: word) ?? .none
+        let word = try c.decodeIfPresent(String.self, forKey: .unlock)
+        unlock = word.map { UnlockNeed(rawValue: $0) ?? .password } ?? .none
     }
 
     public init(id: String, displayName: String, accent: String? = nil, avatar: String? = nil,
