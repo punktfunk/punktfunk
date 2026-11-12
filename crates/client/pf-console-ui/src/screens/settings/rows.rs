@@ -908,8 +908,8 @@ pub fn row_on(id: RowId, platform: crate::platform::Platform) -> bool {
         RowId::VideoFit => &[Desktop, Android, Apple],
         // The clients that open a window per monitor; Apple's is the Mac (`row_applies`).
         RowId::Screens => &[Desktop, Apple],
-        // The clients whose dial sends a preset's screen wish.
-        RowId::HostScreen => &[Desktop, Android, Apple],
+        // Every client's dial sends a preset's screen wish.
+        RowId::HostScreen => &Platform::ALL,
         // The clients whose dial sends `pyrowave_bpp`.
         RowId::PyroWaveQuality => &[Desktop, Android, Apple, Ps5, Switch],
         // Offered wherever there is a second UI to fall back to: Android's touch home,
