@@ -1,5 +1,6 @@
 use super::*;
 use crate::model::HostRow;
+use pf_client_core::menu_nav::MenuDir;
 use pf_client_core::trust::Settings;
 use punktfunk_core::quic::v2::msg::UNLOCK_PASSWORD;
 
@@ -256,13 +257,23 @@ fn a_short_pin_never_dials() {
     assert_eq!(s.password.as_str(), "246");
 }
 
-/// The tray opens on its digits for a PIN and on its letters for a password.
+/// A PIN types on a number pad, 1 first, and a password on the letters, q first. Moving through
+/// the pad keeps the screen reader on the field, which never reads what was typed.
 #[test]
-fn the_pin_tray_opens_on_its_digits() {
+fn the_pin_tray_is_a_number_pad() {
     for (pin, first) in [(true, "1"), (false, "q")] {
         let mut s = form(pin);
         press(&mut s, MenuEvent::Confirm);
         press(&mut s, MenuEvent::Confirm);
         assert_eq!(s.password.as_str(), first, "pin {pin}");
     }
+    let mut s = form(true);
+    press(&mut s, MenuEvent::Confirm);
+    for ev in [MenuDir::Down, MenuDir::Right, MenuDir::Down].map(MenuEvent::Move) {
+        press(&mut s, ev);
+    }
+    press(&mut s, MenuEvent::Confirm);
+    assert_eq!(s.password.as_str(), "8");
+    let said = with_ctx(|ctx| s.announcement(ctx));
+    assert_eq!(said.as_deref(), Some("PIN, entered"));
 }
