@@ -87,6 +87,20 @@ function usePlayAs(host: HostView): PlayAs {
   return answer;
 }
 
+// One block per group: the list owns the rounded corners and a hairline between rows, so a row
+// and its ▾ are square and read as one control.
+const HAIRLINE = "1px";
+const SQUARE: CSSProperties = { borderRadius: 0, minWidth: 0 };
+
+/** The rows of one group, drawn as a single list. */
+export const HostList: FC<{ children: ReactNode }> = ({ children }) => (
+  <PanelSectionRow>
+    <div style={{ display: "flex", flexDirection: "column", gap: HAIRLINE, borderRadius: "3px", overflow: "hidden" }}>
+      {children}
+    </div>
+  </PanelSectionRow>
+);
+
 /** A profile row: a check on the one this Deck plays as, its picture, its name, its note. */
 const ProfileItem: FC<{ profile: HostProfile; picked: boolean }> = ({ profile: p, picked }) => {
   return (
@@ -139,10 +153,9 @@ export const HostRow: FC<{ host: HostView; showAddress: boolean }> = ({ host, sh
       caret.current ?? undefined,
     );
   return (
-    <PanelSectionRow>
-      <Focusable style={{ display: "flex", gap: "0.4em" }} flow-children="row">
+    <Focusable style={{ display: "flex", gap: HAIRLINE }} flow-children="row">
         <DialogButton
-          style={{ flex: 1, minWidth: 0 }}
+          style={{ ...SQUARE, flex: 1 }}
           onClick={() => void startStream(host)}
           onOKActionDescription={t("decky_stream")}
           onMenuButton={menu ? openMenu : undefined}
@@ -153,14 +166,13 @@ export const HostRow: FC<{ host: HostView; showAddress: boolean }> = ({ host, sh
         {menu && (
           <DialogButton
             ref={caret}
-            style={{ flex: "0 0 auto", width: "auto", minWidth: 0, padding: "0 0.8em" }}
+            style={{ ...SQUARE, flex: "0 0 auto", width: "auto", padding: "0 0.9em" }}
             onClick={openMenu}
           >
             <FaCaretDown />
           </DialogButton>
         )}
-      </Focusable>
-    </PanelSectionRow>
+    </Focusable>
   );
 };
 
@@ -170,9 +182,8 @@ export const AccessRow: FC<{ host: HostView; showAddress: boolean; refresh: () =
   showAddress,
   refresh,
 }) => (
-  <PanelSectionRow>
-    <DialogButton
-      style={{ width: "100%", minWidth: 0 }}
+  <DialogButton
+      style={{ ...SQUARE, width: "100%" }}
       onOKActionDescription={t("decky_host_connect")}
       onClick={() =>
         showModal(
@@ -181,6 +192,5 @@ export const AccessRow: FC<{ host: HostView; showAddress: boolean; refresh: () =
       }
     >
       <HostLabel host={host} icon={<FaLock />} showAddress={showAddress} />
-    </DialogButton>
-  </PanelSectionRow>
+  </DialogButton>
 );

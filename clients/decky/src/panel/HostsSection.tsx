@@ -7,7 +7,7 @@ import { FaSyncAlt } from "react-icons/fa";
 import { splitByAccess } from "../hosts/model";
 import { useHosts } from "../hosts/store";
 import { t } from "../i18n";
-import { AccessRow, HostRow } from "./HostRow";
+import { AccessRow, HostList, HostRow } from "./HostRow";
 import { sharedNames } from "./model";
 
 const ProblemRow: FC<{ problem: string }> = ({ problem }) => (
@@ -54,17 +54,23 @@ export const HostsSection: FC = () => {
               <Field focusable={false} label={t("hosts_empty_title")} description={t("decky_empty_body")} />
             </PanelSectionRow>
           )}
-          {ready.map((v) => (
-            <HostRow key={v.ref} host={v} showAddress={shared.has(v.name)} />
-          ))}
+          {ready.length > 0 && (
+            <HostList>
+              {ready.map((v) => (
+                <HostRow key={v.ref} host={v} showAddress={shared.has(v.name)} />
+              ))}
+            </HostList>
+          )}
           {access.length === 0 && refreshRow}
         </PanelSection>
       )}
       {access.length > 0 && (
         <PanelSection title={t("decky_host_needs_access")}>
-          {access.map((v) => (
-            <AccessRow key={v.ref} host={v} showAddress={shared.has(v.name)} refresh={refresh} />
-          ))}
+          <HostList>
+            {access.map((v) => (
+              <AccessRow key={v.ref} host={v} showAddress={shared.has(v.name)} refresh={refresh} />
+            ))}
+          </HostList>
           {refreshRow}
         </PanelSection>
       )}
