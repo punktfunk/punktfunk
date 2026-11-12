@@ -24,14 +24,6 @@ fn profile(id: &str, name: &str, os_account: OsAccount) -> Profile {
         os_account,
         home: Home::Desktop,
         legacy_device: None,
-        assigned_fingerprints: Vec::new(),
-        passcode: None,
-        require_passcode_even_when_assigned: false,
-        allow_shared_view: false,
-        tvos_user_ids: Vec::new(),
-        library_scope: LibraryScope::All,
-        custom_entries: Vec::new(),
-        session_defaults: SessionDefaults::default(),
         created_unix: 1,
         updated_unix: 1,
         last_used_unix: 0,
@@ -292,24 +284,6 @@ fn a_seat_host_announces_a_profile_the_box_removed() {
 }
 
 #[test]
-fn an_os_user_profile_has_no_session_yet() {
-    let mut file = box_file();
-    file.profiles.push(profile(
-        "cccccccccccc",
-        "Alice",
-        OsAccount::Linux {
-            username: "alice".into(),
-            uid: Some(1001),
-        },
-    ));
-    let (p, _) = store("linux", &file, None);
-    assert_eq!(
-        p.resolve(None, Some("cccccccccccc")),
-        Err(ProfileError::SessionUnavailable)
-    );
-}
-
-#[test]
 fn a_store_without_an_owner_still_resolves_the_box_session() {
     let p = Profiles::load_with(Some(temp_dir("empty").join("profiles.json")), None);
     let r = p.resolve(None, None).unwrap();
@@ -361,27 +335,51 @@ fn the_owner_is_created_once_across_restarts() {
     assert_eq!(json(&again.list()), json(&owners));
 }
 
+/// A file an older host wrote, with the keys this one never read, loads whole; its next save
+/// drops those keys and keeps everything else, the take-turns credential an older host needs.
 #[test]
-fn a_file_round_trips_its_unused_fields() {
-    let mut file = box_file();
-    file.profiles[0].passcode = Some(PasscodeHash {
-        phc: "$argon2id$x".into(),
-    });
-    file.profiles[0].library_scope = LibraryScope::Deny {
-        ids: vec!["steam:570".into()],
-    };
-    file.profiles[0].os_account = OsAccount::Windows {
-        account_name: r".\enrico".into(),
-        sid: None,
-        credential: CredentialRef::DpapiBlob {
-            path: "cred/x.bin".into(),
-        },
-    };
-    let text = serde_json::to_string(&file).unwrap();
-    assert_eq!(
-        json(&serde_json::from_str::<ProfilesFile>(&text).unwrap()),
-        json(&file)
+fn a_file_with_keys_no_longer_read_loads_and_saves_without_them() {
+    let unread = r#""assigned_fingerprints": ["ab12"], "passcode": {"phc": "$argon2id$x"},
+        "require_passcode_even_when_assigned": true, "allow_shared_view": true,
+        "tvos_user_ids": ["u1"], "library_scope": {"mode": "deny", "ids": ["steam:570"]},
+        "custom_entries": [], "session_defaults": {"max_width": 1920},"#;
+    let text = format!(
+        r#"{{"version": 1, "profiles": [
+          {{"id": "4f1c3a9b0e27", "display_name": "Enrico", "os_account": {{"kind": "operator"}},
+            {unread} "created_unix": 1, "updated_unix": 1}},
+          {{"id": "9a3f1c2b7e40", "display_name": "Ben", "os_account": {{"kind": "windows",
+            "account_name": "Ben", "credential": {{"source": "none"}}}},
+            {unread} "home": "bigpicture", "created_unix": 1, "updated_unix": 1}}
+        ]}}"#
     );
+    let path = temp_dir("unread-keys").join("profiles.json");
+    std::fs::write(&path, text).unwrap();
+    let p = Profiles::load_with(Some(path.clone()), None);
+    let ben = p.get("9a3f1c2b7e40").expect("the file parsed");
+    assert_eq!(
+        (ben.display_name.as_str(), ben.home),
+        ("Ben", Home::Bigpicture)
+    );
+    p.set_default(Some("9a3f1c2b7e40")).unwrap();
+    let saved = std::fs::read_to_string(&path).unwrap();
+    for key in [
+        "assigned_fingerprints",
+        "passcode",
+        "allow_shared_view",
+        "tvos_user_ids",
+        "library_scope",
+        "custom_entries",
+        "session_defaults",
+    ] {
+        assert!(!saved.contains(key), "{key}: {saved}");
+    }
+    let file: serde_json::Value = serde_json::from_str(&saved).unwrap();
+    assert_eq!(
+        file["profiles"][1]["os_account"],
+        serde_json::json!({"kind": "windows", "account_name": "Ben",
+            "credential": {"source": "none"}})
+    );
+    assert_eq!(file["default_profile_id"], "9a3f1c2b7e40");
 }
 
 #[test]

@@ -243,9 +243,7 @@ fn seat(st: &MgmtState, p: &Profile, seats: &Snapshot, operator: bool) -> SeatPu
     }
     let kind = match &p.os_account {
         OsAccount::Operator => SeatKind::Shared,
-        OsAccount::Seat { .. } | OsAccount::Linux { .. } | OsAccount::Windows { .. } => {
-            SeatKind::Desktop
-        }
+        OsAccount::Seat { .. } | OsAccount::Windows { .. } => SeatKind::Desktop,
     };
     SeatPublic {
         kind,
@@ -374,7 +372,7 @@ fn seat_line(st: &MgmtState, p: &Profile, seats: &Snapshot, operator: bool) -> S
             take_turns: false,
             account: None,
         },
-        OsAccount::Linux { .. } | OsAccount::Windows { .. } => unavailable((
+        OsAccount::Windows { .. } => unavailable((
             "seatline_account_not_startable",
             "This profile signs in to an account this host can't start yet.",
         )),
