@@ -168,13 +168,19 @@ pub(crate) fn widens_poc(codec: u8, codec_name: &str, forced: Option<bool>) -> b
     codec == punktfunk_core::quic::CODEC_HEVC && forced.unwrap_or(amlogic)
 }
 
-/// Whether each fed HEVC AU goes through the concealer first: a Realtek decoder, which does not
-/// conceal a lost current reference and keeps showing garbage past the host's anchor. `forced`
-/// is the debug override.
-pub(crate) fn conceals_h265(codec: u8, codec_name: &str, forced: Option<bool>) -> bool {
+/// Whether each fed AU goes through the concealer first. HEVC on a Realtek decoder, which keeps
+/// showing garbage past the host's anchor after a picture naming a lost reference. AV1 on a
+/// `strict` decoder (Tensor G5, Realtek), which refuses a stale wave start: the concealer makes
+/// an error-resilient one conformant, so the wave heals it. `forced` is the debug override.
+pub(crate) fn conceals(codec: u8, codec_name: &str, strict: bool, forced: Option<bool>) -> bool {
+    use punktfunk_core::quic::{CODEC_AV1, CODEC_HEVC};
     let name = codec_name.to_ascii_lowercase();
-    let realtek = name.starts_with("omx.realtek") || name.starts_with("c2.realtek");
-    codec == punktfunk_core::quic::CODEC_HEVC && forced.unwrap_or(realtek)
+    let pick = match codec {
+        CODEC_HEVC => name.starts_with("omx.realtek") || name.starts_with("c2.realtek"),
+        CODEC_AV1 => strict,
+        _ => return false,
+    };
+    forced.unwrap_or(pick)
 }
 
 /// Whether a decoder tolerates `operating-rate = Short.MAX` rather than regressing on it. Follows
@@ -263,32 +269,55 @@ mod tests {
     }
 
     #[test]
-    fn only_realtek_hevc_is_concealed() {
-        use punktfunk_core::quic::{CODEC_AV1, CODEC_HEVC};
-        assert!(super::conceals_h265(
+    fn realtek_hevc_and_strict_av1_are_concealed() {
+        use punktfunk_core::quic::{CODEC_AV1, CODEC_H264, CODEC_HEVC};
+        assert!(super::conceals(
             CODEC_HEVC,
             "OMX.realtek.video.dec.hevc",
+            false,
             None
         ));
-        assert!(!super::conceals_h265(
+        assert!(!super::conceals(
             CODEC_HEVC,
             "c2.qti.hevc.decoder",
+            false,
             None
         ));
-        assert!(!super::conceals_h265(
+        assert!(super::conceals(
             CODEC_AV1,
-            "OMX.realtek.video.dec.av1",
+            "c2.google.av1.decoder",
+            true,
+            None
+        ));
+        assert!(!super::conceals(
+            CODEC_AV1,
+            "c2.qti.av1.decoder",
+            false,
+            None
+        ));
+        assert!(!super::conceals(
+            CODEC_H264,
+            "OMX.realtek.video.dec.avc",
+            true,
             None
         ));
         // The override moves the decoder pick, never the codec.
-        assert!(super::conceals_h265(
-            CODEC_HEVC,
-            "c2.qti.hevc.decoder",
+        assert!(super::conceals(
+            CODEC_AV1,
+            "c2.qti.av1.decoder",
+            false,
             Some(true)
         ));
-        assert!(!super::conceals_h265(
+        assert!(!super::conceals(
+            CODEC_H264,
+            "c2.qti.avc.decoder",
+            false,
+            Some(true)
+        ));
+        assert!(!super::conceals(
             CODEC_HEVC,
             "OMX.realtek.video.dec.hevc",
+            false,
             Some(false)
         ));
     }

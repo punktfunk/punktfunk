@@ -2,11 +2,12 @@
 
 use ndk::media::media_codec::{AsyncNotifyCallback, MediaCodec, MediaCodecDirection};
 use ndk::native_window::NativeWindow;
+use pf_bitstream::av1::conceal::Av1Concealer;
 use pf_bitstream::h265::conceal::{Concealment, H265Concealer};
 use pf_bitstream::h265::poc_widen::PocWidener;
 use punktfunk_core::client::{Decoded, NativeClient};
 use punktfunk_core::error::PunktfunkError;
-use punktfunk_core::reanchor::{AnchorEvidence, DecoderClass, LocalRecovery};
+use punktfunk_core::reanchor::{self, AnchorEvidence, DecoderClass, LocalRecovery};
 use punktfunk_core::session::Frame;
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, AtomicUsize, Ordering};
@@ -467,9 +468,10 @@ fn run_codec(
         client.video_format().codec,
         &ctx.codec.name().unwrap_or_default(),
     );
-    state.conceal = h265_concealer(
+    state.conceal = concealer(
         client.video_format().codec,
         &ctx.codec.name().unwrap_or_default(),
+        class == Some(DecoderClass::Strict),
     );
     if await_keyframe {
         client.recovery_lost();
@@ -997,9 +999,9 @@ struct State {
     sink: Box<dyn Sink>,
     /// Recodes each fed AU with a 16-bit POC ([`poc_widener`]). `None` on other decoders.
     widen: Option<PocWidener>,
-    /// Moves a fed AU's lost current reference to a held picture ([`h265_concealer`]). `None`
-    /// on other decoders.
-    conceal: Option<H265Concealer>,
+    /// Points a fed AU's lost reference at a held picture ([`concealer`]). `None` on other
+    /// decoders.
+    conceal: Option<Concealer>,
     /// The codec's input side: the slots it offered, the parked deliveries, the open AU.
     inputs: Feed,
     ready: Vec<OutputReady>,
@@ -1137,20 +1139,57 @@ fn poc_widener(codec: u8, decoder: &str) -> Option<PocWidener> {
     Some(PocWidener::new())
 }
 
-/// The HEVC concealer for this session: a Realtek decoder, which shows garbage past the host's
-/// anchor once fed a picture whose current reference was lost. `debug.punktfunk.h265_conceal`
-/// = `on` / `off` overrides the pick.
-fn h265_concealer(codec: u8, decoder: &str) -> Option<H265Concealer> {
-    let forced = match sysprop(c"debug.punktfunk.h265_conceal").as_deref() {
+/// A bitstream concealer: every AU the codec is fed goes through it, in feed order.
+enum Concealer {
+    H265(Box<H265Concealer>),
+    Av1(Box<Av1Concealer>),
+}
+
+impl Concealer {
+    fn conceal(&mut self, au: &[u8]) -> Concealment {
+        match self {
+            Concealer::H265(c) => c.conceal(au),
+            Concealer::Av1(c) => c.conceal(au),
+        }
+    }
+
+    fn flush(&mut self) {
+        match self {
+            Concealer::H265(c) => c.flush(),
+            Concealer::Av1(c) => c.flush(),
+        }
+    }
+}
+
+/// The concealer for this session ([`crate::codec_format::conceals`]); `strict` is the AV1
+/// receiver rule's class. `debug.punktfunk.conceal` = `on` / `off` overrides the pick.
+fn concealer(codec: u8, decoder: &str, strict: bool) -> Option<Concealer> {
+    let forced = match sysprop(c"debug.punktfunk.conceal").as_deref() {
         Some("on") => Some(true),
         Some("off") => Some(false),
         _ => None,
     };
-    if !crate::codec_format::conceals_h265(codec, decoder, forced) {
+    if !crate::codec_format::conceals(codec, decoder, strict, forced) {
         return None;
     }
-    log::info!("decode: lost HEVC references concealed in the bitstream for {decoder}");
-    Some(H265Concealer::new())
+    log::info!("decode: lost references concealed in the bitstream for {decoder}");
+    Some(if codec == punktfunk_core::quic::CODEC_AV1 {
+        Concealer::Av1(Box::default())
+    } else {
+        Concealer::H265(Box::new(H265Concealer::new()))
+    })
+}
+
+/// The concealer's word to the receiver rule on a whole AV1 wave start: an error-resilient one
+/// codes the order hints it expects, so the concealer finds and rewrites a stale reference and
+/// the wave heals even a strict decoder. `None` leaves the AU to the rule.
+fn conceal_verdict(conceal: &Option<Concealer>, f: &Frame) -> Option<reanchor::Concealment> {
+    let Some(Concealer::Av1(c)) = conceal else {
+        return None;
+    };
+    let wave_start = f.flags & punktfunk_core::packet::USER_FLAG_RECOVERY_POINT != 0;
+    (f.part.is_none() && wave_start && c.error_resilient(&f.data))
+        .then_some(reanchor::Concealment::Decodable)
 }
 
 /// One feeder delivery as the intake rules see it.
@@ -1230,7 +1269,9 @@ impl State {
                     self.loss_open = true;
                     pass.lost = true;
                 }
-                let verdict = self.intake.note(delivery(&f), gap);
+                let verdict =
+                    self.intake
+                        .note(delivery(&f), gap, conceal_verdict(&self.conceal, &f));
                 pass.ask_keyframe |= verdict.ask_keyframe;
                 if !verdict.feed {
                     return;
@@ -1284,8 +1325,9 @@ impl State {
             return;
         }
         let intake = &mut self.intake;
+        let conceal = &self.conceal;
         self.inputs.rejudge(|f| {
-            let verdict = intake.rejudge(delivery(f));
+            let verdict = intake.rejudge(delivery(f), conceal_verdict(conceal, f));
             pass.ask_keyframe |= verdict.ask_keyframe;
             verdict.feed
         });
@@ -1390,7 +1432,7 @@ impl State {
             // The concealer, then the widener, see exactly what the codec is fed, in feed order.
             let mut concealed = None;
             if frame.part.is_some() && self.conceal.take().is_some() {
-                log::warn!("decode: this HEVC stream comes in parts — fed as it came");
+                log::warn!("decode: this stream comes in parts — fed as it came");
             }
             if let Some(c) = self.conceal.as_mut() {
                 match c.conceal(&frame.data) {
