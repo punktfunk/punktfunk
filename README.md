@@ -77,7 +77,7 @@ uninstalling are [/docs/updating](https://docs.punktfunk.unom.io/docs/updating) 
 | Steam Deck | The **Decky plugin** in Gaming Mode; the Flatpak in Desktop Mode |
 | Android phone or TV | The **Android app** on Google Play |
 | Windows | Native **`punktfunk-client`** — signed installer (portable zip and MSIX too) |
-| LG webOS TV | **`pf-webos`**, a community client in its own repo |
+| LG webOS TV | **`client-webos`**, in its own repo |
 | Scripts and launchers | **`punktfunk`**, the headless CLI in the Linux client packages |
 | Anything else | **Moonlight** over GameStream |
 
