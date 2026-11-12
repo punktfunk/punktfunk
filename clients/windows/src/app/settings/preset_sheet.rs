@@ -186,12 +186,15 @@ pub(super) fn edit_preset_modal(
 enum ScopePick {
     Default,
     Preset(String),
+    /// An empty preset, named in the sheet.
     New,
+    /// Core's Second screen starter.
+    SecondScreen,
     Edit,
 }
 
 /// The bar above the page: the preset's colour chip and one native DropDownButton that picks
-/// the scope, creates a preset or opens the sheet.
+/// the scope, creates a preset from a starter (Empty, Second screen) or opens the sheet.
 pub(super) fn scope_bar(
     cx: &Cx,
     active: Option<&StreamPreset>,
@@ -206,11 +209,15 @@ pub(super) fn scope_bar(
         picks.push(ScopePick::Preset(p.id.clone()));
     }
     items.push(MenuItem::separator("sep"));
-    items.push(MenuItem::item(
-        picks.len().to_string(),
-        client::preset_new(),
-    ));
+    let empty = MenuItem::item(picks.len().to_string(), client::preset_starter_empty());
     picks.push(ScopePick::New);
+    let second = MenuItem::item(picks.len().to_string(), client::screen_role_second());
+    picks.push(ScopePick::SecondScreen);
+    items.push(MenuItem::submenu(
+        "sub:new",
+        client::preset_new_title(),
+        [empty, second],
+    ));
     if let Some(p) = active {
         let label = client::preset_menu_edit_named(&p.name);
         items.push(MenuItem::item(picks.len().to_string(), label));
@@ -244,6 +251,18 @@ pub(super) fn scope_bar(
                 if let Some(new_id) = saved(r, &set_status, Some((rev, &set_rev))) {
                     set_scope.call(new_id);
                     set_edit.call(true);
+                }
+            }
+            // Named after its role, so it opens on its settings rather than the sheet.
+            Some(ScopePick::SecondScreen) => {
+                let r = PresetsFile::update(|catalog| {
+                    let preset = StreamPreset::second_screen(|n| catalog.name_taken(n, None));
+                    let new_id = preset.id.clone();
+                    catalog.presets.push(preset);
+                    new_id
+                });
+                if let Some(new_id) = saved(r, &set_status, Some((rev, &set_rev))) {
+                    set_scope.call(new_id);
                 }
             }
             Some(ScopePick::Edit) => set_edit.call(true),

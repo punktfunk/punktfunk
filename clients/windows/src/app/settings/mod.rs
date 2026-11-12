@@ -94,15 +94,25 @@ pub(crate) fn update_preset(
     })
 }
 
-/// Re-base the process-lifetime settings snapshot on the file, and re-probe this device's
-/// hardware — called from the navigation handlers that (re)enter this page, NOT per render
-/// pass. `ctx.settings` is loaded once at process start and this process is not the file's
-/// only writer (a spawned session persists its match-window size, the console UI and Decky
-/// save too — presets.rs documents the family), so without this the page opens showing values
-/// another process already replaced, which then visibly "jump" the moment a row is touched and
-/// `commit`'s rebase pulls the file in.
+/// Re-base the settings snapshot on the file, re-probe this device's hardware, and ask each
+/// paired host for its screens, which a preset's Host screen row lists. Called from the
+/// navigation handlers that (re)enter this page, never per render pass. `ctx.settings` is
+/// loaded once at process start and this process is not the file's only writer (a spawned
+/// session, the console UI and Decky save too), so without this the page opens on values
+/// another process already replaced, which "jump" the moment a row is touched and `commit`'s
+/// rebase pulls the file in.
 pub(crate) fn refresh_snapshot(ctx: &Arc<AppCtx>) {
     *ctx.settings.lock().unwrap() = Settings::load();
+    for k in crate::trust::KnownHosts::load()
+        .hosts
+        .iter()
+        .filter(|k| k.paired)
+    {
+        let mgmt = k
+            .mgmt_port
+            .unwrap_or(pf_client_core::library::DEFAULT_MGMT_PORT);
+        pf_client_core::display_targets::refresh(&k.addr, mgmt, k.port, &k.fp_hex);
+    }
     let (speakers, mics) = pf_client_core::audio::devices().unwrap_or_default();
     *ctx.probes.lock().unwrap() = DeviceProbes {
         gpus: crate::gpu::adapter_names(),

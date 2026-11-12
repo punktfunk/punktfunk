@@ -48,51 +48,26 @@ pub fn scope_group(
     );
     row.set_selected(current);
     {
-        let (dialog, next, parent, store) = (
-            b.dialog.clone(),
-            next.clone(),
-            parent.clone(),
-            b.store.clone(),
-        );
+        let ctx = Ctx {
+            store: b.store.clone(),
+            dialog: b.dialog.clone(),
+            next: next.clone(),
+            parent: parent.clone(),
+        };
         let ids: Vec<String> = catalog.presets.iter().map(|p| p.id.clone()).collect();
         let restore = row.restorer();
         row.connect_changed(move |i| {
             if i != new_index {
-                *next.borrow_mut() =
-                    Some(match i.checked_sub(1).and_then(|n| ids.get(n as usize)) {
-                        Some(id) => Scope::Preset(id.clone()),
-                        None => Scope::Defaults,
-                    });
-                dialog.close();
+                ctx.reopen(match i.checked_sub(1).and_then(|n| ids.get(n as usize)) {
+                    Some(id) => Scope::Preset(id.clone()),
+                    None => Scope::Defaults,
+                });
                 return;
             }
             // Back on the layer being edited before asking: the prompt can be cancelled, and a
             // row parked on "New preset…" names the wrong layer and cannot be picked again.
             restore_selected(&restore, current);
-            let (dialog, next, store) = (dialog.clone(), next.clone(), store.clone());
-            prompt_name(
-                &parent,
-                client::preset_new_title(),
-                common::common_create(),
-                "",
-                true,
-                move |name, accent| {
-                    let created = store.update_presets(|c| {
-                        if c.name_taken(&name, None) {
-                            return None;
-                        }
-                        let mut preset = StreamPreset::new(name.clone());
-                        preset.accent = accent.clone();
-                        let id = preset.id.clone();
-                        c.presets.push(preset);
-                        Some(id)
-                    });
-                    if let Some(Some(id)) = saved(&dialog, created) {
-                        *next.borrow_mut() = Some(Scope::Preset(id));
-                        dialog.close();
-                    }
-                },
-            );
+            new_preset(&ctx);
         });
     }
     g.add(row.widget());
@@ -173,6 +148,96 @@ impl Ctx {
         *self.next.borrow_mut() = Some(scope);
         self.dialog.close();
     }
+}
+
+/// Where a new preset starts: Empty asks its name and colour, Second screen saves core's
+/// starter under a free name. Either reopens the dialog on the new preset.
+fn new_preset(ctx: &Ctx) {
+    let empty = {
+        let ctx = ctx.clone();
+        move || {
+            let on_ok = {
+                let ctx = ctx.clone();
+                move |name: String, accent: Option<String>| {
+                    let created = ctx.store.update_presets(|c| {
+                        if c.name_taken(&name, None) {
+                            return None;
+                        }
+                        let mut preset = StreamPreset::new(name.clone());
+                        preset.accent = accent.clone();
+                        let id = preset.id.clone();
+                        c.presets.push(preset);
+                        Some(id)
+                    });
+                    if let Some(Some(id)) = saved(&ctx.dialog, created) {
+                        ctx.reopen(Scope::Preset(id));
+                    }
+                }
+            };
+            let (title, accept) = (client::preset_new_title(), common::common_create());
+            prompt_name(&ctx.parent, title, accept, "", true, on_ok);
+        }
+    };
+    let second = {
+        let ctx = ctx.clone();
+        move || {
+            let created = ctx.store.update_presets(|c| {
+                let preset = StreamPreset::second_screen(|n| c.name_taken(n, None));
+                let id = preset.id.clone();
+                c.presets.push(preset);
+                id
+            });
+            if let Some(id) = saved(&ctx.dialog, created) {
+                ctx.reopen(Scope::Preset(id));
+            }
+        }
+    };
+    prompt_starter(&ctx.parent, empty, second);
+}
+
+/// The starters as two rows under the New preset heading, each saying what it starts from.
+/// Picking one closes the prompt and runs it.
+fn prompt_starter(parent: &gtk::Widget, empty: impl Fn() + 'static, second: impl Fn() + 'static) {
+    let dialog = adw::AlertDialog::new(Some(client::preset_new_title()), None);
+    let list = gtk::ListBox::builder()
+        .selection_mode(gtk::SelectionMode::None)
+        .css_classes(["boxed-list"])
+        .build();
+    let (e, e_hint) = (client::preset_starter_empty(), client::preset_new_hint());
+    list.append(&starter_row(&dialog, e, e_hint, empty));
+    let (s, s_hint) = (
+        client::screen_role_second(),
+        client::screen_role_second_hint(),
+    );
+    list.append(&starter_row(&dialog, s, s_hint, second));
+    dialog.set_extra_child(Some(&list));
+    dialog.add_response("cancel", common::common_cancel());
+    dialog.set_close_response("cancel");
+    dialog.present(Some(parent));
+}
+
+/// One starter: its name, what it starts from, and `start` after the prompt closes.
+fn starter_row(
+    dialog: &adw::AlertDialog,
+    title: &str,
+    hint: &str,
+    start: impl Fn() + 'static,
+) -> adw::ActionRow {
+    let row = adw::ActionRow::builder()
+        .title(title)
+        .subtitle(hint)
+        .use_markup(false)
+        .activatable(true)
+        .build();
+    row.add_suffix(&crate::widgets::lucide::row_icon("chevron-right"));
+    let dialog = dialog.downgrade();
+    row.connect_activated(move |_| {
+        if let Some(d) = dialog.upgrade() {
+            d.close();
+        }
+        start();
+    });
+    row
 }
 
 /// Rename, duplicate or delete the preset in scope. Each reopens the dialog, so the switcher

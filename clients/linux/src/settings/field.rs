@@ -182,31 +182,37 @@ impl Binder {
             if b.quiet.get() {
                 return;
             }
-            b.write(&f, to_preset);
-            if let Some(show) = &mark {
-                show();
+            let pinned = b.write(&f, to_preset);
+            if let Some(mark) = &mark {
+                mark(pinned);
             }
         }));
     }
 
-    fn write(&self, field: &Field, to_preset: bool) {
+    /// Write `field` to the layer in scope. True unless a preset write left the field unpinned:
+    /// a pin of Host screen's empty value is no pin.
+    fn write(&self, field: &Field, to_preset: bool) -> bool {
         let result = match (&self.preset, to_preset) {
             (Some(id), true) => {
                 let globals = self.store.settings().clone();
                 self.store.update_presets(|catalog| {
-                    if let Some(p) = catalog.presets.iter_mut().find(|p| &p.id == id) {
-                        let mut v = p.overrides.apply(&globals);
-                        (field.write)(&mut v);
-                        p.overrides.pin(field.spec.key, &v);
-                    }
+                    let Some(p) = catalog.presets.iter_mut().find(|p| &p.id == id) else {
+                        return true;
+                    };
+                    let mut v = p.overrides.apply(&globals);
+                    (field.write)(&mut v);
+                    p.overrides.pin(field.spec.key, &v);
+                    p.overrides.overrides(field.spec.key)
                 })
             }
             _ => {
                 self.store.update_settings(|s| (field.write)(s));
-                Ok(())
+                Ok(true)
             }
         };
-        self.report(result);
+        let pinned = *result.as_ref().unwrap_or(&true);
+        self.report(result.map(drop));
+        pinned
     }
 
     /// A settings write never fails loudly, so its latch is read after each one too.
@@ -226,12 +232,16 @@ impl Binder {
 
     /// The override mark: a dot and a reset, built on the first override so an unmarked row
     /// keeps its inset. Both sit left of the title: a suffix would move the control under the
-    /// pointer between two clicks. Returns what shows the mark.
-    fn mark(self: &Rc<Self>, field: &Rc<Field>, overridden: bool) -> Handler {
+    /// pointer between two clicks. Returns what shows (`true`) or takes down the mark.
+    fn mark(self: &Rc<Self>, field: &Rc<Field>, overridden: bool) -> Rc<dyn Fn(bool)> {
         let parts: Rc<RefCell<Option<(gtk::Box, gtk::Button)>>> = Rc::default();
         let (binder, weak) = (Rc::downgrade(self), Rc::downgrade(field));
-        let show: Handler = Rc::new(move || {
+        let show: Rc<dyn Fn(bool)> = Rc::new(move |on| {
             let Some(f) = weak.upgrade() else { return };
+            if !on {
+                take_down(&f, &parts);
+                return;
+            }
             if parts.borrow().is_some() {
                 return;
             }
@@ -253,15 +263,14 @@ impl Binder {
                     return;
                 };
                 b.reset(&f);
-                if let Some((dot, reset)) = held.upgrade().and_then(|p| p.borrow_mut().take()) {
-                    f.row.remove(&dot);
-                    f.row.remove(&reset);
+                if let Some(parts) = held.upgrade() {
+                    take_down(&f, &parts);
                 }
             });
             *parts.borrow_mut() = Some((dot, reset));
         });
         if overridden {
-            show();
+            show(true);
         }
         show
     }
@@ -278,6 +287,15 @@ impl Binder {
         let globals = self.store.settings().clone();
         self.quietly(|| (field.seed)(&globals));
     }
+}
+
+/// Take the override mark off `f`'s row, when it is on.
+fn take_down(f: &Field, parts: &RefCell<Option<(gtk::Box, gtk::Button)>>) {
+    let Some((dot, reset)) = parts.borrow_mut().take() else {
+        return;
+    };
+    f.row.remove(&dot);
+    f.row.remove(&reset);
 }
 
 /// Keeps the fields and their binder for as long as the dialog lives: the handlers hold them

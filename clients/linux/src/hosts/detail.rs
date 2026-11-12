@@ -34,8 +34,9 @@ pub struct Live {
 /// The power rows on screen: id, can run now, why not.
 type ActionsShown = Vec<(String, bool, Option<String>)>;
 
-/// The screen rows on screen: the host's answer, and whether it is reachable to write to.
-type ScreensShown = (Option<Targets>, bool);
+/// The Screen section on screen: core's rows, its note, and whether the host is reachable to
+/// write to.
+type ScreensShown = (Vec<ScreenRow>, Option<String>, bool);
 
 /// State the row handlers share: the record they act on, and a switch that silences them
 /// while `refresh` writes rows.
@@ -463,7 +464,8 @@ impl DetailPage {
         self.library.set_visible(k.paired);
 
         self.refresh_presets(k, &live.presets);
-        self.refresh_screens(live.screens.as_ref(), live.online);
+        let (rows, note) = screen_section(live.screens.as_ref(), k, &live.presets);
+        self.refresh_screens(rows, note, live.online);
 
         set_if_idle(&self.name_row, &k.name);
         set_if_idle(&self.addr_row, &k.addr);
@@ -607,21 +609,21 @@ impl DetailPage {
         }
     }
 
-    /// Core's Screen rows as one radio set: the roles in the Screen group, the rows from the
-    /// first header on in a group under it. Under a note only the current row is left, greyed;
-    /// with no row at all the note is the group's description. Offline, nothing is pickable.
-    fn refresh_screens(&self, targets: Option<&Targets>, online: bool) {
-        let shown = (targets.cloned(), online);
+    /// [`screen_section`]'s rows as one radio set: the roles in the Screen group, the rows from
+    /// the first header on in a group under it. Under a note only the row the host or the
+    /// preset leaves is drawn, greyed; with no row at all the note is the group's description.
+    /// Offline, nothing is pickable.
+    fn refresh_screens(&self, rows: Vec<ScreenRow>, note: Option<String>, online: bool) {
+        let shown = (rows, note, online);
         if self.screens_shown.borrow().as_ref() == Some(&shown) {
             return;
         }
+        let (rows, note) = (&shown.0, shown.1.as_deref());
         for (group, row) in self.screen_rows.borrow_mut().drain(..) {
             group.remove(&row);
         }
-        let rows = targets.map(Targets::rows).unwrap_or_default();
-        let note = targets.and_then(Targets::note);
         let mut group = &self.screen_group;
-        for r in &rows {
+        for r in rows {
             if let Some(header) = r.header {
                 self.monitor_group
                     .set_title(&glib::markup_escape_text(header));
@@ -752,8 +754,24 @@ fn data_row(title: &str, subtitle: &str) -> adw::ActionRow {
     row
 }
 
-/// What a Screen row says under its name: the note on the row the host leaves, else why it is
-/// greyed, else the role's hint, else a monitor's connector and mode.
+/// The host page's Screen section: core's rows and note under the preset its Connect uses,
+/// the host's binding. No answer from the host is no section.
+fn screen_section(
+    t: Option<&Targets>,
+    k: &KnownHost,
+    presets: &[Preset],
+) -> (Vec<ScreenRow>, Option<String>) {
+    let Some(t) = t else {
+        return (Vec::new(), None);
+    };
+    let bound = (k.preset_id.as_ref())
+        .and_then(|id| presets.iter().find(|p| &p.id == id))
+        .and_then(Preset::bound);
+    (t.rows_under(bound), t.note_under(bound))
+}
+
+/// What a Screen row says under its name: the note on the row the host or the preset leaves,
+/// else why it is greyed, else the role's hint, else a monitor's connector and mode.
 fn under(r: &ScreenRow, note: Option<&str>) -> String {
     note.map(str::to_string)
         .or_else(|| r.reason.clone())
@@ -936,5 +954,34 @@ mod tests {
         t.may_choose = false;
         let said: Vec<String> = t.rows().iter().map(|r| under(r, t.note())).collect();
         assert_eq!(said, [client::screen_host_decides()]);
+    }
+
+    /// Under a binding that pins the screen, the section is the preset's row, checked and
+    /// greyed, with whose it is; without one it is the host's own rows.
+    #[test]
+    fn the_bound_preset_decides_the_screen_section() {
+        let t: Targets = serde_json::from_str(
+            r#"{"targets": [{"id": "own"}],
+               "role": {"yours": "second", "host_default": "only", "offered": ["only", "main", "second"]}}"#,
+        )
+        .unwrap();
+        let couch = Preset {
+            id: "c".into(),
+            name: "Couch".into(),
+            accent: None,
+            host_screen: Some("main".into()),
+        };
+        let mut k = KnownHost::default();
+        let (rows, note) = screen_section(Some(&t), &k, std::slice::from_ref(&couch));
+        assert_eq!((rows, note), (t.rows(), None), "no binding");
+        k.preset_id = Some("c".into());
+        let (rows, note) = screen_section(Some(&t), &k, &[couch]);
+        let got: Vec<_> = rows
+            .iter()
+            .map(|r| (r.id.as_str(), r.checked, r.pickable))
+            .collect();
+        assert_eq!(got, [("main", true, false)]);
+        assert_eq!(note, Some(client::screen_preset_decides("Couch")));
+        assert_eq!(under(&rows[0], note.as_deref()), note.clone().unwrap());
     }
 }

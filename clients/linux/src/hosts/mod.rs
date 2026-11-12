@@ -604,6 +604,7 @@ impl HostsPage {
                 id: p.id.clone(),
                 name: p.name.clone(),
                 accent: p.accent.clone(),
+                host_screen: p.overrides.host_screen.clone(),
             })
             .collect()
     }
@@ -614,7 +615,7 @@ impl HostsPage {
         let settings = self.store.settings().clone();
         let presets = self.presets();
         let playing = |fp: &str| pf_client_core::library::now_playing(fp);
-        let screen = |fp: &str| display_targets::cached(fp).and_then(|t| t.card_line());
+        let screen = |fp: &str| display_targets::cached(fp);
         let live = Live {
             probed: &self.probed,
             sessions: &self.sessions,

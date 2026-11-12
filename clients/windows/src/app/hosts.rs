@@ -10,7 +10,7 @@ use super::style::*;
 use super::{saved, AsyncSetState, Screen, Svc, Target};
 use crate::trust::{HostEdit, KnownHosts, Settings};
 use pf_client_core::discovery::DiscoveredHost;
-use pf_client_core::display_targets::{self, DisplayTarget, Pick, Targets};
+use pf_client_core::display_targets::{self, BoundPreset, DisplayTarget, Pick, Targets};
 use pf_client_core::host_order::{self, Arrangeable};
 use pf_client_core::orchestrate::HostTarget;
 use pf_client_core::profiles::ProfilePick;
@@ -300,12 +300,18 @@ fn status_row(pal: &Palette, online: Option<bool>, badge: Option<(&str, Pill)>) 
     status_row_with(pal, online, badge, None, None)
 }
 
-/// A saved tile's status `row`, then core's screen line: "Streams LG TV", "Second screen".
-/// The only screen is the ordinary case and adds nothing.
-fn with_screen(pal: &Palette, row: View, k: &pf_client_core::trust::KnownHost) -> View {
+/// A saved tile's status `row`, then core's screen line: "Streams LG TV", "Second screen",
+/// the tile's `preset`'s pick where that decides. The only screen is the ordinary case and
+/// adds nothing.
+fn with_screen(
+    pal: &Palette,
+    row: View,
+    k: &pf_client_core::trust::KnownHost,
+    preset: Option<BoundPreset>,
+) -> View {
     let line = display_targets::cached(&k.fp_hex)
         .filter(|_| k.paired)
-        .and_then(|t| t.card_line());
+        .and_then(|t| t.card_line_under(preset));
     let Some(line) = line else {
         return row;
     };
@@ -596,12 +602,11 @@ fn hosts_page(page: &HostsPage, props: &HostsProps) -> View {
     // the device's host sort asks for.
     if !known.hosts.is_empty() {
         // One catalog read per render, shared by every tile's menu and chip.
-        let presets: Vec<(String, String, Option<String>)> =
-            pf_client_core::presets::PresetsFile::load()
-                .presets
-                .into_iter()
-                .map(|p| (p.id, p.name, p.accent))
-                .collect();
+        let presets: Vec<TilePreset> = pf_client_core::presets::PresetsFile::load()
+            .presets
+            .into_iter()
+            .map(|p| (p.id, p.name, p.accent, p.overrides.host_screen))
+            .collect();
         let mut cards: Vec<SavedCard> = known
             .hosts
             .iter()
@@ -828,12 +833,32 @@ fn arrange_button(props: &HostsProps, settings: &Settings) -> View {
         .tooltip(client::hosts_arrange())
 }
 
+/// A preset as the tiles read it: id, name, accent, and the host screen it pins.
+type TilePreset = (String, String, Option<String>, Option<String>);
+
+/// `p` as core's Screen rows read it, when it pins the host screen.
+fn screen_preset(p: &TilePreset) -> Option<BoundPreset<'_>> {
+    Some(BoundPreset {
+        name: &p.1,
+        host_screen: p.3.as_deref()?,
+    })
+}
+
+/// The host's binding as core's Screen rows read it, when its preset pins the host screen.
+fn bound_screen_preset<'a>(
+    k: &pf_client_core::trust::KnownHost,
+    presets: &'a [TilePreset],
+) -> Option<BoundPreset<'a>> {
+    let id = k.preset_id.as_ref()?;
+    presets.iter().find(|p| &p.0 == id).and_then(screen_preset)
+}
+
 /// One saved-host tile as the order sees it: a host's primary tile or a pinned one.
 struct SavedCard<'a> {
     host: &'a pf_client_core::trust::KnownHost,
     online: bool,
-    /// A pinned tile's preset `(id, name, accent)`; `None` on the primary.
-    pinned: Option<&'a (String, String, Option<String>)>,
+    /// A pinned tile's preset; `None` on the primary.
+    pinned: Option<&'a TilePreset>,
     /// What a plain click connects with: the pinned preset, else the host's binding.
     preset: Option<&'a str>,
 }
@@ -859,7 +884,7 @@ impl Arrangeable for SavedCard<'_> {
 fn saved_cards<'a>(
     props: &HostsProps,
     k: &'a pf_client_core::trust::KnownHost,
-    presets: &'a [(String, String, Option<String>)],
+    presets: &'a [TilePreset],
 ) -> Vec<SavedCard<'a>> {
     let hosts = props.hosts.as_slice();
     // Online = the last probe sweep reached it, and nothing else. An advert is a cache entry
@@ -909,7 +934,7 @@ fn saved_tile(
     props: &HostsProps,
     c: &SavedCard,
     hover: &Hover,
-    presets: &[(String, String, Option<String>)],
+    presets: &[TilePreset],
     settings_default: &Option<String>,
 ) -> View {
     let (ctx, set_screen, set_status) =
@@ -952,8 +977,8 @@ fn saved_tile(
                 // that is what makes two bound hosts tell apart at a glance.
                 k.preset_id
                     .as_ref()
-                    .and_then(|id| presets.iter().find(|(pid, _, _)| pid == id))
-                    .map(|(_, name, accent)| (name.as_str(), accent.clone())),
+                    .and_then(|id| presets.iter().find(|(pid, ..)| pid == id))
+                    .map(|(_, name, accent, _)| (name.as_str(), accent.clone())),
                 k.profile.as_ref().map(|p| {
                     let (rev, set_rev) = (props.hosts_rev, props.set_hosts_rev.clone());
                     let redraw = move |held: u64| set_rev.call(rev + held);
@@ -961,6 +986,7 @@ fn saved_tile(
                 }),
             ),
             k,
+            bound_screen_preset(k, presets),
         ),
         Some(menu),
         Box::new(move || {
@@ -1002,11 +1028,15 @@ enum MenuAction {
 
 /// The Screen submenu from core's rows: the roles, then the rows from the first header on in a
 /// submenu under it. A leaf reads name · detail · why it is greyed, else its hint; the checked
-/// one carries ✓ and writes nothing. Under a note, the row the host leaves, greyed, then the
-/// note. `None` when there is nothing to show.
-fn screen_submenu(rows: &mut MenuRows<MenuAction>, t: &Targets) -> Option<MenuItem> {
+/// one carries ✓ and writes nothing. Under a note, the row the host or the tile's `preset`
+/// leaves, greyed, then the note. `None` when there is nothing to show.
+fn screen_submenu(
+    rows: &mut MenuRows<MenuAction>,
+    t: &Targets,
+    preset: Option<BoundPreset>,
+) -> Option<MenuItem> {
     let (mut leaves, mut group, mut monitor_checked) = (Vec::new(), None, false);
-    for r in t.rows() {
+    for r in t.rows_under(preset) {
         let mut label = [Some(r.label.as_str()), Some(r.detail.as_str())]
             .into_iter()
             .chain([r.reason.as_deref().or(r.hint)])
@@ -1042,7 +1072,10 @@ fn screen_submenu(rows: &mut MenuRows<MenuAction>, t: &Targets) -> Option<MenuIt
         leaves.push(MenuItem::separator("sep:screen"));
         leaves.push(MenuItem::submenu("sub:screen:monitors", header, monitors));
     }
-    leaves.extend(t.note().map(|n| MenuItem::disabled("screen:note", n)));
+    leaves.extend(
+        t.note_under(preset)
+            .map(|n| MenuItem::disabled("screen:note", n)),
+    );
     (!leaves.is_empty())
         .then(|| MenuItem::submenu("sub:screen", client::hostcard_section_screen(), leaves))
 }
@@ -1053,7 +1086,7 @@ fn saved_menu_rows(
     k: &pf_client_core::trust::KnownHost,
     online: bool,
     can_wake: bool,
-    presets: &[(String, String, Option<String>)],
+    presets: &[TilePreset],
     is_default: bool,
 ) -> MenuRows<MenuAction> {
     use MenuAction as A;
@@ -1063,7 +1096,7 @@ fn saved_menu_rows(
     if !presets.is_empty() {
         let mut leaves: Vec<MenuItem> = presets
             .iter()
-            .map(|(id, name, _)| rows.row(name.as_str(), A::ConnectWith(id.clone())))
+            .map(|(id, name, ..)| rows.row(name.as_str(), A::ConnectWith(id.clone())))
             .collect();
         leaves.push(rows.row(
             client::hostcard_default_settings(),
@@ -1075,10 +1108,10 @@ fn saved_menu_rows(
             leaves,
         ));
     }
-    // Which screen a connect streams, from the cache the host list keeps warm. Only a
-    // reachable host can take a pick.
+    // Which screen a connect streams, from the cache the host list keeps warm, under the
+    // binding's preset. Only a reachable host can take a pick.
     if let Some(t) = display_targets::cached(&k.fp_hex).filter(|_| k.paired && online) {
-        let screen = screen_submenu(&mut rows, &t);
+        let screen = screen_submenu(&mut rows, &t, bound_screen_preset(k, presets));
         rows.items.extend(screen);
     }
 
@@ -1111,7 +1144,7 @@ fn saved_menu_rows(
     if !presets.is_empty() {
         let leaves: Vec<MenuItem> = presets
             .iter()
-            .map(|(id, name, _)| {
+            .map(|(id, name, ..)| {
                 let on = !k.pinned_presets.iter().any(|x| x == id);
                 let label = if on {
                     desktop::desktop_hostcard_pin_tile(name)
@@ -1158,7 +1191,7 @@ fn saved_menu(
     target: &Target,
     online: bool,
     can_wake: bool,
-    presets: &[(String, String, Option<String>)],
+    presets: &[TilePreset],
     settings_default: &Option<String>,
 ) -> View {
     let record_id = k.id.clone();
@@ -1356,8 +1389,9 @@ fn pinned_tile(
     online: bool,
     can_wake: bool,
     base: &Target,
-    (id, name, accent): &(String, String, Option<String>),
+    preset: &TilePreset,
 ) -> View {
+    let (id, name, accent, _) = preset;
     let pal = &props.svc.pal;
     let (ctx, set_screen, set_status) =
         (&props.svc.ctx, &props.svc.set_screen, &props.svc.set_status);
@@ -1422,6 +1456,7 @@ fn pinned_tile(
                 None,
             ),
             k,
+            screen_preset(preset),
         ),
         Some(pinned_menu),
         Box::new(move || {
