@@ -40,7 +40,7 @@
 	"apple_hostcard_default_hint": "Die Startansicht öffnet die Bibliothek des Standard-Hosts. Ist nur ein Host gekoppelt, ist er es auch ohne diesen Schalter.",
 	"apple_hostcard_pairing_hint": "Nach dem Koppeln kann dieses Gerät die Bibliothek ansehen, das Netzwerk testen und Logs senden.",
 	"apple_hostcard_power_hint": "Neustarten und Herunterfahren beenden alle Streams von diesem Host und fragen vorher nach.",
-	"apple_hostcard_no_power_body": "Dieser Host bietet diesem Gerät keine Energieaktionen an.",
+	"apple_hostcard_no_power_body": "Dieser Host bietet diesem Gerät keine Ein/Aus-Aktionen an.",
 	"apple_speedtest_about_body": "Misst den Weg, den der Stream zu {host} nimmt: was er trägt, Verlust und Jitter bei einer Rate, die er hält, und wie sich die Verbindung verhält. Die Empfehlung lässt etwa 30 % Reserve für Encoder-Bursts.",
 	"apple_speedtest_ready_body": "Bereit, die Verbindung zu {host} zu messen.",
 	"apple_speedtest_connecting_host": "Verbindung zu {host} wird hergestellt…",
