@@ -34,7 +34,7 @@ _PLUGIN = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_PLUGIN / "py_modules"))
 sys.path.insert(0, str(_PLUGIN))
 import main  # noqa: E402  (the plugin backend)
-from pf_decky import client, steam_input  # noqa: E402
+from pf_decky import client, steam_input, update  # noqa: E402
 
 # The argv fixtures below monkey-patch `_client_argv` to pin one install shape; the
 # _flatpak_ref block wants the REAL resolver back, so keep a handle on it.
@@ -347,9 +347,9 @@ except ValueError:
 
 # ---- _field_from (flatpak info parsing, drives the client update check) ------------------
 info = "        ID: io.unom.punktfunk\n    Origin: punktfunk-origin\n    Commit: abc123def\n"
-check("field: commit", main._field_from(info, "Commit") == "abc123def")
-check("field: origin", main._field_from(info, "Origin") == "punktfunk-origin")
-check("field: absent", main._field_from(info, "Nope") == "")
+check("field: commit", update._field_from(info, "Commit") == "abc123def")
+check("field: origin", update._field_from(info, "Origin") == "punktfunk-origin")
+check("field: absent", update._field_from(info, "Nope") == "")
 
 # ---- flatpak runs in the C locale: `flatpak info` labels are localized ------------------
 _seen: dict = {}
@@ -363,7 +363,7 @@ async def _spy_exec(argv, label, timeout, **kw):
 
 client._exec = _spy_exec
 client._flatpak = lambda: "/usr/bin/flatpak"
-asyncio.run(main._flatpak_capture(["info", "--user", "io.unom.punktfunk//stable"]))
+asyncio.run(update._flatpak_capture(["info", "--user", "io.unom.punktfunk//stable"]))
 check("flatpak: info is read in the C locale", _seen.get("env_extra") == {"LC_ALL": "C"})
 client._exec = _real_exec
 
@@ -372,14 +372,41 @@ check("end game: a flag-shaped ref is unresolved, with no English notice",
       asyncio.run(main.Plugin().end_game("--exec", "steam:570")) == {"ok": False, "error": "unresolved"})
 
 # ---- _looks_outdated (the GTK-init signature of a client predating a headless flag) ------
-check("outdated: gtk init noise", main._looks_outdated("cannot open display: \nGtk-WARNING") is True)
-check("outdated: an ordinary error is not", main._looks_outdated("connection refused") is False)
+check("outdated: gtk init noise", update._looks_outdated("cannot open display: \nGtk-WARNING") is True)
+check("outdated: an ordinary error is not", update._looks_outdated("connection refused") is False)
 
 # ---- _semver_tuple (plugin update comparison) --------------------------------------------
-check("semver: plain", main._semver_tuple("1.2.3") == (1, 2, 3))
-check("semver: pre-release suffix dropped", main._semver_tuple("1.2.3-rc1") == (1, 2, 3))
-check("semver: short forms pad", main._semver_tuple("2") == (2, 0, 0))
-check("semver: ordering", main._semver_tuple("0.10.0") > main._semver_tuple("0.9.9"))
+check("semver: plain", update._semver_tuple("1.2.3") == (1, 2, 3))
+check("semver: pre-release suffix dropped", update._semver_tuple("1.2.3-rc1") == (1, 2, 3))
+check("semver: short forms pad", update._semver_tuple("2") == (2, 0, 0))
+check("semver: ordering", update._semver_tuple("0.10.0") > update._semver_tuple("0.9.9"))
+
+# ---- the update cache has one home: update_client clears what check_update answers from ----
+import time  # noqa: E402
+
+update._update_cache.update(at=time.monotonic(), data={"current": "cached"})
+check("update: check_update answers from the cache",
+      asyncio.run(main.Plugin().check_update())["current"] == "cached")
+_real_is_flatpak, _real_native_state = client._client_is_flatpak, update._native_update_state
+_real_run_client = client._run_client
+
+
+async def _helper_state():
+    return {"applier": "helper"}
+
+
+async def _applied(_args, timeout=20.0, env_extra=None):
+    return 0, '{"ok": true, "changed": true}', ""
+
+
+client._client_is_flatpak = lambda: False
+update._native_update_state = _helper_state
+client._run_client = _applied
+got = asyncio.run(main.Plugin().update_client())
+check("update: a native update lands and clears that cache",
+      got == {"ok": True, "updated": True, "staged": False} and update._update_cache["data"] is None)
+client._client_is_flatpak, update._native_update_state = _real_is_flatpak, _real_native_state
+client._run_client = _real_run_client
 
 # ---- _upsert_configset_entry (Steam Input layout binding) --------------------------------
 #

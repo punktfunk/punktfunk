@@ -138,7 +138,7 @@ jobs:
             for f in main.py dist/index.js bin/punktfunkrun.sh assets/grid.png \
                      controller_config/punktfunk.vdf update.json \
                      py_modules/pf_decky/__init__.py py_modules/pf_decky/client.py \
-                     py_modules/pf_decky/steam_input.py; do
+                     py_modules/pf_decky/steam_input.py py_modules/pf_decky/update.py; do
               unzip -l "$out/punktfunk.zip" "$PLUGIN/$f" >/dev/null || { echo "MISSING $f" >&2; exit 1; }
             done
             # Decky verifies the download against this hash and aborts on a mismatch.
