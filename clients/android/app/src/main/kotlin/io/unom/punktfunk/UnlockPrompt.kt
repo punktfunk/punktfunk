@@ -26,6 +26,16 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.autofill.ContentType
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.input.InputMode
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
+import androidx.compose.ui.platform.LocalInputModeManager
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentType
@@ -41,7 +51,8 @@ import io.unom.punktfunk.kit.R
  * for the account password (the password manager can fill it) or the profile's PIN (the number
  * pad), one switch (off), and the host's sentence after a refusal, spoken when it shows. The
  * field is plain `remember` state, never saved instance state. Sign In hands its characters over
- * as a CharArray and clears the field; leaving the composition counts as Cancel.
+ * as a CharArray and clears the field; leaving the composition counts as Cancel. Driven by a
+ * remote or a pad, focus starts in the field with the system keyboard up, and B cancels.
  */
 @Composable
 internal fun UnlockPromptDialog(ask: PasswordAsk) {
@@ -68,8 +79,15 @@ internal fun UnlockPromptDialog(ask: PasswordAsk) {
         onDismissRequest = { finish(submit = false) },
         title = { Text(stringResource(R.string.unlock_title, ask.profileName)) },
         text = {
+            val focus = remember { FocusRequester() }
+            val keyboard = LocalSoftwareKeyboardController.current
             val view = LocalView.current
+            val keys = LocalInputModeManager.current.inputMode == InputMode.Keyboard
             LaunchedEffect(ask) {
+                if (keys) {
+                    focus.requestFocus()
+                    keyboard?.show()
+                }
                 // A live region needs a node that was there before; the dialog opens with the line.
                 @Suppress("DEPRECATION")
                 refusal?.let { view.announceForAccessibility(it) }
@@ -92,9 +110,20 @@ internal fun UnlockPromptDialog(ask: PasswordAsk) {
                     onKeyboardAction = { if (field.text.isNotEmpty()) finish(submit = true) },
                     modifier = Modifier
                         .fillMaxWidth()
+                        .focusRequester(focus)
                         .semantics {
                             if (!ask.pin) contentType = ContentType.Password
                             if (refusal != null) error(refusal)
+                        }
+                        // The IME sees each key first; what it passes on is a hardware Enter or a pad's B.
+                        .onPreviewKeyEvent { ev ->
+                            if (ev.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
+                            when (ev.key) {
+                                Key.Enter, Key.NumPadEnter -> if (field.text.isNotEmpty()) finish(submit = true)
+                                Key.ButtonB, Key.Escape -> finish(submit = false)
+                                else -> return@onPreviewKeyEvent false
+                            }
+                            true
                         },
                 )
                 Row(verticalAlignment = Alignment.CenterVertically) {

@@ -140,8 +140,8 @@ suspend fun authenticateSigner(
         }
     }
 
-/** Whether this shell shows the password prompt: the touch UI on a phone or tablet, never a TV. */
-fun promptsUnlock(context: Context): Boolean = !isTvDevice(context) && context is FragmentActivity
+/** Whether this shell shows the unlock prompt: the touch UI on every device, a TV's too. */
+fun promptsUnlock(context: Context): Boolean = context is FragmentActivity
 
 /**
  * The touch shell's [UnlockHooks] for a dial to [host] as [identity]; `null` where it shows no
