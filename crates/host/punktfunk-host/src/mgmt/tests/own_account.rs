@@ -269,6 +269,155 @@ async fn every_lane_keeps_its_refusals_on_a_person_s_own_account() {
     assert!(crate::library::lists(&view, "custom:bbbbbbbbbbbb"));
 }
 
+/// Set on the child only: the box's library dir it reads.
+const PERSON_CHILD: &str = "PF_OWN_ACCOUNT_PERSON_CHILD";
+/// The person token of the seat host the person's test runs.
+const PERSON_TOKEN: &str = "7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c";
+/// That seat host's own profile.
+const MINE: &str = "a1b2c3d4e5f6";
+
+/// On their own account a person's own session sets hooks and adds titles with a command, and
+/// only what it wrote runs there: a hooks file or an own title planted without its mark does
+/// nothing, and the box's prep step runs nothing. The console still sets, changes and reads none
+/// of it. The store and emulators stay closed on the person's lane too.
+#[tokio::test]
+async fn the_person_s_own_lane_writes_and_runs_only_what_it_wrote() {
+    use serde_json::json;
+    let Some(library) = std::env::var_os(PERSON_CHILD) else {
+        return on_own_account(
+            "the_person_s_own_lane_writes_and_runs_only_what_it_wrote",
+            PERSON_CHILD,
+        );
+    };
+    let library = std::path::Path::new(&library);
+    let config = pf_paths::config_dir();
+    let app = test_app_seat(test_state(), PERSON_TOKEN, MINE);
+    let now = crate::clock::unix_secs_u64();
+    let ticket = crate::person_token::sign(PERSON_TOKEN, now, &"0".repeat(32), MINE);
+    let open = json_req(
+        Method::POST,
+        "/api/v1/auth/person/session",
+        json!({ "ticket": ticket }),
+    );
+    let resp = app.clone().oneshot(open).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let grant: serde_json::Value =
+        serde_json::from_slice(&resp.into_body().collect().await.unwrap().to_bytes()).unwrap();
+    let token = grant["token"].as_str().unwrap().to_string();
+    let person = |req| with_bearer(req, &token);
+
+    // Hooks: the person's hold runs; the console sets none and reads none of theirs.
+    let hooks = json!({"hooks": [{"on": "game.launching", "run": "true", "hold": true}]});
+    let put = || json_req(Method::PUT, "/api/v1/hooks", hooks.clone());
+    let (status, why) = send(&app, put()).await;
+    assert_eq!(
+        (status, &why["code"]),
+        (StatusCode::FORBIDDEN, &json!("hooks_own_account"))
+    );
+    assert_eq!(send(&app, person(put())).await.0, StatusCode::OK);
+    let stored = std::fs::read_to_string(config.join("hooks.json")).unwrap();
+    assert!(stored.contains("\"person\": true"), "{stored}");
+    let launching = crate::events::HostEvent {
+        seq: 1,
+        ts_ms: 0,
+        schema: crate::events::SCHEMA_VERSION,
+        seat: None,
+        kind: crate::events::EventKind::GameLaunching {
+            game: crate::events::GameRefPayload {
+                app: Some("steam:570".into()),
+                title: "Dota 2".into(),
+                store: Some("steam".into()),
+                client: "Deck".into(),
+                fingerprint: None,
+                plane: crate::events::Plane::Native,
+                preset: None,
+                profile: None,
+            },
+            hold: None,
+        },
+    };
+    assert_eq!(crate::hooks::holding(&launching).len(), 1, "their hold");
+    let (_, read) = send(&app, get_req("/api/v1/hooks")).await;
+    assert_eq!(read["hooks"], json!([]), "the console read their hooks");
+    let (_, read) = send(&app, person(get_req("/api/v1/hooks"))).await;
+    assert_eq!(read["hooks"].as_array().unwrap().len(), 1);
+    let planted = json!({"hooks": [{"on": "game.*", "run": "true", "hold": true, "timeout_s": 9}]});
+    std::fs::write(config.join("hooks.json"), planted.to_string()).unwrap();
+    assert!(
+        crate::hooks::holding(&launching).is_empty(),
+        "a planted hold ran"
+    );
+
+    // Own titles: the person's command and its prep run; the console adds, changes, removes and
+    // reads none.
+    let ran = library.join("own-prep-ran");
+    let title = json!({
+        "title": "Shell",
+        "launch": {"kind": "command", "value": "true"},
+        "prep": [{"do": format!("touch {}", ran.display())}],
+    });
+    let add = || json_req(Method::POST, "/api/v1/library/custom", title.clone());
+    let (status, why) = send(&app, add()).await;
+    assert_eq!(
+        (status, &why["code"]),
+        (StatusCode::FORBIDDEN, &json!("library_own_account"))
+    );
+    let (status, added) = send(&app, person(add())).await;
+    assert_eq!(status, StatusCode::CREATED, "{added}");
+    assert_eq!(added["person"], true);
+    let id = added["id"].as_str().unwrap().to_string();
+    let path = format!("/api/v1/library/custom/{id}");
+    assert_eq!(send(&app, get_req(&path)).await.0, StatusCode::NOT_FOUND);
+    assert_eq!(send(&app, person(get_req(&path))).await.0, StatusCode::OK);
+    let (status, _) = send(&app, json_req(Method::PUT, &path, title.clone())).await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    let delete = axum::http::Request::delete(&path)
+        .body(Body::empty())
+        .unwrap();
+    assert_eq!(send(&app, delete).await.0, StatusCode::FORBIDDEN);
+    let view = crate::library::View::here();
+    assert!(crate::library::lists(&view, &id), "their title is listed");
+    let (_, own) = send(&app, get_req("/api/v1/library/own")).await;
+    assert_eq!(own[0]["id"], json!(id), "published to the box: {own}");
+    drop(crate::hooks::run_prep(&crate::library::prep_for(&id), &[]));
+    assert!(ran.exists(), "their prep step didn't run");
+    let box_ran = library.join("box-prep-ran");
+    let box_step = crate::hooks::PrepCmd {
+        run: format!("touch {}", box_ran.display()),
+        undo: None,
+        elevated: false,
+    };
+    drop(crate::hooks::run_prep(&[box_step], &[]));
+    assert!(!box_ran.exists(), "the box's prep step ran");
+    let shelf = config.join("library.json");
+    let mut own: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&shelf).unwrap()).unwrap();
+    own["entries"].as_array_mut().unwrap().push(json!({
+        "id": "own:aaaaaaaaaaaa", "title": "Planted",
+        "launch": {"kind": "command", "value": "true"},
+    }));
+    std::fs::write(&shelf, own.to_string()).unwrap();
+    assert!(
+        !crate::library::lists(&view, "own:aaaaaaaaaaaa"),
+        "a planted title is listed"
+    );
+    assert!(crate::library::lists(&view, &id));
+
+    if cfg!(target_os = "linux") {
+        let install = json!({"spec": "punktfunk-plugin-x", "accept_unverified": true});
+        let install = json_req(Method::POST, "/api/v1/store/install", install);
+        let (status, why) = send(&app, person(install)).await;
+        assert_eq!(
+            (status, &why["code"]),
+            (StatusCode::FORBIDDEN, &json!("plugins_own_account"))
+        );
+        let emulator = json_req(Method::POST, "/api/v1/emulators/rpcs3/install", json!({}));
+        let (status, why) = send(&app, person(emulator)).await;
+        let yet = json!("emulators_own_account_yet");
+        assert_eq!((status, &why["code"]), (StatusCode::FORBIDDEN, &yet));
+    }
+}
+
 /// On a person's own Linux account every write to plugins or emulators is refused, each group
 /// with its sentence; every read, and a catalog refresh, passes.
 #[test]
