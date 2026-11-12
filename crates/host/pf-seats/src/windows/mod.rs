@@ -45,7 +45,7 @@ use windows::Win32::System::SystemInformation::{
 use windows::Win32::System::Threading::{GetCurrentProcess, IsWow64Process2};
 use windows_service::service::{ServiceAccess, ServiceState};
 use windows_service::service_manager::{ServiceManager, ServiceManagerAccess};
-use winreg::enums::{HKEY_LOCAL_MACHINE, KEY_QUERY_VALUE, KEY_WOW64_64KEY};
+use winreg::enums::{HKEY_LOCAL_MACHINE, KEY_QUERY_VALUE, KEY_READ, KEY_WOW64_64KEY};
 use winreg::RegKey;
 
 /// Whose existence reserves display slots 12 through 15, and turns seats on unless it holds
@@ -438,9 +438,11 @@ impl WindowsBackend {
     }
 }
 
-/// Steam's streaming speakers driver, which a seat's sound device binds, is on disk.
+/// Steam's streaming speakers driver, which a seat's sound device binds, is on disk, or already
+/// bound to a sound device whose INF Windows still holds: the host mints a seat's from either,
+/// as `pf_audio`'s `discover_driver` does, so Steam itself may be gone.
 fn seat_sound() -> bool {
-    std::env::var_os("CommonProgramFiles(x86)")
+    let staged = std::env::var_os("CommonProgramFiles(x86)")
         .map(PathBuf::from)
         .is_some_and(|dir| {
             dir.join(r"Steam\drivers\Windows10")
@@ -451,6 +453,33 @@ fn seat_sound() -> bool {
                 })
                 .join("SteamStreamingSpeakers.inf")
                 .is_file()
+        });
+    staged || speakers_bound()
+}
+
+/// The MEDIA class's driver keys: one per sound device with a driver, naming the hardware id
+/// it matched and the INF it came from.
+const MEDIA_CLASS: &str =
+    r"SYSTEM\CurrentControlSet\Control\Class\{4d36e96c-e325-11ce-bfc1-08002be10318}";
+
+/// A sound device runs Steam's streaming speakers driver and its INF is still in `%WINDIR%\INF`.
+fn speakers_bound() -> bool {
+    let Ok(class) = RegKey::predef(HKEY_LOCAL_MACHINE)
+        .open_subkey_with_flags(MEDIA_CLASS, KEY_READ | KEY_WOW64_64KEY)
+    else {
+        return false;
+    };
+    class
+        .enum_keys()
+        .flatten()
+        .filter_map(|name| class.open_subkey_with_flags(name, KEY_QUERY_VALUE).ok())
+        .any(|driver| {
+            let matched = driver.get_value::<String, _>("MatchingDeviceId");
+            let inf = driver.get_value::<String, _>("InfPath");
+            matched.is_ok_and(|id| id.to_ascii_lowercase().contains("steamstreamingspeakers"))
+                && inf.is_ok_and(|inf| {
+                    Path::new(&pf_paths::windows_dir(&format!(r"INF\{inf}"))).is_file()
+                })
         })
 }
 
