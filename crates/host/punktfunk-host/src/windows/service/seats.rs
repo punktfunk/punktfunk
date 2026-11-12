@@ -14,6 +14,9 @@ use pf_seats::{SeatService, WindowsBackend};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
+/// How often the service narrows Remote Desktop to this PC again, as the idle check runs.
+const RDP_LOCAL_TICK_SECS: u64 = 300;
+
 pub(super) struct SeatsSlot {
     stop: Arc<AtomicBool>,
     backend: Option<WindowsBackend>,
@@ -50,14 +53,24 @@ impl SeatsSlot {
             tracing::error!("seat supervisor thread did not start: {error}");
         }
         // Windows takes about a minute to answer the first role query after a restart. Asked
-        // here, the Seats dialog an operator opens after signing in is answered at once. First
-        // the firewall: a rule Windows added since must not open Remote Desktop to the network.
-        let warm = backend.clone();
+        // here, the Seats dialog an operator opens after signing in is answered at once. The
+        // firewall goes first and again on every tick: a rule added or reset since, or a
+        // firewall not up yet at boot, must not leave Remote Desktop open to the network.
+        let (warm, checks_stop) = (backend.clone(), Arc::clone(&stop));
         let _ = std::thread::Builder::new()
             .name("seats-checks".into())
             .spawn(move || {
                 warm.keep_rdp_local();
                 drop(pf_seats::backend::PlatformBackend::seating(&warm));
+                for second in 1_u64.. {
+                    std::thread::sleep(std::time::Duration::from_secs(1));
+                    if checks_stop.load(Ordering::SeqCst) {
+                        break;
+                    }
+                    if second % RDP_LOCAL_TICK_SECS == 0 {
+                        warm.keep_rdp_local();
+                    }
+                }
             });
         SeatsSlot {
             stop,

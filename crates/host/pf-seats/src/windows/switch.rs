@@ -5,7 +5,8 @@
 //! OS types, so the tables run on every target. The order is the contract: the firewall has its
 //! final scope before Remote Desktop listens, the listener goes off before the firewall widens,
 //! each change is noted before it is made, and the key goes last, so a failed step leaves
-//! enough behind for the next turn-off to undo.
+//! enough behind for the next turn-off to undo. [`reaches_rdp_from_network`] reads whether a
+//! firewall rule breaks the operator's choice of this PC only.
 
 // Off Windows only the tests read this module.
 #![cfg_attr(not(windows), allow(dead_code))]
@@ -132,6 +133,54 @@ pub(crate) fn narrowed(recorded: &Recorded) -> bool {
         || recorded
             .choice
             .map_or(recorded.scopes_noted, |choice| choice == 0)
+}
+
+/// An enabled inbound allow rule on Remote Desktop's port that an address other than this PC's
+/// reaches, whatever group it is in. `rule` is one rule as Windows Firewall stores it in the
+/// registry, `|`-separated; a rule without `RA…` remote address fields takes any address.
+pub(crate) fn reaches_rdp_from_network(rule: &str) -> bool {
+    let fields: Vec<(&str, &str)> = rule.split('|').filter_map(|f| f.split_once('=')).collect();
+    let has = |key: &str, value: &str| {
+        fields
+            .iter()
+            .any(|(k, v)| k.eq_ignore_ascii_case(key) && v.eq_ignore_ascii_case(value))
+    };
+    let remote: Vec<(&str, &str)> = fields
+        .iter()
+        .copied()
+        .filter(|(key, _)| {
+            key.get(..2).is_some_and(|ra| ra.eq_ignore_ascii_case("RA"))
+                && key
+                    .get(2..)
+                    .is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
+        })
+        .collect();
+    has("Action", "Allow")
+        && has("Active", "TRUE")
+        && has("Dir", "In")
+        && has("LPort", "3389")
+        && (remote.is_empty() || remote.iter().any(|&(key, range)| !loopback(key, range)))
+}
+
+/// `range`, the value of an `RA4` or `RA6` field, holds this PC's own addresses only: an
+/// address, `from-to` range or `address/mask` inside 127.0.0.0/8, or `::1`. Keywords and other
+/// fields reach further.
+fn loopback(key: &str, range: &str) -> bool {
+    let in_127 = |address: &str| address.split('.').next() == Some("127");
+    if key.eq_ignore_ascii_case("RA6") {
+        return range == "::1" || range == "::1/128";
+    }
+    if !key.eq_ignore_ascii_case("RA4") {
+        return false;
+    }
+    match range.split_once(['-', '/']) {
+        None => in_127(range),
+        Some((from, to)) if range.contains('-') => in_127(from) && in_127(to),
+        Some((address, mask)) => {
+            in_127(address)
+                && (mask.starts_with("255.") || mask.parse::<u8>().is_ok_and(|bits| bits >= 8))
+        }
+    }
 }
 
 #[cfg(test)]
@@ -312,5 +361,47 @@ mod tests {
         assert!(narrowed_by(false, None, true));
         // An older key has no record and always has the choice; a bare key has neither.
         assert!(!narrowed_by(false, None, false));
+    }
+
+    /// Any group's rule counts, a custom one too; only loopback scopes and blocks don't.
+    #[test]
+    fn a_rule_reaches_remote_desktop_unless_it_keeps_to_loopback() {
+        let rule = |extra: &str| {
+            format!(
+                "v2.33|Action=Allow|Active=TRUE|Dir=In|Protocol=6|LPort=3389|{extra}\
+                 Name=Custom RDP|"
+            )
+        };
+        assert!(reaches_rdp_from_network(&rule("")));
+        assert!(reaches_rdp_from_network(&rule(
+            "EmbedCtxt=@FirewallAPI.dll,-28752|"
+        )));
+        assert!(reaches_rdp_from_network(&rule(
+            "RA4=10.0.5.0/255.255.255.0|"
+        )));
+        assert!(reaches_rdp_from_network(&rule(
+            "RA4=LocalSubnet|RA6=LocalSubnet|"
+        )));
+        assert!(reaches_rdp_from_network(&rule(
+            "RA4=127.0.0.1|RA6=fe80::/64|"
+        )));
+        assert!(reaches_rdp_from_network(&rule("RA4=127.0.0.1-128.0.0.1|")));
+        assert!(reaches_rdp_from_network(&rule("RA4=127.0.0.0/0|")));
+        assert!(reaches_rdp_from_network(&rule("RA42=IntrAnet|")));
+        // What seats narrow the rules to, and other loopback-only scopes.
+        assert!(!reaches_rdp_from_network(&rule("RA4=127.0.0.0/255.0.0.0|")));
+        assert!(!reaches_rdp_from_network(&rule("RA4=127.0.0.2|RA6=::1|")));
+        assert!(!reaches_rdp_from_network(&rule("RA4=127.0.0.1-127.0.0.9|")));
+        assert!(!reaches_rdp_from_network(&rule("RA4=127.0.0.0/8|")));
+        // Off, blocking, outbound or on another port.
+        let open = rule("");
+        for other in [
+            open.replace("Active=TRUE", "Active=FALSE"),
+            open.replace("Action=Allow", "Action=Block"),
+            open.replace("Dir=In", "Dir=Out"),
+            open.replace("LPort=3389", "LPort=3390"),
+        ] {
+            assert!(!reaches_rdp_from_network(&other), "{other}");
+        }
     }
 }

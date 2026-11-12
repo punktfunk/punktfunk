@@ -18,6 +18,7 @@ use crate::seat_switch::{self, Recorded, Step};
 use pf_paths::POWERSHELL;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::{Mutex, PoisonError, TryLockError};
 use std::time::{Duration, Instant};
 use winreg::enums::{RegDisposition, HKEY_LOCAL_MACHINE, KEY_READ, KEY_SET_VALUE, KEY_WOW64_64KEY};
 use winreg::RegKey;
@@ -230,21 +231,31 @@ pub(super) fn prepare() -> Vec<Diagnostic> {
     rows
 }
 
+/// Held while seats turn on or off, so [`keep_rdp_local`] never narrows rules a switch is
+/// widening on the way.
+static SWITCHING: Mutex<()> = Mutex::new(());
+
 /// Turn seats on. A failure where seats were off puts the machine back, and a crash leaves the
 /// Seats key marked [`ENABLING`], so `enabled` never reports a half-done switch.
 pub(super) fn turn_on(host_path: &Path, allow_rdp_from_network: bool) -> WinResult<()> {
+    let _switching = SWITCHING.lock().unwrap_or_else(PoisonError::into_inner);
     let fresh = !seats_enabled();
     let done = apply(host_path, allow_rdp_from_network);
     if done.is_err() && fresh {
-        let _ = turn_off();
+        let _ = off();
     }
     done
 }
 
-/// Undo what `turn_on` recorded ([`seat_switch::off`]), then remove the Seats key. Nothing to
-/// do without the key. Each restore forgets its value as it finishes, so the key is opened for
-/// writing.
+/// Undo what `turn_on` recorded ([`seat_switch::off`]), then remove the Seats key.
 pub(super) fn turn_off() -> WinResult<()> {
+    let _switching = SWITCHING.lock().unwrap_or_else(PoisonError::into_inner);
+    off()
+}
+
+/// [`turn_off`] under its caller's hold. Nothing to do without the key. Each restore forgets its
+/// value as it finishes, so the key is opened for writing.
+fn off() -> WinResult<()> {
     let Ok(seats) = RegKey::predef(HKEY_LOCAL_MACHINE)
         .open_subkey_with_flags(SEATS_KEY, KEY_READ | KEY_SET_VALUE | KEY_WOW64_64KEY)
     else {
@@ -364,6 +375,8 @@ pub(super) fn rdp_from_network() -> bool {
 /// Where Windows Firewall keeps its local rules, one `|`-separated string each.
 const FIREWALL_RULES: &str =
     r"SYSTEM\CurrentControlSet\Services\SharedAccess\Parameters\FirewallPolicy\FirewallRules";
+/// Where Group Policy puts its rules, in the same form.
+const POLICY_RULES: &str = r"SOFTWARE\Policies\Microsoft\WindowsFirewall\FirewallRules";
 
 /// The listener is on and a firewall rule lets any address reach it.
 fn rdp_open_today() -> bool {
@@ -374,32 +387,60 @@ fn rdp_open_today() -> bool {
     listening && rdp_rule_open()
 }
 
-/// A local firewall rule lets any address reach Remote Desktop. Read from the registry: the
-/// dialog asks every time it opens, and PowerShell's firewall cmdlets take seconds, a minute
-/// after a restart.
+/// A local firewall rule of the Remote Desktop groups lets any address reach Remote Desktop.
+/// Read from the registry: the dialog asks every time it opens, and PowerShell's firewall
+/// cmdlets take seconds, a minute after a restart.
 fn rdp_rule_open() -> bool {
-    RegKey::predef(HKEY_LOCAL_MACHINE)
-        .open_subkey_with_flags(FIREWALL_RULES, KEY_READ | KEY_WOW64_64KEY)
-        .is_ok_and(|rules| {
-            let names: Vec<String> = rules
-                .enum_values()
-                .flatten()
-                .map(|(name, _)| name)
-                .collect();
-            names
-                .iter()
-                .filter_map(|name| rules.get_value::<String, _>(name).ok())
-                .any(|rule| open_rdp_rule(&rule))
-        })
+    firewall_rules(FIREWALL_RULES)
+        .iter()
+        .any(|rule| open_rdp_rule(rule))
 }
 
-/// Narrow Remote Desktop again where the operator keeps it on this PC and a rule is open to
-/// the network: the Session Host role and Windows updates add rules of their own.
-pub(super) fn keep_rdp_local() {
-    let narrowed = RegKey::predef(HKEY_LOCAL_MACHINE)
+/// The rules under `store`, one `|`-separated string each; none when it can't be read.
+fn firewall_rules(store: &str) -> Vec<String> {
+    let Ok(rules) = RegKey::predef(HKEY_LOCAL_MACHINE)
+        .open_subkey_with_flags(store, KEY_READ | KEY_WOW64_64KEY)
+    else {
+        return Vec::new();
+    };
+    let names: Vec<String> = rules
+        .enum_values()
+        .flatten()
+        .map(|(name, _)| name)
+        .collect();
+    names
+        .iter()
+        .filter_map(|name| rules.get_value::<String, _>(name).ok())
+        .collect()
+}
+
+/// The operator keeps Remote Desktop to this PC: the Seats key's choice.
+pub(super) fn rdp_local_chosen() -> bool {
+    RegKey::predef(HKEY_LOCAL_MACHINE)
         .open_subkey_with_flags(SEATS_KEY, KEY_READ | KEY_WOW64_64KEY)
-        .is_ok_and(|seats| seats.get_value::<u32, _>(RDP_FROM_NETWORK).ok() == Some(0));
-    if narrowed && rdp_rule_open() {
+        .is_ok_and(|seats| seats.get_value::<u32, _>(RDP_FROM_NETWORK).ok() == Some(0))
+}
+
+/// A local or Group Policy firewall rule, in any group, lets an address other than this PC's
+/// reach Remote Desktop ([`seat_switch::reaches_rdp_from_network`]). For the doctor.
+pub(super) fn rdp_reachable() -> bool {
+    [FIREWALL_RULES, POLICY_RULES]
+        .iter()
+        .flat_map(|store| firewall_rules(store))
+        .any(|rule| seat_switch::reaches_rdp_from_network(&rule))
+}
+
+/// Narrow Remote Desktop again where the operator keeps it on this PC and a rule of its groups
+/// is open to the network: the Session Host role, Windows updates and a restore of the defaults
+/// add or reset them. A registry read decides whether PowerShell runs, so the service repeats
+/// this on its tick. A look while seats turn on or off is skipped.
+pub(super) fn keep_rdp_local() {
+    let _switching = match SWITCHING.try_lock() {
+        Ok(held) => held,
+        Err(TryLockError::Poisoned(held)) => held.into_inner(),
+        Err(TryLockError::WouldBlock) => return,
+    };
+    if rdp_local_chosen() && rdp_rule_open() {
         match firewall_scope(LOOPBACK) {
             Ok(()) => tracing::info!("remote desktop narrowed to this pc again"),
             Err(cause) => tracing::warn!(%cause, "remote desktop not narrowed to this pc"),

@@ -51,6 +51,10 @@ pub(crate) struct BoxFacts {
     /// The licensing row. Read only on Windows Server.
     pub licensing: Option<Diagnostic>,
     pub termservice: bool,
+    /// The operator keeps Remote Desktop to this PC.
+    pub rdp_local_only: bool,
+    /// An enabled firewall rule lets an address other than this PC's reach Remote Desktop.
+    pub rdp_reachable: bool,
     /// The first of the host and keeper executables that isn't on disk.
     pub missing_file: Option<PathBuf>,
     pub driver: DriverState,
@@ -132,6 +136,14 @@ pub(crate) fn report_rows(facts: BoxFacts) -> Vec<Diagnostic> {
         )
         .worded("seatcheck_termservice_off")
     });
+    if facts.rdp_local_only && facts.rdp_reachable {
+        rows.push(Diagnostic::warning(
+            "rdp_network",
+            "A firewall rule lets other computers reach Remote Desktop, which seats keep to this \
+             PC. Turn the rule off in Windows Defender Firewall, or turn on Allow Remote Desktop \
+             from the network under Profiles → Seats.",
+        ));
+    }
     if let Some(missing) = &facts.missing_file {
         rows.push(
             Diagnostic::error(
@@ -552,6 +564,8 @@ mod tests {
             checks: Vec::new(),
             licensing: None,
             termservice: true,
+            rdp_local_only: true,
+            rdp_reachable: false,
             missing_file: None,
             driver: DriverState::Current,
             inbox_driver_newer: Some(false),
@@ -792,6 +806,31 @@ mod tests {
                     .into()
             )
         );
+    }
+
+    /// Only "this PC only" with a rule open to the network warns; the network choice never does.
+    #[test]
+    fn remote_desktop_open_against_the_choice_warns() {
+        let rows = |rdp_local_only, rdp_reachable| {
+            report_rows(BoxFacts {
+                rdp_local_only,
+                rdp_reachable,
+                ..healthy()
+            })
+        };
+        assert_eq!(
+            pick(&rows(true, true), "rdp_network"),
+            (
+                Warning,
+                "A firewall rule lets other computers reach Remote Desktop, which seats keep to \
+                 this PC. Turn the rule off in Windows Defender Firewall, or turn on Allow Remote \
+                 Desktop from the network under Profiles → Seats."
+                    .into()
+            )
+        );
+        for (local, reachable) in [(true, false), (false, true), (false, false)] {
+            assert!(!codes(&rows(local, reachable)).contains(&"rdp_network"));
+        }
     }
 
     #[test]

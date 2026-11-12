@@ -170,7 +170,8 @@ impl WindowsBackend {
     }
 
     /// Narrows Remote Desktop to this PC again where the operator chose that and a firewall
-    /// rule has opened it since. For the service's start.
+    /// rule has opened it since. For the service's start and its tick: a registry read decides
+    /// whether anything runs.
     pub fn keep_rdp_local(&self) {
         enable::keep_rdp_local();
     }
@@ -396,6 +397,8 @@ impl WindowsBackend {
             checks,
             licensing,
             termservice,
+            rdp_local_only: enable::rdp_local_chosen(),
+            rdp_reachable: enable::rdp_reachable(),
             missing_file,
             driver,
             inbox_driver_newer,
