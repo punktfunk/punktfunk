@@ -4,7 +4,7 @@
 //! and feeds what comes back. The freeze and every ask are core's.
 
 use punktfunk_core::packet::FLAG_SOF;
-use punktfunk_core::reanchor::{AuAdmission, DecoderClass, Resume};
+use punktfunk_core::reanchor::{AuAdmission, Concealment, DecoderClass, Resume};
 
 /// One delivery from the feeder: a whole AU, or one part of a sliced one.
 #[derive(Clone, Copy)]
@@ -75,11 +75,12 @@ impl Intake {
         self.withheld
     }
 
-    /// One delivery with the index gap ahead of it. The rule sees every AU, the ones the
-    /// keyframe wait then drops too, and only a keyframe's head ends that wait: its later
-    /// parts carry the flag too, and without the head they decode nothing.
-    pub(crate) fn note(&mut self, d: Delivery, gap: u32) -> Verdict {
-        let mut v = self.judge(d, gap);
+    /// One delivery with the index gap ahead of it and the concealer's `verdict` on it. The
+    /// rule sees every AU, the ones the keyframe wait then drops too, and only a keyframe's
+    /// head ends that wait: its later parts carry the flag too, and without the head they
+    /// decode nothing.
+    pub(crate) fn note(&mut self, d: Delivery, gap: u32, verdict: Option<Concealment>) -> Verdict {
+        let mut v = self.judge(d, gap, verdict);
         if v.feed && self.await_keyframe {
             if d.first && d.flags & u32::from(FLAG_SOF) != 0 {
                 self.await_keyframe = false;
@@ -104,11 +105,11 @@ impl Intake {
     }
 
     /// A parked AU behind a local loss: the rule alone, it passed the keyframe wait before.
-    pub(crate) fn rejudge(&mut self, d: Delivery) -> Verdict {
-        self.judge(d, 0)
+    pub(crate) fn rejudge(&mut self, d: Delivery, verdict: Option<Concealment>) -> Verdict {
+        self.judge(d, 0, verdict)
     }
 
-    fn judge(&mut self, d: Delivery, gap: u32) -> Verdict {
+    fn judge(&mut self, d: Delivery, gap: u32, verdict: Option<Concealment>) -> Verdict {
         let Some(a) = self.admit.as_mut() else {
             return Verdict {
                 feed: true,
@@ -126,7 +127,7 @@ impl Intake {
         } else {
             gap
         };
-        let step = a.rule.note(d.index, gap, d.flags, a.class, None);
+        let step = a.rule.note(d.index, gap, d.flags, a.class, verdict);
         a.parts_of = step.withhold.then_some(d.index);
         if let Some(e) = step.ended {
             log::info!(
@@ -154,6 +155,7 @@ impl Intake {
 mod tests {
     use super::{hand_on, Delivery, Intake, Verdict};
     use punktfunk_core::packet::{FLAG_SOF, USER_FLAG_RECOVERY_ANCHOR, USER_FLAG_RECOVERY_POINT};
+    use punktfunk_core::reanchor::Concealment;
     use punktfunk_core::reanchor::DecoderClass::{self, Lenient, Strict};
 
     const SOF: u32 = FLAG_SOF as u32;
@@ -164,6 +166,8 @@ mod tests {
     enum Op {
         /// A whole AU or a first part: index, flags, gap ahead.
         Au(u32, u32, u32),
+        /// A whole AU the concealer finds decodable: index, flags.
+        Concealed(u32, u32),
         /// A later part of a sliced AU: index, flags.
         Part(u32, u32),
         /// The loop dropped an admitted AU; the bool is whether a rule is on.
@@ -171,7 +175,7 @@ mod tests {
         /// A parked AU judged again behind that drop.
         Parked(u32, u32),
     }
-    use Op::{Au, LocalLoss, Parked, Part};
+    use Op::{Au, Concealed, LocalLoss, Parked, Part};
 
     const FEED: Option<(bool, bool)> = Some((true, false));
     const DROP: Option<(bool, bool)> = Some((false, false));
@@ -252,6 +256,18 @@ mod tests {
             1,
         ),
         (
+            "a wave start the concealer can rewrite resumes a strict decoder",
+            Some(Strict),
+            false,
+            &[
+                (Au(1, SOF, 0), FEED),
+                (Au(3, 0, 1), DROP),
+                (Concealed(4, POINT), FEED),
+                (Au(5, 0, 0), FEED),
+            ],
+            1,
+        ),
+        (
             "a wave start asks for a keyframe on a strict decoder",
             Some(Strict),
             false,
@@ -319,6 +335,16 @@ mod tests {
                             flags,
                         },
                         gap,
+                        None,
+                    )),
+                    Concealed(index, flags) => Some(intake.note(
+                        Delivery {
+                            index,
+                            first: true,
+                            flags,
+                        },
+                        0,
+                        Some(Concealment::Decodable),
                     )),
                     Part(index, flags) => Some(intake.note(
                         Delivery {
@@ -327,16 +353,20 @@ mod tests {
                             flags,
                         },
                         0,
+                        None,
                     )),
                     LocalLoss(rule) => {
                         assert_eq!(intake.local_loss(), rule, "{name}: step {i}");
                         None
                     }
-                    Parked(index, flags) => Some(intake.rejudge(Delivery {
-                        index,
-                        first: true,
-                        flags,
-                    })),
+                    Parked(index, flags) => Some(intake.rejudge(
+                        Delivery {
+                            index,
+                            first: true,
+                            flags,
+                        },
+                        None,
+                    )),
                 };
                 let want = want.map(|(feed, ask_keyframe)| Verdict { feed, ask_keyframe });
                 assert_eq!(got, want, "{name}: step {i}");

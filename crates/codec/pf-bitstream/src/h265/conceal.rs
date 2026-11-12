@@ -45,6 +45,12 @@ impl H265Concealer {
         }
     }
 
+    /// The decoder lost an AU this concealer folded: forget the decoding state. Every AU is
+    /// [`Concealment::Unrecoverable`] until an IRAP; parameter sets survive.
+    pub fn flush(&mut self) {
+        self.planner.flush();
+    }
+
     /// Fold one access unit; see [`Concealment`].
     pub fn conceal(&mut self, au: &[u8]) -> Concealment {
         let before = self.planner.checkpoint();
@@ -369,6 +375,19 @@ mod tests {
             .map(|r| r.pic_order_cnt)
             .collect();
         assert_eq!(current, vec![0]);
+    }
+
+    #[test]
+    fn a_flush_holds_every_au_until_the_next_idr() {
+        let mut c = H265Concealer::new();
+        c.conceal(&idr());
+        c.flush();
+        assert_eq!(
+            c.conceal(&trail_p(1, &[(0, true)], 1)),
+            Concealment::Unrecoverable
+        );
+        assert_eq!(c.conceal(&idr()), Concealment::Intact);
+        assert_eq!(c.conceal(&trail_p(1, &[(0, true)], 1)), Concealment::Intact);
     }
 
     /// A one-reference chain, as NVENC codes it: each P names only the picture before it.

@@ -7,7 +7,7 @@ import * as fs from "node:fs";
 import * as net from "node:net";
 import * as os from "node:os";
 import * as path from "node:path";
-import { redirectUiServeToChannel } from "../src/ui-forward.js";
+import { attachOverPipe, redirectUiServeToChannel } from "../src/ui-forward.js";
 
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pf-ui-"));
 const sock = path.join(dir, "host.sock");
@@ -118,6 +118,26 @@ describe("redirectUiServeToChannel", () => {
 		} finally {
 			server.stop(true);
 			other.stop(true);
+		}
+	});
+});
+
+describe("attachOverPipe", () => {
+	test("an absent host costs one warning, not one per parked dial", async () => {
+		const warn = console.warn;
+		const lines: string[] = [];
+		console.warn = (m: string) => {
+			lines.push(m);
+		};
+		const channel = attachOverPipe(path.join(dir, "absent.sock"), "demo", async () => new Response("x"));
+		try {
+			await waitFor(() => lines.length > 0);
+			await new Promise((r) => setTimeout(r, 200));
+			expect(lines).toHaveLength(1);
+			expect(lines[0]).toContain("the UI channel did not attach");
+		} finally {
+			channel.stop();
+			console.warn = warn;
 		}
 	});
 });

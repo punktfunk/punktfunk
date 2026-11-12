@@ -168,7 +168,8 @@ internal fun rememberStatsLines(
 
 /**
  * The 1 Hz session watch: the access level and its countdown, the operator's mute, and the end
- * of the session; a session that starts on another device's screen says so once. A host that
+ * of the session; a session that starts on another device's screen says so once, and so does a
+ * device decoder that stops answering. A host that
  * sleeps, crashes or drops off the network stops answering the QUIC keep-alive, and the
  * connection idle-times out (~8 s). The moment the session is dead this drops
  * back to the menu, so the user can wake the host instead of being stranded on a frozen picture.
@@ -187,6 +188,7 @@ internal fun SessionWatchEffect(
     val context = LocalContext.current
     LaunchedEffect(handle) {
         var lastAccessSeq = initialAccess?.getOrNull(2) ?: 0
+        var decoderStuckShown = false
         if (NativeBridge.nativeSharesScreen(handle)) {
             Toast.makeText(context, context.getString(R.string.notice_shared_screen), Toast.LENGTH_LONG).show()
         }
@@ -224,6 +226,10 @@ internal fun SessionWatchEffect(
             // The operator's per-session mute rides the control stream, so the badge learns it
             // on this tick. The local bit is in the same mask — the toggle writes it at once.
             ui.audioMute = NativeBridge.nativeAudioMute(handle)
+            if (!decoderStuckShown && NativeBridge.nativeVideoDecoderStuck(handle)) {
+                decoderStuckShown = true
+                Toast.makeText(context, context.getString(R.string.notice_decoder_stuck), Toast.LENGTH_LONG).show()
+            }
             if (NativeBridge.nativeSessionEnded(handle)) {
                 // WHY it ended decides what the user is told: only a connection that actually
                 // died says the host may be asleep. A quit game or a deliberate host end is not

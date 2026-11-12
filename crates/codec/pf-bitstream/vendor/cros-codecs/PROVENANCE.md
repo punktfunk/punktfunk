@@ -355,5 +355,10 @@ this crate with overflow checks off, as it ships: 26, 28, 30 and 31 abort a rele
     `windows(3).position`: the scan runs once per byte of every AU on every client.
     Not a defect; not for upstream.
 
+33. `src/codec/av1/parser.rs` — `FrameHeaderObu::ref_order_hint_bit`: the bit offset in the
+    OBU payload where an error-resilient frame codes `ref_order_hint[0]`, recorded by
+    `parse_uncompressed_frame_header`. `pf_bitstream::av1::conceal` rewrites those hints in
+    place. Not a defect; not for upstream.
+
 Re-sync procedure: fetch the AOSP tree, re-apply this trim, diff `codec/` +
 `bitstream_utils.rs` (expect near-zero conflicts), update the commit pin above.

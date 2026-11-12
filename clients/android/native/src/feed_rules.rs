@@ -99,6 +99,8 @@ pub(crate) enum Cause {
     Oversize,
     /// The codec refused the queue call.
     Refused,
+    /// It names a lost reference and no held picture can stand in.
+    Unrecoverable,
 }
 
 /// What a piece that did not reach the codec leaves behind.
@@ -115,6 +117,7 @@ pub(crate) fn spoiled(p: &Piece, cause: Cause) -> Spoiled {
     let poisons = match cause {
         Cause::Oversize => p.partial,
         Cause::Refused => p.partial && !p.last,
+        Cause::Unrecoverable => p.partial,
     };
     if !poisons {
         return Spoiled::Lost;
@@ -298,6 +301,7 @@ mod tests {
         // A whole AU is a plain loss either way.
         assert_eq!(spoiled(&whole(), Cause::Oversize), Spoiled::Lost);
         assert_eq!(spoiled(&whole(), Cause::Refused), Spoiled::Lost);
+        assert_eq!(spoiled(&whole(), Cause::Unrecoverable), Spoiled::Lost);
         // Oversize poisons for any piece, and freezes at once.
         for (first, last) in [(true, false), (false, false), (false, true)] {
             assert_eq!(

@@ -33,8 +33,6 @@ pub extern "system" fn Java_io_unom_punktfunk_kit_NativeBridge_nativeStartVideo(
     surface_h: jni::sys::jint,
 ) {
     use super::VideoThread;
-    use std::sync::atomic::AtomicBool;
-    use std::sync::Arc;
 
     env.with_env(|env| -> jni::errors::Result<()> {
         if handle == 0 {
@@ -59,9 +57,7 @@ pub extern "system" fn Java_io_unom_punktfunk_kit_NativeBridge_nativeStartVideo(
                     return None;
                 }
             };
-            let shutdown = Arc::new(AtomicBool::new(false));
             let client = h.client.clone();
-            let sd = shutdown.clone();
             let st = h.stats.clone(); // session-lifetime stats (gate survives surface recreate)
 
             // Seed the live view size with what the view measures right now; `surfaceChanged`
@@ -89,14 +85,10 @@ pub extern "system" fn Java_io_unom_punktfunk_kit_NativeBridge_nativeStartVideo(
                     .video_started
                     .swap(true, std::sync::atomic::Ordering::Relaxed),
             };
-            match std::thread::Builder::new()
-                .name("pf-decode".into())
-                .spawn(move || crate::decode::run(client, window, sd, st, opts))
-            {
-                Ok(join) => Some(VideoThread {
-                    shutdown,
-                    join: Some(join),
-                }),
+            match VideoThread::spawn("pf-decode", move |sd| {
+                crate::decode::run(client, window, sd, st, opts)
+            }) {
+                Ok(thread) => Some(thread),
                 Err(e) => {
                     log::error!("nativeStartVideo: decode thread spawn failed: {e}");
                     h.start_drain(); // nothing else pops the frame queue
@@ -333,8 +325,8 @@ pub extern "system" fn Java_io_unom_punktfunk_kit_NativeBridge_nativePyrowaveCap
     jni_guard(false, crate::pyro::available)
 }
 
-/// `NativeBridge.nativeStopVideo(handle)` — stop + join the decode thread (without closing the
-/// session). No-op on `0`.
+/// `NativeBridge.nativeStopVideo(handle)` — stop the decode thread without closing the session,
+/// waiting at most 2 s for it. No-op on `0`.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_io_unom_punktfunk_kit_NativeBridge_nativeStopVideo(
     _env: EnvUnowned,
@@ -345,6 +337,24 @@ pub extern "system" fn Java_io_unom_punktfunk_kit_NativeBridge_nativeStopVideo(
         if let Some(h) = SESSIONS.get(handle) {
             h.video.stop();
         }
+    })
+}
+
+/// A codec create or stop takes well under a second when the device's decoder service works.
+const DECODER_STUCK_AFTER: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// `NativeBridge.nativeVideoDecoderStuck(handle)` — whether a call into the device's video
+/// decoder has gone unanswered for 5 s. `false` on `0`.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_io_unom_punktfunk_kit_NativeBridge_nativeVideoDecoderStuck(
+    _env: EnvUnowned,
+    _this: JObject,
+    handle: jlong,
+) -> jboolean {
+    jni_guard(false, || {
+        SESSIONS
+            .get(handle)
+            .is_some_and(|h| h.stats.codec_stuck(DECODER_STUCK_AFTER))
     })
 }
 

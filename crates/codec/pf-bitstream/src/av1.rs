@@ -22,6 +22,7 @@ use cros_codecs::codec::av1::parser::SequenceHeaderObu;
 
 use crate::h264::ColourDescription;
 
+pub mod conceal;
 pub mod tiles;
 
 /// Parsed types a backend conversion names. Re-exported so backends do not reach
@@ -200,6 +201,8 @@ pub struct PicturePlan {
 #[derive(Debug, Clone)]
 pub struct AuPlan {
     pub picture: PicturePlan,
+    /// Where this frame header's OBU payload starts in the access unit, in bytes.
+    pub header_at: usize,
     pub tiles: Vec<TilePlan>,
     /// References this frame names, indexed by AV1 reference *name*: position `i`
     /// is `ref_frame_idx[i]` (`LAST_FRAME + i`).
@@ -292,7 +295,9 @@ impl std::fmt::Display for PlanError {
 
 impl std::error::Error for PlanError {}
 
-/// The AV1 planner: vendored parser plus this crate's reference ledger.
+/// The AV1 planner: vendored parser plus this crate's reference ledger. A clone is a
+/// checkpoint.
+#[derive(Clone)]
 pub struct Av1Planner {
     parser: Parser,
     /// Slot → the picture it holds. AV1's whole reference model.
@@ -343,7 +348,7 @@ impl Av1Planner {
     pub fn plan_au(&mut self, au: &[u8]) -> Result<Vec<AuPlan>, PlanError> {
         let mut warnings = Vec::new();
         let mut plans: Vec<AuPlan> = Vec::new();
-        let mut pending: Option<(FrameHeaderObu, Vec<TilePlan>)> = None;
+        let mut pending: Option<(FrameHeaderObu, Vec<TilePlan>, usize)> = None;
         let mut consumed = 0usize;
 
         while consumed < au.len() {
@@ -371,20 +376,21 @@ impl Av1Planner {
             // Payload as a range in this AU so a backend can hand the driver
             // bytes without re-parsing.
             let obu_start = consumed;
+            let payload_at = obu_start + used - obu.as_ref().len();
             consumed += used;
 
             // A new header ends the previous frame; its tile groups are all in.
             // Plan it before the parse: planning runs the 7.20 update, and the
             // new header reads the order hints and sizes that update writes.
             if matches!(obu.header.obu_type, ObuType::Frame | ObuType::FrameHeader) {
-                if let Some((h, t)) = pending.take() {
-                    plans.push(self.plan_one(h, t, std::mem::take(&mut warnings))?);
+                if let Some((h, t, at)) = pending.take() {
+                    plans.push(self.plan_one(h, t, at, std::mem::take(&mut warnings))?);
                 }
             }
 
             match self.parser.parse_obu(obu) {
                 Ok(ParsedObu::SequenceHeader(seq)) => self.sequence = Some(seq),
-                Ok(ParsedObu::FrameHeader(fh)) => pending = Some((fh, Vec::new())),
+                Ok(ParsedObu::FrameHeader(fh)) => pending = Some((fh, Vec::new(), payload_at)),
                 Ok(ParsedObu::Frame(frame)) => {
                     // A Frame OBU is a header plus its first tile group. It stays
                     // open like a bare header: 5.10 lets further tile-group OBUs
@@ -394,7 +400,7 @@ impl Av1Planner {
                         tg_start: frame.tile_group.tg_start,
                         tg_end: frame.tile_group.tg_end,
                     };
-                    pending = Some((frame.header, vec![tile]));
+                    pending = Some((frame.header, vec![tile], payload_at));
                 }
                 Ok(ParsedObu::TileGroup(tg)) => {
                     let tile = TilePlan {
@@ -403,7 +409,7 @@ impl Av1Planner {
                         tg_end: tg.tg_end,
                     };
                     match pending.as_mut() {
-                        Some((_, tiles)) => tiles.push(tile),
+                        Some((_, tiles, _)) => tiles.push(tile),
                         // Tiles with no header ahead of them: the header was
                         // lost. Dropped, not guessed — no picture to attach to.
                         None => warnings.push(PlanWarning::TruncatedAu { offset: obu_start }),
@@ -420,8 +426,8 @@ impl Av1Planner {
             }
         }
 
-        if let Some((h, t)) = pending.take() {
-            plans.push(self.plan_one(h, t, std::mem::take(&mut warnings))?);
+        if let Some((h, t, at)) = pending.take() {
+            plans.push(self.plan_one(h, t, at, std::mem::take(&mut warnings))?);
         }
         if plans.is_empty() {
             return Err(PlanError::NoFrame);
@@ -440,10 +446,13 @@ impl Av1Planner {
         &mut self,
         header: FrameHeaderObu,
         tiles: Vec<TilePlan>,
+        header_at: usize,
         warnings: Vec<PlanWarning>,
     ) -> Result<AuPlan, PlanError> {
         let sequence = self.sequence.clone().ok_or(PlanError::NoSequenceHeader)?;
-        self.plan_frame(header, sequence, tiles, warnings)
+        let mut plan = self.plan_frame(header, sequence, tiles, warnings)?;
+        plan.header_at = header_at;
+        Ok(plan)
     }
 
     fn plan_frame(
@@ -498,6 +507,7 @@ impl Av1Planner {
             self.clean
                 .retain_live(self.slots.iter().flatten().map(|p| p.id));
             return Ok(AuPlan {
+                header_at: 0,
                 picture,
                 tiles,
                 refs: [None; REFS_PER_FRAME],
@@ -584,6 +594,7 @@ impl Av1Planner {
             .retain_live(self.slots.iter().flatten().map(|p| p.id));
 
         Ok(AuPlan {
+            header_at: 0,
             picture,
             tiles,
             refs,
