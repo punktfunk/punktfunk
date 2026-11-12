@@ -52,6 +52,7 @@ mod plugin_access;
 mod plugin_channel;
 mod plugins;
 mod profiles;
+mod seat_proxy;
 mod seating;
 mod session;
 mod settings;
@@ -653,7 +654,7 @@ fn api_router_parts() -> (Router<Arc<MgmtState>>, utoipa::openapi::OpenApi) {
     // Any method passes through to the seat's host, so the spec has no one shape to document.
     let router = router.route(
         "/api/v1/profiles/{id}/proxy/{*rest}",
-        axum::routing::any(profiles::proxy_profile_seat),
+        axum::routing::any(seat_proxy::proxy_profile_seat),
     );
     // A plugin page's root and paths, any method: the channel proxy (a wildcard never matches an
     // empty rest). Not an API, so not in the document; admin-lane, as no plugin allowlist names it.
