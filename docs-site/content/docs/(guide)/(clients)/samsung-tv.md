@@ -64,8 +64,8 @@ makes the certificate for your set and installs apps on it.
 
 1. Open **punktfunk** from the Apps page. It starts in Punktfunk Console.
 2. **Add a host** and type the host's address with the remote (the on-screen keyboard opens).
-3. Choose **Request access**, then approve the TV in the host's console under **Devices → Waiting
-   for approval** ([Pairing](/docs/pairing#approve-it-from-the-console-no-pin)).
+3. In the host's console, open **Devices** and click **Pair a device**, then type the PIN it shows
+   on the TV ([Pair with a PIN](/docs/pairing#pair-with-a-pin)).
 4. Pick a title, or stream the desktop.
 
 In a stream, **Back** on the remote opens the quick menu: **Disconnect, keep the game running** is

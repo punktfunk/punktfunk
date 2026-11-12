@@ -13,7 +13,7 @@ final class HostDiscoveryTests: XCTestCase {
         let uniqueid = "test-\(UUID().uuidString)"
 
         var txt = NWTXTRecord()
-        txt["proto"] = "punktfunk/1"
+        txt["proto"] = "punktfunk/2"
         txt["fp"] = String(repeating: "ab", count: 32) // 64 hex chars, like a real cert SHA-256
         txt["pair"] = "required"
         txt["id"] = uniqueid
