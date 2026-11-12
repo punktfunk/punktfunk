@@ -28,6 +28,7 @@ mod hidden;
 mod launch;
 mod metadata;
 mod overrides;
+mod profile;
 mod scanners;
 mod stats;
 
@@ -38,6 +39,7 @@ pub use hidden::*;
 pub use launch::*;
 pub use metadata::*;
 pub use overrides::*;
+pub use profile::*;
 pub use scanners::*;
 pub use stats::*;
 
@@ -303,8 +305,13 @@ pub struct OperatorGameEntry {
     #[serde(flatten)]
     pub entry: GameEntry,
     /// Set by [`set_entry_hidden`]. Omitted when false so the shape only grows for hidden titles.
+    /// With a profile in view (`as`), the profile hid it: a title the box hides is not listed.
     #[serde(skip_serializing_if = "is_not_hidden")]
     pub hidden: bool,
+    /// With a profile in view, the values on this row that are the profile's own.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(required = false)]
+    pub profile: Option<ProfileValues>,
 }
 
 fn is_not_hidden(hidden: &bool) -> bool {
@@ -345,37 +352,60 @@ impl ArtKind {
     }
 }
 
-/// Every *enabled* source's titles, sorted by title. Hidden entries are omitted.
+/// [`all_games_for`] this host's own view.
+pub fn all_games() -> Vec<GameEntry> {
+    all_games_for(&View::here())
+}
+
+/// Every *enabled* source's titles in `view`, sorted by title. Hidden entries are omitted.
 ///
 /// Both gates run at read time and never mutate stored state. Source toggles
 /// (`scanners.rs` / `library-scanners.json`) hide a source from this grid, native
 /// clients, `/applist`, and launch resolution — the plugin may keep reconciling.
-/// Per-entry hides (`hidden.rs`) apply here so every surface agrees;
-/// [`all_games_for_operator`] is the one exception. Operator-typed custom entries
+/// Per-entry hides (`hidden.rs`), the box's and the profile's, apply here so every surface
+/// agrees; [`all_games_for_operator`] is the one exception. Operator-typed custom entries
 /// carry no source and always contribute.
-pub fn all_games() -> Vec<GameEntry> {
-    let hidden = hidden_ids();
-    sorted_games()
+pub fn all_games_for(view: &View) -> Vec<GameEntry> {
+    let (by_box, by_profile) = hidden_layers(view);
+    sorted_games_for(view)
         .iter()
-        .filter(|g| !hidden.contains(&g.id))
+        .filter(|g| !by_box.contains(&g.id) && !by_profile.contains(&g.id))
         .cloned()
         .collect()
 }
 
-/// The library including hidden titles, each flagged.
+/// The library in `view` including hidden titles, each flagged.
 ///
 /// Only the console list on the operator lane calls this: a hidden entry has to
 /// be visible somewhere or it could never be brought back. Paired clients,
-/// the GameStream app list, and launch resolution use [`all_games`].
-pub fn all_games_for_operator() -> Vec<OperatorGameEntry> {
-    let hidden = hidden_ids();
-    sorted_games()
+/// the GameStream app list, and launch resolution use [`all_games`]. With a profile in view the
+/// flag is the profile's, and a title the box hides is left out: only the box brings it back.
+pub fn all_games_for_operator(view: &View) -> Vec<OperatorGameEntry> {
+    let (by_box, by_profile) = hidden_layers(view);
+    let own = OwnValues::load(view);
+    sorted_games_for(view)
         .iter()
-        .map(|entry| OperatorGameEntry {
-            hidden: hidden.contains(&entry.id),
-            entry: entry.clone(),
-        })
+        .filter_map(|entry| operator_row(entry, view, &by_box, &by_profile, &own))
         .collect()
+}
+
+/// `entry` as the operator's list shows it in `view`; `None` for a title the box hides there.
+pub(crate) fn operator_row(
+    entry: &GameEntry,
+    view: &View,
+    by_box: &HashSet<String>,
+    by_profile: &HashSet<String>,
+    own: &OwnValues,
+) -> Option<OperatorGameEntry> {
+    let box_hides = by_box.contains(&entry.id);
+    if box_hides && view.layer().is_some() {
+        return None;
+    }
+    Some(OperatorGameEntry {
+        hidden: box_hides || by_profile.contains(&entry.id),
+        profile: own.of(&entry.id),
+        entry: entry.clone(),
+    })
 }
 
 /// A title's place in the list: its search fold (case, width, kana script), then id so equal
@@ -398,24 +428,26 @@ type Inputs = (
 );
 
 /// Every file the list is built from is named `library*` in the library dir, or sits in its
-/// `library-metadata` folder; a seat that reads the box's library adds its own play stats. A
-/// file outside that rule would leave a stale list.
-fn inputs() -> Inputs {
+/// `library-metadata` folder or the view's own layer; a seat that reads the box's library adds
+/// its own play stats. A file outside that rule would leave a stale list.
+fn inputs(view: &View) -> Inputs {
     let dir = pf_paths::seat::library_dir();
     let own = pf_paths::config_dir();
     let mut folders = vec![(dir.clone(), "library"), (dir.join("library-metadata"), "")];
     if own != dir {
         folders.push((own, "library-stats"));
     }
+    if let Some(layer) = view.own_dir() {
+        folders.push((layer, ""));
+    }
     let mut stamps = Vec::new();
     for (folder, prefix) in folders {
         for e in std::fs::read_dir(folder).into_iter().flatten().flatten() {
-            let name = e.file_name();
-            if !name.to_string_lossy().starts_with(prefix) {
+            if !e.file_name().to_string_lossy().starts_with(prefix) {
                 continue;
             }
             if let Some(md) = e.metadata().ok().filter(|md| md.is_file()) {
-                stamps.push((name, md.modified().ok(), md.len()));
+                stamps.push((e.path().into_os_string(), md.modified().ok(), md.len()));
             }
         }
     }
@@ -424,37 +456,51 @@ fn inputs() -> Inputs {
     (dir, writes, stamps)
 }
 
-/// The whole library, hidden titles included, sorted by [`sort_key`]. Built once and kept
-/// until an input moves: a page of a large library must not cost the whole of it.
+/// [`sorted_games_for`] this host's own view.
+#[cfg(test)]
 pub(crate) fn sorted_games() -> std::sync::Arc<Vec<GameEntry>> {
-    type Built = std::sync::Mutex<Option<(Inputs, std::sync::Arc<Vec<GameEntry>>)>>;
-    static BUILT: Built = std::sync::Mutex::new(None);
+    sorted_games_for(&View::here())
+}
+
+/// Lists kept at once: this host's own view and one per profile, with room to spare.
+const VIEWS_KEPT: usize = 16;
+
+/// The whole library in `view`, hidden titles included, sorted by [`sort_key`]. Built once and
+/// kept until an input moves: a page of a large library must not cost the whole of it.
+pub(crate) fn sorted_games_for(view: &View) -> std::sync::Arc<Vec<GameEntry>> {
+    type Built = std::sync::Mutex<Vec<(View, Inputs, std::sync::Arc<Vec<GameEntry>>)>>;
+    static BUILT: Built = std::sync::Mutex::new(Vec::new());
     // Read before the build: a write that lands in between leaves this key behind the list,
     // which costs the next caller a rebuild and never serves an old list.
-    let key = inputs();
-    if let Some((k, games)) = BUILT.lock().unwrap_or_else(|e| e.into_inner()).as_ref() {
-        if *k == key {
-            return games.clone();
-        }
+    let key = inputs(view);
+    let kept = BUILT.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some((.., games)) = kept.iter().find(|(v, k, _)| v == view && *k == key) {
+        return games.clone();
     }
-    let games = std::sync::Arc::new(collect_games());
-    *BUILT.lock().unwrap_or_else(|e| e.into_inner()) = Some((key, games.clone()));
+    drop(kept);
+    let games = std::sync::Arc::new(collect_games(view));
+    let mut kept = BUILT.lock().unwrap_or_else(|e| e.into_inner());
+    kept.retain(|(v, ..)| v != view);
+    if kept.len() >= VIEWS_KEPT {
+        kept.remove(0);
+    }
+    kept.push((view.clone(), key, games.clone()));
     games
 }
 
-/// Merge every enabled source and the custom entries, sorted by [`sort_key`], each
+/// Merge every enabled source and the custom entries in `view`, sorted by [`sort_key`], each
 /// carrying its play stats, its game overrides and what Art & Metadata sources fill, plus the
 /// host's own [`GAME_MODE_ID`] tile. Split out so the two public views differ only in how they
 /// apply the hidden set.
-fn collect_games() -> Vec<GameEntry> {
-    let off = disabled_scanners();
+fn collect_games(view: &View) -> Vec<GameEntry> {
+    let off = disabled_scanners(view);
     let stats = game_stats();
-    let overrides = load_overrides();
-    let fills = Fills::load();
+    let overrides = Overrides::load(view);
+    let fills = Fills::load(view);
     // Manual entries always contribute; a provider's follow its toggle and [`source_off`].
     let mut games: Vec<GameEntry> = load_custom()
         .into_iter()
-        .filter(|e| !source_off(e, &off))
+        .filter(|e| !source_off(e, &off, view.reach))
         .map(GameEntry::from)
         .collect();
     for g in &mut games {
@@ -464,7 +510,7 @@ fn collect_games() -> Vec<GameEntry> {
     }
     games.extend(game_mode_entry(
         crate::vdisplay::managed_session_available(),
-        pf_paths::seat::role().follows_contract(),
+        view.reach.contract,
     ));
     games.sort_by_cached_key(sort_key);
     games
@@ -519,8 +565,12 @@ fn read_json_or_default<T: serde::de::DeserializeOwned + Default>(path: &Path) -
 /// `prep`/`launch` commands the host runs.
 fn save_json(path: &Path, json: &str) -> Result<()> {
     let saved = pf_paths::replace_secret_file(path, json.as_bytes());
-    WRITES.fetch_add(1, std::sync::atomic::Ordering::Release);
+    wrote();
     saved.with_context(|| format!("replace {}", path.display()))
+}
+
+fn wrote() {
+    WRITES.fetch_add(1, std::sync::atomic::Ordering::Release);
 }
 
 #[cfg(test)]
@@ -600,6 +650,7 @@ mod tests {
         let visible = OperatorGameEntry {
             entry: entry("steam:70", "Half-Life"),
             hidden: false,
+            profile: None,
         };
         let v = serde_json::to_value(&visible).expect("serializes");
         assert_eq!(v["id"], "steam:70", "the entry's fields stay at top level");
@@ -612,6 +663,7 @@ mod tests {
         let hidden = OperatorGameEntry {
             entry: entry("steam:70", "Half-Life"),
             hidden: true,
+            profile: None,
         };
         let v = serde_json::to_value(&hidden).expect("serializes");
         assert_eq!(v["hidden"], true);
@@ -650,6 +702,7 @@ mod tests {
             .map(|entry| OperatorGameEntry {
                 hidden: hidden.contains(&entry.id),
                 entry,
+                profile: None,
             })
             .collect();
         let played: Vec<GameEntry> = games

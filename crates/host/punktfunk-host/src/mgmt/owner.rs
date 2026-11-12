@@ -1,8 +1,8 @@
 //! The door's rule for who answers a request. The door opens no device, encodes nothing and
 //! runs no plugin: it pairs, places and keeps the box's files. Everything else is a host that
 //! streams. So the door answers only what [`DOOR`] names and passes every other admin call to
-//! the owner's host; a device's call about its own play goes to the seat it plays on, as that
-//! device. `mgmt::tests::routes` holds the table against the API document.
+//! the owner's host; a device's call about its own play goes, as that device, to the host
+//! [`DEVICE`] names. `mgmt::tests::routes` holds the tables against the API document.
 
 use super::auth::{AuthLane, PairedDevice};
 use super::shared::*;
@@ -55,16 +55,26 @@ pub(crate) const DOOR: &[(&str, &str)] = &[
     ("GET", "library/art/*"),
 ];
 
-/// Routes a device may call about its own play, which go to the seat it plays on: its game, its
-/// installs, its screen and the compositors there. `mgmt::tests::routes` holds every other
+/// Which host answers a device's call about its own play.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Side {
+    /// The seat it plays on.
+    Seat,
+    /// The owner's host, which runs the plugins.
+    Owner,
+}
+
+/// Routes a device may call about its own play, and the host each goes to as that device: its
+/// game, its screen and the compositors on its seat; its installs on the owner's host, whose
+/// plugins download into the box's shared game files. `mgmt::tests::routes` holds every other
 /// device route to the door.
-pub(crate) const DEVICE: &[(&str, &str)] = &[
-    ("POST", "game/end"),
-    ("POST", "library/install/*"),
-    ("DELETE", "library/install/*"),
-    ("GET", "display/targets"),
-    ("PUT", "display/clients/*"),
-    ("GET", "compositors"),
+pub(crate) const DEVICE: &[(&str, &str, Side)] = &[
+    ("POST", "game/end", Side::Seat),
+    ("POST", "library/install/*", Side::Owner),
+    ("DELETE", "library/install/*", Side::Owner),
+    ("GET", "display/targets", Side::Seat),
+    ("PUT", "display/clients/*", Side::Seat),
+    ("GET", "compositors", Side::Seat),
 ];
 
 /// Answers that never end: a tail the console keeps open.
@@ -109,9 +119,15 @@ pub(crate) fn classify(method: &Method, rest: &str) -> Verdict {
     }
 }
 
-/// Whether a device's call to `method` `rest` is about its own play.
-pub(crate) fn device_route(method: &Method, rest: &str) -> bool {
-    !has_dot_segment(rest) && listed(DEVICE, method, rest)
+/// The host a device's call to `method` `rest` goes to, when it is about its own play.
+pub(crate) fn device_route(method: &Method, rest: &str) -> Option<Side> {
+    if has_dot_segment(rest) {
+        return None;
+    }
+    DEVICE
+        .iter()
+        .find(|(m, t, _)| *m == method.as_str() && template_matches(t, rest))
+        .map(|(_, _, side)| *side)
 }
 
 /// Whether `rest` is a tail, to hand over as it arrives.
@@ -342,9 +358,9 @@ fn device_seat(st: &MgmtState, seats: &crate::seats::Snapshot, fp: &str) -> Opti
 }
 
 /// On a door: an admin call the door does not answer itself goes to the owner's host, and a
-/// device's call about its own play to the seat it plays on. A device's read wakes no seat: a
-/// client asks each time it shows the host. Every other lane, and every other host, is
-/// answered here.
+/// device's call about its own play to the host [`device_route`] names, carrying the device so
+/// that host answers as it would the device. A device's read wakes no seat: a client asks each
+/// time it shows the host. Every other lane, and every other host, is answered here.
 pub(crate) async fn pass_on(
     State(st): State<Arc<MgmtState>>,
     req: Request,
@@ -360,21 +376,27 @@ pub(crate) async fn pass_on(
         .strip_prefix("/api/v1/")
         .unwrap_or_default()
         .to_string();
-    let target = match lane {
-        Some(AuthLane::Admin) if classify(req.method(), &rest) == Verdict::Forward => Target::Owner,
-        Some(AuthLane::Cert) if device_route(req.method(), &rest) => {
+    let target = match (lane, device_route(req.method(), &rest)) {
+        (Some(AuthLane::Admin), _) if classify(req.method(), &rest) == Verdict::Forward => {
+            Target::Owner
+        }
+        (Some(AuthLane::Cert), Some(side)) => {
             let Some(PairedDevice(fp)) = req.extensions().get::<PairedDevice>().cloned() else {
                 return next.run(req).await;
             };
-            let snapshot = {
-                let seats = seats.clone();
-                tokio::task::spawn_blocking(move || seats.snapshot())
-                    .await
-                    .unwrap_or_default()
-            };
-            match device_seat(&st, &snapshot, &fp) {
-                Some(id) => Target::Seat(id),
-                None => return next.run(req).await,
+            if side == Side::Owner {
+                Target::Owner
+            } else {
+                let snapshot = {
+                    let seats = seats.clone();
+                    tokio::task::spawn_blocking(move || seats.snapshot())
+                        .await
+                        .unwrap_or_default()
+                };
+                match device_seat(&st, &snapshot, &fp) {
+                    Some(id) => Target::Seat(id),
+                    None => return next.run(req).await,
+                }
             }
         }
         _ => return next.run(req).await,
@@ -466,19 +488,25 @@ mod tests {
         assert_eq!(get("plugins/steam/ui/%2E%2e/x"), Verdict::Door);
     }
 
-    /// A device's own play goes to its seat; its reads of the box stay on the door.
+    /// A device's game goes to its seat and its installs to the owner's host; its reads of the
+    /// box stay on the door.
     #[test]
-    fn a_device_s_own_play_is_its_seat_s() {
-        assert!(device_route(&Method::POST, "game/end"));
-        assert!(device_route(&Method::POST, "library/install/steam:570"));
-        assert!(device_route(&Method::DELETE, "library/install/steam:570"));
-        assert!(device_route(
-            &Method::POST,
-            "library/install/steam:570/pause"
-        ));
-        assert!(!device_route(&Method::GET, "status"));
-        assert!(!device_route(&Method::GET, "library"));
-        assert!(!device_route(&Method::POST, "actions/power.sleep"));
+    fn a_device_s_own_play_has_its_host() {
+        let route = |method, rest| device_route(&method, rest);
+        assert_eq!(route(Method::POST, "game/end"), Some(Side::Seat));
+        assert_eq!(route(Method::GET, "display/targets"), Some(Side::Seat));
+        for rest in [
+            "library/install/steam:570",
+            "library/install/steam:570/pause",
+        ] {
+            assert_eq!(route(Method::POST, rest), Some(Side::Owner), "{rest}");
+        }
+        let remove = route(Method::DELETE, "library/install/steam:570");
+        assert_eq!(remove, Some(Side::Owner));
+        assert_eq!(route(Method::POST, "library/install/%2e%2e/x"), None);
+        assert_eq!(route(Method::GET, "status"), None);
+        assert_eq!(route(Method::GET, "library"), None);
+        assert_eq!(route(Method::POST, "actions/power.sleep"), None);
     }
 
     /// A supervisor that didn't answer is a host that didn't, never a box without the row.

@@ -41,6 +41,33 @@ class LibraryClientTest {
         assertEquals("ab".repeat(32), LibraryCache.keyFor(null, "ab".repeat(32)))
     }
 
+    /** Replays `clients/shared/library-profile-vectors.json`, the rule Rust and Swift replay too. */
+    @Test
+    fun a_library_fetch_follows_the_shared_profile_vectors() {
+        val file = java.io.File("../../shared/library-profile-vectors.json")
+        assertTrue("vectors reachable at ${file.absolutePath}", file.isFile)
+        val cases = org.json.JSONObject(file.readText()).getJSONArray("cases")
+        assertTrue(cases.length() > 0)
+        for (i in 0 until cases.length()) {
+            val c = cases.getJSONObject(i)
+            val name = c.getString("name")
+            val host = c.getJSONObject("host")
+            val expect = c.getJSONObject("expect")
+            val asked = ArrayList<String>()
+            val pick = if (c.isNull("pick")) null else c.getString("pick")
+            val shown = LibraryClient.catalog(pick, "https://h:47990") { path ->
+                asked += path
+                host.optJSONObject(path)?.let { it.getInt("status") to it.get("body").toString() } ?: (404 to "")
+            }
+            val want = expect.getJSONArray("asked").let { a -> (0 until a.length()).map { a.getString(it) } }
+            assertEquals("$name: asked", want, asked)
+            val served = if (expect.isNull("as")) null else expect.getString("as")
+            assertEquals("$name: as", served, (shown as? LibraryResult.Ok)?.profile)
+            val ids = expect.optJSONArray("ids")?.let { a -> (0 until a.length()).map { a.getString(it) } }
+            assertEquals("$name: ids", ids, (shown as? LibraryResult.Ok)?.games?.map { it.id })
+        }
+    }
+
     private fun page(ids: List<String>, next: String?): Pair<Int, String> {
         val items = ids.joinToString(",") { """{"id":"$it","store":"custom","title":"$it","art":{"portrait":"/api/v1/library/art/$it/portrait"}}""" }
         val cursor = next?.let { ""","next_cursor":"$it"""" } ?: ""
@@ -148,7 +175,7 @@ class LibraryClientTest {
         for ((macs, autoWake) in listOf(listOf("aa:bb:cc:dd:ee:ff") to false, emptyList<String>() to true)) {
             val res = LibraryClient.fetchAcrossWake(
                 "192.168.1.9", 47990, "", "", "",
-                macs = macs, autoWake = autoWake, onWaking = { waking++ },
+                macs = macs, autoWake = autoWake, profile = null, onWaking = { waking++ },
             )
             assertTrue(res is LibraryResult.Unauthorized)
         }

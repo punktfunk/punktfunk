@@ -265,6 +265,9 @@ pub(crate) const SCOPES: &[(&str, &str, Scope)] = &[
     ("POST", "/api/v1/profiles/{id}/stop", Scope::Box),
     ("POST", "/api/v1/profiles/{id}/unlock-challenge", Scope::Box),
     ("POST", "/api/v1/profiles/{id}/wake", Scope::Box),
+    // A profile's own session preferences. Before `session/{id}`, which `settings` also fits: the
+    // first row that fits wins, as the router's literal segment does.
+    ("DELETE", "/api/v1/session/settings", Scope::ProfileData),
     // This host's live sessions: the console steers a seat's through the proxy.
     ("DELETE", "/api/v1/session", Scope::Host),
     ("POST", "/api/v1/session/idr", Scope::Host),

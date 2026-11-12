@@ -304,7 +304,8 @@ mod session_main {
     ///
     /// `clipboard_override` is the spawner's per-host decision. `None` reads the
     /// record this pin resolves to. The launched game's overrides come from this pin's
-    /// cached library. `display_hdr` is the selected output's HDR volume on Windows.
+    /// library as cached for `profile`, the one the session plays as. `display_hdr` is the
+    /// selected output's HDR volume on Windows.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn session_params(
         settings: &trust::Settings,
@@ -315,7 +316,7 @@ mod session_main {
         port: u16,
         pin: [u8; 32],
         identity: (String, String),
-        launch: Option<String>,
+        (launch, profile): (Option<String>, Option<&str>),
         gamepad: &GamepadService,
         native: Mode,
         display_hdr: Option<punktfunk_core::quic::HdrMeta>,
@@ -327,9 +328,9 @@ mod session_main {
                 .resolve(Some(&trust::hex(&pin)), &addr, port)
                 .is_some_and(|h| h.clipboard_sync)
         });
-        let overrides = launch
-            .as_deref()
-            .and_then(|game| pf_client_core::library_cache::overrides(&trust::hex(&pin), game));
+        let overrides = launch.as_deref().and_then(|game| {
+            pf_client_core::library_cache::overrides(&trust::hex(&pin), profile, game)
+        });
         let spec = ResolvedSpec::new(settings.clone(), clipboard, preset, preset_id, overrides);
         params_from_spec(
             spec,
@@ -1110,7 +1111,7 @@ mod session_main {
                         port,
                         pin,
                         identity,
-                        launch,
+                        (launch, profile.as_deref()),
                         gamepad,
                         native,
                         hdr,

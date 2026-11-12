@@ -306,8 +306,10 @@ extension ConsoleModel {
         // The session binary's console wakes on the same switch.
         let autoWake = UserDefaults.standard.object(forKey: DefaultsKey.autoWake) as? Bool
             ?? SettingDefault.autoWake
+        // The console plays as a remembered pick only, so its shelf is that profile's.
         let events = LibraryLoad.run(
-            target: target, hostID: host.id.uuidString, wakeMacs: host.wakeMacs, autoWake: autoWake)
+            target: target, hostID: host.id.uuidString, wakeMacs: host.wakeMacs, autoWake: autoWake,
+            profile: host.pickedProfile.flatMap { $0.remember ? $0.id : nil })
         fetching = Task { [weak self] in
             for await event in events {
                 guard let self, openShelf.accepts(.answer(serial: serial), fp: fp) else { return }

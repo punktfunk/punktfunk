@@ -447,12 +447,22 @@ impl LibraryScreen {
         &self.host.fp_hex
     }
 
-    /// Whether this is `host`'s shelf: same row key and the same pin, if any.
+    pub(crate) fn host_key(&self) -> &str {
+        &self.host.key
+    }
+
+    /// Whether this is `host`'s shelf: same row key, the same pin, if any, and the same
+    /// remembered profile, whose library the shelf is.
     pub(crate) fn shelf_of(&self, host: &HostRow) -> bool {
         fn pin(h: &HostRow) -> Option<&str> {
             h.pin.as_ref().map(|p| p.id.as_str())
         }
-        self.host.key == host.key && pin(&self.host) == pin(host)
+        fn plays(h: &HostRow) -> Option<&str> {
+            h.remembered().map(|p| p.id.as_str())
+        }
+        self.host.key == host.key
+            && pin(&self.host) == pin(host)
+            && plays(&self.host) == plays(host)
     }
 
     /// A decoded poster, for the launch hold drawn over this shelf. The focused tile

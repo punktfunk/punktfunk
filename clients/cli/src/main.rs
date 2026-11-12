@@ -1089,8 +1089,9 @@ from the config directory for a true factory reset."
             host.port,
             &identity,
             pin,
+            host.profile.as_ref().map(|p| p.id.as_str()),
         ) {
-            Ok(games) => {
+            Ok((games, _)) => {
                 if has(args, "--json") {
                     let rows: Vec<serde_json::Value> = games
                         .iter()
@@ -1194,7 +1195,7 @@ from the config directory for a true factory reset."
         }
         // An id or a name; the session looks a name up in the host's list.
         if let Some(wanted) = value(args, "--as") {
-            plan.profile = Some(wanted);
+            plan.play_as(Some(wanted));
         }
         run_plan(plan, exec, request_access)
     }

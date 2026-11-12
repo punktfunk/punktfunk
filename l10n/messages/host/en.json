@@ -148,6 +148,7 @@
 	"apierr_plugin_own_account_unreviewed": "Only plugins reviewed for the Punktfunk store install on a profile that uses an existing account, because they run as that person.",
 	"apierr_plugins_own_account": "Plugins don't run on a profile that uses an existing Linux account yet.",
 	"apierr_profile_has_no_seat": "This profile plays on the host's own desktop; it has no seat to start or stop.",
+	"apierr_profile_layer_console_only": "Couldn't change this profile's own settings. Change them in the host's web console.",
 	"apierr_profile_limit": [
 		{
 			"declarations": [
@@ -171,6 +172,8 @@
 	"apierr_profile_owner_not_removable": "The owner profile can't be removed",
 	"apierr_profile_picture_invalid": "Couldn't save the picture. Use a PNG or JPEG under 1 MB.",
 	"apierr_profile_seat_needs_door": "Turn on Reachable without logging in before adding a profile with a desktop of its own.",
+	"apierr_profile_session_settings_host": "This profile plays on the host's own desktop, so it uses the host's session settings.",
+	"apierr_profile_unknown": "That profile is gone from this host. Pick another one.",
 	"apierr_proof_invalid": "Couldn't confirm it's you on this device. Type the account password.",
 	"apierr_proof_invalid_identity_changed": "This host's identity changed, so this device can't unlock with its key. Type the account password.",
 	"apierr_rdp_firewall_close": "Couldn't close Remote Desktop to the network.",
@@ -209,6 +212,7 @@
 	"apierr_seats_stay_on_with_door": "Seats stay on while Reachable without logging in is on.",
 	"apierr_session_gamestream_cannot": "This session is a GameStream one, which can't do that. Stop it or ask its client.",
 	"apierr_session_not_streaming": "No session with that id is streaming.",
+	"apierr_session_settings_need_profile": "Couldn't remove the host's own session settings. Change them instead, or pick a profile.",
 	"apierr_session_settings_not_saved": "Couldn't save the session settings",
 	"apierr_take_turns_windows_only": "Take-turns profiles are only on Windows.",
 	"apierr_title_already_installed": "That game is already on this host.",

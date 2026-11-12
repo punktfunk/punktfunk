@@ -169,6 +169,8 @@ export type GameRole = "game" | "launcher"
 export const GameRole = Schema.Literals(["game", "launcher"]).annotate({ "description": "Presentation hint: ordinary title vs the launcher itself (Steam Big Picture,\nHeroic, Playnite fullscreen). A launcher entry launches, leases, and lists\nlike a game (design D4). Serde-default `game`; skipped when default so the\nwire is unchanged for entries that don't opt in.", "identifier": "GameRole" })
 export type GameStats = { readonly "last_played_unix_ms": number, readonly "last_run_ms": number, readonly "launch_count": number, readonly "play_time_ms": number } & { readonly [x: string]: Schema.Json }
 export const GameStats = Schema.StructWithRest(Schema.Struct({ "last_played_unix_ms": Schema.Number.annotate({ "description": "Unix ms of the most recent launch. Stamped at launch, so a game just started sorts first.", "format": "int64" }).check(Schema.isInt().annotate({ "expected": "an integer" })).check(Schema.isGreaterThanOrEqualTo(0).annotate({ "expected": "a value greater than or equal to 0" })), "last_run_ms": Schema.Number.annotate({ "description": "The run that started at `last_played_unix_ms`. Still growing while it runs.", "format": "int64" }).check(Schema.isInt().annotate({ "expected": "an integer" })).check(Schema.isGreaterThanOrEqualTo(0).annotate({ "expected": "a value greater than or equal to 0" })), "launch_count": Schema.Number.annotate({ "format": "int32" }).check(Schema.isInt().annotate({ "expected": "an integer" })).check(Schema.isGreaterThanOrEqualTo(0).annotate({ "expected": "a value greater than or equal to 0" })), "play_time_ms": Schema.Number.annotate({ "description": "Every run added up.", "format": "int64" }).check(Schema.isInt().annotate({ "expected": "an integer" })).check(Schema.isGreaterThanOrEqualTo(0).annotate({ "expected": "a value greater than or equal to 0" })) }), [Schema.Record(Schema.String, Schema.Json.annotate({ "expected": "JSON value" }))]).annotate({ "description": "One title's numbers. On the wire as `GameEntry.stats`; absent until the first launch.", "identifier": "GameStats" })
+export type ProfileValues = { readonly "overrides"?: boolean, readonly "picks"?: ReadonlyArray<string> } & { readonly [x: string]: Schema.Json }
+export const ProfileValues = Schema.StructWithRest(Schema.Struct({ "overrides": Schema.optionalKey(Schema.Boolean.annotate({ "description": "`overrides` is the profile's: its entry for the game, or for the game's source." })), "picks": Schema.optionalKey(Schema.Array(Schema.String).annotate({ "description": "The art slots the profile picked: `portrait`, `hero`, `logo`, `header`." })) }), [Schema.Record(Schema.String, Schema.Json.annotate({ "expected": "JSON value" }))]).annotate({ "description": "The values on a row that the profile in view (`as`) set itself.", "identifier": "ProfileValues" })
 export type AudioSessions = "all" | "owner" | "joined" | "launcher"
 export const AudioSessions = Schema.Literals(["all", "owner", "joined", "launcher"]).annotate({ "description": "Which sessions hear a title's audio (`audio.sessions` on a custom entry).", "identifier": "AudioSessions" })
 export type EnvMarker = { readonly "key": string, readonly "value"?: string | null } & { readonly [x: string]: Schema.Json }
@@ -209,6 +211,8 @@ export type RunningTitle = { readonly "external_id": string, readonly "pid"?: nu
 export const RunningTitle = Schema.StructWithRest(Schema.Struct({ "external_id": Schema.String.annotate({ "description": "Same key the reconcile payload uses." }), "pid": Schema.optionalKey(Schema.Union([Schema.Number.annotate({ "format": "int32" }).check(Schema.isInt().annotate({ "expected": "an integer" })).check(Schema.isGreaterThanOrEqualTo(0).annotate({ "expected": "a value greater than or equal to 0" })), Schema.Null]).annotate({ "description": "Pid the provider started, when it knows one. Re-resolved and pinned to start time\nbefore any signal; a stale or recycled pid contributes nothing." })) }), [Schema.Record(Schema.String, Schema.Json.annotate({ "expected": "JSON value" }))]).annotate({ "identifier": "RunningTitle" })
 export type ProviderRunningAccepted = { readonly "matched": number, readonly "ttl_s": number, readonly "unknown": number } & { readonly [x: string]: Schema.Json }
 export const ProviderRunningAccepted = Schema.StructWithRest(Schema.Struct({ "matched": Schema.Number.check(Schema.isInt().annotate({ "expected": "an integer" })).check(Schema.isGreaterThanOrEqualTo(0).annotate({ "expected": "a value greater than or equal to 0" })), "ttl_s": Schema.Number.annotate({ "description": "Seconds this report stays authoritative without being restated.", "format": "int64" }).check(Schema.isInt().annotate({ "expected": "an integer" })).check(Schema.isGreaterThanOrEqualTo(0).annotate({ "expected": "a value greater than or equal to 0" })), "unknown": Schema.Number.annotate({ "description": "Ignored because no such entry exists (report raced a reconcile)." }).check(Schema.isInt().annotate({ "expected": "an integer" })).check(Schema.isGreaterThanOrEqualTo(0).annotate({ "expected": "a value greater than or equal to 0" })) }), [Schema.Record(Schema.String, Schema.Json.annotate({ "expected": "JSON value" }))]).annotate({ "identifier": "ProviderRunningAccepted" })
+export type Layer = "box" | "profile"
+export const Layer = Schema.Literals(["box", "profile"]).annotate({ "description": "Whose file a value came from.", "identifier": "Layer" })
 export type SourceOrigin = "builtin" | "plugin"
 export const SourceOrigin = Schema.Literals(["builtin", "plugin"]).annotate({ "description": "Origin of a [`ScannerInfo`]. This host emits only `Plugin`.", "identifier": "SourceOrigin" })
 export type ScannerToggle = { readonly "enabled": boolean } & { readonly [x: string]: Schema.Json }
@@ -413,8 +417,8 @@ export type OverridesDoc = { readonly "games"?: { readonly [x: string]: Override
 export const OverridesDoc = Schema.StructWithRest(Schema.Struct({ "games": Schema.optionalKey(Schema.Record(Schema.String, OverrideEntry).annotate({ "description": "Library id (`steam:570`) → its entry." }).check(Schema.isPropertyNames(Schema.String).annotate({ "expected": "an object with property names matching the schema" }))), "sets": Schema.optionalKey(Schema.Record(Schema.String, GameOverrides).annotate({ "description": "Shared overrides by id, 12 lowercase hex." }).check(Schema.isPropertyNames(Schema.String).annotate({ "expected": "an object with property names matching the schema" }))), "sources": Schema.optionalKey(Schema.Record(Schema.String, OverrideEntry).annotate({ "description": "Source (`lutris`) → the entry each of its titles takes when it has none of its own." }).check(Schema.isPropertyNames(Schema.String).annotate({ "expected": "an object with property names matching the schema" }))), "version": Schema.optionalKey(Schema.Number.annotate({ "examples": [1], "format": "int32" }).check(Schema.isInt().annotate({ "expected": "an integer" })).check(Schema.isGreaterThanOrEqualTo(0).annotate({ "expected": "a value greater than or equal to 0" }))) }), [Schema.Record(Schema.String, Schema.Json.annotate({ "expected": "JSON value" }))]).annotate({ "description": "`library-overrides.json`, and the body of `GET /library/overrides`.", "identifier": "OverridesDoc" })
 export type ProviderRunningInput = { readonly "running"?: ReadonlyArray<RunningTitle> } & { readonly [x: string]: Schema.Json }
 export const ProviderRunningInput = Schema.StructWithRest(Schema.Struct({ "running": Schema.optionalKey(Schema.Array(RunningTitle).annotate({ "description": "Complete running set, not a delta: anything absent is reported as stopped." })) }), [Schema.Record(Schema.String, Schema.Json.annotate({ "expected": "JSON value" }))]).annotate({ "identifier": "ProviderRunningInput" })
-export type ScannerInfo = { readonly "enabled": boolean, readonly "entries"?: number | null, readonly "id": string, readonly "label": string, readonly "origin": SourceOrigin, readonly "provider"?: string | null } & { readonly [x: string]: Schema.Json }
-export const ScannerInfo = Schema.StructWithRest(Schema.Struct({ "enabled": Schema.Boolean, "entries": Schema.optionalKey(Schema.Union([Schema.Number.check(Schema.isInt().annotate({ "expected": "an integer" })).check(Schema.isGreaterThanOrEqualTo(0).annotate({ "expected": "a value greater than or equal to 0" })), Schema.Null]).annotate({ "description": "Titles this source currently contributes. `None` on `Builtin` (counting would walk launcher files)." })), "id": Schema.String.annotate({ "description": "Entry `store`, provider id, and store claim. One string, so a disabled\ntoggle survives the store's plugin taking over.", "examples": ["steam"] }), "label": Schema.String.annotate({ "examples": ["Steam"] }), "origin": Schema.suspend((): Schema.Codec<SourceOrigin> => SourceOrigin).annotate({ "description": "Always `plugin` on this host. `Builtin` remains so OpenAPI still names it for N-1 consoles." }), "provider": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null]).annotate({ "description": "Provider id. `None` only for a `Builtin` source an N-1 host still reports." })) }), [Schema.Record(Schema.String, Schema.Json.annotate({ "expected": "JSON value" }))]).annotate({ "description": "One game source and its enable state — the console toggle row.", "identifier": "ScannerInfo" })
+export type ScannerInfo = { readonly "enabled": boolean, readonly "entries"?: number | null, readonly "id": string, readonly "label": string, readonly "off_by"?: null | Layer, readonly "origin": SourceOrigin, readonly "provider"?: string | null } & { readonly [x: string]: Schema.Json }
+export const ScannerInfo = Schema.StructWithRest(Schema.Struct({ "enabled": Schema.Boolean, "entries": Schema.optionalKey(Schema.Union([Schema.Number.check(Schema.isInt().annotate({ "expected": "an integer" })).check(Schema.isGreaterThanOrEqualTo(0).annotate({ "expected": "a value greater than or equal to 0" })), Schema.Null]).annotate({ "description": "Titles this source currently contributes. `None` on `Builtin` (counting would walk launcher files)." })), "id": Schema.String.annotate({ "description": "Entry `store`, provider id, and store claim. One string, so a disabled\ntoggle survives the store's plugin taking over.", "examples": ["steam"] }), "label": Schema.String.annotate({ "examples": ["Steam"] }), "off_by": Schema.optionalKey(Schema.Union([Schema.Null, Schema.suspend((): Schema.Codec<Layer> => Layer).annotate({ "description": "With a profile in view (`as`), who turned the source off. Only the box turns on what the\nbox turned off." })], { mode: "oneOf" })), "origin": Schema.suspend((): Schema.Codec<SourceOrigin> => SourceOrigin).annotate({ "description": "Always `plugin` on this host. `Builtin` remains so OpenAPI still names it for N-1 consoles." }), "provider": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null]).annotate({ "description": "Provider id. `None` only for a `Builtin` source an N-1 host still reports." })) }), [Schema.Record(Schema.String, Schema.Json.annotate({ "expected": "JSON value" }))]).annotate({ "description": "One game source and its enable state — the console toggle row.", "identifier": "ScannerInfo" })
 export type CaptureEpisode = { readonly "consecutive_failures": number, readonly "cooldown_ms": number, readonly "recovered": boolean, readonly "stages": ReadonlyArray<CaptureStage>, readonly "stall_class": string, readonly "took_ms": number } & { readonly [x: string]: Schema.Json }
 export const CaptureEpisode = Schema.StructWithRest(Schema.Struct({ "consecutive_failures": Schema.Number.annotate({ "format": "int32" }).check(Schema.isInt().annotate({ "expected": "an integer" })).check(Schema.isGreaterThanOrEqualTo(0).annotate({ "expected": "a value greater than or equal to 0" })), "cooldown_ms": Schema.Number.annotate({ "format": "int64" }).check(Schema.isInt().annotate({ "expected": "an integer" })).check(Schema.isGreaterThanOrEqualTo(0).annotate({ "expected": "a value greater than or equal to 0" })), "recovered": Schema.Boolean, "stages": Schema.Array(CaptureStage).annotate({ "description": "The rungs run, in ladder order." }), "stall_class": Schema.String, "took_ms": Schema.Number.annotate({ "format": "int64" }).check(Schema.isInt().annotate({ "expected": "an integer" })).check(Schema.isGreaterThanOrEqualTo(0).annotate({ "expected": "a value greater than or equal to 0" })) }), [Schema.Record(Schema.String, Schema.Json.annotate({ "expected": "JSON value" }))]).annotate({ "description": "One closed staged-recovery episode.", "identifier": "CaptureEpisode" })
 export type LogPage = { readonly "dropped": boolean, readonly "entries": ReadonlyArray<LogEntry>, readonly "next": number } & { readonly [x: string]: Schema.Json }
@@ -473,8 +477,8 @@ export type RecentSessions = { readonly "sessions": ReadonlyArray<SessionSummary
 export const RecentSessions = Schema.StructWithRest(Schema.Struct({ "sessions": Schema.Array(SessionSummary).annotate({ "description": "Newest first. Bounded in memory and lost on a host restart — this is the last\nfew sessions, not a history." }) }), [Schema.Record(Schema.String, Schema.Json.annotate({ "expected": "JSON value" }))]).annotate({ "identifier": "RecentSessions" })
 export type HostSettingsState = { readonly "env_file": string, readonly "restart_pending": ReadonlyArray<string>, readonly "settings": ReadonlyArray<SettingState> } & { readonly [x: string]: Schema.Json }
 export const HostSettingsState = Schema.StructWithRest(Schema.Struct({ "env_file": Schema.String.annotate({ "description": "The file an operator edits to pin a setting.", "examples": ["/home/me/.config/punktfunk/host.env"] }), "restart_pending": Schema.Array(Schema.String).annotate({ "description": "Setting ids waiting for a restart." }), "settings": Schema.Array(SettingState).annotate({ "description": "Rows this host acts on, in page order." }) }), [Schema.Record(Schema.String, Schema.Json.annotate({ "expected": "JSON value" }))]).annotate({ "identifier": "HostSettingsState" })
-export type OperatorGameEntry = { readonly "description"?: string | null, readonly "developer"?: string | null, readonly "genres"?: ReadonlyArray<string>, readonly "platform"?: string | null, readonly "players"?: number | null, readonly "publisher"?: string | null, readonly "region"?: string | null, readonly "release_year"?: number | null, readonly "tags"?: ReadonlyArray<string>, readonly "art": Artwork, readonly "filled"?: { readonly [x: string]: string }, readonly "icon"?: string | null, readonly "id": string, readonly "ids"?: { readonly [x: string]: string }, readonly "install"?: null | Install, readonly "launch"?: null | LaunchSpec, readonly "on_window"?: OnWindow, readonly "overrides"?: null | GameOverrides, readonly "provider"?: string | null, readonly "role"?: GameRole, readonly "stats"?: null | EntryStats, readonly "store": string, readonly "title": string, readonly "hidden"?: boolean } & { readonly [x: string]: Schema.Json }
-export const OperatorGameEntry = Schema.StructWithRest(Schema.Struct({ "description": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null])), "developer": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null])), "genres": Schema.optionalKey(Schema.Array(Schema.String)), "platform": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null]).annotate({ "description": "`\"PS2\"`, `\"Xbox 360\"`, `\"SNES\"`, … Installed-store scanners stamp `\"PC\"`;\n`GET /library?platform=` filters on it (case-insensitive).", "examples": ["PS2"] })), "players": Schema.optionalKey(Schema.Union([Schema.Number.annotate({ "format": "int32" }).check(Schema.isInt().annotate({ "expected": "an integer" })).check(Schema.isGreaterThanOrEqualTo(0).annotate({ "expected": "a value greater than or equal to 0" })), Schema.Null])), "publisher": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null])), "region": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null])), "release_year": Schema.optionalKey(Schema.Union([Schema.Number.annotate({ "format": "int32" }).check(Schema.isInt().annotate({ "expected": "an integer" })).check(Schema.isGreaterThanOrEqualTo(0).annotate({ "expected": "a value greater than or equal to 0" })), Schema.Null]).annotate({ "description": "Year of first release — the granularity metadata sources agree on.", "examples": [2001] })), "tags": Schema.optionalKey(Schema.Array(Schema.String)), "art": Artwork, "filled": Schema.optionalKey(Schema.Record(Schema.String, Schema.String).annotate({ "description": "Where each borrowed value came from: art slot or meta field → source id, or `pick`\n([`PICK`]). Values the entry carried itself are absent. Not sent to paired clients." }).check(Schema.isPropertyNames(Schema.String).annotate({ "expected": "an object with property names matching the schema" }))), "icon": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null]).annotate({ "description": "Brand-mark token (`steam`, `heroic`) — never bytes or a URL. See [`is_icon_token`].\n\nThe art proxy serves raster only ([`art::local_art_bytes`] refuses SVG as\nscript-capable XML), so the mark stays a name the client already ships.", "examples": ["steam"] })), "id": Schema.String.annotate({ "description": "Stable, store-qualified id: `steam:<appid>` or `custom:<id>`.", "examples": ["steam:570"] }), "ids": Schema.optionalKey(Schema.Record(Schema.String, Schema.String).annotate({ "description": "Catalog ids a metadata source matches on (`steam`, `gog`, `libretro`, `sgdb` → value),\nset by the plugin that lists the entry. Not sent to paired clients." }).check(Schema.isPropertyNames(Schema.String).annotate({ "expected": "an object with property names matching the schema" }))), "install": Schema.optionalKey(Schema.Union([Schema.Null, Schema.suspend((): Schema.Codec<Install> => Install).annotate({ "description": "Whether the title's files are on this host. Absent means they are." })], { mode: "oneOf" })), "launch": Schema.optionalKey(Schema.Union([Schema.Null, LaunchSpec], { mode: "oneOf" })), "on_window": Schema.optionalKey(Schema.suspend((): Schema.Codec<OnWindow> => OnWindow).annotate({ "description": "Which workspace this title's windows open on, where the compositor can\nplace them ([`OnWindow`])." })), "overrides": Schema.optionalKey(Schema.Union([Schema.Null, Schema.suspend((): Schema.Codec<GameOverrides> => GameOverrides).annotate({ "description": "The stream settings this host sets for the title (`overrides.rs`), resolved: its own, a\nshared override's with that one's `name`, or its source's. Joined at read time." })], { mode: "oneOf" })), "provider": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null]).annotate({ "description": "Plugin that owns this entry. `None` only for operator-typed custom entries.\n`GET /library?provider=` filters on it." })), "role": Schema.optionalKey(GameRole), "stats": Schema.optionalKey(Schema.Union([Schema.Null, Schema.suspend((): Schema.Codec<EntryStats> => EntryStats).annotate({ "description": "Play stats, once this host has launched the title (`stats.rs`). Joined at read\ntime from `library-stats.json`, never stored on the entry." })], { mode: "oneOf" })), "store": Schema.String.annotate({ "description": "Which store surfaced it: `\"steam\"` or `\"custom\"`.", "examples": ["steam"] }), "title": Schema.String, "hidden": Schema.optionalKey(Schema.Boolean.annotate({ "description": "Set by [`set_entry_hidden`]. Omitted when false so the shape only grows for hidden titles." })) }), [Schema.Record(Schema.String, Schema.Json.annotate({ "expected": "JSON value" }))]).annotate({ "description": "A library entry plus the operator's view of it — whether they hid it.\n\nA field on [`GameEntry`] would leak onto every lane: `GET /library` returns\n`Vec<GameEntry>` except on the operator's lane, so a hidden flag cannot\nreach a paired client. `flatten` keeps the wire a plain entry plus one key.", "identifier": "OperatorGameEntry" })
+export type OperatorGameEntry = { readonly "description"?: string | null, readonly "developer"?: string | null, readonly "genres"?: ReadonlyArray<string>, readonly "platform"?: string | null, readonly "players"?: number | null, readonly "publisher"?: string | null, readonly "region"?: string | null, readonly "release_year"?: number | null, readonly "tags"?: ReadonlyArray<string>, readonly "art": Artwork, readonly "filled"?: { readonly [x: string]: string }, readonly "icon"?: string | null, readonly "id": string, readonly "ids"?: { readonly [x: string]: string }, readonly "install"?: null | Install, readonly "launch"?: null | LaunchSpec, readonly "on_window"?: OnWindow, readonly "overrides"?: null | GameOverrides, readonly "provider"?: string | null, readonly "role"?: GameRole, readonly "stats"?: null | EntryStats, readonly "store": string, readonly "title": string, readonly "hidden"?: boolean, readonly "profile"?: null | ProfileValues } & { readonly [x: string]: Schema.Json }
+export const OperatorGameEntry = Schema.StructWithRest(Schema.Struct({ "description": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null])), "developer": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null])), "genres": Schema.optionalKey(Schema.Array(Schema.String)), "platform": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null]).annotate({ "description": "`\"PS2\"`, `\"Xbox 360\"`, `\"SNES\"`, … Installed-store scanners stamp `\"PC\"`;\n`GET /library?platform=` filters on it (case-insensitive).", "examples": ["PS2"] })), "players": Schema.optionalKey(Schema.Union([Schema.Number.annotate({ "format": "int32" }).check(Schema.isInt().annotate({ "expected": "an integer" })).check(Schema.isGreaterThanOrEqualTo(0).annotate({ "expected": "a value greater than or equal to 0" })), Schema.Null])), "publisher": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null])), "region": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null])), "release_year": Schema.optionalKey(Schema.Union([Schema.Number.annotate({ "format": "int32" }).check(Schema.isInt().annotate({ "expected": "an integer" })).check(Schema.isGreaterThanOrEqualTo(0).annotate({ "expected": "a value greater than or equal to 0" })), Schema.Null]).annotate({ "description": "Year of first release — the granularity metadata sources agree on.", "examples": [2001] })), "tags": Schema.optionalKey(Schema.Array(Schema.String)), "art": Artwork, "filled": Schema.optionalKey(Schema.Record(Schema.String, Schema.String).annotate({ "description": "Where each borrowed value came from: art slot or meta field → source id, or `pick`\n([`PICK`]). Values the entry carried itself are absent. Not sent to paired clients." }).check(Schema.isPropertyNames(Schema.String).annotate({ "expected": "an object with property names matching the schema" }))), "icon": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null]).annotate({ "description": "Brand-mark token (`steam`, `heroic`) — never bytes or a URL. See [`is_icon_token`].\n\nThe art proxy serves raster only ([`art::local_art_bytes`] refuses SVG as\nscript-capable XML), so the mark stays a name the client already ships.", "examples": ["steam"] })), "id": Schema.String.annotate({ "description": "Stable, store-qualified id: `steam:<appid>` or `custom:<id>`.", "examples": ["steam:570"] }), "ids": Schema.optionalKey(Schema.Record(Schema.String, Schema.String).annotate({ "description": "Catalog ids a metadata source matches on (`steam`, `gog`, `libretro`, `sgdb` → value),\nset by the plugin that lists the entry. Not sent to paired clients." }).check(Schema.isPropertyNames(Schema.String).annotate({ "expected": "an object with property names matching the schema" }))), "install": Schema.optionalKey(Schema.Union([Schema.Null, Schema.suspend((): Schema.Codec<Install> => Install).annotate({ "description": "Whether the title's files are on this host. Absent means they are." })], { mode: "oneOf" })), "launch": Schema.optionalKey(Schema.Union([Schema.Null, LaunchSpec], { mode: "oneOf" })), "on_window": Schema.optionalKey(Schema.suspend((): Schema.Codec<OnWindow> => OnWindow).annotate({ "description": "Which workspace this title's windows open on, where the compositor can\nplace them ([`OnWindow`])." })), "overrides": Schema.optionalKey(Schema.Union([Schema.Null, Schema.suspend((): Schema.Codec<GameOverrides> => GameOverrides).annotate({ "description": "The stream settings this host sets for the title (`overrides.rs`), resolved: its own, a\nshared override's with that one's `name`, or its source's. Joined at read time." })], { mode: "oneOf" })), "provider": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null]).annotate({ "description": "Plugin that owns this entry. `None` only for operator-typed custom entries.\n`GET /library?provider=` filters on it." })), "role": Schema.optionalKey(GameRole), "stats": Schema.optionalKey(Schema.Union([Schema.Null, Schema.suspend((): Schema.Codec<EntryStats> => EntryStats).annotate({ "description": "Play stats, once this host has launched the title (`stats.rs`). Joined at read\ntime from `library-stats.json`, never stored on the entry." })], { mode: "oneOf" })), "store": Schema.String.annotate({ "description": "Which store surfaced it: `\"steam\"` or `\"custom\"`.", "examples": ["steam"] }), "title": Schema.String, "hidden": Schema.optionalKey(Schema.Boolean.annotate({ "description": "Set by [`set_entry_hidden`]. Omitted when false so the shape only grows for hidden titles.\nWith a profile in view (`as`), the profile hid it: a title the box hides is not listed." })), "profile": Schema.optionalKey(Schema.Union([Schema.Null, Schema.suspend((): Schema.Codec<ProfileValues> => ProfileValues).annotate({ "description": "With a profile in view, the values on this row that are the profile's own." })], { mode: "oneOf" })) }), [Schema.Record(Schema.String, Schema.Json.annotate({ "expected": "JSON value" }))]).annotate({ "description": "A library entry plus the operator's view of it — whether they hid it.\n\nA field on [`GameEntry`] would leak onto every lane: `GET /library` returns\n`Vec<GameEntry>` except on the operator's lane, so a hidden flag cannot\nreach a paired client. `flatten` keeps the wire a plain entry plus one key.", "identifier": "OperatorGameEntry" })
 export type CustomInput = { readonly "description"?: string | null, readonly "developer"?: string | null, readonly "genres"?: ReadonlyArray<string>, readonly "platform"?: string | null, readonly "players"?: number | null, readonly "publisher"?: string | null, readonly "region"?: string | null, readonly "release_year"?: number | null, readonly "tags"?: ReadonlyArray<string>, readonly "art"?: Artwork, readonly "audio"?: null | AudioPolicy, readonly "detect"?: null | DetectHint, readonly "icon"?: string | null, readonly "launch"?: null | LaunchSpec, readonly "on_window"?: null | OnWindow, readonly "prep"?: ReadonlyArray<PrepCmd> | null, readonly "role"?: GameRole, readonly "title": string } & { readonly [x: string]: Schema.Json }
 export const CustomInput = Schema.StructWithRest(Schema.Struct({ "description": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null])), "developer": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null])), "genres": Schema.optionalKey(Schema.Array(Schema.String)), "platform": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null]).annotate({ "description": "`\"PS2\"`, `\"Xbox 360\"`, `\"SNES\"`, … Installed-store scanners stamp `\"PC\"`;\n`GET /library?platform=` filters on it (case-insensitive).", "examples": ["PS2"] })), "players": Schema.optionalKey(Schema.Union([Schema.Number.annotate({ "format": "int32" }).check(Schema.isInt().annotate({ "expected": "an integer" })).check(Schema.isGreaterThanOrEqualTo(0).annotate({ "expected": "a value greater than or equal to 0" })), Schema.Null])), "publisher": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null])), "region": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null])), "release_year": Schema.optionalKey(Schema.Union([Schema.Number.annotate({ "format": "int32" }).check(Schema.isInt().annotate({ "expected": "an integer" })).check(Schema.isGreaterThanOrEqualTo(0).annotate({ "expected": "a value greater than or equal to 0" })), Schema.Null]).annotate({ "description": "Year of first release — the granularity metadata sources agree on.", "examples": [2001] })), "tags": Schema.optionalKey(Schema.Array(Schema.String)), "art": Schema.optionalKey(Artwork), "audio": Schema.optionalKey(Schema.Union([Schema.Null, Schema.suspend((): Schema.Codec<AudioPolicy> => AudioPolicy).annotate({ "description": "Absent on an update keeps the stored policy; `{\"sessions\":\"all\"}` clears it." })], { mode: "oneOf" })), "detect": Schema.optionalKey(Schema.Union([Schema.Null, Schema.suspend((): Schema.Codec<DetectHint> => DetectHint).annotate({ "description": "Absent on an update keeps the stored hint, as with `prep`." })], { mode: "oneOf" })), "icon": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null]).annotate({ "description": "Brand token. A hand-added \"Steam\" tile can look like one. See [`GameEntry::icon`]." })), "launch": Schema.optionalKey(Schema.Union([Schema.Null, LaunchSpec], { mode: "oneOf" })), "on_window": Schema.optionalKey(Schema.Union([Schema.Null, Schema.suspend((): Schema.Codec<OnWindow> => OnWindow).annotate({ "description": "Absent on an update keeps the stored placement, as with `prep`." })], { mode: "oneOf" })), "prep": Schema.optionalKey(Schema.Union([Schema.Array(PrepCmd), Schema.Null]).annotate({ "description": "Run as the host user; operator-privileged. See [`privileged_field`]. Absent on an\nupdate keeps the stored list: a writer that never read it must not clear it." })), "role": Schema.optionalKey(Schema.suspend((): Schema.Codec<GameRole> => GameRole).annotate({ "description": "A hand-added launcher tile is legal without installing the matching plugin." })), "title": Schema.String }), [Schema.Record(Schema.String, Schema.Json.annotate({ "expected": "JSON value" }))]).annotate({ "description": "Flattened [`GameMeta`]. Replaced wholesale on update — an edit must send every field it wants kept.", "identifier": "CustomInput" })
 export type CustomEntry = { readonly "description"?: string | null, readonly "developer"?: string | null, readonly "genres"?: ReadonlyArray<string>, readonly "platform"?: string | null, readonly "players"?: number | null, readonly "publisher"?: string | null, readonly "region"?: string | null, readonly "release_year"?: number | null, readonly "tags"?: ReadonlyArray<string>, readonly "art"?: Artwork, readonly "audio"?: null | AudioPolicy, readonly "detect"?: DetectHint, readonly "external_id"?: string | null, readonly "icon"?: string | null, readonly "id": string, readonly "ids"?: { readonly [x: string]: string }, readonly "install"?: null | Install, readonly "launch"?: null | LaunchSpec, readonly "on_window"?: OnWindow, readonly "prep"?: ReadonlyArray<PrepCmd>, readonly "provider"?: string | null, readonly "role"?: GameRole, readonly "store"?: string | null, readonly "title": string } & { readonly [x: string]: Schema.Json }
@@ -934,8 +938,10 @@ export type GetLibrary200 = ReadonlyArray<OperatorGameEntry>
 export const GetLibrary200 = Schema.Array(OperatorGameEntry)
 export type GetLibrary401 = ApiError
 export const GetLibrary401 = ApiError
-export type GetLibraryArtParams = { readonly "If-None-Match"?: string }
-export const GetLibraryArtParams = Schema.Struct({ "If-None-Match": Schema.optionalKey(Schema.String) })
+export type GetLibrary404 = ApiError
+export const GetLibrary404 = ApiError
+export type GetLibraryArtParams = { readonly "as"?: string, readonly "If-None-Match"?: string }
+export const GetLibraryArtParams = Schema.Struct({ "as": Schema.optionalKey(Schema.String), "If-None-Match": Schema.optionalKey(Schema.String) })
 export type GetLibraryArt401 = ApiError
 export const GetLibraryArt401 = ApiError
 export type GetLibraryArt404 = ApiError
@@ -978,6 +984,8 @@ export type DeleteCustomGame404 = ApiError
 export const DeleteCustomGame404 = ApiError
 export type DeleteCustomGame500 = ApiError
 export const DeleteCustomGame500 = ApiError
+export type SetLibraryEntryHiddenParams = { readonly "as"?: string }
+export const SetLibraryEntryHiddenParams = Schema.Struct({ "as": Schema.optionalKey(Schema.String) })
 export type SetLibraryEntryHiddenRequestJson = HiddenToggle
 export const SetLibraryEntryHiddenRequestJson = HiddenToggle
 export type SetLibraryEntryHidden200 = HiddenState
@@ -986,6 +994,8 @@ export type SetLibraryEntryHidden400 = ApiError
 export const SetLibraryEntryHidden400 = ApiError
 export type SetLibraryEntryHidden401 = ApiError
 export const SetLibraryEntryHidden401 = ApiError
+export type SetLibraryEntryHidden404 = ApiError
+export const SetLibraryEntryHidden404 = ApiError
 export type SetLibraryEntryHidden500 = ApiError
 export const SetLibraryEntryHidden500 = ApiError
 export type InstallLibraryEntry202 = Download
@@ -1062,10 +1072,16 @@ export type DeleteLibraryMetadata403 = ApiError
 export const DeleteLibraryMetadata403 = ApiError
 export type DeleteLibraryMetadata500 = ApiError
 export const DeleteLibraryMetadata500 = ApiError
+export type GetLibraryOverridesParams = { readonly "as"?: string }
+export const GetLibraryOverridesParams = Schema.Struct({ "as": Schema.optionalKey(Schema.String) })
 export type GetLibraryOverrides200 = OverridesDoc
 export const GetLibraryOverrides200 = OverridesDoc
 export type GetLibraryOverrides401 = ApiError
 export const GetLibraryOverrides401 = ApiError
+export type GetLibraryOverrides404 = ApiError
+export const GetLibraryOverrides404 = ApiError
+export type SetGameOverridesParams = { readonly "as"?: string }
+export const SetGameOverridesParams = Schema.Struct({ "as": Schema.optionalKey(Schema.String) })
 export type SetGameOverridesRequestJson = OverrideEntry
 export const SetGameOverridesRequestJson = OverrideEntry
 export type SetGameOverrides200 = OverrideEntry
@@ -1078,6 +1094,8 @@ export type SetGameOverrides404 = ApiError
 export const SetGameOverrides404 = ApiError
 export type SetGameOverrides500 = ApiError
 export const SetGameOverrides500 = ApiError
+export type CreateOverrideSetParams = { readonly "as"?: string }
+export const CreateOverrideSetParams = Schema.Struct({ "as": Schema.optionalKey(Schema.String) })
 export type CreateOverrideSetRequestJson = GameOverrides
 export const CreateOverrideSetRequestJson = GameOverrides
 export type CreateOverrideSet201 = OverrideSet
@@ -1086,10 +1104,14 @@ export type CreateOverrideSet400 = ApiError
 export const CreateOverrideSet400 = ApiError
 export type CreateOverrideSet401 = ApiError
 export const CreateOverrideSet401 = ApiError
+export type CreateOverrideSet404 = ApiError
+export const CreateOverrideSet404 = ApiError
 export type CreateOverrideSet409 = ApiError
 export const CreateOverrideSet409 = ApiError
 export type CreateOverrideSet500 = ApiError
 export const CreateOverrideSet500 = ApiError
+export type UpdateOverrideSetParams = { readonly "as"?: string }
+export const UpdateOverrideSetParams = Schema.Struct({ "as": Schema.optionalKey(Schema.String) })
 export type UpdateOverrideSetRequestJson = OverrideSetPatch
 export const UpdateOverrideSetRequestJson = OverrideSetPatch
 export type UpdateOverrideSet200 = OverrideSet
@@ -1104,6 +1126,8 @@ export type UpdateOverrideSet409 = ApiError
 export const UpdateOverrideSet409 = ApiError
 export type UpdateOverrideSet500 = ApiError
 export const UpdateOverrideSet500 = ApiError
+export type DeleteOverrideSetParams = { readonly "as"?: string }
+export const DeleteOverrideSetParams = Schema.Struct({ "as": Schema.optionalKey(Schema.String) })
 export type DeleteOverrideSet200 = OverrideUsers
 export const DeleteOverrideSet200 = OverrideUsers
 export type DeleteOverrideSet401 = ApiError
@@ -1112,6 +1136,8 @@ export type DeleteOverrideSet404 = ApiError
 export const DeleteOverrideSet404 = ApiError
 export type DeleteOverrideSet500 = ApiError
 export const DeleteOverrideSet500 = ApiError
+export type SetSourceOverridesParams = { readonly "as"?: string }
+export const SetSourceOverridesParams = Schema.Struct({ "as": Schema.optionalKey(Schema.String) })
 export type SetSourceOverridesRequestJson = OverrideEntry
 export const SetSourceOverridesRequestJson = OverrideEntry
 export type SetSourceOverrides200 = OverrideEntry
@@ -1132,6 +1158,10 @@ export type GetLibraryPage400 = ApiError
 export const GetLibraryPage400 = ApiError
 export type GetLibraryPage401 = ApiError
 export const GetLibraryPage401 = ApiError
+export type GetLibraryPage404 = ApiError
+export const GetLibraryPage404 = ApiError
+export type SetLibraryArtPickParams = { readonly "as"?: string }
+export const SetLibraryArtPickParams = Schema.Struct({ "as": Schema.optionalKey(Schema.String) })
 export type SetLibraryArtPickRequestJson = ArtPickInput
 export const SetLibraryArtPickRequestJson = ArtPickInput
 export type SetLibraryArtPick200 = Artwork
@@ -1140,6 +1170,8 @@ export type SetLibraryArtPick400 = ApiError
 export const SetLibraryArtPick400 = ApiError
 export type SetLibraryArtPick401 = ApiError
 export const SetLibraryArtPick401 = ApiError
+export type SetLibraryArtPick404 = ApiError
+export const SetLibraryArtPick404 = ApiError
 export type SetLibraryArtPick500 = ApiError
 export const SetLibraryArtPick500 = ApiError
 export type ReconcileProviderEntriesParams = { readonly "store"?: string }
@@ -1184,10 +1216,16 @@ export type ReportProviderRunning401 = ApiError
 export const ReportProviderRunning401 = ApiError
 export type ReportProviderRunning403 = ApiError
 export const ReportProviderRunning403 = ApiError
+export type ListLibraryScannersParams = { readonly "as"?: string }
+export const ListLibraryScannersParams = Schema.Struct({ "as": Schema.optionalKey(Schema.String) })
 export type ListLibraryScanners200 = ReadonlyArray<ScannerInfo>
 export const ListLibraryScanners200 = Schema.Array(ScannerInfo)
 export type ListLibraryScanners401 = ApiError
 export const ListLibraryScanners401 = ApiError
+export type ListLibraryScanners404 = ApiError
+export const ListLibraryScanners404 = ApiError
+export type SetLibraryScannerParams = { readonly "as"?: string }
+export const SetLibraryScannerParams = Schema.Struct({ "as": Schema.optionalKey(Schema.String) })
 export type SetLibraryScannerRequestJson = ScannerToggle
 export const SetLibraryScannerRequestJson = ScannerToggle
 export type SetLibraryScanner200 = ReadonlyArray<ScannerInfo>
@@ -1594,10 +1632,18 @@ export type GetRecentSessions200 = RecentSessions
 export const GetRecentSessions200 = RecentSessions
 export type GetRecentSessions401 = ApiError
 export const GetRecentSessions401 = ApiError
+export type GetSessionSettingsParams = { readonly "as"?: string }
+export const GetSessionSettingsParams = Schema.Struct({ "as": Schema.optionalKey(Schema.String) })
 export type GetSessionSettings200 = SessionSettingsState
 export const GetSessionSettings200 = SessionSettingsState
 export type GetSessionSettings401 = ApiError
 export const GetSessionSettings401 = ApiError
+export type GetSessionSettings404 = ApiError
+export const GetSessionSettings404 = ApiError
+export type GetSessionSettings409 = ApiError
+export const GetSessionSettings409 = ApiError
+export type SetSessionSettingsParams = { readonly "as"?: string }
+export const SetSessionSettingsParams = Schema.Struct({ "as": Schema.optionalKey(Schema.String) })
 export type SetSessionSettingsRequestJson = SessionSettings
 export const SetSessionSettingsRequestJson = SessionSettings
 export type SetSessionSettings200 = SessionSettingsState
@@ -1606,8 +1652,30 @@ export type SetSessionSettings400 = ApiError
 export const SetSessionSettings400 = ApiError
 export type SetSessionSettings401 = ApiError
 export const SetSessionSettings401 = ApiError
+export type SetSessionSettings403 = ApiError
+export const SetSessionSettings403 = ApiError
+export type SetSessionSettings404 = ApiError
+export const SetSessionSettings404 = ApiError
+export type SetSessionSettings409 = ApiError
+export const SetSessionSettings409 = ApiError
 export type SetSessionSettings500 = ApiError
 export const SetSessionSettings500 = ApiError
+export type ClearSessionSettingsParams = { readonly "as": string }
+export const ClearSessionSettingsParams = Schema.Struct({ "as": Schema.String })
+export type ClearSessionSettings200 = SessionSettingsState
+export const ClearSessionSettings200 = SessionSettingsState
+export type ClearSessionSettings400 = ApiError
+export const ClearSessionSettings400 = ApiError
+export type ClearSessionSettings401 = ApiError
+export const ClearSessionSettings401 = ApiError
+export type ClearSessionSettings403 = ApiError
+export const ClearSessionSettings403 = ApiError
+export type ClearSessionSettings404 = ApiError
+export const ClearSessionSettings404 = ApiError
+export type ClearSessionSettings409 = ApiError
+export const ClearSessionSettings409 = ApiError
+export type ClearSessionSettings500 = ApiError
+export const ClearSessionSettings500 = ApiError
 export type StopOneSession401 = ApiError
 export const StopOneSession401 = ApiError
 export type StopOneSession404 = ApiError
@@ -2479,11 +2547,13 @@ export const make = (
       withResponse(options?.config)(HttpClientResponse.matchStatus({
       "2xx": decodeSuccess(GetLibrary200),
       "401": decodeError("GetLibrary401", GetLibrary401),
+      "404": decodeError("GetLibrary404", GetLibrary404),
       orElse: unexpectedStatus
     }))
     ),
     "getLibraryArt": (id, kind, options: Parameters<Punktfunk["getLibraryArt"]>[2]) => __makePathRequest(HttpClientRequest.get, [id, kind], () => "/api/v1/library/art/" + __encodePathParam(id) + "/" + __encodePathParam(kind) + "").pipe(
     Effect.flatMap((request) => request.pipe(
+      HttpClientRequest.setUrlParams({ "as": options?.params?.["as"] as any }),
       HttpClientRequest.setHeaders({ "If-None-Match": options?.params?.["If-None-Match"] ?? undefined }),
       withResponse(options?.config)(HttpClientResponse.matchStatus({
       "200": decodeBinary,
@@ -2496,6 +2566,7 @@ export const make = (
   ),
     "getLibraryArtStream": (id, kind, options) => Stream.unwrap(__makePathRequest(HttpClientRequest.get, [id, kind], () => "/api/v1/library/art/" + __encodePathParam(id) + "/" + __encodePathParam(kind) + "").pipe(
     Effect.map((request) => request.pipe(
+      HttpClientRequest.setUrlParams({ "as": options?.params?.["as"] as any }),
       HttpClientRequest.setHeaders({ "If-None-Match": options?.params?.["If-None-Match"] ?? undefined }),
       binaryRequest
     ))
@@ -2548,11 +2619,13 @@ export const make = (
   ),
     "setLibraryEntryHidden": (id, options: Parameters<Punktfunk["setLibraryEntryHidden"]>[1]) => __makePathRequest(HttpClientRequest.put, [id], () => "/api/v1/library/hidden/" + __encodePathParam(id) + "").pipe(
     Effect.flatMap((request) => request.pipe(
+      HttpClientRequest.setUrlParams({ "as": options.params?.["as"] as any }),
       HttpClientRequest.bodyJsonUnsafe(options.payload),
       withResponse(options.config)(HttpClientResponse.matchStatus({
       "2xx": decodeSuccess(SetLibraryEntryHidden200),
       "400": decodeError("SetLibraryEntryHidden400", SetLibraryEntryHidden400),
       "401": decodeError("SetLibraryEntryHidden401", SetLibraryEntryHidden401),
+      "404": decodeError("SetLibraryEntryHidden404", SetLibraryEntryHidden404),
       "500": decodeError("SetLibraryEntryHidden500", SetLibraryEntryHidden500),
       orElse: unexpectedStatus
     }))
@@ -2651,14 +2724,17 @@ export const make = (
     ))
   ),
     "getLibraryOverrides": (options: Parameters<Punktfunk["getLibraryOverrides"]>[0]) => HttpClientRequest.get("/api/v1/library/overrides").pipe(
+      HttpClientRequest.setUrlParams({ "as": options?.params?.["as"] as any }),
       withResponse(options?.config)(HttpClientResponse.matchStatus({
       "2xx": decodeSuccess(GetLibraryOverrides200),
       "401": decodeError("GetLibraryOverrides401", GetLibraryOverrides401),
+      "404": decodeError("GetLibraryOverrides404", GetLibraryOverrides404),
       orElse: unexpectedStatus
     }))
     ),
     "setGameOverrides": (id, options: Parameters<Punktfunk["setGameOverrides"]>[1]) => __makePathRequest(HttpClientRequest.put, [id], () => "/api/v1/library/overrides/games/" + __encodePathParam(id) + "").pipe(
     Effect.flatMap((request) => request.pipe(
+      HttpClientRequest.setUrlParams({ "as": options.params?.["as"] as any }),
       HttpClientRequest.bodyJsonUnsafe(options.payload),
       withResponse(options.config)(HttpClientResponse.matchStatus({
       "2xx": decodeSuccess(SetGameOverrides200),
@@ -2671,11 +2747,13 @@ export const make = (
     ))
   ),
     "createOverrideSet": (options: Parameters<Punktfunk["createOverrideSet"]>[0]) => HttpClientRequest.post("/api/v1/library/overrides/sets").pipe(
+      HttpClientRequest.setUrlParams({ "as": options.params?.["as"] as any }),
       HttpClientRequest.bodyJsonUnsafe(options.payload),
       withResponse(options.config)(HttpClientResponse.matchStatus({
       "2xx": decodeSuccess(CreateOverrideSet201),
       "400": decodeError("CreateOverrideSet400", CreateOverrideSet400),
       "401": decodeError("CreateOverrideSet401", CreateOverrideSet401),
+      "404": decodeError("CreateOverrideSet404", CreateOverrideSet404),
       "409": decodeError("CreateOverrideSet409", CreateOverrideSet409),
       "500": decodeError("CreateOverrideSet500", CreateOverrideSet500),
       orElse: unexpectedStatus
@@ -2683,6 +2761,7 @@ export const make = (
     ),
     "updateOverrideSet": (id, options: Parameters<Punktfunk["updateOverrideSet"]>[1]) => __makePathRequest(HttpClientRequest.put, [id], () => "/api/v1/library/overrides/sets/" + __encodePathParam(id) + "").pipe(
     Effect.flatMap((request) => request.pipe(
+      HttpClientRequest.setUrlParams({ "as": options.params?.["as"] as any }),
       HttpClientRequest.bodyJsonUnsafe(options.payload),
       withResponse(options.config)(HttpClientResponse.matchStatus({
       "2xx": decodeSuccess(UpdateOverrideSet200),
@@ -2697,6 +2776,7 @@ export const make = (
   ),
     "deleteOverrideSet": (id, options: Parameters<Punktfunk["deleteOverrideSet"]>[1]) => __makePathRequest(HttpClientRequest.delete, [id], () => "/api/v1/library/overrides/sets/" + __encodePathParam(id) + "").pipe(
     Effect.flatMap((request) => request.pipe(
+      HttpClientRequest.setUrlParams({ "as": options?.params?.["as"] as any }),
       withResponse(options?.config)(HttpClientResponse.matchStatus({
       "2xx": decodeSuccess(DeleteOverrideSet200),
       "401": decodeError("DeleteOverrideSet401", DeleteOverrideSet401),
@@ -2708,6 +2788,7 @@ export const make = (
   ),
     "setSourceOverrides": (source, options: Parameters<Punktfunk["setSourceOverrides"]>[1]) => __makePathRequest(HttpClientRequest.put, [source], () => "/api/v1/library/overrides/sources/" + __encodePathParam(source) + "").pipe(
     Effect.flatMap((request) => request.pipe(
+      HttpClientRequest.setUrlParams({ "as": options.params?.["as"] as any }),
       HttpClientRequest.bodyJsonUnsafe(options.payload),
       withResponse(options.config)(HttpClientResponse.matchStatus({
       "2xx": decodeSuccess(SetSourceOverrides200),
@@ -2725,16 +2806,19 @@ export const make = (
       "2xx": decodeSuccess(GetLibraryPage200),
       "400": decodeError("GetLibraryPage400", GetLibraryPage400),
       "401": decodeError("GetLibraryPage401", GetLibraryPage401),
+      "404": decodeError("GetLibraryPage404", GetLibraryPage404),
       orElse: unexpectedStatus
     }))
     ),
     "setLibraryArtPick": (id, options: Parameters<Punktfunk["setLibraryArtPick"]>[1]) => __makePathRequest(HttpClientRequest.put, [id], () => "/api/v1/library/picks/" + __encodePathParam(id) + "").pipe(
     Effect.flatMap((request) => request.pipe(
+      HttpClientRequest.setUrlParams({ "as": options.params?.["as"] as any }),
       HttpClientRequest.bodyJsonUnsafe(options.payload),
       withResponse(options.config)(HttpClientResponse.matchStatus({
       "2xx": decodeSuccess(SetLibraryArtPick200),
       "400": decodeError("SetLibraryArtPick400", SetLibraryArtPick400),
       "401": decodeError("SetLibraryArtPick401", SetLibraryArtPick401),
+      "404": decodeError("SetLibraryArtPick404", SetLibraryArtPick404),
       "500": decodeError("SetLibraryArtPick500", SetLibraryArtPick500),
       orElse: unexpectedStatus
     }))
@@ -2790,14 +2874,17 @@ export const make = (
     ))
   ),
     "listLibraryScanners": (options: Parameters<Punktfunk["listLibraryScanners"]>[0]) => HttpClientRequest.get("/api/v1/library/scanners").pipe(
+      HttpClientRequest.setUrlParams({ "as": options?.params?.["as"] as any }),
       withResponse(options?.config)(HttpClientResponse.matchStatus({
       "2xx": decodeSuccess(ListLibraryScanners200),
       "401": decodeError("ListLibraryScanners401", ListLibraryScanners401),
+      "404": decodeError("ListLibraryScanners404", ListLibraryScanners404),
       orElse: unexpectedStatus
     }))
     ),
     "setLibraryScanner": (id, options: Parameters<Punktfunk["setLibraryScanner"]>[1]) => __makePathRequest(HttpClientRequest.put, [id], () => "/api/v1/library/scanners/" + __encodePathParam(id) + "").pipe(
     Effect.flatMap((request) => request.pipe(
+      HttpClientRequest.setUrlParams({ "as": options.params?.["as"] as any }),
       HttpClientRequest.bodyJsonUnsafe(options.payload),
       withResponse(options.config)(HttpClientResponse.matchStatus({
       "2xx": decodeSuccess(SetLibraryScanner200),
@@ -3329,19 +3416,39 @@ export const make = (
     }))
     ),
     "getSessionSettings": (options: Parameters<Punktfunk["getSessionSettings"]>[0]) => HttpClientRequest.get("/api/v1/session/settings").pipe(
+      HttpClientRequest.setUrlParams({ "as": options?.params?.["as"] as any }),
       withResponse(options?.config)(HttpClientResponse.matchStatus({
       "2xx": decodeSuccess(GetSessionSettings200),
       "401": decodeError("GetSessionSettings401", GetSessionSettings401),
+      "404": decodeError("GetSessionSettings404", GetSessionSettings404),
+      "409": decodeError("GetSessionSettings409", GetSessionSettings409),
       orElse: unexpectedStatus
     }))
     ),
     "setSessionSettings": (options: Parameters<Punktfunk["setSessionSettings"]>[0]) => HttpClientRequest.put("/api/v1/session/settings").pipe(
+      HttpClientRequest.setUrlParams({ "as": options.params?.["as"] as any }),
       HttpClientRequest.bodyJsonUnsafe(options.payload),
       withResponse(options.config)(HttpClientResponse.matchStatus({
       "2xx": decodeSuccess(SetSessionSettings200),
       "400": decodeError("SetSessionSettings400", SetSessionSettings400),
       "401": decodeError("SetSessionSettings401", SetSessionSettings401),
+      "403": decodeError("SetSessionSettings403", SetSessionSettings403),
+      "404": decodeError("SetSessionSettings404", SetSessionSettings404),
+      "409": decodeError("SetSessionSettings409", SetSessionSettings409),
       "500": decodeError("SetSessionSettings500", SetSessionSettings500),
+      orElse: unexpectedStatus
+    }))
+    ),
+    "clearSessionSettings": (options: Parameters<Punktfunk["clearSessionSettings"]>[0]) => HttpClientRequest.delete("/api/v1/session/settings").pipe(
+      HttpClientRequest.setUrlParams({ "as": options.params["as"] as any }),
+      withResponse(options.config)(HttpClientResponse.matchStatus({
+      "2xx": decodeSuccess(ClearSessionSettings200),
+      "400": decodeError("ClearSessionSettings400", ClearSessionSettings400),
+      "401": decodeError("ClearSessionSettings401", ClearSessionSettings401),
+      "403": decodeError("ClearSessionSettings403", ClearSessionSettings403),
+      "404": decodeError("ClearSessionSettings404", ClearSessionSettings404),
+      "409": decodeError("ClearSessionSettings409", ClearSessionSettings409),
+      "500": decodeError("ClearSessionSettings500", ClearSessionSettings500),
       orElse: unexpectedStatus
     }))
     ),
@@ -4107,15 +4214,17 @@ readonly "getHostTheme": {
   /**
 * Plugin-synced entries plus custom ones. Art the host can serve is rewritten to this API's
 * art proxy, local paths and remote URLs alike; a URL the proxy already refused passes
-* through. `?provider=` / `?platform=` (case-insensitive) narrow. `?as=` names the
-* asking device's profile: each title it has launched carries its own numbers in `stats.mine`.
+* through. `?provider=` / `?platform=` (case-insensitive) narrow. `?as=` names a profile: the
+* library as it plays it, the box's with the profile's own layer on top, and each title it has
+* launched carries its own numbers in `stats.mine`.
 * 
-* The operator lane sees hidden titles (`hidden: true`) so the console can un-hide them.
-* Every other lane is filtered upstream and cannot tell they exist.
+* The operator lane sees hidden titles (`hidden: true`) so the console can un-hide them; with
+* `as`, those the profile hides, and none the box hides. Every other lane is filtered upstream
+* and cannot tell they exist.
 */
 readonly "getLibrary": {
-    <Config extends OperationConfig | undefined = undefined>(options: { readonly params?: typeof GetLibraryParams.Encoded | undefined; readonly config: Config }): Effect.Effect<WithOptionalResponse<typeof GetLibrary200.Type, Config>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"GetLibrary401", typeof GetLibrary401.Type>>;
-    <Config extends OperationConfig | undefined = undefined>(options: { readonly params?: typeof GetLibraryParams.Encoded | undefined; readonly config?: Config | undefined } | undefined): Effect.Effect<WithOptionalResponse<typeof GetLibrary200.Type, Config | undefined>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"GetLibrary401", typeof GetLibrary401.Type>>;
+    <Config extends OperationConfig | undefined = undefined>(options: { readonly params?: typeof GetLibraryParams.Encoded | undefined; readonly config: Config }): Effect.Effect<WithOptionalResponse<typeof GetLibrary200.Type, Config>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"GetLibrary401", typeof GetLibrary401.Type> | PunktfunkError<"GetLibrary404", typeof GetLibrary404.Type>>;
+    <Config extends OperationConfig | undefined = undefined>(options: { readonly params?: typeof GetLibraryParams.Encoded | undefined; readonly config?: Config | undefined } | undefined): Effect.Effect<WithOptionalResponse<typeof GetLibrary200.Type, Config | undefined>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"GetLibrary401", typeof GetLibrary401.Type> | PunktfunkError<"GetLibrary404", typeof GetLibrary404.Type>>;
   }
   /**
 * Resolves `kind` (`portrait` | `hero` | `logo` | `header`) for a catalog id and returns the
@@ -4124,7 +4233,8 @@ readonly "getLibrary": {
 * can try the next candidate, and so is a URL the fetch refused — `GET /library` advertises
 * that one verbatim again. The response carries `Cache-Control` and an `ETag` of the bytes; a
 * request whose `If-None-Match` names that tag gets 304 with no body. On a Linux door the
-* covers are in the owner's home, and the owner's host serves them while it runs.
+* covers are in the owner's home, and the owner's host serves them while it runs. With `as`,
+* the art as that profile sees it: its own picks first.
 */
 readonly "getLibraryArt": {
     <Config extends OperationConfig | undefined = undefined>(id: string, kind: string, options: { readonly params?: typeof GetLibraryArtParams.Encoded | undefined; readonly config: Config }): Effect.Effect<WithOptionalResponse<Uint8Array | void, Config>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"GetLibraryArt401", typeof GetLibraryArt401.Type> | PunktfunkError<"GetLibraryArt404", typeof GetLibraryArt404.Type>>;
@@ -4137,7 +4247,8 @@ readonly "getLibraryArt": {
 * can try the next candidate, and so is a URL the fetch refused — `GET /library` advertises
 * that one verbatim again. The response carries `Cache-Control` and an `ETag` of the bytes; a
 * request whose `If-None-Match` names that tag gets 304 with no body. On a Linux door the
-* covers are in the owner's home, and the owner's host serves them while it runs.
+* covers are in the owner's home, and the owner's host serves them while it runs. With `as`,
+* the art as that profile sees it: its own picks first.
 */
 readonly "getLibraryArtStream": (id: string, kind: string, options: { readonly params?: typeof GetLibraryArtParams.Encoded | undefined } | undefined) => Stream.Stream<Uint8Array, HttpClientError.HttpClientError>
   /**
@@ -4167,11 +4278,12 @@ readonly "getCustomGame": {
 * Curation, not access control: the title leaves every play surface and launch resolution
 * but is not deleted. The operator console still lists it (`hidden: true`) so it can return.
 * The id is not required to exist now — a plugin mid-sync or an unmounted drive would
-* otherwise refuse a choice that should stick. Emits `library.changed` only on a real change.
+* otherwise refuse a choice that should stick. With `as`, the hide is that profile's own; it
+* cannot bring back a title the box hides. Emits `library.changed` only on a real change.
 */
 readonly "setLibraryEntryHidden": {
-    <Config extends OperationConfig | undefined = undefined>(id: string, options: { readonly payload: typeof SetLibraryEntryHiddenRequestJson.Encoded; readonly config: Config }): Effect.Effect<WithOptionalResponse<typeof SetLibraryEntryHidden200.Type, Config>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"SetLibraryEntryHidden400", typeof SetLibraryEntryHidden400.Type> | PunktfunkError<"SetLibraryEntryHidden401", typeof SetLibraryEntryHidden401.Type> | PunktfunkError<"SetLibraryEntryHidden500", typeof SetLibraryEntryHidden500.Type>>;
-    <Config extends OperationConfig | undefined = undefined>(id: string, options: { readonly payload: typeof SetLibraryEntryHiddenRequestJson.Encoded; readonly config?: Config | undefined }): Effect.Effect<WithOptionalResponse<typeof SetLibraryEntryHidden200.Type, Config | undefined>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"SetLibraryEntryHidden400", typeof SetLibraryEntryHidden400.Type> | PunktfunkError<"SetLibraryEntryHidden401", typeof SetLibraryEntryHidden401.Type> | PunktfunkError<"SetLibraryEntryHidden500", typeof SetLibraryEntryHidden500.Type>>;
+    <Config extends OperationConfig | undefined = undefined>(id: string, options: { readonly params?: typeof SetLibraryEntryHiddenParams.Encoded | undefined; readonly payload: typeof SetLibraryEntryHiddenRequestJson.Encoded; readonly config: Config }): Effect.Effect<WithOptionalResponse<typeof SetLibraryEntryHidden200.Type, Config>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"SetLibraryEntryHidden400", typeof SetLibraryEntryHidden400.Type> | PunktfunkError<"SetLibraryEntryHidden401", typeof SetLibraryEntryHidden401.Type> | PunktfunkError<"SetLibraryEntryHidden404", typeof SetLibraryEntryHidden404.Type> | PunktfunkError<"SetLibraryEntryHidden500", typeof SetLibraryEntryHidden500.Type>>;
+    <Config extends OperationConfig | undefined = undefined>(id: string, options: { readonly params?: typeof SetLibraryEntryHiddenParams.Encoded | undefined; readonly payload: typeof SetLibraryEntryHiddenRequestJson.Encoded; readonly config?: Config | undefined }): Effect.Effect<WithOptionalResponse<typeof SetLibraryEntryHidden200.Type, Config | undefined>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"SetLibraryEntryHidden400", typeof SetLibraryEntryHidden400.Type> | PunktfunkError<"SetLibraryEntryHidden401", typeof SetLibraryEntryHidden401.Type> | PunktfunkError<"SetLibraryEntryHidden404", typeof SetLibraryEntryHidden404.Type> | PunktfunkError<"SetLibraryEntryHidden500", typeof SetLibraryEntryHidden500.Type>>;
   }
   /**
 * Asks the plugin that lists the title to download it, or to resume a paused download. The
@@ -4243,52 +4355,58 @@ readonly "deleteLibraryMetadata": {
   }
   /**
 * The shared overrides, each game's entry and each source's, as `library-overrides.json`
-* holds them. `GET /library` carries what each title resolves to.
+* holds them. `GET /library` carries what each title resolves to. With `as`, the profile's own
+* file: where it has an entry for a game or its source, that entry wins over the box's.
 */
 readonly "getLibraryOverrides": {
-    <Config extends OperationConfig | undefined = undefined>(options: { readonly config: Config }): Effect.Effect<WithOptionalResponse<typeof GetLibraryOverrides200.Type, Config>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"GetLibraryOverrides401", typeof GetLibraryOverrides401.Type>>;
-    <Config extends OperationConfig | undefined = undefined>(options: { readonly config?: Config | undefined } | undefined): Effect.Effect<WithOptionalResponse<typeof GetLibraryOverrides200.Type, Config | undefined>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"GetLibraryOverrides401", typeof GetLibraryOverrides401.Type>>;
+    <Config extends OperationConfig | undefined = undefined>(options: { readonly params?: typeof GetLibraryOverridesParams.Encoded | undefined; readonly config: Config }): Effect.Effect<WithOptionalResponse<typeof GetLibraryOverrides200.Type, Config>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"GetLibraryOverrides401", typeof GetLibraryOverrides401.Type> | PunktfunkError<"GetLibraryOverrides404", typeof GetLibraryOverrides404.Type>>;
+    <Config extends OperationConfig | undefined = undefined>(options: { readonly params?: typeof GetLibraryOverridesParams.Encoded | undefined; readonly config?: Config | undefined } | undefined): Effect.Effect<WithOptionalResponse<typeof GetLibraryOverrides200.Type, Config | undefined>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"GetLibraryOverrides401", typeof GetLibraryOverrides401.Type> | PunktfunkError<"GetLibraryOverrides404", typeof GetLibraryOverrides404.Type>>;
   }
   /**
 * `{ "set": id }` points the game at a shared override; fields alone are its own values;
 * `{ "none": true }` leaves it to the device, whatever the source sets; `{}` clears its entry,
 * and the game takes its source's. The id is not required to exist now, as with hiding.
-* Emits `library.changed`.
+* With `as`, the entry is that profile's own and `set` may name the box's shared override or
+* the profile's; `{}` hands the game back to the box's entry. Emits `library.changed`.
 */
 readonly "setGameOverrides": {
-    <Config extends OperationConfig | undefined = undefined>(id: string, options: { readonly payload: typeof SetGameOverridesRequestJson.Encoded; readonly config: Config }): Effect.Effect<WithOptionalResponse<typeof SetGameOverrides200.Type, Config>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"SetGameOverrides400", typeof SetGameOverrides400.Type> | PunktfunkError<"SetGameOverrides401", typeof SetGameOverrides401.Type> | PunktfunkError<"SetGameOverrides404", typeof SetGameOverrides404.Type> | PunktfunkError<"SetGameOverrides500", typeof SetGameOverrides500.Type>>;
-    <Config extends OperationConfig | undefined = undefined>(id: string, options: { readonly payload: typeof SetGameOverridesRequestJson.Encoded; readonly config?: Config | undefined }): Effect.Effect<WithOptionalResponse<typeof SetGameOverrides200.Type, Config | undefined>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"SetGameOverrides400", typeof SetGameOverrides400.Type> | PunktfunkError<"SetGameOverrides401", typeof SetGameOverrides401.Type> | PunktfunkError<"SetGameOverrides404", typeof SetGameOverrides404.Type> | PunktfunkError<"SetGameOverrides500", typeof SetGameOverrides500.Type>>;
+    <Config extends OperationConfig | undefined = undefined>(id: string, options: { readonly params?: typeof SetGameOverridesParams.Encoded | undefined; readonly payload: typeof SetGameOverridesRequestJson.Encoded; readonly config: Config }): Effect.Effect<WithOptionalResponse<typeof SetGameOverrides200.Type, Config>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"SetGameOverrides400", typeof SetGameOverrides400.Type> | PunktfunkError<"SetGameOverrides401", typeof SetGameOverrides401.Type> | PunktfunkError<"SetGameOverrides404", typeof SetGameOverrides404.Type> | PunktfunkError<"SetGameOverrides500", typeof SetGameOverrides500.Type>>;
+    <Config extends OperationConfig | undefined = undefined>(id: string, options: { readonly params?: typeof SetGameOverridesParams.Encoded | undefined; readonly payload: typeof SetGameOverridesRequestJson.Encoded; readonly config?: Config | undefined }): Effect.Effect<WithOptionalResponse<typeof SetGameOverrides200.Type, Config | undefined>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"SetGameOverrides400", typeof SetGameOverrides400.Type> | PunktfunkError<"SetGameOverrides401", typeof SetGameOverrides401.Type> | PunktfunkError<"SetGameOverrides404", typeof SetGameOverrides404.Type> | PunktfunkError<"SetGameOverrides500", typeof SetGameOverrides500.Type>>;
   }
   /**
 * A named set of stream settings that games and sources point at. The host assigns its id.
+* With `as`, it is that profile's own.
 */
 readonly "createOverrideSet": {
-    <Config extends OperationConfig | undefined = undefined>(options: { readonly payload: typeof CreateOverrideSetRequestJson.Encoded; readonly config: Config }): Effect.Effect<WithOptionalResponse<typeof CreateOverrideSet201.Type, Config>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"CreateOverrideSet400", typeof CreateOverrideSet400.Type> | PunktfunkError<"CreateOverrideSet401", typeof CreateOverrideSet401.Type> | PunktfunkError<"CreateOverrideSet409", typeof CreateOverrideSet409.Type> | PunktfunkError<"CreateOverrideSet500", typeof CreateOverrideSet500.Type>>;
-    <Config extends OperationConfig | undefined = undefined>(options: { readonly payload: typeof CreateOverrideSetRequestJson.Encoded; readonly config?: Config | undefined }): Effect.Effect<WithOptionalResponse<typeof CreateOverrideSet201.Type, Config | undefined>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"CreateOverrideSet400", typeof CreateOverrideSet400.Type> | PunktfunkError<"CreateOverrideSet401", typeof CreateOverrideSet401.Type> | PunktfunkError<"CreateOverrideSet409", typeof CreateOverrideSet409.Type> | PunktfunkError<"CreateOverrideSet500", typeof CreateOverrideSet500.Type>>;
+    <Config extends OperationConfig | undefined = undefined>(options: { readonly params?: typeof CreateOverrideSetParams.Encoded | undefined; readonly payload: typeof CreateOverrideSetRequestJson.Encoded; readonly config: Config }): Effect.Effect<WithOptionalResponse<typeof CreateOverrideSet201.Type, Config>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"CreateOverrideSet400", typeof CreateOverrideSet400.Type> | PunktfunkError<"CreateOverrideSet401", typeof CreateOverrideSet401.Type> | PunktfunkError<"CreateOverrideSet404", typeof CreateOverrideSet404.Type> | PunktfunkError<"CreateOverrideSet409", typeof CreateOverrideSet409.Type> | PunktfunkError<"CreateOverrideSet500", typeof CreateOverrideSet500.Type>>;
+    <Config extends OperationConfig | undefined = undefined>(options: { readonly params?: typeof CreateOverrideSetParams.Encoded | undefined; readonly payload: typeof CreateOverrideSetRequestJson.Encoded; readonly config?: Config | undefined }): Effect.Effect<WithOptionalResponse<typeof CreateOverrideSet201.Type, Config | undefined>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"CreateOverrideSet400", typeof CreateOverrideSet400.Type> | PunktfunkError<"CreateOverrideSet401", typeof CreateOverrideSet401.Type> | PunktfunkError<"CreateOverrideSet404", typeof CreateOverrideSet404.Type> | PunktfunkError<"CreateOverrideSet409", typeof CreateOverrideSet409.Type> | PunktfunkError<"CreateOverrideSet500", typeof CreateOverrideSet500.Type>>;
   }
   /**
 * A field left out keeps its value; `null` clears it. Every game and source that uses it
-* follows. Emits `library.changed` for each source they belong to.
+* follows. With `as`, one of that profile's own. Emits `library.changed` for each source they
+* belong to.
 */
 readonly "updateOverrideSet": {
-    <Config extends OperationConfig | undefined = undefined>(id: string, options: { readonly payload: typeof UpdateOverrideSetRequestJson.Encoded; readonly config: Config }): Effect.Effect<WithOptionalResponse<typeof UpdateOverrideSet200.Type, Config>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"UpdateOverrideSet400", typeof UpdateOverrideSet400.Type> | PunktfunkError<"UpdateOverrideSet401", typeof UpdateOverrideSet401.Type> | PunktfunkError<"UpdateOverrideSet404", typeof UpdateOverrideSet404.Type> | PunktfunkError<"UpdateOverrideSet409", typeof UpdateOverrideSet409.Type> | PunktfunkError<"UpdateOverrideSet500", typeof UpdateOverrideSet500.Type>>;
-    <Config extends OperationConfig | undefined = undefined>(id: string, options: { readonly payload: typeof UpdateOverrideSetRequestJson.Encoded; readonly config?: Config | undefined }): Effect.Effect<WithOptionalResponse<typeof UpdateOverrideSet200.Type, Config | undefined>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"UpdateOverrideSet400", typeof UpdateOverrideSet400.Type> | PunktfunkError<"UpdateOverrideSet401", typeof UpdateOverrideSet401.Type> | PunktfunkError<"UpdateOverrideSet404", typeof UpdateOverrideSet404.Type> | PunktfunkError<"UpdateOverrideSet409", typeof UpdateOverrideSet409.Type> | PunktfunkError<"UpdateOverrideSet500", typeof UpdateOverrideSet500.Type>>;
+    <Config extends OperationConfig | undefined = undefined>(id: string, options: { readonly params?: typeof UpdateOverrideSetParams.Encoded | undefined; readonly payload: typeof UpdateOverrideSetRequestJson.Encoded; readonly config: Config }): Effect.Effect<WithOptionalResponse<typeof UpdateOverrideSet200.Type, Config>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"UpdateOverrideSet400", typeof UpdateOverrideSet400.Type> | PunktfunkError<"UpdateOverrideSet401", typeof UpdateOverrideSet401.Type> | PunktfunkError<"UpdateOverrideSet404", typeof UpdateOverrideSet404.Type> | PunktfunkError<"UpdateOverrideSet409", typeof UpdateOverrideSet409.Type> | PunktfunkError<"UpdateOverrideSet500", typeof UpdateOverrideSet500.Type>>;
+    <Config extends OperationConfig | undefined = undefined>(id: string, options: { readonly params?: typeof UpdateOverrideSetParams.Encoded | undefined; readonly payload: typeof UpdateOverrideSetRequestJson.Encoded; readonly config?: Config | undefined }): Effect.Effect<WithOptionalResponse<typeof UpdateOverrideSet200.Type, Config | undefined>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"UpdateOverrideSet400", typeof UpdateOverrideSet400.Type> | PunktfunkError<"UpdateOverrideSet401", typeof UpdateOverrideSet401.Type> | PunktfunkError<"UpdateOverrideSet404", typeof UpdateOverrideSet404.Type> | PunktfunkError<"UpdateOverrideSet409", typeof UpdateOverrideSet409.Type> | PunktfunkError<"UpdateOverrideSet500", typeof UpdateOverrideSet500.Type>>;
   }
   /**
 * The games and sources that used it lose their entry and go back to what the device
-* decides. The answer counts them. Emits `library.changed` for each source they belong to.
+* decides. The answer counts them. With `as`, one of that profile's own, and only its entries
+* lose theirs. Emits `library.changed` for each source they belong to.
 */
 readonly "deleteOverrideSet": {
-    <Config extends OperationConfig | undefined = undefined>(id: string, options: { readonly config: Config }): Effect.Effect<WithOptionalResponse<typeof DeleteOverrideSet200.Type, Config>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"DeleteOverrideSet401", typeof DeleteOverrideSet401.Type> | PunktfunkError<"DeleteOverrideSet404", typeof DeleteOverrideSet404.Type> | PunktfunkError<"DeleteOverrideSet500", typeof DeleteOverrideSet500.Type>>;
-    <Config extends OperationConfig | undefined = undefined>(id: string, options: { readonly config?: Config | undefined } | undefined): Effect.Effect<WithOptionalResponse<typeof DeleteOverrideSet200.Type, Config | undefined>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"DeleteOverrideSet401", typeof DeleteOverrideSet401.Type> | PunktfunkError<"DeleteOverrideSet404", typeof DeleteOverrideSet404.Type> | PunktfunkError<"DeleteOverrideSet500", typeof DeleteOverrideSet500.Type>>;
+    <Config extends OperationConfig | undefined = undefined>(id: string, options: { readonly params?: typeof DeleteOverrideSetParams.Encoded | undefined; readonly config: Config }): Effect.Effect<WithOptionalResponse<typeof DeleteOverrideSet200.Type, Config>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"DeleteOverrideSet401", typeof DeleteOverrideSet401.Type> | PunktfunkError<"DeleteOverrideSet404", typeof DeleteOverrideSet404.Type> | PunktfunkError<"DeleteOverrideSet500", typeof DeleteOverrideSet500.Type>>;
+    <Config extends OperationConfig | undefined = undefined>(id: string, options: { readonly params?: typeof DeleteOverrideSetParams.Encoded | undefined; readonly config?: Config | undefined } | undefined): Effect.Effect<WithOptionalResponse<typeof DeleteOverrideSet200.Type, Config | undefined>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"DeleteOverrideSet401", typeof DeleteOverrideSet401.Type> | PunktfunkError<"DeleteOverrideSet404", typeof DeleteOverrideSet404.Type> | PunktfunkError<"DeleteOverrideSet500", typeof DeleteOverrideSet500.Type>>;
   }
   /**
 * The same body as a game's, without `none`: `{}` clears the source's entry. Each title of
-* the source without an entry of its own takes it. Emits `library.changed`.
+* the source without an entry of its own takes it. With `as`, the entry is that profile's own.
+* Emits `library.changed`.
 */
 readonly "setSourceOverrides": {
-    <Config extends OperationConfig | undefined = undefined>(source: string, options: { readonly payload: typeof SetSourceOverridesRequestJson.Encoded; readonly config: Config }): Effect.Effect<WithOptionalResponse<typeof SetSourceOverrides200.Type, Config>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"SetSourceOverrides400", typeof SetSourceOverrides400.Type> | PunktfunkError<"SetSourceOverrides401", typeof SetSourceOverrides401.Type> | PunktfunkError<"SetSourceOverrides404", typeof SetSourceOverrides404.Type> | PunktfunkError<"SetSourceOverrides500", typeof SetSourceOverrides500.Type>>;
-    <Config extends OperationConfig | undefined = undefined>(source: string, options: { readonly payload: typeof SetSourceOverridesRequestJson.Encoded; readonly config?: Config | undefined }): Effect.Effect<WithOptionalResponse<typeof SetSourceOverrides200.Type, Config | undefined>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"SetSourceOverrides400", typeof SetSourceOverrides400.Type> | PunktfunkError<"SetSourceOverrides401", typeof SetSourceOverrides401.Type> | PunktfunkError<"SetSourceOverrides404", typeof SetSourceOverrides404.Type> | PunktfunkError<"SetSourceOverrides500", typeof SetSourceOverrides500.Type>>;
+    <Config extends OperationConfig | undefined = undefined>(source: string, options: { readonly params?: typeof SetSourceOverridesParams.Encoded | undefined; readonly payload: typeof SetSourceOverridesRequestJson.Encoded; readonly config: Config }): Effect.Effect<WithOptionalResponse<typeof SetSourceOverrides200.Type, Config>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"SetSourceOverrides400", typeof SetSourceOverrides400.Type> | PunktfunkError<"SetSourceOverrides401", typeof SetSourceOverrides401.Type> | PunktfunkError<"SetSourceOverrides404", typeof SetSourceOverrides404.Type> | PunktfunkError<"SetSourceOverrides500", typeof SetSourceOverrides500.Type>>;
+    <Config extends OperationConfig | undefined = undefined>(source: string, options: { readonly params?: typeof SetSourceOverridesParams.Encoded | undefined; readonly payload: typeof SetSourceOverridesRequestJson.Encoded; readonly config?: Config | undefined }): Effect.Effect<WithOptionalResponse<typeof SetSourceOverrides200.Type, Config | undefined>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"SetSourceOverrides400", typeof SetSourceOverrides400.Type> | PunktfunkError<"SetSourceOverrides401", typeof SetSourceOverrides401.Type> | PunktfunkError<"SetSourceOverrides404", typeof SetSourceOverrides404.Type> | PunktfunkError<"SetSourceOverrides500", typeof SetSourceOverrides500.Type>>;
   }
   /**
 * Title order, `limit` titles a page (60 when absent, 200 at most). `next_cursor` names the
@@ -4300,17 +4418,18 @@ readonly "setSourceOverrides": {
 * included.
 */
 readonly "getLibraryPage": {
-    <Config extends OperationConfig | undefined = undefined>(options: { readonly params?: typeof GetLibraryPageParams.Encoded | undefined; readonly config: Config }): Effect.Effect<WithOptionalResponse<typeof GetLibraryPage200.Type, Config>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"GetLibraryPage400", typeof GetLibraryPage400.Type> | PunktfunkError<"GetLibraryPage401", typeof GetLibraryPage401.Type>>;
-    <Config extends OperationConfig | undefined = undefined>(options: { readonly params?: typeof GetLibraryPageParams.Encoded | undefined; readonly config?: Config | undefined } | undefined): Effect.Effect<WithOptionalResponse<typeof GetLibraryPage200.Type, Config | undefined>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"GetLibraryPage400", typeof GetLibraryPage400.Type> | PunktfunkError<"GetLibraryPage401", typeof GetLibraryPage401.Type>>;
+    <Config extends OperationConfig | undefined = undefined>(options: { readonly params?: typeof GetLibraryPageParams.Encoded | undefined; readonly config: Config }): Effect.Effect<WithOptionalResponse<typeof GetLibraryPage200.Type, Config>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"GetLibraryPage400", typeof GetLibraryPage400.Type> | PunktfunkError<"GetLibraryPage401", typeof GetLibraryPage401.Type> | PunktfunkError<"GetLibraryPage404", typeof GetLibraryPage404.Type>>;
+    <Config extends OperationConfig | undefined = undefined>(options: { readonly params?: typeof GetLibraryPageParams.Encoded | undefined; readonly config?: Config | undefined } | undefined): Effect.Effect<WithOptionalResponse<typeof GetLibraryPage200.Type, Config | undefined>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"GetLibraryPage400", typeof GetLibraryPage400.Type> | PunktfunkError<"GetLibraryPage401", typeof GetLibraryPage401.Type> | PunktfunkError<"GetLibraryPage404", typeof GetLibraryPage404.Type>>;
   }
   /**
 * The operator's choice beats the entry's own art and every metadata source, and survives
 * the provider's next reconcile. `url: null` clears the pick. The id is not required to
-* exist now, as with hiding. Emits `library.changed`.
+* exist now, as with hiding. With `as`, the pick is that profile's own and beats the box's for
+* the same slot. Emits `library.changed`.
 */
 readonly "setLibraryArtPick": {
-    <Config extends OperationConfig | undefined = undefined>(id: string, options: { readonly payload: typeof SetLibraryArtPickRequestJson.Encoded; readonly config: Config }): Effect.Effect<WithOptionalResponse<typeof SetLibraryArtPick200.Type, Config>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"SetLibraryArtPick400", typeof SetLibraryArtPick400.Type> | PunktfunkError<"SetLibraryArtPick401", typeof SetLibraryArtPick401.Type> | PunktfunkError<"SetLibraryArtPick500", typeof SetLibraryArtPick500.Type>>;
-    <Config extends OperationConfig | undefined = undefined>(id: string, options: { readonly payload: typeof SetLibraryArtPickRequestJson.Encoded; readonly config?: Config | undefined }): Effect.Effect<WithOptionalResponse<typeof SetLibraryArtPick200.Type, Config | undefined>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"SetLibraryArtPick400", typeof SetLibraryArtPick400.Type> | PunktfunkError<"SetLibraryArtPick401", typeof SetLibraryArtPick401.Type> | PunktfunkError<"SetLibraryArtPick500", typeof SetLibraryArtPick500.Type>>;
+    <Config extends OperationConfig | undefined = undefined>(id: string, options: { readonly params?: typeof SetLibraryArtPickParams.Encoded | undefined; readonly payload: typeof SetLibraryArtPickRequestJson.Encoded; readonly config: Config }): Effect.Effect<WithOptionalResponse<typeof SetLibraryArtPick200.Type, Config>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"SetLibraryArtPick400", typeof SetLibraryArtPick400.Type> | PunktfunkError<"SetLibraryArtPick401", typeof SetLibraryArtPick401.Type> | PunktfunkError<"SetLibraryArtPick404", typeof SetLibraryArtPick404.Type> | PunktfunkError<"SetLibraryArtPick500", typeof SetLibraryArtPick500.Type>>;
+    <Config extends OperationConfig | undefined = undefined>(id: string, options: { readonly params?: typeof SetLibraryArtPickParams.Encoded | undefined; readonly payload: typeof SetLibraryArtPickRequestJson.Encoded; readonly config?: Config | undefined }): Effect.Effect<WithOptionalResponse<typeof SetLibraryArtPick200.Type, Config | undefined>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"SetLibraryArtPick400", typeof SetLibraryArtPick400.Type> | PunktfunkError<"SetLibraryArtPick401", typeof SetLibraryArtPick401.Type> | PunktfunkError<"SetLibraryArtPick404", typeof SetLibraryArtPick404.Type> | PunktfunkError<"SetLibraryArtPick500", typeof SetLibraryArtPick500.Type>>;
   }
   /**
 * The payload is the desired set, keyed by `external_id`. The host diffs, keeps surviving
@@ -4360,19 +4479,22 @@ readonly "reportProviderRunning": {
 * One row per installed library plugin, with its enable state. Sources default to
 * enabled; disabling hides titles from the next read. The custom store is not a
 * source and is always on. Every row is
-* `origin: "plugin"`.
+* `origin: "plugin"`. With `as`, a source is off when the box or the profile turned it off, and
+* `off_by` says which.
 */
 readonly "listLibraryScanners": {
-    <Config extends OperationConfig | undefined = undefined>(options: { readonly config: Config }): Effect.Effect<WithOptionalResponse<typeof ListLibraryScanners200.Type, Config>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"ListLibraryScanners401", typeof ListLibraryScanners401.Type>>;
-    <Config extends OperationConfig | undefined = undefined>(options: { readonly config?: Config | undefined } | undefined): Effect.Effect<WithOptionalResponse<typeof ListLibraryScanners200.Type, Config | undefined>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"ListLibraryScanners401", typeof ListLibraryScanners401.Type>>;
+    <Config extends OperationConfig | undefined = undefined>(options: { readonly params?: typeof ListLibraryScannersParams.Encoded | undefined; readonly config: Config }): Effect.Effect<WithOptionalResponse<typeof ListLibraryScanners200.Type, Config>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"ListLibraryScanners401", typeof ListLibraryScanners401.Type> | PunktfunkError<"ListLibraryScanners404", typeof ListLibraryScanners404.Type>>;
+    <Config extends OperationConfig | undefined = undefined>(options: { readonly params?: typeof ListLibraryScannersParams.Encoded | undefined; readonly config?: Config | undefined } | undefined): Effect.Effect<WithOptionalResponse<typeof ListLibraryScanners200.Type, Config | undefined>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"ListLibraryScanners401", typeof ListLibraryScanners401.Type> | PunktfunkError<"ListLibraryScanners404", typeof ListLibraryScanners404.Type>>;
   }
   /**
 * Takes effect on the next library read. Disabling hides titles; the plugin may keep
-* reconciling while off. Nothing is deleted. Emits `library.changed` when the state changes.
+* reconciling while off. Nothing is deleted. With `as`, the switch is that profile's own: it
+* turns a source off for the profile, and cannot turn on one the box turned off. Emits
+* `library.changed` when the state changes.
 */
 readonly "setLibraryScanner": {
-    <Config extends OperationConfig | undefined = undefined>(id: string, options: { readonly payload: typeof SetLibraryScannerRequestJson.Encoded; readonly config: Config }): Effect.Effect<WithOptionalResponse<typeof SetLibraryScanner200.Type, Config>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"SetLibraryScanner401", typeof SetLibraryScanner401.Type> | PunktfunkError<"SetLibraryScanner403", typeof SetLibraryScanner403.Type> | PunktfunkError<"SetLibraryScanner404", typeof SetLibraryScanner404.Type> | PunktfunkError<"SetLibraryScanner500", typeof SetLibraryScanner500.Type>>;
-    <Config extends OperationConfig | undefined = undefined>(id: string, options: { readonly payload: typeof SetLibraryScannerRequestJson.Encoded; readonly config?: Config | undefined }): Effect.Effect<WithOptionalResponse<typeof SetLibraryScanner200.Type, Config | undefined>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"SetLibraryScanner401", typeof SetLibraryScanner401.Type> | PunktfunkError<"SetLibraryScanner403", typeof SetLibraryScanner403.Type> | PunktfunkError<"SetLibraryScanner404", typeof SetLibraryScanner404.Type> | PunktfunkError<"SetLibraryScanner500", typeof SetLibraryScanner500.Type>>;
+    <Config extends OperationConfig | undefined = undefined>(id: string, options: { readonly params?: typeof SetLibraryScannerParams.Encoded | undefined; readonly payload: typeof SetLibraryScannerRequestJson.Encoded; readonly config: Config }): Effect.Effect<WithOptionalResponse<typeof SetLibraryScanner200.Type, Config>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"SetLibraryScanner401", typeof SetLibraryScanner401.Type> | PunktfunkError<"SetLibraryScanner403", typeof SetLibraryScanner403.Type> | PunktfunkError<"SetLibraryScanner404", typeof SetLibraryScanner404.Type> | PunktfunkError<"SetLibraryScanner500", typeof SetLibraryScanner500.Type>>;
+    <Config extends OperationConfig | undefined = undefined>(id: string, options: { readonly params?: typeof SetLibraryScannerParams.Encoded | undefined; readonly payload: typeof SetLibraryScannerRequestJson.Encoded; readonly config?: Config | undefined }): Effect.Effect<WithOptionalResponse<typeof SetLibraryScanner200.Type, Config | undefined>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"SetLibraryScanner401", typeof SetLibraryScanner401.Type> | PunktfunkError<"SetLibraryScanner403", typeof SetLibraryScanner403.Type> | PunktfunkError<"SetLibraryScanner404", typeof SetLibraryScanner404.Type> | PunktfunkError<"SetLibraryScanner500", typeof SetLibraryScanner500.Type>>;
   }
   /**
 * Bearer: `<config>/tray-token`, which every local account but a seat's may read; loopback only.
@@ -4793,16 +4915,26 @@ readonly "getRecentSessions": {
     <Config extends OperationConfig | undefined = undefined>(options: { readonly config?: Config | undefined } | undefined): Effect.Effect<WithOptionalResponse<typeof GetRecentSessions200.Type, Config | undefined>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"GetRecentSessions401", typeof GetRecentSessions401.Type>>;
   }
   readonly "getSessionSettings": {
-    <Config extends OperationConfig | undefined = undefined>(options: { readonly config: Config }): Effect.Effect<WithOptionalResponse<typeof GetSessionSettings200.Type, Config>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"GetSessionSettings401", typeof GetSessionSettings401.Type>>;
-    <Config extends OperationConfig | undefined = undefined>(options: { readonly config?: Config | undefined } | undefined): Effect.Effect<WithOptionalResponse<typeof GetSessionSettings200.Type, Config | undefined>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"GetSessionSettings401", typeof GetSessionSettings401.Type>>;
+    <Config extends OperationConfig | undefined = undefined>(options: { readonly params?: typeof GetSessionSettingsParams.Encoded | undefined; readonly config: Config }): Effect.Effect<WithOptionalResponse<typeof GetSessionSettings200.Type, Config>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"GetSessionSettings401", typeof GetSessionSettings401.Type> | PunktfunkError<"GetSessionSettings404", typeof GetSessionSettings404.Type> | PunktfunkError<"GetSessionSettings409", typeof GetSessionSettings409.Type>>;
+    <Config extends OperationConfig | undefined = undefined>(options: { readonly params?: typeof GetSessionSettingsParams.Encoded | undefined; readonly config?: Config | undefined } | undefined): Effect.Effect<WithOptionalResponse<typeof GetSessionSettings200.Type, Config | undefined>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"GetSessionSettings401", typeof GetSessionSettings401.Type> | PunktfunkError<"GetSessionSettings404", typeof GetSessionSettings404.Type> | PunktfunkError<"GetSessionSettings409", typeof GetSessionSettings409.Type>>;
   }
   /**
 * Persisted clamped. Takes effect on the next decision, including a session
-* already streaming — policy is read at session end, not start.
+* already streaming — policy is read at session end, not start. With `as`, the settings of
+* that profile's own seat; a profile on the host's own desktop has none of its own.
 */
 readonly "setSessionSettings": {
-    <Config extends OperationConfig | undefined = undefined>(options: { readonly payload: typeof SetSessionSettingsRequestJson.Encoded; readonly config: Config }): Effect.Effect<WithOptionalResponse<typeof SetSessionSettings200.Type, Config>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"SetSessionSettings400", typeof SetSessionSettings400.Type> | PunktfunkError<"SetSessionSettings401", typeof SetSessionSettings401.Type> | PunktfunkError<"SetSessionSettings500", typeof SetSessionSettings500.Type>>;
-    <Config extends OperationConfig | undefined = undefined>(options: { readonly payload: typeof SetSessionSettingsRequestJson.Encoded; readonly config?: Config | undefined }): Effect.Effect<WithOptionalResponse<typeof SetSessionSettings200.Type, Config | undefined>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"SetSessionSettings400", typeof SetSessionSettings400.Type> | PunktfunkError<"SetSessionSettings401", typeof SetSessionSettings401.Type> | PunktfunkError<"SetSessionSettings500", typeof SetSessionSettings500.Type>>;
+    <Config extends OperationConfig | undefined = undefined>(options: { readonly params?: typeof SetSessionSettingsParams.Encoded | undefined; readonly payload: typeof SetSessionSettingsRequestJson.Encoded; readonly config: Config }): Effect.Effect<WithOptionalResponse<typeof SetSessionSettings200.Type, Config>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"SetSessionSettings400", typeof SetSessionSettings400.Type> | PunktfunkError<"SetSessionSettings401", typeof SetSessionSettings401.Type> | PunktfunkError<"SetSessionSettings403", typeof SetSessionSettings403.Type> | PunktfunkError<"SetSessionSettings404", typeof SetSessionSettings404.Type> | PunktfunkError<"SetSessionSettings409", typeof SetSessionSettings409.Type> | PunktfunkError<"SetSessionSettings500", typeof SetSessionSettings500.Type>>;
+    <Config extends OperationConfig | undefined = undefined>(options: { readonly params?: typeof SetSessionSettingsParams.Encoded | undefined; readonly payload: typeof SetSessionSettingsRequestJson.Encoded; readonly config?: Config | undefined }): Effect.Effect<WithOptionalResponse<typeof SetSessionSettings200.Type, Config | undefined>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"SetSessionSettings400", typeof SetSessionSettings400.Type> | PunktfunkError<"SetSessionSettings401", typeof SetSessionSettings401.Type> | PunktfunkError<"SetSessionSettings403", typeof SetSessionSettings403.Type> | PunktfunkError<"SetSessionSettings404", typeof SetSessionSettings404.Type> | PunktfunkError<"SetSessionSettings409", typeof SetSessionSettings409.Type> | PunktfunkError<"SetSessionSettings500", typeof SetSessionSettings500.Type>>;
+  }
+  /**
+* Its seat plays with the box's Seat defaults again; the answer is what `GET` with the same
+* `as` answers, `configured: false`. Dropping settings a profile never had is the same answer.
+* `as` is required: the host's own settings are changed with `PUT`, never dropped.
+*/
+readonly "clearSessionSettings": {
+    <Config extends OperationConfig | undefined = undefined>(options: { readonly params: typeof ClearSessionSettingsParams.Encoded; readonly config: Config }): Effect.Effect<WithOptionalResponse<typeof ClearSessionSettings200.Type, Config>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"ClearSessionSettings400", typeof ClearSessionSettings400.Type> | PunktfunkError<"ClearSessionSettings401", typeof ClearSessionSettings401.Type> | PunktfunkError<"ClearSessionSettings403", typeof ClearSessionSettings403.Type> | PunktfunkError<"ClearSessionSettings404", typeof ClearSessionSettings404.Type> | PunktfunkError<"ClearSessionSettings409", typeof ClearSessionSettings409.Type> | PunktfunkError<"ClearSessionSettings500", typeof ClearSessionSettings500.Type>>;
+    <Config extends OperationConfig | undefined = undefined>(options: { readonly params: typeof ClearSessionSettingsParams.Encoded; readonly config?: Config | undefined }): Effect.Effect<WithOptionalResponse<typeof ClearSessionSettings200.Type, Config | undefined>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"ClearSessionSettings400", typeof ClearSessionSettings400.Type> | PunktfunkError<"ClearSessionSettings401", typeof ClearSessionSettings401.Type> | PunktfunkError<"ClearSessionSettings403", typeof ClearSessionSettings403.Type> | PunktfunkError<"ClearSessionSettings404", typeof ClearSessionSettings404.Type> | PunktfunkError<"ClearSessionSettings409", typeof ClearSessionSettings409.Type> | PunktfunkError<"ClearSessionSettings500", typeof ClearSessionSettings500.Type>>;
   }
   /**
 * Same deliberate stop as `DELETE /session`, for the one id. Every other live

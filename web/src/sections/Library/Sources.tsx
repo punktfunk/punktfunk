@@ -1,6 +1,13 @@
-import { useQueryClient } from "@tanstack/react-query";
+import { keepPreviousData, useQueryClient } from "@tanstack/react-query";
 import { toast } from "@unom/ui/toast";
-import { Boxes, Download, PackagePlus, Settings2, Trash2 } from "lucide-react";
+import {
+	Boxes,
+	Download,
+	Lock,
+	PackagePlus,
+	Settings2,
+	Trash2,
+} from "lucide-react";
 import { type FC, type ReactNode, useMemo, useState } from "react";
 import {
 	getListLibraryScannersQueryKey,
@@ -13,7 +20,7 @@ import type { PluginAccessSnapshot } from "@/api/gen/model/pluginAccessSnapshot"
 import type { ScannerInfo } from "@/api/gen/model/scannerInfo";
 import { useGetPluginCatalog } from "@/api/gen/store/store";
 import { usePlugins } from "@/api/plugins";
-import { useOwnAccount, usePluginsReachable, useSeat } from "@/api/seat";
+import { useAs, usePluginsReachable, useProfileView } from "@/api/seat";
 import { installable, useInstallPlugin } from "@/api/store";
 import { useDialogs } from "@/components/dialogs";
 import { ROW_GAP, Stagger } from "@/components/stagger";
@@ -33,9 +40,8 @@ import { SourceSettingsDialog } from "./SourceSettings";
  * The Sources tab: one card of sections — Game sources, Emulators, Art & metadata — with the
  * migration banner above it. Game sources: enablement, liveness, counts, actions, and pending
  * folder access in one list, because this is where missing games are visible. N-1 hosts may
- * still report built-in scanners, so migration stays until those hosts age out. A seat on a
- * person's own account offers only what its host installs, and on Linux a sentence stands in for
- * the emulators and the folder requests.
+ * still report built-in scanners, so migration stays until those hosts age out. A profile's view
+ * switches only its own sources and their stream settings: the rest is the owner's library's.
  */
 export const SourcesSection: FC<{
 	/** The provider currently filtered to in the grid, or null for "everything". */
@@ -46,7 +52,11 @@ export const SourcesSection: FC<{
 }> = ({ activeFilter, onFilter, metadata }) => {
 	const qc = useQueryClient();
 	const { confirm } = useDialogs();
-	const scanners = useListLibraryScanners();
+	const view = useProfileView();
+	const as = useAs();
+	const scanners = useListLibraryScanners(as, {
+		query: { placeholderData: keepPreviousData },
+	});
 	const toggle = useSetLibraryScanner();
 	const purge = useDeleteProviderEntries();
 	const plugins = usePlugins();
@@ -55,8 +65,6 @@ export const SourcesSection: FC<{
 	const access = usePluginAccess();
 	const [settingsFor, setSettingsFor] = useState<ScannerInfo | null>(null);
 	const nameOf = useSourceNames();
-	const own = useOwnAccount();
-	const seatName = useSeat()?.name ?? "";
 
 	const onToggle = async (source: ScannerInfo) => {
 		try {
@@ -65,8 +73,9 @@ export const SourcesSection: FC<{
 			const list = await toggle.mutateAsync({
 				id: source.id,
 				data: { enabled: !source.enabled },
+				params: as,
 			});
-			qc.setQueryData(getListLibraryScannersQueryKey(), list);
+			qc.setQueryData(getListLibraryScannersQueryKey(as), list);
 			await refreshLibrary(qc);
 		} catch {
 			toast.error(m.library_sources_failed());
@@ -127,7 +136,7 @@ export const SourcesSection: FC<{
 	// run on this OS is a control that does nothing (design/web-console-overhaul.md §2.1). The
 	// full catalog, incompatible entries included, is a checkbox away on the Store page. A launcher
 	// found on this host leads.
-	const available = installable(catalog.data?.plugins, own)
+	const available = installable(catalog.data?.plugins, null)
 		.filter(
 			(p) =>
 				p.categories?.includes("library") &&
@@ -167,7 +176,7 @@ export const SourcesSection: FC<{
 	// runs its own (stagger.tsx, `root`).
 	return (
 		<Stagger root className="flex flex-col gap-card">
-			{migratable.length > 0 && (
+			{!view && migratable.length > 0 && (
 				<MigrationBanner
 					rows={migratable}
 					busy={catalog.data?.busy === true || install.isPending}
@@ -178,7 +187,7 @@ export const SourcesSection: FC<{
 				<CardContent className="space-y-8">
 					<SourcesCard
 						sources={sources}
-						available={available}
+						available={view ? [] : available}
 						running={running}
 						absent={absent}
 						busyId={toggle.isPending ? (toggle.variables?.id ?? null) : null}
@@ -187,19 +196,17 @@ export const SourcesSection: FC<{
 						onToggle={onToggle}
 						onFilter={onFilter}
 						onSettings={setSettingsFor}
-						onPurge={onPurge}
+						{...(view
+							? { profile: { name: view.name, ownerName: view.ownerName } }
+							: {
+									onPurge,
+									access: access.access.data,
+									accessBusy: access.busy,
+									onAccessDecision: access.onDecide,
+								})}
 						onInstall={onInstall}
-						access={own === "linux" ? undefined : access.access.data}
-						accessBusy={access.busy}
-						onAccessDecision={access.onDecide}
 					/>
-					{own === "linux" ? (
-						<p className="text-sm text-muted-foreground">
-							{m.seat_own_unmanaged({ name: seatName })}
-						</p>
-					) : (
-						<EmulatorsCard />
-					)}
+					{!view && <EmulatorsCard />}
 					{metadata}
 				</CardContent>
 			</Card>
@@ -207,6 +214,7 @@ export const SourcesSection: FC<{
 				<SourceSettingsDialog
 					source={settingsFor}
 					stream
+					form={!view}
 					onClose={() => setSettingsFor(null)}
 				/>
 			)}
@@ -258,6 +266,12 @@ export const MigrationBanner: FC<{
 	</Card>
 );
 
+/** A profile's view of the sources: whose they are, and the owner's library they follow. */
+export interface SourcesProfile {
+	name: string;
+	ownerName: string;
+}
+
 /** Presentational source list, including deterministic pending-access states for Storybook. A
  * section of the Sources card, not a card of its own. */
 export const SourcesCard: FC<{
@@ -275,7 +289,8 @@ export const SourcesCard: FC<{
 	onToggle: (source: ScannerInfo) => void;
 	onFilter: (provider: string | null) => void;
 	onSettings: (source: ScannerInfo) => void;
-	onPurge: (source: ScannerInfo) => void;
+	/** Absent in a profile's view: removing a source's titles is the owner's library's. */
+	onPurge?: (source: ScannerInfo) => void;
 	onInstall: (entry: CatalogEntry) => void;
 	access?: PluginAccessSnapshot[];
 	accessBusy?: boolean;
@@ -285,6 +300,8 @@ export const SourcesCard: FC<{
 		paths: string[],
 		decision: "allow" | "deny" | "forget",
 	) => void;
+	/** A profile's view: each switch is its own, and one the owner turned off stays off. */
+	profile?: SourcesProfile;
 }> = ({
 	sources,
 	available,
@@ -302,6 +319,7 @@ export const SourcesCard: FC<{
 	accessBusy = false,
 	accessInitiallyOpen = false,
 	onAccessDecision = () => {},
+	profile,
 }) => (
 	<SourceGroup
 		icon={<Boxes className="size-4" />}
@@ -313,6 +331,7 @@ export const SourcesCard: FC<{
 					<SourceRow
 						key={source.id}
 						source={source}
+						profile={profile}
 						running={running.has(source.provider ?? source.id)}
 						absent={absent.has(source.provider ?? source.id)}
 						access={access.find(
@@ -332,12 +351,14 @@ export const SourcesCard: FC<{
 							onFilter(activeFilter === p ? null : p);
 						}}
 						onSettings={() => onSettings(source)}
-						onPurge={() => onPurge(source)}
+						{...(onPurge ? { onPurge: () => onPurge(source) } : {})}
 					/>
 				))}
 			</Stagger>
 			<p className="max-w-prose text-xs text-muted-foreground">
-				{m.library_sources_help()}
+				{profile
+					? m.profile_view_sources_help({ name: profile.name })
+					: m.library_sources_help()}
 			</p>
 
 			<AddSourceRail
@@ -351,10 +372,12 @@ export const SourcesCard: FC<{
 
 /**
  * One source: on/off, its name over what it is doing, the rest in ⋯. The folder requests that
- * explain missing games open below it.
+ * explain missing games open below it. In a profile's view the switch is the profile's own; a
+ * source the owner turned off has a lock and the reason instead.
  */
 const SourceRow: FC<{
 	source: ScannerInfo;
+	profile?: SourcesProfile | undefined;
 	/** The plugin backing this source is currently registered (its lease is live). */
 	running: boolean;
 	/** The host found no launcher for this source. */
@@ -372,9 +395,10 @@ const SourceRow: FC<{
 	onToggle: () => void;
 	onFilter: () => void;
 	onSettings: () => void;
-	onPurge: () => void;
+	onPurge?: () => void;
 }> = ({
 	source,
+	profile,
 	running,
 	absent,
 	access,
@@ -401,18 +425,32 @@ const SourceRow: FC<{
 	]
 		.filter(Boolean)
 		.join(" · ");
+	const locked = profile !== undefined && source.off_by === "box";
+	const why = !profile
+		? undefined
+		: source.off_by === "box"
+			? m.profile_view_source_off_owner({ owner: profile.ownerName })
+			: source.off_by === "profile"
+				? m.profile_view_source_off_own({ name: profile.name })
+				: undefined;
 	return (
 		<SourceItem
 			lead={
-				<Checkbox
-					checked={source.enabled}
-					disabled={busy}
-					aria-label={source.label}
-					onCheckedChange={onToggle}
-				/>
+				locked ? (
+					// The owner's library turned it off: no switch here, the reason below.
+					<Lock className="size-4 shrink-0 text-muted-foreground" aria-hidden />
+				) : (
+					<Checkbox
+						checked={source.enabled}
+						disabled={busy}
+						aria-label={source.label}
+						onCheckedChange={onToggle}
+					/>
+				)
 			}
 			title={source.label}
 			meta={meta || undefined}
+			detail={why}
 			actions={
 				isPlugin && (
 					<RowActions
@@ -423,14 +461,15 @@ const SourceRow: FC<{
 									: m.library_provider_filter(),
 								onSelect: onFilter,
 							},
-							// The form is a plugin the console reaches; another seat's is not.
-							reachable && {
+							// The form is a plugin the console reaches; another seat's is not. A
+							// profile's view has only the stream settings, which are its own.
+							(reachable || profile !== undefined) && {
 								label: m.library_source_settings(),
 								icon: <Settings2 />,
 								iconOnly: true,
 								onSelect: onSettings,
 							},
-							{
+							onPurge && {
 								label: m.library_provider_purge(),
 								icon: <Trash2 />,
 								iconOnly: true,

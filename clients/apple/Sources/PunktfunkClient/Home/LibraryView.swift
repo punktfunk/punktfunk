@@ -943,7 +943,8 @@ struct LibraryView: View {
         // honest signal that someone intends to play. Auto-wake off asks once and offers a wake.
         let hostID = current.id.uuidString
         let events = LibraryLoad.run(
-            target: target, hostID: hostID, wakeMacs: current.wakeMacs, autoWake: autoWake)
+            target: target, hostID: hostID, wakeMacs: current.wakeMacs, autoWake: autoWake,
+            profile: current.pickedProfile?.id)
         let canWake = WakePolicy.canWake(current.wakeMacs)
         for await event in events {
             shelf = LibraryShelf.reduce(shelf, event, autoWake: autoWake, canWake: canWake)

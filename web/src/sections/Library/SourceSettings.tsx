@@ -24,6 +24,7 @@ import {
 import { Spinner } from "@/components/ui/spinner";
 import { type GrantRefusal, newlyHanded } from "@/lib/handed-paths";
 import { apiText } from "@/lib/host-messages";
+import { cn } from "@/lib/utils";
 import { m } from "@/paraglide/messages";
 import { StreamControls } from "./Stream";
 
@@ -42,18 +43,22 @@ import { StreamControls } from "./Stream";
  * `__config` at all. That 404 points at the plugin's page instead of reporting a failure.
  *
  * A game source also shows the stream settings its titles take when they have none of their
- * own; those save as each control changes, apart from the form.
+ * own; those save as each control changes, apart from the form. A profile's view shows only
+ * those: the form is the owner's library's.
  */
 export const SourceSettingsDialog: FC<{
 	/** A game source, or an Art & Metadata source by its plugin id. */
 	source: Pick<ScannerInfo, "id" | "label" | "provider">;
 	/** A game source: its titles' stream settings show below the form. */
 	stream?: boolean;
+	/** The plugin's own form; off, the stream settings alone. */
+	form?: boolean;
 	onClose: () => void;
-}> = ({ source, stream, onClose }) => {
+}> = ({ source, stream, form = true, onClose }) => {
 	const pluginId = source.provider ?? source.id;
 	const configUrl = `/api/plugin-config/${pluginId}`;
 	const config = useQuery({
+		enabled: form,
 		queryKey: ["plugin-config", pluginId],
 		queryFn: async () => {
 			const r = await pluginSurface<{
@@ -124,7 +129,7 @@ export const SourceSettingsDialog: FC<{
 						{m.library_source_settings_title({ source: source.label })}
 					</DialogTitle>
 				</DialogHeader>
-				{config.isPending && <Spinner />}
+				{form && config.isPending && <Spinner />}
 				{config.isError && !config.data && (
 					<p className="text-sm text-destructive">
 						{m.library_source_settings_unreachable({
@@ -154,7 +159,9 @@ export const SourceSettingsDialog: FC<{
 					/>
 				)}
 				{stream && (
-					<section className="@container space-y-4 border-t pt-4">
+					<section
+						className={cn("@container space-y-4", form && "border-t pt-4")}
+					>
 						<div className="space-y-1">
 							<h3 className="font-semibold">
 								{m.library_stream_source_title({ source: source.label })}

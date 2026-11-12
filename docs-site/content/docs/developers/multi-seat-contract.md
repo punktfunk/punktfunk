@@ -216,7 +216,10 @@ session by design, and display activation fails while its session is inactive.
   **DualSense over USB/IP** switch: a seat's DualSense is a USB/IP pad with a sound card exactly
   when the box's is), `browser` and `browser_origins` (each seat runs a browser plane of its own,
   under those origins) and `background_input` (Windows: every app a seat starts reads GameInput
-  in the background). The box itself applies **Seats kept warm** and **Stop idle seats**.
+  in the background). Session settings the seat's profile holds in its own layer (below) come
+  first; `end_on_game_exit` applies where it holds none. On a person's own Linux account a game's
+  exit always returns to the desktop. The box itself applies **Seats kept warm** and **Stop idle
+  seats**.
 - **The box's trust, its own key.** The seat never writes the pairing store or profiles. A grant
   changed in the box console applies to the seat's next check, and within about three seconds to
   its live sessions: a narrowed grant takes effect, and an unpair, an expiry or a removed profile
@@ -248,6 +251,22 @@ session by design, and display activation fails while its session is inactive.
   profile, the owner's included, is refused as an unknown profile; one that names none plays as
   this seat's profile. The owner's row alone also serves the owner and the profiles that share the
   owner's desktop.
+- **A profile's own layer.** Each profile but the owner may keep a layer of its own over the box's
+  library, in the library directory at `library-profiles/<profile id>/`: `library-hidden.json`,
+  `library-scanners.json`, `library-overrides.json`, `library-picks.json` and
+  `session-settings.json`, each the shape of the box's file. Only the host-minted id (12 lowercase
+  hex) names a folder. Nothing in a layer runs: no custom entry, command, `prep` or hook. The
+  host that writes the library writes the layers, and removing a profile removes its folder. A
+  layer adds and narrows, never widens: a title is hidden, or a source off, when the box or the
+  profile says so; the profile's game override (for the game or its source) and its art pick for
+  a slot win over the box's. Session settings are the profile's file when it has one, and only a
+  profile with a seat of its own has them. A seat reads its own profile's folder, found from the
+  box's `profiles.json` in its trust directory, for its list, launches, art, game overrides and
+  session settings; the owner's host applies the layer of the profile a session resolved to,
+  sharing the owner's desktop or taking turns, at launch and for game overrides. On the box,
+  `?as=<profile id>` on the library routes and `session/settings` reads and writes that layer, and
+  a profile with a seat of its own lists there what its seat lists. `DELETE session/settings?as=`
+  drops the profile's own session settings, so its seat takes the Seat defaults again.
 - **Not a host of its own to clients.** A seat host never advertises over mDNS, whatever
   `PUNKTFUNK_MDNS` says, and its `Welcome` carries management port `0`: its API answers on
   loopback only, so a client keeps the box's port, where the library comes from.
@@ -401,7 +420,12 @@ the installed unit.
   From the owner's `~/.config/punktfunk` the daemon copies `library.json`, `library-hidden.json`,
   `library-metadata.json`, `library-overrides.json`, `library-picks.json`, `library-scanners.json`
   and `library-metadata/` to `library/`, `root:punktfunk-door` `0640`, within 2 seconds of a change,
-  and from there into each seat's trust copy. `plugin-run/plugin-grants.json` goes with them, and so
+  and from there into each seat's trust copy. Each profile's layer, `library-profiles/<profile id>/`
+  with `library-hidden.json`, `library-overrides.json`, `library-picks.json`,
+  `library-scanners.json` and `session-settings.json`, goes to `library/` for every profile; a
+  seat's trust copy gets only the folder of the profile whose `os_account` names that seat in the
+  box's `profiles.json`, and loses one that stops being its own.
+  `plugin-run/plugin-grants.json` goes with them, and so
   does the firmware plugins staged, `plugin-state/<provider>/firmware/<platform>/<file>` at exactly
   that depth, up to 1 GiB a file. Nothing else of `plugin-run` or `plugin-state` is read: the
   plugins' tokens and sign-ins live there. A link, a file with a second link or one over its cap is
@@ -519,10 +543,11 @@ seat's sessions, games and downloads, each row with `seat`, the profile whose ho
 the operator) and `diagnostics` with `diagnostics/refresh`. Every other admin call goes to the
 owner's host the way covers do, a dot segment never, and the table is checked against the API
 document (`every_route_has_a_side_on_the_door`). The door releases a seat's launch hold on that
-seat (`game/holds/{token}/release`, below). A device's `game/end`, `library/install/*`,
-`GET display/targets`, `PUT display/clients/*` and `GET compositors` go to the seat it plays on,
+seat (`game/holds/{token}/release`, below). A device's `game/end`, `GET display/targets`,
+`PUT display/clients/*` and `GET compositors` go to the seat it plays on, and its
+`library/install/*` to the owner's host, whose plugins download into the shared game files, each
 as that device: the door's call carries `X-Punktfunk-Device`, which a seat host honours only with
-its admin token and only for a device paired there. A
+its admin token and only for a device paired there, and then answers on the device's grants. A
 call starts a stopped seat and answers 503, except `host`, `status` and `diagnostics`, which
 wake nobody; a host that doesn't answer is 502, and so is every call while the seat supervisor
 doesn't answer. With no owner row the owner's calls answer 503, and so does a `host/settings`

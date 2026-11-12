@@ -1032,7 +1032,7 @@ impl PlatformBackend for LinuxBackend {
         }
         let reader = shared::Reader::group(passwd.gid);
         shared::refresh_trust(box_dir, state, &seat.id, reader)?;
-        shared::refresh_seat_library(state, &seat.id, reader)?;
+        shared::refresh_seat_library(box_dir, state, &seat.id, reader)?;
         unit_hook(&self.inner, &seat.account, Some(passwd.uid));
         self.bring_up(seat, Own::Seat, &passwd, None, asked)?;
         self.track(&seat.id, Tracked::of(seat, &passwd));
@@ -1355,7 +1355,7 @@ impl LinuxBackend {
         shared::ensure_person_dirs(state, &seat.id, &passwd)?;
         let reader = shared::Reader::person(passwd.uid, passwd.gid);
         person_trust(&self.inner, &seat.id, reader)?;
-        shared::refresh_seat_library(state, &seat.id, reader)?;
+        shared::refresh_seat_library(&self.inner.box_dir, state, &seat.id, reader)?;
         let written = self.bring_up(seat, Own::Person, &passwd, password, asked)?;
         self.track(&seat.id, Tracked::of(seat, &passwd));
         let ready = self.wait_ready(seat, asked, written.is_some());
@@ -1627,7 +1627,7 @@ fn refresh_copies(inner: &Inner, id: &SeatId, tracked: &Tracked) -> Result<(), B
         rewrite_env(inner, seat, tracked.kind, passwd)?;
     }
     if tracked.kind != Own::Owner {
-        shared::refresh_seat_library(state, id, reader)?;
+        shared::refresh_seat_library(box_dir, state, id, reader)?;
     }
     Ok(())
 }

@@ -2,14 +2,19 @@ import type { Meta, StoryObj } from "@storybook/react-vite";
 import { ApiError } from "@/api/fetcher";
 import { getGetLibraryOverridesQueryKey } from "@/api/gen/library/library";
 import type { PluginAccessSnapshot } from "@/api/gen/model/pluginAccessSnapshot";
-import type { SeatScopeValue } from "@/api/seat";
+import { type SeatScopeValue, scopeChoices } from "@/api/seat";
 import { QueryState } from "@/components/query-state";
 import { SeatScopeView } from "@/components/seat-scope";
 import { LibraryHeader } from "@/sections/Library";
 import { LibraryGrid } from "@/sections/Library/LibraryGrid";
 import { MigrationBanner, SourcesCard } from "@/sections/Library/Sources";
 import { SharedOverridesDialog } from "@/sections/Library/Stream";
-import { library, overridesDoc } from "./lib/fixtures";
+import {
+	library,
+	overridesDoc,
+	profilesDoor,
+	profilesWindows,
+} from "./lib/fixtures";
 import { Routed } from "./lib/routed";
 import { Seeded } from "./lib/seeded";
 
@@ -62,33 +67,35 @@ const gridArgs = {
 	hidingId: null,
 };
 
-const SEATS = [
-	{ id: "a".repeat(32), name: "Ben" },
-	{ id: "b".repeat(32), name: "Guest room" },
-];
-
-/** A host with two seats of its own: the chip, on the box's library. */
-const scope = (seat: SeatScopeValue["seat"]): SeatScopeValue => ({
+/** A host with two more profiles: the pick, on the owner's library. */
+const choices = scopeChoices("library", profilesWindows.slice(0, 3), "windows");
+const scope: SeatScopeValue = {
 	page: "library",
-	seat,
-	seats: SEATS,
-	ownerName: "Enrico",
+	choices,
+	current: choices[0] ?? null,
 	pick: noop,
-});
+};
 
-/** **Whose library** on the header: the box's own is the default. */
+/** **Whose library** on the header: the owner's is the default. */
 export const WhoseLibrary: Story = {
 	render: () => (
-		<SeatScopeView {...scope(null)}>
+		<SeatScopeView {...scope}>
 			<LibraryHeader />
 		</SeatScopeView>
 	),
 };
 
-/** A seat picked, whose host is not running. */
+/** A door whose owner's host is not running: its library is read from there. */
+const door = scopeChoices("library", profilesDoor, "linux", true);
 export const SeatDown: Story = {
 	render: () => (
-		<SeatScopeView {...scope(SEATS[0] ?? null)}>
+		<SeatScopeView
+			page="library"
+			choices={door}
+			current={door[0] ?? null}
+			door
+			pick={noop}
+		>
 			<div className="flex flex-col gap-card">
 				<LibraryHeader />
 				<QueryState

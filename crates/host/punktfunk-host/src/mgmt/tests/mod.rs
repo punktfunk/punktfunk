@@ -51,6 +51,7 @@ mod native_pairing;
 mod own_account;
 mod plugin_access;
 mod plugins;
+mod profile_view;
 mod profiles;
 mod routes;
 mod sessions;

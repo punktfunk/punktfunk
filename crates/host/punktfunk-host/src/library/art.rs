@@ -756,7 +756,7 @@ pub fn proxy_art(id: &str, art: &mut Artwork) {
 /// host, not the CDN). Blocking — call off the async runtime.
 #[cfg_attr(not(feature = "gamestream"), allow(dead_code, reason = "compat plane"))]
 pub fn fetch_box_art(id: &str) -> Option<(Vec<u8>, String)> {
-    let art = merged_art(id)?;
+    let art = merged_art(&View::here(), id)?;
     [
         ArtKind::Portrait,
         ArtKind::Header,
