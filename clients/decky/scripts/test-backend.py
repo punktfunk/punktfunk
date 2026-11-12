@@ -5,7 +5,7 @@ runtime needed.
 Stubs the ``decky`` module the backend imports, then asserts the argv shapes, the exit-code
 mapping and the Steam VDF editor against fixtures, and that Decky's loader can import it at all.
 A fixture patches the module whose function looks the name up (``client._run_cli``, never
-``main._run_cli``), or the check silently runs the real code.
+``client._run_cli``), or the check silently runs the real code.
 
 Needs Python >= 3.10 for `X | None` annotations — macOS ships 3.9, so run it explicitly:
 
@@ -34,11 +34,11 @@ _PLUGIN = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_PLUGIN / "py_modules"))
 sys.path.insert(0, str(_PLUGIN))
 import main  # noqa: E402  (the plugin backend)
-from pf_decky import steam_input  # noqa: E402
+from pf_decky import client, steam_input  # noqa: E402
 
 # The argv fixtures below monkey-patch `_client_argv` to pin one install shape; the
 # _flatpak_ref block wants the REAL resolver back, so keep a handle on it.
-_real_client_argv = main._client_argv
+_real_client_argv = client._client_argv
 
 failures = 0
 
@@ -55,11 +55,11 @@ def check(name: str, cond: bool):
 # `flatpak run --command=X <app-id> ARGS` — everything after the app id is the APP's argv, so
 # an app id that drifts left silently turns our flags into the client's. This is the shape the
 # deleted _session_argv used and the one thing about it that is easy to get wrong.
-main._client_argv = lambda: ["/usr/bin/flatpak", "run", "--arch=x86_64", "io.unom.punktfunk"]
-main._flatpak = lambda: "/usr/bin/flatpak"
+client._client_argv = lambda: ["/usr/bin/flatpak", "run", "--arch=x86_64", "io.unom.punktfunk"]
+client._flatpak = lambda: "/usr/bin/flatpak"
 check(
     "cli argv: flatpak form, app id last",
-    main._cli_argv()
+    client._cli_argv()
     == [
         "/usr/bin/flatpak",
         "run",
@@ -80,10 +80,10 @@ shutil.rmtree("/tmp/pf-test-native", ignore_errors=True)
 tmp = Path("/tmp/pf-test-native/bin")
 tmp.mkdir(parents=True, exist_ok=True)
 (tmp / "punktfunk-client").write_text("")
-main._client_argv = lambda: [str(tmp / "punktfunk-client")]
-check("cli argv: native without a sibling CLI is None", main._cli_argv() is None)
+client._client_argv = lambda: [str(tmp / "punktfunk-client")]
+check("cli argv: native without a sibling CLI is None", client._cli_argv() is None)
 (tmp / "punktfunk").write_text("")
-check("cli argv: native sibling found", main._cli_argv() == [str(tmp / "punktfunk")])
+check("cli argv: native sibling found", client._cli_argv() == [str(tmp / "punktfunk")])
 
 # ---- _flatpak_ref: the branch must be NAMED, always ---------------------------------------
 #
@@ -95,10 +95,10 @@ check("cli argv: native sibling found", main._cli_argv() == [str(tmp / "punktfun
 shutil.rmtree("/tmp/pf-test-home", ignore_errors=True)
 # An arm install (Steam Frame): the resolver must look under the installed arch, not uname's.
 _fp_root = Path("/tmp/pf-test-home/.local/share/flatpak/app/io.unom.punktfunk/aarch64")
-main._flatpak = lambda: "/usr/bin/flatpak"
-main._client_argv = _real_client_argv  # undo the fixture patches above
+client._flatpak = lambda: "/usr/bin/flatpak"
+client._client_argv = _real_client_argv  # undo the fixture patches above
 
-check("ref: nothing installed => None", main._flatpak_ref() is None)
+check("ref: nothing installed => None", client._flatpak_ref() is None)
 
 
 def _install_branch(name: str):
@@ -109,24 +109,24 @@ def _install_branch(name: str):
 
 
 (_fp_root / "canary").mkdir(parents=True, exist_ok=True)
-check("ref: a branch dir without `active` is leftovers, not an install", main._flatpak_ref() is None)
+check("ref: a branch dir without `active` is leftovers, not an install", client._flatpak_ref() is None)
 
 _install_branch("canary")
-ref = main._flatpak_ref()
+ref = client._flatpak_ref()
 check("ref: the single installed branch is used", ref == {
     "scope": "--user", "branch": "canary", "arch": "aarch64", "app_id": "io.unom.punktfunk",
     "ref": "io.unom.punktfunk//canary",
 })
 check(
     "ref: the launcher pins that branch, app id still LAST",
-    main._client_argv() == [
+    client._client_argv() == [
         "/usr/bin/flatpak", "run", "--arch=aarch64", "--branch=canary", "io.unom.punktfunk",
     ],
 )
 # The pin must survive _cli_argv's rewrite, or the CLI runs a different build than the GUI.
 check(
     "ref: --command= is inserted before the app id, keeping the pin",
-    main._cli_argv() == [
+    client._cli_argv() == [
         "/usr/bin/flatpak", "run", "--arch=aarch64", "--branch=canary",
         "--command=punktfunk", "io.unom.punktfunk",
     ],
@@ -137,7 +137,7 @@ check(
 # gets the update, and the two halves disagree about which client is even running.
 _install_branch("stable")
 check("ref: with both installed, stable wins (what `flatpak run` picks)",
-      main._flatpak_ref()["branch"] == "stable")
+      client._flatpak_ref()["branch"] == "stable")
 
 # A Deck still on the CamelCase id until its next update: it must launch and update under that
 # id, and the new id wins as soon as both are there. The two ids are one directory on a
@@ -150,15 +150,15 @@ if (Path("/tmp/pf-test-home") / "caseprobe").exists():
 else:
     _fp_root = Path("/tmp/pf-test-home/.local/share/flatpak/app/io.unom.Punktfunk/x86_64")
     _install_branch("stable")
-    ref = main._flatpak_ref()
+    ref = client._flatpak_ref()
     check("ref: a legacy-only install resolves under its own id",
           ref["app_id"] == "io.unom.Punktfunk" and ref["ref"] == "io.unom.Punktfunk//stable")
     check("ref: the launcher runs the legacy id, still LAST",
-          main._client_argv()[-1] == "io.unom.Punktfunk")
+          client._client_argv()[-1] == "io.unom.Punktfunk")
     _fp_root = Path("/tmp/pf-test-home/.local/share/flatpak/app/io.unom.punktfunk/x86_64")
     _install_branch("stable")
     check("ref: the new id wins once both are installed",
-          main._flatpak_ref()["app_id"] == "io.unom.punktfunk")
+          client._flatpak_ref()["app_id"] == "io.unom.punktfunk")
 
 shutil.rmtree("/tmp/pf-test-home", ignore_errors=True)
 
@@ -166,21 +166,21 @@ shutil.rmtree("/tmp/pf-test-home", ignore_errors=True)
 #
 # The exit code alone picks the error: no prose is read. A client too old for a verb is told
 # apart by the CLI's `--json` answer (`unknown-command`) or, for `discover`, by exit 5.
-check("err: exit 5 is unresolved", main._cli_error(5) == "unresolved")
-check("err: connect failed", main._cli_error(2) == "unreachable")
-check("err: trust rejected", main._cli_error(3) == "refused")
-check("err: needs a person", main._cli_error(6) == "needs-pairing")
-check("err: nothing ran", main._cli_error(-1) == "client-unavailable")
-check("err: unmapped code falls back", main._cli_error(4) == "client-error")
+check("err: exit 5 is unresolved", client._cli_error(5) == "unresolved")
+check("err: connect failed", client._cli_error(2) == "unreachable")
+check("err: trust rejected", client._cli_error(3) == "refused")
+check("err: needs a person", client._cli_error(6) == "needs-pairing")
+check("err: nothing ran", client._cli_error(-1) == "client-unavailable")
+check("err: unmapped code falls back", client._cli_error(4) == "client-error")
 
 # ---- the host's refusal token: a safe shape, or nothing -----------------------------------
-check("reject: a token passes", main._reject_token('{"ok": false, "reject": "not-armed"}') == "not-armed")
-check("reject: null is none", main._reject_token('{"ok": false, "reject": null}') is None)
-check("reject: junk stdout is none", main._reject_token("paired 10.0.0.5:9777 fp=ab") is None)
-check("reject: a token off the shape is none", main._reject_token('{"reject": "Not Armed"}') is None)
-check("reject: a non-string is none", main._reject_token('{"reject": 3}') is None)
-check("fp: from the json object", main._paired_fp('{"ok": true, "fp": "ab12"}') == "ab12")
-check("fp: from a client older than --json", main._paired_fp("paired 10.0.0.5:9777 fp=ab12\n") == "ab12")
+check("reject: a token passes", client._reject_token('{"ok": false, "reject": "not-armed"}') == "not-armed")
+check("reject: null is none", client._reject_token('{"ok": false, "reject": null}') is None)
+check("reject: junk stdout is none", client._reject_token("paired 10.0.0.5:9777 fp=ab") is None)
+check("reject: a token off the shape is none", client._reject_token('{"reject": "Not Armed"}') is None)
+check("reject: a non-string is none", client._reject_token('{"reject": 3}') is None)
+check("fp: from the json object", client._paired_fp('{"ok": true, "fp": "ab12"}') == "ab12")
+check("fp: from a client older than --json", client._paired_fp("paired 10.0.0.5:9777 fp=ab12\n") == "ab12")
 
 # ---- _cli_json: a zero exit with junk on stdout is a FAILURE, not an empty result --------
 import asyncio  # noqa: E402
@@ -193,24 +193,24 @@ def _fake_cli(rc: int, out: str, err: str = ""):
     return run
 
 
-main._run_cli = _fake_cli(0, '{"hosts": [{"name": "desk"}]}')
-got = asyncio.run(main._cli_json(["discover", "--json"]))
+client._run_cli = _fake_cli(0, '{"hosts": [{"name": "desk"}]}')
+got = asyncio.run(client._cli_json(["discover", "--json"]))
 check("json: payload merged under ok", got == {"ok": True, "hosts": [{"name": "desk"}]})
 
-main._run_cli = _fake_cli(0, "not json at all")
-got = asyncio.run(main._cli_json(["discover", "--json"]))
+client._run_cli = _fake_cli(0, "not json at all")
+got = asyncio.run(client._cli_json(["discover", "--json"]))
 check("json: unparseable stdout is an error, not an empty list", got["ok"] is False)
 check("json: ...and says so specifically", got["error"] == "client-error")
 
-main._run_cli = _fake_cli(5, '{"ok": false, "error": "unknown-command"}', 'unknown command "x"')
-got = asyncio.run(main._cli_json(["library", "--json"]))
+client._run_cli = _fake_cli(5, '{"ok": false, "error": "unknown-command"}', 'unknown command "x"')
+got = asyncio.run(client._cli_json(["library", "--json"]))
 check("json: the CLI's own unknown-command answer is client-outdated", got["error"] == "client-outdated")
 check("json: detail carries the CLI's own last line", "unknown command" in got["detail"])
 
-main._run_cli = _fake_cli(5, "", 'no saved host matches "desk"')
-got = asyncio.run(main._cli_json(["library", "desk", "--json"]))
+client._run_cli = _fake_cli(5, "", 'no saved host matches "desk"')
+got = asyncio.run(client._cli_json(["library", "desk", "--json"]))
 check("json: exit 5 alone is unresolved, not outdated", got["error"] == "unresolved")
-got = asyncio.run(main._cli_json(["discover", "--json"], outdated_rc=(5,)))
+got = asyncio.run(client._cli_json(["discover", "--json"], outdated_rc=(5,)))
 check("json: a verb that never exits 5 reads it as outdated", got["error"] == "client-outdated")
 
 # ---- Plugin.library: the argv shape, and a ref that would read as a flag ------------------
@@ -225,7 +225,7 @@ async def _capture_cli(args, timeout=20.0, stdin_text=None):
     return 0, '{"games": [{"id": "steam:570", "store": "steam", "title": "Dota 2"}]}', ""
 
 
-main._run_cli = _capture_cli
+client._run_cli = _capture_cli
 got = asyncio.run(main.Plugin().library("2f1c-desk"))
 check("library: argv is `library <ref> --json`", captured.get("args") == ["library", "2f1c-desk", "--json"])
 check("library: games merged under ok", got["ok"] is True and got["games"][0]["id"] == "steam:570")
@@ -263,20 +263,20 @@ check("request access: a flag-shaped fingerprint never reaches the CLI", "args" 
 check("request access: ...and is reported as bad-fingerprint", got["error"] == "bad-fingerprint")
 
 # The host's refusal reaches the panel as a token; a client that exits 6 is too old for the flag.
-main._run_cli = _fake_cli(3, '{"ok": false, "reject": "approval-timeout"}', "nobody approved it")
+client._run_cli = _fake_cli(3, '{"ok": false, "reject": "approval-timeout"}', "nobody approved it")
 got = asyncio.run(main.Plugin().request_access("192.168.1.9", 9777, "Steam Deck", desk))
 check("request access: refusal carries the host's token",
       got["error"] == "refused" and got["reject"] == "approval-timeout")
-main._run_cli = _fake_cli(6, "", "no --pin - and no terminal to ask on")
+client._run_cli = _fake_cli(6, "", "no --pin - and no terminal to ask on")
 got = asyncio.run(main.Plugin().request_access("192.168.1.9", 9777, "Steam Deck", desk))
 check("request access: exit 6 is a client too old for the flag", got["error"] == "client-outdated")
-main._run_cli = _fake_cli(0, '{"ok": true, "fp": "ab"}')
+client._run_cli = _fake_cli(0, '{"ok": true, "fp": "ab"}')
 got = asyncio.run(main.Plugin().pair("192.168.1.9", 9777, "1234"))
 check("pair: the fingerprint comes from the json object", got == {"ok": True, "fp": "ab"})
-main._run_cli = _fake_cli(3, '{"ok": false, "kind": "crypto", "reject": null}', "the PIN was wrong")
+client._run_cli = _fake_cli(3, '{"ok": false, "kind": "crypto", "reject": null}', "the PIN was wrong")
 got = asyncio.run(main.Plugin().pair("192.168.1.9", 9777, "1234"))
 check("pair: a wrong PIN has no token", got["error"] == "refused" and "reject" not in got)
-main._run_cli = _fake_cli(3, '{"ok": false, "kind": "timeout", "reject": null}', "the host did not answer")
+client._run_cli = _fake_cli(3, '{"ok": false, "kind": "timeout", "reject": null}', "the host did not answer")
 got = asyncio.run(main.Plugin().pair("192.168.1.9", 9777, "1234"))
 check("pair: a host that never answered is unreachable, not refused", got["error"] == "unreachable")
 
@@ -353,7 +353,7 @@ check("field: absent", main._field_from(info, "Nope") == "")
 
 # ---- flatpak runs in the C locale: `flatpak info` labels are localized ------------------
 _seen: dict = {}
-_real_exec = main._exec
+_real_exec = client._exec
 
 
 async def _spy_exec(argv, label, timeout, **kw):
@@ -361,11 +361,11 @@ async def _spy_exec(argv, label, timeout, **kw):
     return 0, "", ""
 
 
-main._exec = _spy_exec
-main._flatpak = lambda: "/usr/bin/flatpak"
+client._exec = _spy_exec
+client._flatpak = lambda: "/usr/bin/flatpak"
 asyncio.run(main._flatpak_capture(["info", "--user", "io.unom.punktfunk//stable"]))
 check("flatpak: info is read in the C locale", _seen.get("env_extra") == {"LC_ALL": "C"})
-main._exec = _real_exec
+client._exec = _real_exec
 
 # ---- end_game: a ref that would read as a flag is refused without a sentence --------------
 check("end game: a flag-shaped ref is unresolved, with no English notice",

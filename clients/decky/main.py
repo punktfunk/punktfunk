@@ -53,18 +53,7 @@ import urllib.request
 from pathlib import Path
 
 import decky
-from pf_decky import steam_input
-
-# Flatpak application id of the GTK client (packaging/flatpak/io.unom.punktfunk.yml).
-APP_ID = "io.unom.punktfunk"
-# The id before the lowercase rename. A Deck still on it is driven under it until its next client
-# update, which the remote's end-of-life marker turns into a rebase onto APP_ID.
-LEGACY_APP_ID = "io.unom.Punktfunk"
-
-def _runner_path() -> str:
-    """Absolute path to the launch wrapper shipped with the plugin (bin/punktfunkrun.sh)."""
-    return str(Path(decky.DECKY_PLUGIN_DIR) / "bin" / "punktfunkrun.sh")
-
+from pf_decky import client, steam_input
 
 # ----------------------------------------------------------------------------------------
 # Self-update check (no Decky store). The plugin is distributed via "Install Plugin from
@@ -268,366 +257,6 @@ def _read_icon(appid: int, icon_hash: str) -> bytes | None:
     return None
 
 
-def _flatpak() -> str | None:
-    return shutil.which("flatpak") or (
-        "/usr/bin/flatpak" if Path("/usr/bin/flatpak").exists() else None
-    )
-
-
-# --- which client is installed -------------------------------------------------------------
-#
-# The flatpak is the Deck's usual client, but a sysext, a .deb/.rpm, an AUR build, a nix profile
-# and a hand-built binary all install a NATIVE `punktfunk-client` instead. Every call goes
-# through the one client found, which owns its identity, known-hosts and settings (the
-# flatpak's under ~/.var/app), so nothing else in this file cares which one answered.
-NATIVE_BIN = "punktfunk-client"
-# The headless CLI — the door this backend does almost everything through (discover, hosts,
-# pair, trust). Shipped beside the GTK client in every package since v0.22.0: /app/bin in the
-# flatpak, the same bindir as `punktfunk-client` natively.
-CLI_BIN = "punktfunk"
-
-# Prefixes to try when PATH doesn't have it. The Decky backend runs with a minimal PATH, and
-# SteamOS's read-only /usr pushes native installs into a sysext or the user's own prefix.
-_NATIVE_PREFIXES = (
-    "/usr/bin",
-    "/usr/local/bin",
-    "/run/host/usr/bin",
-    "/var/lib/extensions/punktfunk/usr/bin",
-)
-
-
-def _native_client() -> str | None:
-    """Absolute path of a native (non-flatpak) client binary, or None."""
-    found = shutil.which(NATIVE_BIN, path=os.environ.get("PATH", "") + ":" + ":".join(_NATIVE_PREFIXES))
-    if found:
-        return found
-    for prefix in (str(Path(decky.DECKY_USER_HOME) / ".local" / "bin"),):
-        candidate = Path(prefix) / NATIVE_BIN
-        if candidate.exists():
-            return str(candidate)
-    return None
-
-
-def _flatpak_ref() -> dict | None:
-    """The INSTALLED client flatpak resolved to a SCOPE and a BRANCH, or None when there is none.
-
-    ``{"scope": "--user"|"--system", "branch": "canary", "arch": "aarch64", "app_id": APP_ID,
-    "ref": "io.unom.punktfunk//canary"}``. ``app_id`` is :data:`LEGACY_APP_ID` only when that is
-    all the box has.
-
-    The arch is read off the installed tree, not `os.uname()`: Decky's Python can be an x86_64
-    process on an aarch64 SteamOS (Steam Frame).
-
-    ⭐⭐ **Naming no branch is not a shorthand for "the only one".** flatpak refuses an ambiguous
-    ref rather than guessing at one, and the ambiguity does not need two branches *installed*:
-    the punktfunk remote publishes `stable` AND `canary`, so an unqualified
-    ``flatpak remote-info <origin> io.unom.punktfunk`` errors with "Multiple branches available"
-    on a Deck that has exactly one. That error is why the client update check silently answered
-    "up to date" on every Deck — so every query downstream now names the ref in full.
-
-    Read off the exported tree rather than by shelling out to ``flatpak list``, because
-    :func:`_client_argv` is on the path of every headless call and a subprocess per call would be
-    absurd (the same reason :func:`_flatpak_installed` reads the filesystem). ``active`` is the
-    symlink flatpak points at the deployed commit — its presence is what makes a branch directory
-    an INSTALL rather than the leftovers of one.
-
-    With more than one branch installed, `stable` wins, because that is the branch a plain
-    ``flatpak run`` resolves to: the check has to describe the client the launcher really starts,
-    or a stale `stable` silently beats a current `canary` in both places at once.
-    """
-    if not _flatpak():
-        return None
-    scopes = (
-        (Path(decky.DECKY_USER_HOME) / ".local" / "share" / "flatpak", "--user"),
-        (Path("/var/lib/flatpak"), "--system"),
-    )
-    for app_id in (APP_ID, LEGACY_APP_ID):
-        for root, scope in scopes:
-            try:
-                found = sorted(
-                    (p.parent.name, p.name) for p in (root / "app" / app_id).glob("*/*")
-                    if (p / "active").exists()
-                )
-            except OSError:
-                continue  # not installed in this scope
-            if not found:
-                continue
-            arch = found[0][0]
-            branches = [b for a, b in found if a == arch]
-            branch = "stable" if "stable" in branches else branches[0]
-            if len(branches) > 1:
-                decky.logger.warning(
-                    "%s is installed on %d branches (%s) — using %s, the one `flatpak run` "
-                    "resolves to; uninstall the others so the client you launch is the client "
-                    "we update",
-                    app_id, len(branches), ", ".join(branches), branch,
-                )
-            return {
-                "scope": scope, "branch": branch, "arch": arch, "app_id": app_id,
-                "ref": f"{app_id}//{branch}",
-            }
-    return None
-
-
-def _flatpak_installed() -> bool:
-    """True when the flatpak APP is actually installed — not merely that `flatpak` exists.
-
-    Checked by the app's own exported directory rather than by shelling out to `flatpak info`,
-    because this is on the path of every headless call and a subprocess per call would be absurd.
-    Both scopes count: the Deck installs --user, a distro image may ship it system-wide.
-    """
-    return _flatpak_ref() is not None
-
-
-def _client_argv() -> list[str] | None:
-    """The argv PREFIX that runs the client headlessly, or None when no client is installed.
-
-    Flatpak wins when it is installed: it is the tested Deck path, so an existing install keeps
-    behaving exactly as it did. A native binary is the fallback — and on a machine with no
-    flatpak client, the thing that makes the plugin work at all. `PF_DECKY_CLIENT=native|flatpak`
-    forces one when a machine has both.
-
-    The branch is PINNED (`--branch=`, which keeps the app id last — :func:`_cli_argv` appends
-    `--command=` and flatpak treats everything after the id as the app's own argv), so the client
-    this launches is the exact ref :func:`_client_update_state` checks and :meth:`Plugin.
-    update_client` updates.
-    """
-    forced = os.environ.get("PF_DECKY_CLIENT", "").strip().lower()
-    native = _native_client()
-    if forced == "native":
-        return [native] if native else None
-    ref = _flatpak_ref()
-    if forced != "flatpak" and not ref and native:
-        return [native]
-    if ref:
-        return [
-            _flatpak(), "run", f"--arch={ref['arch']}", f"--branch={ref['branch']}", ref["app_id"],
-        ]
-    return [native] if native else None
-
-
-def _cli_argv() -> list[str] | None:
-    """The argv PREFIX that runs the headless CLI, or None when no client is installed.
-
-    Exactly the shape the old ``_session_argv`` used, pointed at ``punktfunk`` instead: the
-    flatpak ships both binaries in /app/bin so ``--command=`` picks the other one (**the app id
-    stays LAST** — flatpak treats everything after it as the app's own argv), and a native
-    install puts the CLI in the same bindir as ``punktfunk-client``, so it is its sibling.
-    """
-    prefix = _client_argv()
-    if not prefix:
-        return None
-    if prefix[0] == _flatpak():
-        return [*prefix[:-1], f"--command={CLI_BIN}", prefix[-1]]
-    sibling = Path(prefix[0]).with_name(CLI_BIN)
-    return [str(sibling)] if sibling.exists() else None
-
-
-async def _run_cli(
-    args: list[str], timeout: float = 20.0, stdin_text: str | None = None
-) -> tuple[int, str, str]:
-    """Run the headless CLI, returning ``(returncode, stdout, stderr)``. SEPARATE pipes: stdout
-    is the machine interface (JSON/TSV) and stderr carries the log lines, and merging them would
-    corrupt every payload. ``(-1, "", "")`` when no client is installed or the call times out.
-
-    ``stdin_text`` is written to the child and the pipe closed — the way a secret reaches the CLI,
-    because argv does not qualify: ``/proc/*/cmdline`` is world-readable, so every process on the
-    Deck can read a flag's value. See :meth:`Plugin.pair`.
-
-    The same ``_flatpak_env`` repair the client runs needed applies here unchanged — Decky's
-    PyInstaller ``LD_LIBRARY_PATH`` leak breaks the flatpak's libcurl whatever binary inside the
-    sandbox is being started."""
-    prefix = _cli_argv()
-    return await _exec(
-        prefix and [*prefix, *args], f"cli {' '.join(args)}", timeout, stdin_text=stdin_text
-    )
-
-
-# The CLI's exit-code contract (clients/cli/src/main.rs): 0 ok, 2 connect failed, 3 trust
-# rejected, 4 renderer, 5 could not resolve what was asked for, 6 needs a person. Mapped to the
-# stable strings the panel renders, so a reworded message can never change what the UI shows.
-_CLI_ERRORS = {
-    2: "unreachable",
-    3: "refused",
-    5: "unresolved",
-    6: "needs-pairing",
-}
-
-
-def _cli_error(rc: int) -> str:
-    """One stable error code for a nonzero CLI exit. Never reads the CLI's prose."""
-    if rc == -1:
-        return "client-unavailable"
-    return _CLI_ERRORS.get(rc, "client-error")
-
-
-def _stdout_json(out: str) -> dict:
-    """The JSON object a CLI verb printed under ``--json``; ``{}`` when stdout holds none, as
-    from a client too old for the flag."""
-    try:
-        data = json.loads(out)
-    except json.JSONDecodeError:
-        return {}
-    return data if isinstance(data, dict) else {}
-
-
-_REJECT_TOKEN = re.compile(r"[a-z]+(-[a-z]+)*")
-
-
-def _reject_token(out: str) -> str | None:
-    """The host's refusal token (``not-armed``, ``denied``, …) in a failed ``pair --json``, for
-    the panel to word. None when the host sent none or the client predates the flag."""
-    token = _stdout_json(out).get("reject")
-    valid = isinstance(token, str) and len(token) <= 32 and _REJECT_TOKEN.fullmatch(token)
-    return token if valid else None
-
-
-async def _cli_json(
-    args: list[str], timeout: float = 20.0, outdated_rc: tuple[int, ...] = ()
-) -> dict:
-    """Run the CLI and parse its stdout as JSON. ``{"ok": True, **payload}`` on success, else
-    ``{"ok": False, "error": <code>, "detail": <the CLI's last stderr line, for the log>}``.
-
-    ``client-outdated`` is a client too old for the verb. Its ``--json`` answer says
-    ``unknown-command``; ``outdated_rc`` lists the exits that mean the same from a client that
-    predates that answer, for a verb a current client never exits with.
-
-    A zero exit with unparseable stdout is a failure, not an empty result: silently returning
-    "no hosts" for a broken client is exactly the answer a user cannot debug."""
-    rc, out, err = await _run_cli(args, timeout=timeout)
-    if rc == 0:
-        try:
-            data = json.loads(out)
-            if isinstance(data, dict):
-                # `ok` last: a payload that ever grows its own `ok` key must not be able to
-                # report failure through the field this layer owns.
-                return {**data, "ok": True}
-        except json.JSONDecodeError:
-            decky.logger.warning("cli %s: unparseable output: %s", args[0], out[:200])
-        return {"ok": False, "error": "client-error", "detail": "unreadable output"}
-    code = _cli_error(rc)
-    if _stdout_json(out).get("error") == "unknown-command" or rc in outdated_rc:
-        code = "client-outdated"
-    detail = (err.strip().splitlines() or [f"{args[0]} failed"])[-1]
-    decky.logger.warning("cli %s failed (rc=%s, %s): %s", args[0], rc, code, detail)
-    return {"ok": False, "error": code, "detail": detail}
-
-
-def _paired_fp(out: str) -> str:
-    """The fingerprint a successful ``pair`` printed: the ``--json`` object's, else the
-    ``fp=`` token of the plain line a client older than the flag prints."""
-    fp = _stdout_json(out).get("fp")
-    if isinstance(fp, str):
-        return fp
-    for token in out.split():
-        if token.startswith("fp="):
-            return token[3:]
-    return ""
-
-
-def _pair_failure(rc: int, out: str, err: str, fallback: str) -> dict:
-    """A failed ``pair`` as the panel gets it: the exit-code error (``unreachable`` when the
-    ``--json`` answer says the host never replied, which exit 3 alone cannot), the host's
-    ``reject`` token when it sent one, and the CLI's last stderr line (``fallback`` when none)
-    for the log."""
-    detail = (err.strip().splitlines() or [fallback])[-1]
-    decky.logger.warning("pair failed (rc=%s): %s", rc, detail)
-    silent = _stdout_json(out).get("kind") in ("timeout", "unreachable")
-    failure = {"ok": False, "error": "unreachable" if silent else _cli_error(rc), "detail": detail}
-    token = _reject_token(out)
-    if token:
-        failure["reject"] = token
-    return failure
-
-
-def _client_is_flatpak() -> bool:
-    """Is the client this plugin actually drives the FLATPAK one?
-
-    Not the same question as "is the flatpak installed": `PF_DECKY_CLIENT=native` forces the
-    native binary on a box that has both, and the update check has to describe the client the
-    launcher will really run — otherwise a Deck with both would be offered a flatpak update for
-    a client it never starts.
-    """
-    prefix = _client_argv()
-    return bool(prefix) and prefix[0] == _flatpak()
-
-
-def _flatpak_env() -> dict:
-    """Environment for a headless client run from the backend (no display needed for pairing).
-    Reconstruct the user-session bits flatpak wants; the backend may not inherit them. Harmless
-    if some are already set — and correct for a NATIVE client too, which needs the same HOME and
-    the same LD_LIBRARY_PATH repair below."""
-    env = dict(os.environ)
-    # Decky Loader is a PyInstaller binary: it prepends its bundled libs (an older libssl) to
-    # LD_LIBRARY_PATH (its /tmp/_MEI* unpack dir), and that env leaks into our subprocess. The
-    # SYSTEM flatpak's libcurl needs OPENSSL_3.3.0 from the SYSTEM libssl, so the bundled libssl
-    # breaks it ("libssl.so.3: version OPENSSL_3.3.0 not found"). Restore the pre-bundle value
-    # PyInstaller saved as <VAR>_ORIG, or drop the var so the dynamic loader uses system libraries.
-    for var in ("LD_LIBRARY_PATH", "LD_PRELOAD"):
-        orig = env.pop(f"{var}_ORIG", None)
-        if orig:
-            env[var] = orig
-        else:
-            env.pop(var, None)
-    env.setdefault("HOME", decky.DECKY_USER_HOME)
-    uid = os.environ.get("PF_UID") or "1000"
-    env.setdefault("XDG_RUNTIME_DIR", f"/run/user/{uid}")
-    env.setdefault(
-        "DBUS_SESSION_BUS_ADDRESS", f"unix:path=/run/user/{uid}/bus"
-    )
-    # Ensure flatpak can find the user installation.
-    env.setdefault(
-        "PATH", "/usr/bin:/bin:" + env.get("PATH", "")
-    )
-    return env
-
-
-async def _exec(
-    argv: list[str] | None,
-    label: str,
-    timeout: float,
-    *,
-    stdin_text: str | None = None,
-    merge_stderr: bool = False,
-    env_extra: dict[str, str] | None = None,
-) -> tuple[int, str, str]:
-    """Run ``argv`` with the user-session env, returning ``(returncode, stdout, stderr)`` decoded.
-    ``(-1, "", "")`` when ``argv`` is empty (nothing installed) or the call errors or times out.
-    ``merge_stderr`` folds stderr into stdout, ``env_extra`` adds to the environment. A timed-out
-    child is killed and reaped, so its pipes close with it rather than at garbage collection."""
-    if not argv:
-        return -1, "", ""
-    proc = None
-    try:
-        proc = await asyncio.create_subprocess_exec(
-            *argv,
-            stdin=asyncio.subprocess.PIPE if stdin_text is not None else None,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.STDOUT if merge_stderr else asyncio.subprocess.PIPE,
-            env={**_flatpak_env(), **(env_extra or {})},
-        )
-        payload = stdin_text.encode() if stdin_text is not None else None
-        out, err = await asyncio.wait_for(proc.communicate(payload), timeout=timeout)
-        rc = proc.returncode if proc.returncode is not None else -1
-        return (
-            rc,
-            (out or b"").decode("utf-8", "replace"),
-            (err or b"").decode("utf-8", "replace"),
-        )
-    except asyncio.TimeoutError:
-        decky.logger.warning("%s timed out", label)
-        if proc:
-            try:
-                proc.kill()
-            except ProcessLookupError:
-                pass
-            await proc.wait()
-        return -1, "", ""
-    except Exception:  # noqa: BLE001
-        decky.logger.exception("%s failed", label)
-        return -1, "", ""
-
-
 # Output this file reads by its English words (``flatpak info`` labels, a GTK client's startup
 # error) is requested in the C locale, so the user's language cannot change what it finds.
 _C_LOCALE = {"LC_ALL": "C"}
@@ -638,8 +267,8 @@ async def _flatpak_capture(args: list[str], timeout: float = 20.0) -> tuple[int,
     stdout. Returns ``(returncode, output)``; ``(-1, "")`` if the binary is missing or the call
     errors/times out. Best-effort by design — every caller here treats a failure as "no update /
     can't tell"."""
-    flatpak = _flatpak()
-    rc, out, _ = await _exec(
+    flatpak = client._flatpak()
+    rc, out, _ = await client._exec(
         flatpak and [flatpak, *args],
         f"flatpak {' '.join(args)}",
         timeout,
@@ -647,27 +276,6 @@ async def _flatpak_capture(args: list[str], timeout: float = 20.0) -> tuple[int,
         env_extra=_C_LOCALE,
     )
     return rc, out
-
-
-async def _run_client(
-    client_args: list[str], timeout: float = 20.0, env_extra: dict[str, str] | None = None
-) -> tuple[int, str, str]:
-    """Run the CLIENT headlessly with the user-session env, returning ``(returncode, stdout,
-    stderr)`` with SEPARATE pipes so a JSON payload on stdout stays clean of the client's log
-    lines on stderr. ``(-1, "", "")`` when no client is installed or the call errors/times out.
-
-    Whether that client is the flatpak or a native install is [_client_argv]'s business; both
-    read and write the SAME ``client-known-hosts.json`` the desktop client uses. This is the
-    single entry point for the headless host-store modes (``--list-hosts`` / ``--add-host`` /
-    ``--set-host`` / ``--forget-host`` / ``--reset`` / ``--reachable``), so state is shared, not
-    duplicated."""
-    prefix = _client_argv()
-    return await _exec(
-        prefix and [*prefix, *client_args],
-        f"client {' '.join(client_args)}",
-        timeout,
-        env_extra=env_extra,
-    )
 
 
 def _field_from(text: str, name: str) -> str:
@@ -704,10 +312,10 @@ async def _client_update_state() -> dict:
     signed-manifest comparison the native path uses would call it up to date when it isn't.
     Native installs have no commit to compare and go through :func:`_native_update_state`.
 
-    ⚠ Every query names the ref IN FULL (see :func:`_flatpak_ref`) — the remote publishes both
+    ⚠ Every query names the ref IN FULL (see :func:`client._flatpak_ref`) — the remote publishes both
     `stable` and `canary`, and an unqualified one is an error, not a default."""
     state = {"available": False, "installed": "", "remote": "", "error": ""}
-    ref = _flatpak_ref()
+    ref = client._flatpak_ref()
     if not ref:
         return state  # no flatpak client in either scope
     scope, full = ref["scope"], ref["ref"]
@@ -761,7 +369,7 @@ async def _native_update_state() -> dict:
     own status dict, or ``{}`` when it couldn't be asked (no native client, a client too old to
     have the mode, offline). Best-effort by design: an unanswerable check must read as "can't
     tell", never as "up to date"."""
-    rc, out, err = await _run_client(
+    rc, out, err = await client._run_client(
         ["--check-update", "--json"], timeout=30.0, env_extra=_C_LOCALE
     )
     # The JSON is authoritative whenever there IS JSON, whatever the exit code: the client
@@ -793,145 +401,37 @@ def _ctl_sockets() -> list[Path]:
     uid = os.environ.get("PF_UID") or "1000"
     run = Path(f"/run/user/{uid}")
     return [
-        run / "app" / APP_ID / "punktfunk-session-ctl.sock",
-        run / "app" / LEGACY_APP_ID / "punktfunk-session-ctl.sock",
+        run / "app" / client.APP_ID / "punktfunk-session-ctl.sock",
+        run / "app" / client.LEGACY_APP_ID / "punktfunk-session-ctl.sock",
         run / "punktfunk-session-ctl.sock",
     ]
 
 
 class Plugin:
-    # ---- Thin shells over the headless CLI -------------------------------------------------
-    #
-    # Each is "build argv, run, parse JSON, map the exit code". No parsing of the client's data
-    # files happens here and no trust rule is re-implemented here: this backend exists because
-    # Decky's frontend cannot spawn processes, not because it knows anything the client doesn't.
+    # The headless CLI: build argv, run, map the exit code.
 
     async def discover(self) -> dict:
-        """Browse the LAN for hosts (``punktfunk discover --json``).
-
-        ``{ok: True, hosts: [{name, addr, port, fp, pair, id, mgmt, os, saved, paired}]}``, or
-        ``{ok: False, error}`` — ``client-outdated`` when the installed client predates the
-        verb, which the panel renders as one explanatory row plus the update button.
-
-        The 12 s budget covers a cold flatpak start on top of the CLI's own 3 s browse. A client
-        that has the verb never exits 5 from it, so 5 means ``client-outdated``."""
-        return await _cli_json(["discover", "--json"], timeout=12.0, outdated_rc=(5,))
+        return await client.discover()
 
     async def hosts(self) -> dict:
-        """The saved hosts with a live reachability probe
-        (``punktfunk hosts list --probe --json``).
-
-        ``--probe`` asks each host directly rather than waiting for an advert, so a host reached
-        over a routed network (Tailscale/VPN) reports online instead of looking dead. Preset
-        bindings and pinned cards come back already resolved against the preset catalog —
-        dangling ids dropped, names attached — so the panel renders them without ever opening
-        the catalog file."""
-        return await _cli_json(["hosts", "list", "--probe", "--json"], timeout=30.0)
+        return await client.hosts()
 
     async def pair(self, addr: str, port: int, pin: str, name: str = "Steam Deck") -> dict:
-        """The PIN ceremony (``punktfunk pair <addr:port> --pin - --name LABEL``).
-
-        The operator arms pairing on the host, which shows a 4-digit PIN; entering it here
-        verifies the host end to end and pins its fingerprint, so every later connect is silent.
-        ``{ok: True, fp}``, or ``{ok: False, error, reject?}`` where ``refused`` is a wrong PIN
-        or a host that turned the device away (``reject`` is the host's token for why), and
-        ``unreachable`` is a host that never answered.
-
-        The PIN goes down the child's STDIN (``--pin -``), never on argv: it is the only secret
-        binding the ceremony to the operator's intent, and a value on the command line is readable
-        by every local process for as long as the call runs (~100 s here) — long enough for anyone
-        on the Deck to complete the pairing with their own keypair instead.
-
-        The budget is generous because the ceremony waits on a person at the other end."""
-        rc, out, err = await _run_cli(
-            [
-                "pair", f"{addr}:{int(port)}",
-                "--pin", "-",
-                "--name", name,
-                "--json",
-            ],
-            timeout=100.0,
-            stdin_text=f"{str(pin).strip()}\n",
-        )
-        if rc == 0:
-            decky.logger.info("paired %s:%s", addr, port)
-            return {"ok": True, "fp": _paired_fp(out)}
-        return _pair_failure(rc, out, err, "pairing failed")
+        return await client.pair(addr, port, pin, name)
 
     async def request_access(
         self, addr: str, port: int, name: str = "Steam Deck", fp: str = ""
     ) -> dict:
-        """No-PIN pairing (``punktfunk pair <addr:port> --request-access --name LABEL --fp HEX``).
-
-        Waits up to ~185 s for the host's operator to approve this Deck, pinned to ``fp``, the
-        fingerprint the host advertised and ``trust_host`` saved. Without it the CLI takes the
-        newest record at the address, which at a dual-boot box can be the other OS. Never
-        streams. Same result shape as ``pair``, plus ``bad-fingerprint`` for an ``fp`` that is not
-        64 hex digits. A client too old for the flag asks for a PIN instead, and exits 6, which a
-        current one never does on this path: ``client-outdated``."""
-        fp = str(fp).strip()
-        if fp and not re.fullmatch(r"[0-9a-fA-F]{64}", fp):
-            return {"ok": False, "error": "bad-fingerprint", "detail": "bad host fingerprint"}
-        args = ["pair", f"{addr}:{int(port)}", "--request-access", "--name", name, "--json"]
-        if fp:
-            args += ["--fp", fp]
-        rc, out, err = await _run_cli(args, timeout=200.0)
-        if rc == 0:
-            decky.logger.info("access granted by %s:%s", addr, port)
-            return {"ok": True, "fp": _paired_fp(out)}
-        failure = _pair_failure(rc, out, err, "the request failed")
-        if rc == 6:
-            failure["error"] = "client-outdated"
-        return failure
+        return await client.request_access(addr, port, name, fp)
 
     async def trust_host(self, addr: str, port: int, fp: str, name: str = "") -> dict:
-        """Step 1 of request access: save the host with the fingerprint it ADVERTISED
-        (``punktfunk hosts add <addr:port> --fp <hex> --name <label>``).
-
-        The record lands pinned but unpaired — "trusted" — which is exactly what a
-        discovered-but-unapproved host is. The stream launched right after pins that same
-        fingerprint, so the 185 s wait for an operator's approval cannot be answered by an
-        impostor. Idempotent: re-running it with the same fingerprint is a no-op that still
-        exits 0. A DIFFERENT fingerprint comes back ``refused`` and is never overwritten.
-
-        This is the ONLY write this backend makes to the client's store, and it goes through
-        the CLI — which writes temp+rename into a user-owned directory, so a root backend
-        driving it cannot lock the desktop client out of its own files."""
-        args = ["hosts", "add", f"{addr}:{int(port)}", "--fp", fp.strip()]
-        if name.strip():
-            args += ["--name", name.strip()]
-        rc, _out, err = await _run_cli(args, timeout=20.0)
-        if rc == 0:
-            return {"ok": True}
-        detail = (err.strip().splitlines() or ["saving the host failed"])[-1]
-        decky.logger.warning("trust_host failed (rc=%s): %s", rc, detail)
-        return {"ok": False, "error": _cli_error(rc), "detail": detail}
+        return await client.trust_host(addr, port, fp, name)
 
     async def library(self, ref: str) -> dict:
-        """The host's game library (``punktfunk library <host-ref> --json``).
-
-        ``{ok: True, games: [{id, store, title}]}`` — ``id`` is store-qualified (``steam:570``),
-        which is what lets the game page match a host title to a Steam appid. Paired hosts
-        only: the CLI answers ``needs-pairing`` for a host that merely has a pinned fingerprint
-        and ``unreachable`` for one that is off.
-
-        The ref is a positional argument, so one that starts with ``-`` is refused here rather
-        than handed to the CLI as a flag."""
-        ref = str(ref).strip()
-        if not ref or ref.startswith("-"):
-            return {"ok": False, "error": "unresolved", "detail": "bad host reference"}
-        return await _cli_json(["library", ref, "--json"], timeout=20.0)
+        return await client.library(ref)
 
     async def profiles(self, ref: str) -> dict:
-        """Who plays on the host (``punktfunk profiles <host-ref> --json``).
-
-        ``{ok: True, profiles: [{id, display_name, accent, owner, note, picture}], picked}``,
-        a picture being a data URL or null. A host without profiles answers ``unresolved``,
-        which the panel reads as "no chips"."""
-        ref = str(ref).strip()
-        if not ref or ref.startswith("-"):
-            return {"ok": False, "error": "unresolved", "detail": "bad host reference"}
-        return await _cli_json(["profiles", ref, "--json"], timeout=20.0)
+        return await client.profiles(ref)
 
     async def shortcut_art(self) -> dict:
         """The Steam-shortcut artwork shipped with the plugin (committed under ``assets/``):
@@ -1022,45 +522,27 @@ class Plugin:
         return await steam_input.apply_controller_config(name)
 
     async def runner_info(self) -> dict:
-        """The wrapper-script path + flatpak app id the frontend needs to create the Steam
-        shortcut. The shortcut invokes the script through ``/bin/sh`` (see steam.ts), so no
-        exec bit is needed — Decky's zip extraction drops it, and the root-owned plugins dir
-        means this unprivileged backend couldn't chmod it back on anyway.
-
-        ``client_bin`` is set only when the resolved client is a NATIVE install; the frontend
-        passes it to the wrapper as ``PF_CLIENT_BIN`` so the launch execs the binary instead of
-        ``flatpak run``. Absent = the wrapper's flatpak default, i.e. every existing Deck
-        install is unaffected."""
-        path = _runner_path()
-        prefix = _client_argv()
-        native = bool(prefix) and prefix[0] != _flatpak()
-        return {
-            "runner": path,
-            "app_id": (_flatpak_ref() or {}).get("app_id", APP_ID),
-            "exists": Path(path).exists(),
-            "client_kind": "native" if native else ("flatpak" if prefix else "none"),
-            "client_bin": prefix[0] if native else "",
-        }
+        return await client.runner_info()
 
     # ---- Shared known-hosts store (the SAME file the desktop client reads/writes) ----
 
     async def kill_stream(self) -> dict:
         """Force-stop a wedged stream client — ``flatpak kill`` for the sandboxed one, a plain
         SIGTERM by name for a native install (which has no flatpak instance to kill)."""
-        prefix = _client_argv()
+        prefix = client._client_argv()
         if not prefix:
             return {"ok": False, "error": "client-not-found"}
-        if prefix[0] == _flatpak():
-            argv = [prefix[0], "kill", prefix[-1]]  # the app id is last, see _client_argv
+        if prefix[0] == client._flatpak():
+            argv = [prefix[0], "kill", prefix[-1]]  # the app id is last, see client._client_argv
         else:
             # -x: whole-name match, so this can only ever hit the client itself.
             killer = shutil.which("pkill") or "/usr/bin/pkill"
-            argv = [killer, "-x", NATIVE_BIN]
+            argv = [killer, "-x", client.NATIVE_BIN]
         try:
             proc = await asyncio.create_subprocess_exec(
                 *argv,
                 stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL,
-                env=_flatpak_env(),
+                env=client._flatpak_env(),
             )
             await asyncio.wait_for(proc.wait(), timeout=10.0)
         except Exception:  # noqa: BLE001
@@ -1088,7 +570,7 @@ class Plugin:
         ref, game_id = str(ref).strip(), str(game_id).strip()
         if not ref or ref.startswith("-") or not game_id or game_id.startswith("-"):
             return {"ok": False, "error": "unresolved"}
-        rc, out, err = await _run_cli(["end-game", ref, "--game", game_id], timeout=20.0)
+        rc, out, err = await client._run_cli(["end-game", ref, "--game", game_id], timeout=20.0)
         lines = (out.strip() or err.strip()).splitlines()
         notice = lines[-1] if lines else ""
         if rc in (0, 5):
@@ -1149,7 +631,7 @@ class Plugin:
                 "error": "manual",
                 "command": state.get("opt_in_hint") or state.get("command", ""),
             }
-        rc, out, err = await _run_client(["--apply-update", "--json"], timeout=900.0)
+        rc, out, err = await client._run_client(["--apply-update", "--json"], timeout=900.0)
         if rc == -1:
             return {"ok": False, "updated": False, "error": "timeout"}
         outcome: dict = {}
@@ -1190,9 +672,9 @@ class Plugin:
 
         Returns ``{ok, updated, error?, detail?, command?, staged?}``. Best-effort; non-fatal.
         """
-        if not _client_is_flatpak():
+        if not client._client_is_flatpak():
             return await self._update_native_client()
-        ref = _flatpak_ref()
+        ref = client._flatpak_ref()
         if not ref:
             return {"ok": False, "updated": False, "error": "client-unavailable"}
         scope, full = ref["scope"], ref["ref"]
@@ -1203,7 +685,7 @@ class Plugin:
             decky.logger.warning("flatpak client update failed (rc=%s): %s", rc, out[-400:])
             return {"ok": False, "updated": False, "error": "update-failed"}
         # An end-of-life rebase leaves the old ref uninstalled, so its commit cannot be compared.
-        moved = _flatpak_ref()
+        moved = client._flatpak_ref()
         if moved and moved["app_id"] != ref["app_id"]:
             decky.logger.info("flatpak client rebased: %s -> %s", ref["ref"], moved["ref"])
             _update_cache["data"] = None
@@ -1258,9 +740,9 @@ class Plugin:
         # (exact for a per-user flatpak), everything else asks the client itself, which
         # verifies the signed per-channel manifest. See _client_update_state / _native_update_state.
         try:
-            if _client_is_flatpak():
+            if client._client_is_flatpak():
                 cu = await _client_update_state()
-                ref = _flatpak_ref()
+                ref = client._flatpak_ref()
                 result["client_update_available"] = bool(cu["available"])
                 result["client_current"] = (cu["installed"] or "")[:10]
                 result["client_latest"] = (cu["remote"] or "")[:10]
@@ -1324,7 +806,7 @@ class Plugin:
     # ---- Decky lifecycle ----
 
     async def _main(self):
-        decky.logger.info("punktfunk plugin loaded (runner=%s)", _runner_path())
+        decky.logger.info("punktfunk plugin loaded (runner=%s)", client._runner_path())
 
     async def _unload(self):
         decky.logger.info("punktfunk plugin unloading")
