@@ -129,10 +129,11 @@ fn csv(v: &[usize]) -> String {
         .join(",")
 }
 
-/// The LTR anchor soak both slot-RFI backends run on hardware, from the environment:
+/// The anchor soak the RFI backends run on hardware, from the environment:
 /// `PF_WAVE_SMOKE=WxH[:8[:fps[:mbps]]]` (NV12 only, default `256x256:8:60:2`), `PF_WAVE_SOAK`
 /// losses (12), one every `PF_WAVE_GAP` frames (40) asked about `PF_WAVE_LAG` frames later (2),
-/// and `PF_WAVE_CODEC=h264` or `av1` over HEVC.
+/// and `PF_WAVE_CODEC=h264` or `av1` over HEVC. `PF_WAVE_CONFIRM=N` hands the encoder the
+/// client's confirmations `N` frames late, so a late ask finds the kept picture.
 #[cfg(any(test, feature = "test-support"))]
 pub struct Soak {
     pub w: u32,
@@ -147,6 +148,7 @@ pub struct Soak {
     /// frame `lag` or more back that was not lost as its reference floor, as a client's
     /// confirmations give it.
     acked: bool,
+    confirm: Option<usize>,
 }
 
 #[cfg(any(test, feature = "test-support"))]
@@ -180,6 +182,9 @@ impl Soak {
             gap: count("PF_WAVE_GAP", 40),
             lag: count("PF_WAVE_LAG", 2),
             acked: std::env::var("PF_WAVE_ACKED").is_ok_and(|v| v == "1"),
+            confirm: std::env::var("PF_WAVE_CONFIRM")
+                .ok()
+                .and_then(|v| v.parse().ok()),
         };
         assert!(
             soak.lag >= 1 && soak.lag < soak.gap,
@@ -211,7 +216,12 @@ impl Soak {
             j >= 1 && (j - 1) % gap == 0 && (skip..losses + skip).contains(&((j - 1) / gap))
         };
         let last = last + skip * gap;
+        // What the client decoded clean, as its ack chain counts it, one entry per AU.
+        let mut clean: Vec<bool> = Vec::new();
         for i in 0..=last {
+            if let Some(c) = self.confirm {
+                enc.note_confirmed(confirmed(&clean, i.checked_sub(c)));
+            }
             if self.acked {
                 let last = i
                     .checked_sub(lag)
@@ -238,6 +248,9 @@ impl Soak {
             }
             enc.submit_indexed(&frame(i), i as u32).expect("submit");
             while let Some(au) = enc.poll().expect("poll") {
+                let j = clean.len();
+                let fresh = au.keyframe || au.recovery_anchor;
+                clean.push(!lost_at(j) && (fresh || j > 0 && clean[j - 1]));
                 aus.push(au);
             }
         }
@@ -266,9 +279,10 @@ impl Soak {
         } = self;
         println!(
             "{name}_ltr_anchor_soak: {w}x{h} {fps} fps {mbps} Mbps {:?} lag={lag} gap={gap} \
-             acked={} lost={} anchors={} idrs={}",
+             acked={} confirm={:?} lost={} anchors={} idrs={}",
             self.codec,
             self.acked,
+            self.confirm,
             csv(&lost),
             csv(&anchors),
             csv(&idrs)
@@ -291,6 +305,21 @@ impl Soak {
     }
 }
 
+/// The confirmations a client sends before frame `top + 1`: the newest clean AU at or before
+/// `top` and the sixteen before it as bits. `None` before the first.
+#[cfg(any(test, feature = "test-support"))]
+fn confirmed(clean: &[bool], top: Option<usize>) -> Option<crate::codec::Acked> {
+    let top = top?.min(clean.len().checked_sub(1)?);
+    let last = (0..=top).rev().find(|&j| clean[j])?;
+    let mask = (0..16)
+        .filter(|&k| last > k && clean[last - 1 - k])
+        .fold(0u16, |m, k| m | 1 << k);
+    Some(crate::codec::Acked {
+        last: last as i64,
+        mask,
+    })
+}
+
 /// The NVENC wave soak both sessions run on hardware: `PF_WAVE_SOAK` (12) waves, each
 /// answering a frame lost `PF_WAVE_LAG` (2) ahead of its start, then `PF_WAVE_GAP` (12) plain
 /// frames. `PF_WAVE_SMOKE=WxH[:bits[:fps[:mbps]]]` (`256x256:8:120:1`; `10` bits has the
@@ -299,7 +328,8 @@ impl Soak {
 /// flushes it. `PF_WAVE_ANCHOR=1` answers each loss with an RFI anchor instead (leave
 /// `PUNKTFUNK_NVENC_IR_ALWAYS` unset), and only it takes another lag or `PF_WAVE_CODEC=av1`:
 /// NVENC AV1 never waves. `PF_WAVE_DECLINE=1`, also with that knob unset, follows each anchor
-/// with a loss too old to anchor: the wave answers it, and its start carries no anchor.
+/// with a loss older than every long-term picture: the wave answers it, and its start carries
+/// no anchor.
 #[cfg(all(any(test, feature = "test-support"), feature = "nvenc"))]
 pub struct WaveSoak {
     pub w: u32,
@@ -409,18 +439,15 @@ impl WaveSoak {
             "the spoiling loss lands inside the sweep"
         );
         // Wave k starts at base + k * period. Its lost frame is `lag` before the start, a
-        // declined one a DPB before it and after the opening IDR. A spoiled wave is followed by
-        // the queued one, so its period holds two cycles.
+        // declined one `KEEP_REACH` before it, behind every long-term picture. A spoiled wave
+        // is followed by the queued one, so its period holds two cycles.
         let period = if spoil {
             2 * cycle + gap
         } else {
             cycle.max(lag) + gap
         };
-        let base = if decline {
-            crate::nvenc_core::RFI_DPB as usize + 1
-        } else {
-            lag + 1
-        };
+        let old = crate::rfi::KEEP_REACH as usize;
+        let base = if decline { old + 1 } else { lag + 1 };
         let last = base + waves * period;
         let (mut m, mut aus) = (WaveMarks::default(), Vec::new());
         for i in 0..=last {
@@ -436,7 +463,7 @@ impl WaveSoak {
                     m.lost.push(i - lag);
                     if decline {
                         assert!(session(enc).pending_anchor, "an anchor first");
-                        let d = i - crate::nvenc_core::RFI_DPB as usize;
+                        let d = i - old;
                         assert!(enc.invalidate_ref_frames(d as i64, d as i64), "then a wave");
                         m.lost.push(d);
                     }
