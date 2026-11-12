@@ -10,6 +10,7 @@ import { motion } from "motion/react";
 import { type FC, useEffect, useRef, useState } from "react";
 import { useDownloads } from "@/api/downloads";
 import {
+	deleteCustomGame,
 	getGetLibraryPageQueryKey,
 	getLibraryPage,
 	useDeleteCustomGame,
@@ -44,9 +45,10 @@ import type { Loadable } from "@/lib/query";
 import { useDebounced } from "@/lib/use-debounced";
 import { cn } from "@/lib/utils";
 import { m } from "@/paraglide/messages";
+import { isAbort, useDesktop } from "./desktop";
 import { GameCard } from "./GameCard";
 import { GameRow } from "./GameRow";
-import { customId, refreshLibrary } from "./helpers";
+import { customId, dropTitle, refreshLibrary } from "./helpers";
 import { DownloadsList } from "./Install";
 import { setList } from "./overrides";
 import { useSourceNames } from "./Sources";
@@ -66,7 +68,8 @@ const isView = (v: unknown): v is LibraryView => v === "grid" || v === "rows";
  * Container: the library OVERVIEW. The host pages the list by cursor and searches it, so a
  * library of thousands costs one page at a time; this owns the filters, the pages, per-title
  * delete and hide. A card or row opens the entry's own page. A profile's view lists the titles
- * as that profile has them and changes only its own values: no delete, no downloads.
+ * as that profile has them and changes only its own values: no downloads, and a delete only of a
+ * game the profile alone has.
  */
 export const LibraryGridSection: FC<{
 	/** Show only entries owned by this provider, or everything when null. */
@@ -143,6 +146,43 @@ export const LibraryGridSection: FC<{
 			return;
 		}
 		refresh();
+	};
+
+	// A game only the profile has is deleted on its desktop, which may have to start first: a
+	// toast says so and can cancel. The box lists the game a moment longer, so it leaves here now.
+	const desktop = useDesktop(profile?.ownGames ? profile : null);
+	const [deletingOwn, setDeletingOwn] = useState<string | null>(null);
+	const onDeleteOwn = async (entry: OperatorGameEntry) => {
+		const ok = await confirm({
+			title: m.library_delete_confirm(),
+			description: m.library_delete_body(),
+			confirmLabel: m.library_delete(),
+			destructive: true,
+		});
+		if (!ok || !profile) return;
+		const waiting = `delete-${entry.id}`;
+		setDeletingOwn(entry.id);
+		try {
+			await desktop.run(
+				() => deleteCustomGame(entry.id),
+				(cancel) =>
+					toast.loading(
+						m.profile_view_desktop_wait_delete({ name: profile.name }),
+						{
+							id: waiting,
+							duration: Number.POSITIVE_INFINITY,
+							action: { label: m.common_cancel(), onClick: cancel },
+						},
+					),
+			);
+			dropTitle(qc, entry.id);
+		} catch (e) {
+			if (!isAbort(e))
+				toast.error(apiErrorMessage(e) ?? m.library_delete_failed());
+		} finally {
+			toast.dismiss(waiting);
+			setDeletingOwn((id) => (id === entry.id ? null : id));
+		}
 	};
 
 	const setHidden = useSetLibraryEntryHidden();
@@ -234,9 +274,16 @@ export const LibraryGridSection: FC<{
 				onSources={onSources}
 				view={view}
 				onView={setView}
-				{...(profile ? { who: profile.name } : { onDelete })}
+				{...(profile
+					? {
+							who: profile.name,
+							...(profile.ownGames ? { onDelete: onDeleteOwn } : {}),
+						}
+					: { onDelete })}
 				// The custom id whose delete is in flight (if any), so only that title's button disables.
-				deletingId={remove.isPending ? (remove.variables?.id ?? null) : null}
+				deletingId={
+					remove.isPending ? (remove.variables?.id ?? null) : deletingOwn
+				}
 				onToggleHidden={onToggleHidden}
 				// Keyed by ENTRY id, not custom id — hiding addresses any store's entry, not just ours.
 				hidingId={
@@ -321,7 +368,7 @@ export interface LibraryGridProps {
 	onSources?: () => void;
 	view: LibraryView;
 	onView: (v: LibraryView) => void;
-	/** Absent in a profile's view: the titles are the owner's library's. */
+	/** With `who`, offered only on a game that profile alone has: the rest are the owner's. */
 	onDelete?: (entry: OperatorGameEntry) => void;
 	/** Custom id of the title whose delete is in flight, or null — only that one disables. */
 	deletingId: string | null;
@@ -468,7 +515,9 @@ export const LibraryGrid: FC<LibraryGridProps> = ({
 		const download = downloadOf?.(game.id);
 		return {
 			game,
-			...(onDelete ? { onDelete: () => onDelete(game) } : {}),
+			...(onDelete && (!who || game.own)
+				? { onDelete: () => onDelete(game) }
+				: {}),
 			...(who ? { who } : {}),
 			deleting: deletingId === customId(game),
 			onToggleHidden: () => onToggleHidden(game),

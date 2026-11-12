@@ -196,6 +196,10 @@ fn every_route_is_classified_for_the_plugin_and_cert_lanes() {
         // A plugin reaches only its own provider's rows: `a_plugin_changes_only_its_own_library_rows`.
         ("PUT", "/api/v1/library/custom/{id}", true, false),
         ("DELETE", "/api/v1/library/custom/{id}", true, false),
+        // A seat's own titles go from its host to the box's writer by the admin tokens the door
+        // holds; a client reads them on `GET /library`.
+        ("GET", "/api/v1/library/own", false, false),
+        ("PUT", "/api/v1/library/own", false, false),
         ("PUT", "/api/v1/library/provider/{provider}", true, false),
         ("DELETE", "/api/v1/library/provider/{provider}", true, false),
         // A source writes its own result and reads its mode; order, switches and picks are
@@ -495,9 +499,10 @@ async fn only_the_operator_writes_a_profile_s_layer() {
             }
         }
     }
-    // Hidden, scanner, pick, three on shared overrides, game, source, session settings' two.
+    // Hidden, scanner, pick, three on shared overrides, game, source, session settings' two, a
+    // seat's own titles.
     assert_eq!(
-        writes, 10,
+        writes, 11,
         "a new write that takes `as` belongs in this list"
     );
     // The operator passes the lane check and meets the profile check.
@@ -784,6 +789,9 @@ fn every_route_has_a_side_on_the_door() {
         ("POST", "/api/v1/library/custom", false),
         ("PUT", "/api/v1/library/custom/{id}", false),
         ("DELETE", "/api/v1/library/custom/{id}", false),
+        // The door calls a seat host and the owner's host for these, never its own copy.
+        ("GET", "/api/v1/library/own", false),
+        ("PUT", "/api/v1/library/own", false),
         ("PUT", "/api/v1/library/hidden/{id}", false),
         ("PUT", "/api/v1/library/picks/{id}", false),
         ("GET", "/api/v1/library/overrides", false),

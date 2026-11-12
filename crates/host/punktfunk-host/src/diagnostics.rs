@@ -32,6 +32,7 @@ pub mod ids {
     pub const PAD_AUDIO: &str = "pad_audio";
     pub const PAD_DRIVER: &str = "pad_driver";
     pub const ENCODER_SHARING: &str = "encoder_sharing";
+    pub const GPU_FIRMWARE: &str = "gpu_firmware";
     pub const PLUGIN_SANDBOX: &str = "plugin_sandbox";
     pub const RESTART_PENDING: &str = "restart_pending";
 }
@@ -578,6 +579,7 @@ mod tests {
             ids::OMARCHY_UPDATES,
             ids::VDISPLAY_DRIVER,
             ids::ENCODER_SHARING,
+            ids::GPU_FIRMWARE,
         ] {
             assert!(
                 ids.iter().any(|i| i == expected),

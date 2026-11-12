@@ -7,6 +7,7 @@
 //! never widens: what the box hides or turns off stays so. The owner's layer is the box's. With no
 //! profile in view every loader reads the box's files alone; a contract seat's own view is its
 //! profile's. The box host writes the layers; a seat host reads its own from its library copy.
+//! A seat host's own titles reach its layer as names and pictures alone ([`OwnTitle`]).
 //! Pin: `mgmt::tests::profile_view`.
 
 use super::*;
@@ -193,6 +194,188 @@ impl OwnValues {
     }
 }
 
+/// A profile's own titles as its seat host published them, in its layer.
+const OWN_TITLES: &str = "own-titles.json";
+/// Most own titles one seat publishes: an answer that lists more is refused, not cut short.
+const OWN_TITLES_MAX: usize = 500;
+/// The largest answer: the management API's own request body limit.
+const OWN_TITLES_BYTES: usize = 2 * 1024 * 1024;
+/// Longest title or platform kept, as for an Art & Metadata source's short text.
+const OWN_TEXT_MAX: usize = 256;
+
+/// One of a profile's own titles as its seat host publishes it to the box: what a shelf shows,
+/// never what starts it. Built field by field, so a field added to [`CustomEntry`] stays on the
+/// seat until it is added here.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, ToSchema)]
+pub struct OwnTitle {
+    /// `own:` and 12 lowercase hex, minted by the seat host.
+    #[schema(example = "own:3f9a0c1b2d4e")]
+    pub id: String,
+    pub title: String,
+    /// `http(s)` URLs alone: a cover on the seat's disk stays there.
+    #[serde(default)]
+    pub art: Artwork,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schema(example = "PC")]
+    pub platform: Option<String>,
+}
+
+impl OwnTitle {
+    /// `e` as the box may see it.
+    pub(crate) fn of(e: &CustomEntry) -> Self {
+        let mut art = Artwork::default();
+        for kind in ArtKind::ALL {
+            *art_slot(&mut art, kind) = art_field(&e.art, kind).filter(|u| valid_remote_url(u));
+        }
+        Self {
+            id: e.id.clone(),
+            title: e.title.clone(),
+            art,
+            platform: e.meta.platform.clone(),
+        }
+    }
+}
+
+impl From<OwnTitle> for CustomEntry {
+    /// A published title as the box lists it: with no launch, nothing starts it there.
+    fn from(t: OwnTitle) -> Self {
+        CustomEntry {
+            id: t.id,
+            title: t.title,
+            art: t.art,
+            launch: None,
+            prep: Vec::new(),
+            provider: None,
+            external_id: None,
+            store: None,
+            role: GameRole::Game,
+            icon: None,
+            detect: DetectHint::default(),
+            on_window: OnWindow::default(),
+            audio: None,
+            ids: BTreeMap::new(),
+            install: None,
+            meta: GameMeta {
+                platform: t.platform,
+                ..GameMeta::default()
+            },
+        }
+    }
+}
+
+/// `own-titles.json`.
+#[derive(Default, Serialize, Deserialize)]
+struct OwnTitles {
+    #[serde(default)]
+    titles: Vec<OwnTitle>,
+}
+
+/// The titles `view`'s profile's seat published; none with no profile in view.
+pub(crate) fn own_titles(view: &View) -> Vec<OwnTitle> {
+    let Some(path) = view.own_file(OWN_TITLES) else {
+        return Vec::new();
+    };
+    let mut titles = read_json_or_default::<OwnTitles>(&path).titles;
+    titles.retain(|t| is_own_id(&t.id));
+    titles
+}
+
+/// What this host's `GET /library/own` answers: each entry it keeps of its own, as the box may
+/// see it. A host that keeps none answers none.
+pub fn published_own_titles() -> Vec<OwnTitle> {
+    if !keeps_own_titles() {
+        return Vec::new();
+    }
+    own_entries(&View::here())
+        .iter()
+        .map(OwnTitle::of)
+        .collect()
+}
+
+/// A seat host's `GET /library/own` answer, `body`, as the box keeps it for `profile`, checked as
+/// an Art & Metadata source's push is: a row with a bad id or title, a cover that isn't `http(s)`
+/// and a bad platform are dropped. An answer that isn't a list of titles, is too large, lists
+/// more than [`OWN_TITLES_MAX`] or names an id twice is refused, and logged.
+pub fn checked_own_titles(
+    profile: &str,
+    body: &[u8],
+) -> std::result::Result<Vec<OwnTitle>, String> {
+    let checked = check_own_titles(body);
+    if let Err(why) = &checked {
+        tracing::warn!(profile, reason = %why, "seat's own titles refused: the stored ones stay");
+    }
+    checked
+}
+
+fn check_own_titles(body: &[u8]) -> std::result::Result<Vec<OwnTitle>, String> {
+    if body.len() > OWN_TITLES_BYTES {
+        return Err(format!("an answer of {} bytes", body.len()));
+    }
+    let rows: Vec<OwnTitle> =
+        serde_json::from_slice(body).map_err(|e| format!("not a list of titles: {e}"))?;
+    if rows.len() > OWN_TITLES_MAX {
+        return Err(format!("{} titles", rows.len()));
+    }
+    let text = |s: &str| {
+        !s.trim().is_empty() && s.len() <= OWN_TEXT_MAX && !s.chars().any(char::is_control)
+    };
+    let mut seen = HashSet::new();
+    let mut kept = Vec::with_capacity(rows.len());
+    for mut t in rows {
+        if !seen.insert(t.id.clone()) {
+            return Err(format!("{} twice", t.id));
+        }
+        if !is_own_id(&t.id) || !text(&t.title) {
+            continue;
+        }
+        for kind in ArtKind::ALL {
+            let slot = art_slot(&mut t.art, kind);
+            if slot.as_deref().is_some_and(|u| !valid_remote_url(u)) {
+                *slot = None;
+            }
+        }
+        t.platform = t.platform.filter(|p| text(p));
+        kept.push(t);
+    }
+    Ok(kept)
+}
+
+/// Stores `titles` as profile `profile`'s own, in its layer, on the host that writes the library:
+/// whatever profile a row or the seat named, these are `profile`'s. No titles removes the file.
+/// `true` when they changed, which emits `library.changed`.
+pub fn store_own_titles(profile: &str, titles: Vec<OwnTitle>) -> Result<bool> {
+    anyhow::ensure!(
+        pf_paths::seat::box_library_dir().is_none(),
+        "store own titles on a host that reads the box's library"
+    );
+    let path = View::of(profile, false, Reach::default())
+        .own_file(OWN_TITLES)
+        .with_context(|| format!("profile id {profile:?}"))?;
+    let changed = if titles.is_empty() {
+        match std::fs::remove_file(&path) {
+            Ok(()) => {
+                wrote();
+                true
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => false,
+            Err(e) => return Err(e).with_context(|| format!("remove {}", path.display())),
+        }
+    } else {
+        let json = serde_json::to_string_pretty(&OwnTitles { titles })?;
+        let same = std::fs::read_to_string(&path).is_ok_and(|old| old == json);
+        if !same {
+            save_json(&path, &json)?;
+        }
+        !same
+    };
+    if changed {
+        crate::events::emit(crate::events::EventKind::LibraryChanged {
+            source: "manual".into(),
+        });
+    }
+    Ok(changed)
+}
+
 /// Removes profile `id`'s layer, on the host that writes the library.
 pub fn forget_profile(id: &str) {
     if pf_paths::seat::box_library_dir().is_some() || !is_profile_id(id) {
@@ -243,5 +426,101 @@ mod tests {
         assert!(path.ends_with("library-profiles/a1b2c3d4e5f6/library-hidden.json"));
         assert_eq!(p.base().layer(), None);
         assert!(View::default().own_file("x").is_none());
+    }
+
+    #[test]
+    fn an_own_id_is_own_and_12_lowercase_hex() {
+        assert!(is_own_id("own:0123456789ab"));
+        for bad in [
+            "own:",
+            "own:0123456789AB",
+            "own:0123456789a",
+            "own:0123456789abc",
+            "own:../../etc/x",
+            "custom:0123456789ab",
+            "0123456789ab",
+            "steam:570",
+        ] {
+            assert!(!is_own_id(bad), "{bad:?}");
+        }
+    }
+
+    /// An entry with every field set leaves the seat as its id, title, platform and remote art.
+    #[test]
+    fn an_own_title_is_a_name_and_a_picture_alone() {
+        let full = serde_json::json!({
+            "id": "own:0123456789ab", "title": "Doom",
+            "art": {"portrait": "/home/anna/covers/doom.png", "hero": "https://cdn.example/h.jpg",
+                    "logo": "https://cdn.example/l.png", "header": "C:\\covers\\doom.jpg"},
+            "launch": {"kind": "command", "value": "gzdoom -iwad doom.wad",
+                       "args": [{"name": "rom", "value": "/roms/doom.wad"}]},
+            "prep": [{"do": "xrandr --output X", "undo": "xrandr --auto", "elevated": true}],
+            "provider": "romm", "external_id": "doom-1", "store": "romm",
+            "role": "launcher", "icon": "steam",
+            "detect": {"install_dir": "/games/doom", "exe": "/games/doom/gzdoom",
+                       "process_name": "gzdoom", "steam_appid": 2280,
+                       "env_marker": {"key": "DOOM", "value": "1"}},
+            "on_window": {"workspace": "current", "focus": true, "fullscreen": true,
+                          "move_to_stream_output": true},
+            "audio": {"sessions": "owner"}, "ids": {"steam": "2280"},
+            "install": {"state": "missing", "size_bytes": 1, "target": "/games"},
+            "platform": "PC", "description": "Rip and tear.", "developer": "id",
+            "publisher": "id", "release_year": 1993, "genres": ["FPS"], "tags": ["classic"],
+            "region": "World", "players": 4,
+        });
+        let entry: CustomEntry = serde_json::from_value(full.clone()).unwrap();
+        let stored = serde_json::to_value(&entry).unwrap();
+        let keys = |v: &serde_json::Value| -> std::collections::BTreeSet<String> {
+            v.as_object().unwrap().keys().cloned().collect()
+        };
+        assert_eq!(keys(&stored), keys(&full), "every field is set");
+        let published = serde_json::to_value(OwnTitle::of(&entry)).unwrap();
+        let want = serde_json::json!({
+            "id": "own:0123456789ab", "title": "Doom", "platform": "PC",
+            "art": {"hero": "https://cdn.example/h.jpg", "logo": "https://cdn.example/l.png"},
+        });
+        assert_eq!(published, want);
+    }
+
+    /// What the box keeps of a seat's answer: a garbage answer is refused whole, a bad row or
+    /// value is dropped, and nothing but the four fields survives.
+    #[test]
+    fn the_box_checks_a_seat_s_answer_as_a_source_s() {
+        let check = |v: serde_json::Value| check_own_titles(v.to_string().as_bytes());
+        let row = |id: &str| serde_json::json!({"id": id, "title": "T"});
+        for garbage in [
+            serde_json::json!({"titles": []}),
+            serde_json::json!([{"id": "own:0123456789ab"}]),
+            serde_json::json!([row("own:0123456789ab"), row("own:0123456789ab")]),
+            serde_json::Value::Array(
+                (0..=OWN_TITLES_MAX)
+                    .map(|i| row(&format!("own:{i:012x}")))
+                    .collect(),
+            ),
+        ] {
+            assert!(check(garbage).is_err());
+        }
+        assert!(check_own_titles(b"\xff not json").is_err());
+        let big = vec![b' '; OWN_TITLES_BYTES + 1];
+        assert!(check_own_titles(&big).is_err());
+
+        let answer = serde_json::json!([
+            {"id": "own:0123456789ab", "title": "Doom", "platform": "x".repeat(OWN_TEXT_MAX + 1),
+             "art": {"portrait": "/home/anna/p.png", "hero": "https://cdn.example/h.jpg"},
+             "launch": {"kind": "command", "value": "rm -rf ~"}, "prep": [{"do": "true"}],
+             "profile": "0f0f0f0f0f0f"},
+            {"id": "steam:570", "title": "Dota"},
+            {"id": "custom:0123456789ab", "title": "Theirs"},
+            {"id": "own:00000000000a", "title": " "},
+            {"id": "own:00000000000b", "title": "Bad\u{0}title"},
+            {"id": "own:00000000000c", "title": "Quake", "platform": "PC"},
+        ]);
+        let kept = serde_json::to_value(check(answer).unwrap()).unwrap();
+        let want = serde_json::json!([
+            {"id": "own:0123456789ab", "title": "Doom", "art": {"hero": "https://cdn.example/h.jpg"}},
+            {"id": "own:00000000000c", "title": "Quake", "art": {}, "platform": "PC"},
+        ]);
+        assert_eq!(kept, want);
+        assert!(check(serde_json::json!([])).unwrap().is_empty());
     }
 }

@@ -722,6 +722,10 @@ pub(crate) struct VulkanEncodeCaps {
     pub eight_bit: bool,
     /// HEVC Main10 / AV1 Main at 10 bits (the HDR session profile).
     pub ten_bit: bool,
+    /// The pairs the device's EFC converts; `None` without an EFC.
+    pub efc: Option<crate::vcn_firmware::EfcPairs>,
+    /// The device's VCN firmware; `None` off amdgpu.
+    pub vcn: Option<crate::vcn_firmware::VcnFirmware>,
 }
 
 /// Probe [`VulkanEncodeCaps`] for `codec`. Uncached — [`crate::vulkan_encode_caps`] owns the
@@ -755,10 +759,13 @@ pub(crate) fn probe_encode_caps(codec: Codec) -> VulkanEncodeCaps {
         let caps = match found {
             Some(pd) => {
                 let vq_inst = ash::khr::video_queue::Instance::new(&entry, &instance);
+                let eight_bit = depth_supported(&vq_inst, pd, codec_op, av1, false);
                 VulkanEncodeCaps {
                     supported: true,
-                    eight_bit: depth_supported(&vq_inst, pd, codec_op, av1, false),
+                    eight_bit,
                     ten_bit: depth_supported(&vq_inst, pd, codec_op, av1, true),
+                    efc: build::probe_efc_pairs(&instance, &vq_inst, pd, codec_op, av1, !eight_bit),
+                    vcn: build::vcn_firmware_of(&instance, pd),
                 }
             }
             None => VulkanEncodeCaps::default(),

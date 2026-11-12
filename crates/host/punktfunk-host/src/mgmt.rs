@@ -532,6 +532,7 @@ fn api_router_parts() -> (Router<Arc<MgmtState>>, utoipa::openapi::OpenApi) {
             library::update_custom_game,
             library::delete_custom_game
         ))
+        .routes(routes!(library::list_own_titles, library::store_own_titles))
         // A plugin sends its whole set in one PUT; descriptions across a big library outgrow
         // axum's 2 MB default and a 413 fails the entire sync.
         .merge(

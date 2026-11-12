@@ -70,12 +70,14 @@ const LIBRARY_METADATA: &str = "library-metadata";
 
 /// A profile's own layer of the library: one folder per profile, named by its id.
 const LIBRARY_PROFILES: &str = "library-profiles";
-/// What a profile's folder holds. Nothing in them runs.
-const PROFILE_FILES: [&str; 5] = [
+/// What a profile's folder holds. Nothing in them runs: `own-titles.json` names the titles its
+/// seat keeps, and how each starts stays on the seat.
+const PROFILE_FILES: [&str; 6] = [
     "library-hidden.json",
     "library-overrides.json",
     "library-picks.json",
     "library-scanners.json",
+    "own-titles.json",
     "session-settings.json",
 ];
 
@@ -2175,6 +2177,7 @@ mod tests {
         }
         std::fs::write(layer.join(ANNA).join("library-hidden.json"), "[1]").unwrap();
         std::fs::write(layer.join(ANNA).join("session-settings.json"), "{}").unwrap();
+        std::fs::write(layer.join(ANNA).join("own-titles.json"), "{}").unwrap();
         std::fs::write(layer.join(ANNA).join("notes.txt"), "not a store").unwrap();
         std::fs::write(layer.join(BEN).join("library-picks.json"), "{}").unwrap();
         profiles_on(&box_dir, id().as_str(), OTHER_SEAT);
@@ -2186,7 +2189,11 @@ mod tests {
         assert_eq!(mode(&copy.join(ANNA).join("library-hidden.json")), 0o640);
         assert_eq!(
             listing(&copy.join(ANNA)),
-            ["library-hidden.json", "session-settings.json"],
+            [
+                "library-hidden.json",
+                "own-titles.json",
+                "session-settings.json"
+            ],
             "the stores alone"
         );
 
@@ -2202,6 +2209,7 @@ mod tests {
             "[1]"
         );
         assert_eq!(mode(&trust.join(ANNA).join("library-hidden.json")), 0o600);
+        assert_eq!(mode(&trust.join(ANNA).join("own-titles.json")), 0o600);
         assert!(!seat_copy(&box_dir).unwrap(), "unchanged is a no-op");
 
         // The seat becomes Ben's: Anna's folder goes, with what a cut-short copy left.

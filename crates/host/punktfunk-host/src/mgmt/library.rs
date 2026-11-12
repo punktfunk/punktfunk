@@ -23,8 +23,9 @@ use axum::Extension;
 use sha2::{Digest, Sha256};
 
 /// A seat host reading the box's library ([`pf_paths::seat::box_library_dir`], `box_library`)
-/// changes none of it: every write under `/api/v1/library` answers 409. The box host is the
-/// library's one writer.
+/// changes none of it: every write under `/api/v1/library` answers 409, but the custom-entry
+/// writes, which land in its own titles ([`crate::library::keeps_own_titles`]). The box host is
+/// the library's one writer. On a person's own account no custom-entry write lands at all.
 pub(super) async fn box_library_is_read_only(
     box_library: bool,
     req: Request,
@@ -32,15 +33,30 @@ pub(super) async fn box_library_is_read_only(
 ) -> Response {
     let path = req.uri().path();
     let library = path == "/api/v1/library" || path.starts_with("/api/v1/library/");
+    let custom = path == "/api/v1/library/custom" || path.starts_with("/api/v1/library/custom/");
     let write = !matches!(*req.method(), Method::GET | Method::HEAD);
-    if box_library && library && write {
+    if custom && write && pf_paths::seat::own_account() {
         return api_error_coded(
-            StatusCode::CONFLICT,
-            "seat_library_read_only",
-            "This seat plays the box's library, so it can't be changed here. Change it on the box.",
+            StatusCode::FORBIDDEN,
+            "library_own_account",
+            "Games can't be added to a profile that uses an existing account, because they would \
+             run as that person.",
         );
     }
+    let own = custom && crate::library::keeps_own_titles();
+    if box_library && library && write && !own {
+        return seat_library_read_only();
+    }
     next.run(req).await
+}
+
+/// The 409 a seat host answers a write to the box's library with.
+fn seat_library_read_only() -> Response {
+    api_error_coded(
+        StatusCode::CONFLICT,
+        "seat_library_read_only",
+        "This seat plays the box's library, so it can't be changed here. Change it on the box.",
+    )
 }
 
 /// Refuse a custom-entry write that carries an operator-privileged field on a lane that may
@@ -717,7 +733,10 @@ pub(crate) async fn set_library_scanner(
 
 /// Create a custom title
 ///
-/// A user-curated entry. The host assigns a stable id, returned in the body.
+/// A user-curated entry. The host assigns a stable id, returned in the body. On a seat host it is
+/// that host's own title, under an `own:` id, kept in its own config folder and run as its
+/// account; the box lists its name and picture for the seat's profile. A profile that uses an
+/// existing account takes none.
 #[utoipa::path(
     post,
     path = "/library/custom",
@@ -728,6 +747,7 @@ pub(crate) async fn set_library_scanner(
         (status = CREATED, description = "Entry created", body = crate::library::CustomEntry),
         (status = BAD_REQUEST, description = "Empty title", body = ApiError),
         (status = UNAUTHORIZED, description = "Missing or invalid bearer token", body = ApiError),
+        (status = FORBIDDEN, description = "A field this lane may not set, or a seat on a person's own account", body = ApiError),
         (status = INTERNAL_SERVER_ERROR, description = "Couldn't save the catalog", body = ApiError),
     )
 )]
@@ -762,7 +782,7 @@ pub(crate) async fn create_custom_game(
     path = "/library/custom/{id}",
     tag = "library",
     operation_id = "getCustomGame",
-    params(("id" = String, Path, description = "The custom entry id (without the `custom:` prefix)")),
+    params(("id" = String, Path, description = "The custom entry id (without the `custom:` prefix), or a seat host's own `own:` id")),
     responses(
         (status = OK, description = "The stored entry", body = crate::library::CustomEntry),
         (status = UNAUTHORIZED, description = "Missing or invalid bearer token", body = ApiError),
@@ -781,7 +801,7 @@ pub(crate) async fn get_custom_game(Path(id): Path<String>) -> Response {
     path = "/library/custom/{id}",
     tag = "library",
     operation_id = "updateCustomGame",
-    params(("id" = String, Path, description = "The custom entry id (without the `custom:` prefix)")),
+    params(("id" = String, Path, description = "The custom entry id (without the `custom:` prefix), or a seat host's own `own:` id")),
     request_body = crate::library::CustomInput,
     responses(
         (status = OK, description = "Entry updated", body = crate::library::CustomEntry),
@@ -789,6 +809,7 @@ pub(crate) async fn get_custom_game(Path(id): Path<String>) -> Response {
         (status = UNAUTHORIZED, description = "Missing or invalid bearer token", body = ApiError),
         (status = FORBIDDEN, description = "A plugin named a row its own provider does not publish", body = ApiError),
         (status = NOT_FOUND, description = "No custom entry with that id", body = ApiError),
+        (status = CONFLICT, description = "A seat host named a row of the box's", body = ApiError),
         (status = INTERNAL_SERVER_ERROR, description = "Couldn't save the catalog", body = ApiError),
     )
 )]
@@ -798,6 +819,9 @@ pub(crate) async fn update_custom_game(
     Path(id): Path<String>,
     ApiJson(input): ApiJson<crate::library::CustomInput>,
 ) -> Response {
+    if let Some(refused) = not_this_seats_own(&id) {
+        return refused;
+    }
     if input.title.trim().is_empty() {
         return api_error(StatusCode::BAD_REQUEST, "title must not be empty");
     }
@@ -838,12 +862,13 @@ pub(crate) async fn update_custom_game(
     path = "/library/custom/{id}",
     tag = "library",
     operation_id = "deleteCustomGame",
-    params(("id" = String, Path, description = "The custom entry id (without the `custom:` prefix)")),
+    params(("id" = String, Path, description = "The custom entry id (without the `custom:` prefix), or a seat host's own `own:` id")),
     responses(
         (status = NO_CONTENT, description = "Entry deleted"),
         (status = UNAUTHORIZED, description = "Missing or invalid bearer token", body = ApiError),
         (status = FORBIDDEN, description = "A plugin named a row its own provider does not publish", body = ApiError),
         (status = NOT_FOUND, description = "No custom entry with that id", body = ApiError),
+        (status = CONFLICT, description = "A seat host named a row of the box's", body = ApiError),
         (status = INTERNAL_SERVER_ERROR, description = "Couldn't save the catalog", body = ApiError),
     )
 )]
@@ -852,6 +877,9 @@ pub(crate) async fn delete_custom_game(
     who: Option<Extension<PluginIdentity>>,
     Path(id): Path<String>,
 ) -> Response {
+    if let Some(refused) = not_this_seats_own(&id) {
+        return refused;
+    }
     if let Some(denied) = not_the_plugins_row(lane, who, &id) {
         return denied;
     }
@@ -877,6 +905,13 @@ pub(crate) async fn delete_custom_game(
     }
 }
 
+/// On a seat host a custom-entry write reaches its own titles alone: a row of the box's answers
+/// the 409 every other library write there gets.
+fn not_this_seats_own(id: &str) -> Option<Response> {
+    let box_row = crate::library::keeps_own_titles() && !crate::library::is_own_id(id);
+    box_row.then(seat_library_read_only)
+}
+
 /// On the plugin lane, a stored row its caller's provider does not publish answers 403: the
 /// operator's rows and another plugin's are not a plugin's to change. The shared runner token
 /// names no provider, so it owns none. An unknown id falls through to the 404.
@@ -896,6 +931,75 @@ fn not_the_plugins_row(
             "A plugin can change only the library rows it publishes.",
         )
     })
+}
+
+/// A seat host's own titles, as the box may see them
+///
+/// The custom entries this seat host keeps in its own config folder, each by its `own:` id,
+/// title, platform and `http(s)` art: never how it starts, and never a cover on its disk. The box
+/// asks when the seat's library changes and when the seat comes up, and lists them for the seat's
+/// profile. A host that keeps none answers an empty list.
+#[utoipa::path(
+    get,
+    path = "/library/own",
+    tag = "library",
+    operation_id = "listOwnTitles",
+    responses(
+        (status = OK, description = "This seat host's own titles", body = [crate::library::OwnTitle]),
+        (status = UNAUTHORIZED, description = "Missing or invalid bearer token", body = ApiError),
+    )
+)]
+pub(crate) async fn list_own_titles() -> Json<Vec<crate::library::OwnTitle>> {
+    Json(crate::library::published_own_titles())
+}
+
+/// Store a seat's own titles for its profile
+///
+/// What a seat host's `GET /library/own` answered, for the profile `as` names, on the host that
+/// writes the library: the door hands it here, and a Windows box stores its seats' itself. Rows
+/// are checked as an Art & Metadata source's are: a row with a bad id or title, a cover that isn't
+/// `http(s)` and a bad platform are dropped. An answer that isn't a list, lists more than 500 or
+/// names an id twice is refused, and the stored titles stay. Emits `library.changed` on a change.
+#[utoipa::path(
+    put,
+    path = "/library/own",
+    tag = "library",
+    operation_id = "storeOwnTitles",
+    params(("as" = String, Query, description = "Profile id: the profile whose seat answered")),
+    request_body = Vec<crate::library::OwnTitle>,
+    responses(
+        (status = NO_CONTENT, description = "Stored"),
+        (status = BAD_REQUEST, description = "Not an answer the box keeps", body = ApiError),
+        (status = UNAUTHORIZED, description = "Missing or invalid bearer token", body = ApiError),
+        (status = FORBIDDEN, description = "Not the admin lane", body = ApiError),
+        (status = NOT_FOUND, description = "`as` names no profile on this host", body = ApiError),
+        (status = CONFLICT, description = "`as` names no profile with a seat of its own", body = ApiError),
+        (status = INTERNAL_SERVER_ERROR, description = "Couldn't save the titles", body = ApiError),
+    )
+)]
+pub(crate) async fn store_own_titles(
+    State(st): State<Arc<MgmtState>>,
+    who: AsProfile,
+    body: axum::body::Bytes,
+) -> Response {
+    let scoped = scoped!(who, st);
+    let profile = match (scoped.whose, scoped.view.layer()) {
+        (Whose::Seat { .. }, Some(profile)) => profile.to_string(),
+        _ => {
+            return api_error(
+                StatusCode::CONFLICT,
+                "`as` names no profile with a seat of its own",
+            )
+        }
+    };
+    let titles = match crate::library::checked_own_titles(&profile, &body) {
+        Ok(titles) => titles,
+        Err(why) => return api_error(StatusCode::BAD_REQUEST, &why),
+    };
+    match crate::library::store_own_titles(&profile, titles) {
+        Ok(_) => StatusCode::NO_CONTENT.into_response(),
+        Err(e) => host_error("library change refused", &e),
+    }
 }
 
 #[derive(Serialize, ToSchema)]
@@ -925,7 +1029,7 @@ pub(crate) struct ReconcileQuery {
     operation_id = "reconcileProviderEntries",
     params(
         ("provider" = String, Path, description = "The provider id ([a-z0-9._-], `manual` reserved)"),
-        ("store" = Option<String>, Query, description = "Claim this store for the provider ([a-z0-9_-], `custom`/`manual` reserved)"),
+        ("store" = Option<String>, Query, description = "Claim this store for the provider ([a-z0-9_-], `custom`/`own`/`manual` reserved)"),
     ),
     request_body = Vec<crate::library::ProviderEntryInput>,
     responses(
