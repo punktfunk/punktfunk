@@ -1,8 +1,11 @@
 #!/usr/bin/env python3
-"""Unit checks for main.py's pure helpers — stdlib only, no Decky runtime needed.
+"""Unit checks for the Decky backend (main.py + py_modules/pf_decky) — stdlib only, no Decky
+runtime needed.
 
-Stubs the ``decky`` module (main.py imports it at module level), then asserts the argv
-shapes, the exit-code mapping and the Steam VDF editor against fixtures.
+Stubs the ``decky`` module the backend imports, then asserts the argv shapes, the exit-code
+mapping and the Steam VDF editor against fixtures, and that Decky's loader can import it at all.
+A fixture patches the module whose function looks the name up (``client._run_cli``, never
+``main._run_cli``), or the check silently runs the real code.
 
 Needs Python >= 3.10 for `X | None` annotations — macOS ships 3.9, so run it explicitly:
 
@@ -27,8 +30,11 @@ class _Log:
 decky.logger = _Log()
 sys.modules["decky"] = decky
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+_PLUGIN = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(_PLUGIN / "py_modules"))
+sys.path.insert(0, str(_PLUGIN))
 import main  # noqa: E402  (the plugin backend)
+from pf_decky import steam_input  # noqa: E402
 
 # The argv fixtures below monkey-patch `_client_argv` to pin one install shape; the
 # _flatpak_ref block wants the REAL resolver back, so keep a handle on it.
@@ -380,7 +386,7 @@ check("semver: ordering", main._semver_tuple("0.10.0") > main._semver_tuple("0.9
 # Untested until now, and the riskiest thing that survived the cut: it edits a file holding
 # HUNDREDS of other games' controller bindings, in place. Every assertion below is about not
 # touching them.
-empty = main._upsert_configset_entry("", "punktfunk", "template", "punktfunk.vdf")
+empty = steam_input._upsert_configset_entry("", "punktfunk", "template", "punktfunk.vdf")
 check("vdf: builds the skeleton when the file is new", '"controller_config"' in empty)
 check("vdf: the entry lands", '"punktfunk"' in empty and '"punktfunk.vdf"' in empty)
 
@@ -393,21 +399,86 @@ existing = (
     "\t}\n"
     "}\n"
 )
-added = main._upsert_configset_entry(existing, "punktfunk", "template", "punktfunk.vdf")
+added = steam_input._upsert_configset_entry(existing, "punktfunk", "template", "punktfunk.vdf")
 check("vdf: an existing game's entry survives insertion", '"halflife2"' in added)
 check("vdf: ours is inserted", '"punktfunk"' in added)
 
 # Re-running must REPLACE our block, not accumulate a second one (this runs on every plugin
 # session gated only by a localStorage marker, so idempotence is the whole contract).
-twice = main._upsert_configset_entry(added, "punktfunk", "template", "punktfunk.vdf")
+twice = steam_input._upsert_configset_entry(added, "punktfunk", "template", "punktfunk.vdf")
 check("vdf: idempotent", twice.count('"punktfunk"\n') == 1)
 check("vdf: neighbour still intact after the rewrite", '"halflife2"' in twice)
 
 # Steam keys non-Steam games by their LOWERCASE name, and files on disk may carry either case —
 # a case-sensitive match would append a duplicate the game never reads.
 mixed = existing.replace('"halflife2"', '"Punktfunk"')
-replaced = main._upsert_configset_entry(mixed, "punktfunk", "template", "punktfunk.vdf")
+replaced = steam_input._upsert_configset_entry(mixed, "punktfunk", "template", "punktfunk.vdf")
 check("vdf: matches an existing key case-insensitively", replaced.count("unktfunk\"\n") == 1)
+
+# ---- Decky's loader shape ---------------------------------------------------------------
+#
+# Decky appends only <plugin>/py_modules to sys.path and loads main.py as module `_`, so a
+# module that imports `main` dies on the Deck while passing here. Load it the loader's way, in
+# an isolated interpreter outside the repo, and hold it to every call the frontend makes.
+import ast  # noqa: E402
+import json  # noqa: E402
+import re  # noqa: E402
+import subprocess  # noqa: E402
+import tempfile  # noqa: E402
+
+_LOADER = """
+import json, sys, types
+from importlib.util import module_from_spec, spec_from_file_location
+plugin = sys.argv[1]
+decky = types.ModuleType("decky")
+decky.DECKY_USER_HOME = decky.DECKY_PLUGIN_DIR = decky.DECKY_PLUGIN_SETTINGS_DIR = plugin
+decky.logger = types.SimpleNamespace(**{
+    n: (lambda *a, **k: None) for n in ("debug", "info", "warning", "error", "exception")
+})
+sys.modules["decky"] = decky
+sys.path.append(plugin + "/py_modules")
+spec = spec_from_file_location("_", plugin + "/main.py")
+module = module_from_spec(spec)
+spec.loader.exec_module(module)
+print(json.dumps([n for n in dir(module.Plugin) if callable(getattr(module.Plugin, n))]))
+"""
+with tempfile.TemporaryDirectory() as _cwd:
+    _run = subprocess.run(
+        [sys.executable, "-I", "-B", "-c", _LOADER, str(_PLUGIN)],
+        cwd=_cwd, capture_output=True, text=True, timeout=60,
+    )
+check("loader: main.py loads with only py_modules on the path", _run.returncode == 0)
+if _run.returncode != 0:
+    print(_run.stderr)
+_methods = set(json.loads(_run.stdout or "[]"))
+# Every `callable<…>("name")` under src/, wherever the frontend keeps its bridge.
+_frontend: set = set()
+for _ts in sorted((_PLUGIN / "src").rglob("*.ts*")):
+    _frontend |= set(re.findall(r'callable\s*<[\s\S]*?>\(\s*"(\w+)"', _ts.read_text()))
+check("loader: the frontend's calls are found, multi-line ones too",
+      {"discover", "pair", "update_client"} <= _frontend)
+_missing = sorted(_frontend - _methods)
+check("loader: every frontend call has a Plugin method" + (f" (missing {_missing})" if _missing else ""),
+      not _missing)
+
+
+def _imports_main(path: Path) -> bool:
+    for node in ast.walk(ast.parse(path.read_text())):
+        if isinstance(node, ast.Import):
+            names = [a.name for a in node.names]
+        elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
+            names = [node.module]
+        else:
+            continue
+        if any(n.split(".")[0] == "main" for n in names):
+            return True
+    return False
+
+
+_importers = [p.name for p in sorted((_PLUGIN / "py_modules" / "pf_decky").glob("*.py"))
+              if _imports_main(p)]
+check("loader: no pf_decky module imports main" + (f" ({_importers})" if _importers else ""),
+      not _importers)
 
 print()
 if failures:

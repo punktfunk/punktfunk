@@ -53,6 +53,7 @@ import urllib.request
 from pathlib import Path
 
 import decky
+from pf_decky import steam_input
 
 # Flatpak application id of the GTK client (packaging/flatpak/io.unom.punktfunk.yml).
 APP_ID = "io.unom.punktfunk"
@@ -63,93 +64,6 @@ LEGACY_APP_ID = "io.unom.Punktfunk"
 def _runner_path() -> str:
     """Absolute path to the launch wrapper shipped with the plugin (bin/punktfunkrun.sh)."""
     return str(Path(decky.DECKY_PLUGIN_DIR) / "bin" / "punktfunkrun.sh")
-
-
-# --- Steam Input controller config injection (native touchscreen via the ts_n command) --------
-# The Deck's touchscreen only reaches the app as native wl_touch when a Steam Input layout with
-# the "Touchscreen Native Support" (controller_action ts_n) command is active for the game. We
-# ship that layout (controller_config/punktfunk.vdf, built on Steam's gamepad-fps template) and
-# point our shortcuts at it, EmuDeck-style: drop it in controller_base/templates/ (so it is also
-# a selectable "Punktfunk" template) AND set each account's configset entry for our shortcut's
-# game key to that template. Steam keys non-Steam games by their LOWERCASE NAME (verified on the
-# Deck: our "Punktfunk" shortcut → the "punktfunk" configset key), so both our shortcuts (same
-# name) share one entry. controller_neptune = the Deck's built-in controller type.
-CONTROLLER_TEMPLATE = "punktfunk.vdf"
-
-
-def _steam_root() -> Path:
-    """Steam's base dir on SteamOS (~/.steam/steam symlinks here)."""
-    return Path(decky.DECKY_USER_HOME) / ".local" / "share" / "Steam"
-
-
-def _controller_template_src() -> Path:
-    return Path(decky.DECKY_PLUGIN_DIR) / "controller_config" / CONTROLLER_TEMPLATE
-
-
-def _chown_like_parent(path: Path) -> None:
-    """The Decky backend runs as root, so files it CREATES in the deck-owned Steam tree land
-    root-owned — which would stop Steam (running as the user) from rewriting them. Match the
-    parent dir's owner so Steam retains write access. Best-effort."""
-    try:
-        st = path.parent.stat()
-        os.chown(path, st.st_uid, st.st_gid)
-    except OSError:
-        pass
-
-
-def _configset_dirs() -> list[Path]:
-    """Every Steam account's controller-config dir holding configset_controller_neptune.vdf."""
-    base = _steam_root() / "steamapps" / "common" / "Steam Controller Configs"
-    return [p / "config" for p in sorted(base.glob("*")) if (p / "config").is_dir()]
-
-
-def _upsert_configset_entry(text: str, key: str, source_type: str, source_val: str) -> str:
-    """Set the top-level ``"<key>" { "<source_type>" "<source_val>" }`` block in a
-    configset_controller_neptune.vdf, replacing any existing block for that key (case-insensitive)
-    or inserting one before the file's final closing brace. Targeted (only our key is touched) so
-    the hundreds of other game entries stay byte-for-byte intact. Creates the wrapping
-    ``"controller_config" { }`` skeleton when the file is empty/new."""
-    block = f'\t"{key}"\n\t{{\n\t\t"{source_type}"\t\t"{source_val}"\n\t}}\n'
-    if '"controller_config"' not in text:
-        return '"controller_config"\n{\n' + block + "}\n"
-
-    lower = text.lower()
-    needle = f'"{key.lower()}"'
-    # Find the key token that begins a top-level entry (its own line), then its "{ … }" block.
-    search_from = 0
-    while True:
-        idx = lower.find(needle, search_from)
-        if idx == -1:
-            break
-        # Must be a standalone key line (preceded only by whitespace back to a newline).
-        line_start = text.rfind("\n", 0, idx) + 1
-        if text[line_start:idx].strip() != "":
-            search_from = idx + len(needle)
-            continue
-        brace = text.find("{", idx)
-        if brace == -1:
-            break
-        depth = 0
-        i = brace
-        while i < len(text):
-            if text[i] == "{":
-                depth += 1
-            elif text[i] == "}":
-                depth -= 1
-                if depth == 0:
-                    break
-            i += 1
-        end = i + 1
-        # Consume the trailing newline after the block so we don't accumulate blank lines.
-        if end < len(text) and text[end] == "\n":
-            end += 1
-        return text[:line_start] + block + text[end:]
-
-    # Not present — insert before the last closing brace (the controller_config block's end).
-    last_close = text.rstrip().rfind("}")
-    if last_close == -1:
-        return text.rstrip() + "\n" + block
-    return text[:last_close] + block + text[last_close:]
 
 
 # ----------------------------------------------------------------------------------------
@@ -310,7 +224,7 @@ _ICON_HASH = re.compile(r"^[0-9a-f]{40}$")
 def _librarycache_candidates(appid: int, name: str) -> list[Path]:
     """Where Steam has cached this image locally, oldest layout last: the per-app directory
     current clients write, then the flat `<appid>_<name>` files older ones did."""
-    base = _steam_root() / "appcache" / "librarycache"
+    base = steam_input._steam_root() / "appcache" / "librarycache"
     return [base / str(appid) / name, base / f"{appid}_{name}"]
 
 
@@ -339,7 +253,7 @@ def _icon_dir() -> Path:
 def _read_icon(appid: int, icon_hash: str) -> bytes | None:
     """The game's icon bytes: Steam's own cache (`librarycache/<appid>/<hash>.jpg`) first, the
     CDNs second; None when nowhere has it."""
-    cached = _steam_root() / "appcache" / "librarycache" / str(appid) / f"{icon_hash}.jpg"
+    cached = steam_input._steam_root() / "appcache" / "librarycache" / str(appid) / f"{icon_hash}.jpg"
     try:
         data = cached.read_bytes()
         if data:
@@ -1105,52 +1019,7 @@ class Plugin:
         return {"ok": True, "path": str(dest)}
 
     async def apply_controller_config(self, name: str = "Punktfunk") -> dict:
-        """Install our Steam Input layout (native touchscreen `ts_n` + gamepad passthrough) and
-        point the shortcut(s) at it, so the Deck touchscreen reaches the client as native touch
-        with zero manual controller setup. Best-effort + idempotent — a controller tweak must
-        never block a launch, so failures are reported, not raised. Both shortcuts share the same
-        name → the same lowercase configset key, so one entry per account covers both."""
-        src = _controller_template_src()
-        if not src.exists():
-            return {"ok": False, "error": "template-missing", "detail": str(src)}
-        key = name.strip().lower()
-        applied: list[str] = []
-        errors: list[str] = []
-        # 1) Ship it as a selectable template (also the safe fallback if Steam clobbers the
-        #    configset write on exit): controller_base/templates/punktfunk.vdf.
-        try:
-            tdir = _steam_root() / "controller_base" / "templates"
-            tdir.mkdir(parents=True, exist_ok=True)
-            dst = tdir / CONTROLLER_TEMPLATE
-            shutil.copyfile(src, dst)
-            _chown_like_parent(dst)
-            applied.append("template")
-        except OSError as e:
-            errors.append(f"template: {e}")
-        # 2) Point each Steam account's configset at that template for our game key.
-        dirs = _configset_dirs()
-        for d in dirs:
-            f = d / "configset_controller_neptune.vdf"
-            try:
-                text = f.read_text(encoding="utf-8") if f.exists() else ""
-                new = _upsert_configset_entry(text, key, "template", CONTROLLER_TEMPLATE)
-                if new != text:
-                    if f.exists():  # keep one recoverable backup before our first edit
-                        bak = f.with_name(f.name + ".pf-bak")
-                        if not bak.exists():
-                            shutil.copyfile(f, bak)
-                            _chown_like_parent(bak)
-                    existed = f.exists()
-                    f.write_text(new, encoding="utf-8")
-                    if not existed:  # a freshly-created file is root-owned — hand it to the user
-                        _chown_like_parent(f)
-                applied.append(f"configset:{d.parent.name}")
-            except OSError as e:
-                errors.append(f"{d.parent.name}: {e}")
-        decky.logger.info(
-            "apply_controller_config key=%s applied=%s errors=%s", key, applied, errors
-        )
-        return {"ok": not errors, "applied": applied, "errors": errors, "accounts": len(dirs)}
+        return await steam_input.apply_controller_config(name)
 
     async def runner_info(self) -> dict:
         """The wrapper-script path + flatpak app id the frontend needs to create the Steam
