@@ -370,7 +370,8 @@ fn handle(service: &SeatService<LinuxBackend>, stream: UnixStream, uid: u32, pen
     match request {
         Request::Create { kind, index } => {
             drop(pending);
-            create(stream, &account, kind, index);
+            let seat = ps_seat(&service.ledger(), &account);
+            create(stream, &account, kind, index, seat);
         }
         Request::Serve {
             kind,
@@ -415,8 +416,8 @@ fn answer(stream: &UnixStream, account: &str, status: Status) {
     }
 }
 
-/// A uinput or uhid pad, relayed until the seat hangs up.
-fn create(stream: UnixStream, account: &str, kind: PadKind, index: u8) {
+/// A uinput or uhid pad, relayed until the seat hangs up. A PlayStation pad's MAC carries `seat`.
+fn create(stream: UnixStream, account: &str, kind: PadKind, index: u8, seat: u16) {
     let Some(_slot) = Slot::take(&HELD, account, MAX_PER_SEAT) else {
         tracing::warn!(
             account,
@@ -426,7 +427,7 @@ fn create(stream: UnixStream, account: &str, kind: PadKind, index: u8) {
         answer(&stream, account, Status::Capacity);
         return;
     };
-    let pad = match pad_broker::build(kind, index, account) {
+    let pad = match pad_broker::build(kind, index, account, seat) {
         Ok(pad) => pad,
         Err(error) => {
             tracing::warn!(error = %format!("{error:#}"), account, pad = kind.label(),
