@@ -27,12 +27,14 @@ import {
 	useUpdateProfile,
 	useWindowsAccounts,
 } from "@/api/gen/profiles/profiles";
+import { isFullSeat } from "@/api/seat";
 import { useDialogs } from "@/components/dialogs";
 import { apiErrorMessage } from "@/lib/errors";
 import { doorUnavailable, seatCheckText } from "@/lib/host-messages";
 import { useLocale } from "@/lib/i18n";
 import { m } from "@/paraglide/messages";
 import { SignedInDevices } from "./devices";
+import { GameExitPreference } from "./session";
 import {
 	AddProfileDialog,
 	DoctorDialog,
@@ -108,6 +110,7 @@ export const SectionProfiles: FC = () => {
 	const [seatsOpen, setSeatsOpen] = useState(false);
 	const [doctorOpen, setDoctorOpen] = useState(false);
 	const ownerName = profiles.data?.find((p) => p.owner)?.display_name ?? "";
+	const ownerId = profiles.data?.find((p) => p.owner)?.id;
 	const [adding, setAdding] = useState(false);
 	const [removing, setRemoving] = useState<ProfileAdmin | null>(null);
 	const [passwordFor, setPasswordFor] = useState<ProfileAdmin | null>(null);
@@ -284,6 +287,15 @@ export const SectionProfiles: FC = () => {
 				busyId={busyId}
 				devices={
 					linux && door ? (p) => <SignedInDevices profile={p} /> : undefined
+				}
+				session={(p) =>
+					!p.owner && isFullSeat(p, host.data?.os, door) ? (
+						<GameExitPreference
+							profile={p}
+							{...(door && ownerId ? { via: ownerId } : {})}
+							fixed={linux && door && !!p.seat?.account}
+						/>
+					) : null
 				}
 			/>
 			<AddProfileDialog

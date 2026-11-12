@@ -1,4 +1,6 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
+import type { SessionSettingsState } from "@/api/gen/model/sessionSettingsState";
+import { GameExitFixed, GameExitView } from "@/sections/Profiles/session";
 import {
 	AddProfileDialog,
 	DoctorDialog,
@@ -263,6 +265,86 @@ export const AddOnLinuxDoor: Story = {
 			isPending={false}
 		/>
 	),
+};
+
+/** A profile's own **When the game exits**, as the host answers it. */
+const exit = (
+	configured: boolean,
+	end: boolean,
+	enforced = ["session_on_game_exit"],
+): SessionSettingsState => ({
+	configured,
+	enforced,
+	settings: { session_on_game_exit: end },
+});
+
+/**
+ * **When the game exits** on each card whose seat has a host of its own: Kid follows the host,
+ * Leon set his own (the host can't drop it yet), Mia's is on its way, Oma's couldn't be read.
+ */
+export const SessionPreference: Story = {
+	args: {
+		profiles: { data: profilesWindows, isLoading: false, error: null },
+		seats,
+		session: (p) => {
+			const at = (state: SessionSettingsState | undefined, more = {}) => (
+				<GameExitView
+					state={state}
+					loading={false}
+					error={null}
+					busy={false}
+					onPick={noop}
+					{...more}
+				/>
+			);
+			switch (p.display_name) {
+				case "Kid":
+					return at(exit(false, true));
+				case "Leon":
+					return at(exit(true, false));
+				case "Mia":
+					return at(undefined, { loading: true });
+				case "Oma":
+					return at(undefined, {
+						error: "That host didn't answer. Try again in a moment.",
+					});
+				case "Alice":
+					return at(exit(false, false));
+				default:
+					return null;
+			}
+		},
+	},
+};
+
+/** A door: Leon's own desktop has the choice; Oma plays on her own Linux account, where a
+ * game's exit always goes back to her desktop. */
+export const SessionPreferenceDoor: Story = {
+	args: {
+		profiles: {
+			data: profilesDoor.map((p) =>
+				p.display_name === "Oma" && p.seat
+					? { ...p, seat: { ...p.seat, account: "oma" } }
+					: p,
+			),
+			isLoading: false,
+			error: null,
+		},
+		seats,
+		door: { on: true, changing: false, onChange: noop },
+		session: (p) =>
+			p.display_name === "Oma" ? (
+				<GameExitFixed name={p.display_name} />
+			) : p.display_name === "Leon" ? (
+				<GameExitView
+					state={exit(false, true)}
+					loading={false}
+					error={null}
+					busy={false}
+					onPick={noop}
+				/>
+			) : null,
+	},
 };
 
 /** **Remove** a Windows seat profile: no choice to keep its account, and the password. */
