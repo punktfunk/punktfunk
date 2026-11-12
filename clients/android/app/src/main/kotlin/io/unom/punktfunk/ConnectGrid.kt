@@ -172,10 +172,12 @@ internal fun ConnectGrid(
         }
         // Which host screen a connect streams, as one choice: the host's rows with the current
         // one checked, a taken or off head greyed with why. The note heads the section when
-        // the host decides; a section with neither rows nor a note is not drawn.
-        val shown = screens[kh.fpHex]?.takeIf { pin == null && kh.paired }
-        val rows = shown?.rows(res).orEmpty()
-        val note = shown?.note(res)
+        // the host or the card's preset decides; a section with neither is not drawn. A pinned
+        // card draws it only while its preset decides.
+        val under = pin ?: kh.presetId?.let { id -> presets.firstOrNull { it.id == id } }
+        val shown = screens[kh.fpHex]?.takeIf { kh.paired && (pin == null || it.presetRow(pin, res) != null) }
+        val rows = shown?.rowsUnder(under, res).orEmpty()
+        val note = shown?.noteUnder(under, res)
         if (rows.isNotEmpty() || note != null) {
             add(
                 HostMenuItem(
@@ -241,9 +243,11 @@ internal fun ConnectGrid(
     // presets ever sees the gap.
     val anyPresetChip = savedCards.any { it.pin != null || it.host.presetId != null }
     val res = LocalContext.current.resources
-    // The card names its screen only when it is not the only screen: a role or a monitor.
-    val screenLines = savedHosts.mapNotNull { kh ->
-        screens[kh.fpHex]?.takeIf { kh.paired }?.cardLine(res)?.let { kh.fpHex to it }
+    // The card names its screen only when it is not the only screen: a role or a monitor, the
+    // card's preset's when that decides.
+    val screenLines = savedCards.mapNotNull { e ->
+        val under = e.pin ?: e.host.presetId?.let { id -> presets.firstOrNull { it.id == id } }
+        screens[e.host.fpHex]?.takeIf { e.host.paired }?.cardLineUnder(under, res)?.let { e.key to it }
     }.toMap()
 
     Box(Modifier.fillMaxSize()) {
@@ -309,7 +313,7 @@ internal fun ConnectGrid(
                         profilePicture = kh.asProfile?.avatar,
                         profileArt = if (kh.asProfile?.avatar != null) rememberProfileArt(kh) else null,
                         reservePresetSlot = anyPresetChip,
-                        screenLine = screenLines[kh.fpHex],
+                        screenLine = screenLines[entry.key],
                         reserveScreenLine = screenLines.isNotEmpty(),
                     )
                 }

@@ -6,6 +6,7 @@ import io.unom.punktfunk.DisplayTargets.DisplayTarget
 import io.unom.punktfunk.DisplayTargets.Pick
 import io.unom.punktfunk.kit.R
 import java.io.File
+import org.json.JSONArray
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
@@ -119,35 +120,90 @@ class DisplayTargetsTest {
         else -> error("not a text slot: $v")
     }
 
-    /** `clients/shared/screen-rows-vectors.json`: each answer's rows, note and card line. */
-    @Test
-    fun sharedVectors() {
+    /** `clients/shared/screen-rows-vectors.json`, or one of its lists. */
+    private fun vectors(list: String): List<JSONObject> {
         // Gradle runs unit tests with the module dir as cwd (clients/android/app).
         val file = File("../../shared/screen-rows-vectors.json")
         assertTrue("the shared vector file must be reachable at ${file.absolutePath}", file.isFile)
-        val cases = JSONObject(file.readText()).getJSONArray("cases")
-        for (i in 0 until cases.length()) {
-            val case = cases.getJSONObject(i)
+        val cases = JSONObject(file.readText()).getJSONArray(list)
+        return List(cases.length()) { cases.getJSONObject(it) }
+    }
+
+    /** Rows as the vectors spell them, and a case's `rows` worded the same way. */
+    private fun got(rows: List<DisplayTargets.ScreenRow>) = rows.map { r ->
+        listOf(
+            r.kind.name.lowercase(), r.id, r.label, r.hint, r.detail, r.header, r.checked,
+            r.pickable, r.reason, r.pick?.json()?.let(Pick::of),
+        )
+    }
+
+    private fun want(rows: JSONArray) = (0 until rows.length()).map { j ->
+        val w = rows.getJSONObject(j)
+        listOf(
+            w.getString("kind"), w.getString("id"), text(w.get("label")), text(w.get("hint")),
+            w.getString("detail"), text(w.get("header")), w.getBoolean("checked"),
+            w.getBoolean("pickable"), text(w.get("reason")), w.optJSONObject("put")?.let(Pick::of),
+        )
+    }
+
+    /** `clients/shared/screen-rows-vectors.json`: each answer's rows, note and card line. */
+    @Test
+    fun sharedVectors() {
+        for (case in vectors("cases")) {
             val name = case.getString("name")
             val t = DisplayTargets.parse(case.getJSONObject("targets").toString())!!
-            val got = t.rows(res).map { r ->
-                listOf(
-                    r.kind.name.lowercase(), r.id, r.label, r.hint, r.detail, r.header, r.checked,
-                    r.pickable, r.reason, r.pick?.json()?.let(Pick::of),
-                )
+            assertEquals(name, want(case.getJSONArray("rows")), got(t.rows(res)))
+            assertEquals(name, text(case.get("note")), t.note(res))
+            assertEquals(name, text(case.get("card")), t.cardLine(res))
+        }
+    }
+
+    /** The same file's `preset_cases`: a card whose preset pins the host screen. */
+    @Test
+    fun presetVectors() {
+        val cases = vectors("preset_cases")
+        assertTrue(cases.size >= 5)
+        for (case in cases) {
+            val name = case.getString("name")
+            val t = DisplayTargets.parse(case.getJSONObject("targets").toString())!!
+            val p = case.getJSONObject("preset")
+            val preset = StreamPreset(
+                id = "p", name = p.getString("name"),
+                overrides = SettingsOverlay(hostScreen = p.getString("host_screen")),
+            )
+            assertEquals(name, want(case.getJSONArray("rows")), got(t.rowsUnder(preset, res)))
+            assertEquals(name, text(case.get("note")), t.noteUnder(preset, res))
+            assertEquals(name, text(case.get("card")), t.cardLineUnder(preset, res))
+            assertEquals("$name: no preset", t.rows(res), t.rowsUnder(null, res))
+        }
+    }
+
+    /** The same file's `host_screen_cases`: a preset editor's Host screen row. */
+    @Test
+    fun hostScreenVectors() {
+        val cases = vectors("host_screen_cases")
+        assertTrue(cases.size >= 3)
+        for (case in cases) {
+            val name = case.getString("name")
+            val hosts = case.getJSONArray("hosts").let { a ->
+                List(a.length()) { i ->
+                    val h = a.getJSONObject(i)
+                    h.getString("name") to DisplayTargets.parse(h.getJSONObject("targets").toString())!!
+                }
             }
-            val rows = case.getJSONArray("rows")
-            val want = (0 until rows.length()).map { j ->
-                val w = rows.getJSONObject(j)
+            val pinned = if (case.isNull("pinned")) null else case.getString("pinned")
+            val got = DisplayTargets.hostScreenChoices(hosts, pinned, res).map {
+                listOf(it.value, it.label, it.hint, it.header, it.checked)
+            }
+            val choices = case.getJSONArray("choices")
+            val want = List(choices.length()) { i ->
+                val w = choices.getJSONObject(i)
                 listOf(
-                    w.getString("kind"), w.getString("id"), text(w.get("label")), text(w.get("hint")),
-                    w.getString("detail"), text(w.get("header")), w.getBoolean("checked"),
-                    w.getBoolean("pickable"), text(w.get("reason")), w.optJSONObject("put")?.let(Pick::of),
+                    if (w.isNull("value")) null else w.getString("value"), text(w.get("label")),
+                    text(w.get("hint")), text(w.get("header")), w.getBoolean("checked"),
                 )
             }
             assertEquals(name, want, got)
-            assertEquals(name, text(case.get("note")), t.note(res))
-            assertEquals(name, text(case.get("card")), t.cardLine(res))
         }
     }
 }

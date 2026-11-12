@@ -38,6 +38,9 @@ import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.SegmentedButton
+import androidx.compose.material3.SegmentedButtonDefaults
+import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -160,6 +163,10 @@ internal fun PresetScopeChips(
  * Names must be unique case-insensitively: two "Work" chips in a menu are ambiguous, and a
  * `punktfunk://…?preset=Work` link would have to refuse rather than guess. [taken] is the live
  * duplicate check, which lets an edit keep its own name (and change only its case).
+ *
+ * Creating starts from Empty or the Second screen starter; the starter names the preset after
+ * the role while the name is still blank or the one it gave. [onConfirm]'s `secondScreen` says
+ * which.
  */
 @Composable
 internal fun PresetEditorDialog(
@@ -169,34 +176,69 @@ internal fun PresetEditorDialog(
     initialAccent: String?,
     creating: Boolean,
     taken: (String) -> Boolean,
-    onConfirm: (name: String, accent: String?) -> Unit,
+    onConfirm: (name: String, accent: String?, secondScreen: Boolean) -> Unit,
     onDismiss: () -> Unit,
 ) {
     var name by remember { mutableStateOf(initialName) }
     var accent by remember { mutableStateOf(initialAccent) }
+    var secondScreen by remember { mutableStateOf(false) }
     val trimmed = name.trim()
     val duplicate = trimmed.isNotEmpty() && taken(trimmed)
+    val role = stringResource(R.string.screen_role_second)
+    val starterName = remember(role) { freeName(role, taken) }
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(title) },
         text = {
-            PresetEditorFields(
-                name = name,
-                accent = accent,
-                duplicate = duplicate,
-                creating = creating,
-                onNameChange = { name = it },
-                onAccentChange = { accent = it },
-            )
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                if (creating) {
+                    PresetStarter(secondScreen) { second ->
+                        if (name.isBlank() || name == starterName) name = if (second) starterName else ""
+                        secondScreen = second
+                    }
+                }
+                PresetEditorFields(
+                    name = name,
+                    accent = accent,
+                    duplicate = duplicate,
+                    creating = creating,
+                    onNameChange = { name = it },
+                    onAccentChange = { accent = it },
+                )
+            }
         },
         confirmButton = {
             TextButton(
                 enabled = trimmed.isNotEmpty() && !duplicate,
-                onClick = { onConfirm(trimmed, accent) },
+                onClick = { onConfirm(trimmed, accent, secondScreen) },
             ) { Text(confirmLabel) }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text(stringResource(R.string.common_cancel)) } },
     )
+}
+
+/** Where a new preset starts: Empty, or the Second screen starter with the role's hint under it. */
+@Composable
+private fun PresetStarter(secondScreen: Boolean, onPick: (secondScreen: Boolean) -> Unit) {
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        val starters = listOf(R.string.preset_starter_empty, R.string.screen_role_second)
+        SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
+            starters.forEachIndexed { i, label ->
+                SegmentedButton(
+                    selected = secondScreen == (i == 1),
+                    onClick = { onPick(i == 1) },
+                    shape = SegmentedButtonDefaults.itemShape(index = i, count = starters.size),
+                ) { Text(stringResource(label), maxLines = 1) }
+            }
+        }
+        if (secondScreen) {
+            Text(
+                stringResource(R.string.screen_role_second_hint),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
 }
 
 /**
