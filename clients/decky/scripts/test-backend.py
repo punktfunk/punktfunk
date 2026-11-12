@@ -270,6 +270,17 @@ check("request access: refusal carries the host's token",
 client._run_cli = _fake_cli(6, "", "no --pin - and no terminal to ask on")
 got = asyncio.run(main.Plugin().request_access("192.168.1.9", 9777, "Steam Deck", desk))
 check("request access: exit 6 is a client too old for the flag", got["error"] == "client-outdated")
+# The code the panel shows while a request waits; a client without the verb gives none.
+client._run_cli = _capture_cli
+captured.clear()
+asyncio.run(main.Plugin().device_code())
+check("device code: argv is `device-code --json`", captured.get("args") == ["device-code", "--json"])
+client._run_cli = _fake_cli(0, '{"code": "4F2A 91C3 07BE D512"}')
+got = asyncio.run(main.Plugin().device_code())
+check("device code: the code comes back under ok", got == {"code": "4F2A 91C3 07BE D512", "ok": True})
+client._run_cli = _fake_cli(5, '{"ok": false, "error": "unknown-command"}', 'unknown command "device-code"')
+got = asyncio.run(main.Plugin().device_code())
+check("device code: an older client is client-outdated", got["error"] == "client-outdated")
 client._run_cli = _fake_cli(0, '{"ok": true, "fp": "ab"}')
 got = asyncio.run(main.Plugin().pair("192.168.1.9", 9777, "1234"))
 check("pair: the fingerprint comes from the json object", got == {"ok": True, "fp": "ab"})
