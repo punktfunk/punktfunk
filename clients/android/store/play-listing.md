@@ -1,7 +1,8 @@
 # Google Play listing
 
-Play Console copy that has to match the app. `ci/play-upload.py` uploads bundles only, so the
-listing is edited by hand in Play Console.
+Play Console copy that has to match the app. `ci/play-upload.py` uploads bundles only. The
+listing text for en-US, de-DE, es-ES and fr-FR is set from a file, where the store images are
+composed.
 
 ## Accessibility service
 
@@ -35,10 +36,33 @@ German:
 > Sprachtaste deiner Tastatur für sich. Damit sie den Rechner erreichen, von dem du streamst, kann
 > Punktfunk die AccessibilityService-API von Android nutzen. Das ist freiwillig und aus, bis du es
 > einschaltest: Die App fragt einmal, wenn eine Hardware-Tastatur angeschlossen ist, und unter
-> Settings → Input → Keyboard shortcuts jederzeit. Ist es an, empfängt Punktfunk die Tasten deiner
+> Einstellungen → Eingabe → Tastenkürzel jederzeit. Ist es an, empfängt Punktfunk die Tasten deiner
 > Hardware-Tastatur und schickt sie nur während eines laufenden Streams an diesen Rechner. Außerhalb
 > eines Streams gehen alle Tasten unverändert durch. Der Dienst sieht weder den Bildschirm noch
 > Inhalte anderer Apps und speichert nichts.
+
+Spanish:
+
+> Atajos de teclado (API AccessibilityService): Android se reserva Alt+Tab, la tecla Windows y la
+> tecla de idioma de tu teclado. Para enviarlas al equipo desde el que transmites, Punktfunk puede
+> usar la API AccessibilityService de Android. Es opcional y está desactivada hasta que la actives:
+> la app pregunta una vez cuando hay un teclado físico conectado, y Ajustes → Entrada → Atajos de
+> teclado la ofrece en cualquier momento. Con ella activada, Punktfunk recibe las teclas que pulsas
+> en un teclado físico y las envía a ese equipo solo mientras hay una transmisión en pantalla.
+> Fuera de una transmisión, todas las teclas pasan sin cambios. El servicio no puede ver la
+> pantalla ni el contenido de otras apps, y no guarda nada.
+
+French:
+
+> Raccourcis clavier (API AccessibilityService) : Android garde pour lui Alt+Tab, la touche Windows
+> et la touche de langue de votre clavier. Pour les envoyer à l’ordinateur depuis lequel vous
+> diffusez, Punktfunk peut utiliser l’API AccessibilityService d’Android. C’est facultatif et
+> désactivé tant que vous ne l’activez pas : l’app pose la question une fois lorsqu’un clavier
+> physique est connecté, et Paramètres → Entrées → Raccourcis clavier le propose à tout moment.
+> Une fois activé, Punktfunk reçoit les touches que vous pressez sur un clavier physique et les
+> envoie à cet ordinateur uniquement lorsqu’un flux est à l’écran. En dehors d’un flux, toutes
+> les touches passent sans modification. Le service ne peut voir ni l’écran ni le contenu des
+> autres apps, et n’enregistre rien.
 
 ### Declaration answers
 
