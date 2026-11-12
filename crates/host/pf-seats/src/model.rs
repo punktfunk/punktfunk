@@ -205,6 +205,10 @@ pub struct Seat {
     /// The box owner's row (Linux). Its account is never created or deleted by the ledger.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub owner: bool,
+    /// The owner's row: the uid their account resolved to when the row was last prepared, which
+    /// no person's row may hold. `None`: a row not prepared since the field existed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner_uid: Option<u32>,
     /// SHA-256 of the seat host's certificate DER, lowercase hex: the pin a client dials it
     /// with, carried by the box's `Redirect`. Learned while the seat runs; `None` before its
     /// host has minted an identity.
@@ -329,7 +333,7 @@ impl Ledger {
                 unique(&mut sids, sid.clone(), "account SID")?;
             }
             // Two names can resolve to one user: `jdoe` and `jdoe@corp.example.com`.
-            if let Some(uid) = seat.adopted_uid {
+            for uid in [seat.adopted_uid, seat.owner_uid].into_iter().flatten() {
                 unique(&mut uids, uid, "account uid")?;
             }
             unique(&mut slots, seat.display_slot, "display slot")?;
@@ -419,6 +423,7 @@ impl Ledger {
             autostart: request.autostart,
             runtime: RuntimeStatus::stopped(),
             owner,
+            owner_uid: None,
             fingerprint: None,
             adopted_sid,
             adopted_uid,
@@ -1065,6 +1070,7 @@ mod tests {
                 autostart: false,
                 runtime: RuntimeStatus::default(),
                 owner: false,
+                owner_uid: None,
                 fingerprint: None,
                 adopted_sid: None,
                 adopted_uid: None,

@@ -565,6 +565,7 @@ mod tests {
             autostart: false,
             runtime: RuntimeStatus::stopped(),
             owner: false,
+            owner_uid: None,
             fingerprint: None,
             adopted_sid: None,
             adopted_uid: None,

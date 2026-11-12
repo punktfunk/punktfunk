@@ -51,6 +51,12 @@ pub trait PlatformBackend: Send + Sync + 'static {
         Err(UnsupportedBackend::unavailable())
     }
 
+    /// Linux: the uid of the owner whose row this backend last prepared, by [`Self::adopt`] or at
+    /// the supervisor's start. `None` before then, and on other platforms.
+    fn owner_uid(&self) -> Option<u32> {
+        None
+    }
+
     /// Linux: the uid of `account`, an existing user a new row may adopt, or why it may not. The
     /// uid is the backend's own reading, never the caller's. `ledger` holds the rows that exist:
     /// the box owner's account and any account another row holds are refused.

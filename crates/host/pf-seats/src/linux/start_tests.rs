@@ -32,6 +32,7 @@ fn row(account: &str, id: &str, owner: bool, adopted_uid: Option<u32>) -> Seat {
         autostart: false,
         runtime: RuntimeStatus::stopped(),
         owner,
+        owner_uid: None,
         fingerprint: None,
         adopted_sid: None,
         adopted_uid,

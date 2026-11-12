@@ -11,6 +11,7 @@ use super::shared::{
     acl_bytes, ACL_ACCESS, ACL_GROUP_OBJ, ACL_MASK, ACL_NO_ID, ACL_OTHER, ACL_USER, ACL_USER_OBJ,
 };
 use super::{accounts, LinuxBackend};
+use crate::backend::PlatformBackend as _;
 use crate::ipc::{ApiError, Command, CommandResult, ErrorCode, Request, Response};
 use crate::service::SeatService;
 use std::io::{Read, Write};

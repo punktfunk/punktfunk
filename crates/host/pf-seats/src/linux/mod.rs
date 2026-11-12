@@ -585,12 +585,6 @@ impl LinuxBackend {
         }
     }
 
-    /// The box owner's uid once their row is prepared, for the account `door-helper` recorded:
-    /// the one peer besides root and the door the socket serves, for Flatpak changes only.
-    pub fn owner_uid(&self) -> Option<u32> {
-        self.owner().map(|owner| owner.uid)
-    }
-
     fn owner(&self) -> Option<accounts::Passwd> {
         self.inner
             .owner
@@ -952,6 +946,13 @@ impl PlatformBackend for LinuxBackend {
         self.prepare_owner(seat, &passwd)?;
         self.track(&seat.id, Tracked::of(seat, &passwd));
         Ok(())
+    }
+
+    /// The box owner's uid once their row is prepared, for the account `door-helper` recorded:
+    /// the one peer besides root and the door the socket serves, for Flatpak changes only, and
+    /// the uid the ledger keeps on the owner's row.
+    fn owner_uid(&self) -> Option<u32> {
+        self.owner().map(|owner| owner.uid)
     }
 
     fn account_uid(&self, account: &str, ledger: &Ledger) -> Result<u32, BackendError> {
@@ -1877,6 +1878,7 @@ mod tests {
             autostart: false,
             runtime: crate::model::RuntimeStatus::stopped(),
             owner: true,
+            owner_uid: None,
             fingerprint: None,
             adopted_sid: None,
             adopted_uid: None,
@@ -1912,6 +1914,7 @@ mod tests {
             autostart: false,
             runtime: RuntimeStatus::stopped(),
             owner: false,
+            owner_uid: None,
             fingerprint: None,
             adopted_sid: None,
             adopted_uid: None,
