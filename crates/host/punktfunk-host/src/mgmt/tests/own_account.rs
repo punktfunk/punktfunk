@@ -115,6 +115,160 @@ async fn a_person_s_own_account_refuses_what_would_run_code_as_them() {
     }
 }
 
+/// Set on the child only: the box's library dir it reads.
+const LANES_CHILD: &str = "PF_OWN_ACCOUNT_LANES_CHILD";
+/// Paired with the seat host the lanes test runs.
+const DEVICE: &str = "c9c9c9c9c9c9c9c9c9c9c9c9c9c9c9c9c9c9c9c9c9c9c9c9c9c9c9c9c9c9c9c9";
+
+/// Runs the test `name` of this module again as a child on a person's own account, with its
+/// config and library dirs. `marker` names the child its library dir.
+fn on_own_account(name: &str, marker: &str) {
+    let config = tempfile::tempdir().unwrap();
+    let library = tempfile::tempdir().unwrap();
+    let module = module_path!().split_once("::").expect("crate::module").1;
+    let mut child = std::process::Command::new(std::env::current_exe().expect("this test binary"));
+    child.args(["--exact", &format!("{module}::{name}"), "--nocapture"]);
+    for (key, _) in std::env::vars_os() {
+        if key.to_string_lossy().starts_with("PUNKTFUNK_") {
+            child.env_remove(key);
+        }
+    }
+    let out = child
+        .env(marker, library.path())
+        .env("PUNKTFUNK_CONFIG_DIR", config.path())
+        .env("PUNKTFUNK_LIBRARY_DIR", library.path())
+        .env("PUNKTFUNK_SEAT_SESSION", "1")
+        .env("PUNKTFUNK_SEAT_ID", "0123456789abcdef0123456789abcdef")
+        .env("PUNKTFUNK_SEAT_OWN_ACCOUNT", "1")
+        .output()
+        .expect("run the child");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(out.status.success(), "{stdout}{stderr}");
+    assert!(
+        stdout.contains("1 passed"),
+        "the child ran no test: {stdout}"
+    );
+}
+
+/// What each lane that existed before the person's own got on a person's own account: hooks,
+/// command titles, the store, plugin access and emulator writes are refused on every one, a
+/// prep step runs nothing, and the box's command tile is not listed.
+#[tokio::test]
+async fn every_lane_keeps_its_refusals_on_a_person_s_own_account() {
+    use serde_json::json;
+    let Some(library) = std::env::var_os(LANES_CHILD) else {
+        return on_own_account(
+            "every_lane_keeps_its_refusals_on_a_person_s_own_account",
+            LANES_CHILD,
+        );
+    };
+    assert!(pf_paths::seat::own_account());
+    let library = std::path::Path::new(&library);
+    let entries = json!({"entries": [
+        {"id": "aaaaaaaaaaaa", "title": "Backup", "launch": {"kind": "command", "value": "true"}},
+        {"id": "bbbbbbbbbbbb", "title": "Dota 2", "launch": {"kind": "steam_appid", "value": "570"}},
+    ]});
+    std::fs::write(library.join("library.json"), entries.to_string()).unwrap();
+    let np = crate::native_pairing::NativePairing::load_with(
+        Some(crate::test_support::scratch().join("pf-own-lanes.json")),
+        None,
+        false,
+    )
+    .unwrap();
+    np.add("Deck", DEVICE).unwrap();
+    let app = test_app_native(test_state(), Arc::new(np));
+
+    let command = json!({"title": "Shell", "launch": {"kind": "command", "value": "true"}});
+    let hooks = json!({"hooks": [{"on": "stream.*", "run": "true"}]});
+    let mut writes = vec![
+        (Method::PUT, "/api/v1/hooks", hooks),
+        (Method::POST, "/api/v1/library/custom", command.clone()),
+        (
+            Method::PUT,
+            "/api/v1/library/custom/own:aaaaaaaaaaaa",
+            command,
+        ),
+        (
+            Method::DELETE,
+            "/api/v1/library/custom/aaaaaaaaaaaa",
+            json!({}),
+        ),
+        (
+            Method::POST,
+            "/api/v1/emulators/rpcs3/adopt",
+            json!({"exe": "/bin/sh"}),
+        ),
+    ];
+    // The store, plugin access and emulator writes are refused by the Linux gate.
+    if cfg!(target_os = "linux") {
+        writes.extend([
+            (
+                Method::POST,
+                "/api/v1/store/install",
+                json!({"spec": "punktfunk-plugin-x"}),
+            ),
+            (
+                Method::POST,
+                "/api/v1/store/runtime",
+                json!({"enabled": true}),
+            ),
+            (
+                Method::POST,
+                "/api/v1/plugin-access/requests",
+                json!({"path": "/srv"}),
+            ),
+            (
+                Method::POST,
+                "/api/v1/plugin-access/rom/decide",
+                json!({"allow": true}),
+            ),
+            (Method::POST, "/api/v1/emulators/rpcs3/install", json!({})),
+            (Method::POST, "/api/v1/emulators/rpcs3/prepare", json!({})),
+        ]);
+    }
+    for (method, path, body) in writes {
+        let req = || json_req(method.clone(), path, body.clone());
+        let (admin, why) = send(&app, req()).await;
+        assert_eq!(admin, StatusCode::FORBIDDEN, "admin {method} {path}: {why}");
+        let code = why["code"].as_str().unwrap_or_default();
+        assert!(
+            code.ends_with("_own_account"),
+            "admin {method} {path}: {why}"
+        );
+        for token in ["plugin-secret", "demo-secret"] {
+            let (status, why) = send(&app, with_bearer(req(), token)).await;
+            assert_eq!(
+                status,
+                StatusCode::FORBIDDEN,
+                "{token} {method} {path}: {why}"
+            );
+        }
+        let device = send_cert(&app, req(), DEVICE).await;
+        assert_eq!(device, StatusCode::UNAUTHORIZED, "device {method} {path}");
+    }
+    assert!(
+        crate::hooks::store().get().hooks.is_empty(),
+        "a hook was stored"
+    );
+
+    let ran = library.join("prep-ran");
+    let step = crate::hooks::PrepCmd {
+        run: format!("touch {}", ran.display()),
+        undo: None,
+        elevated: false,
+    };
+    drop(crate::hooks::run_prep(&[step], &[]));
+    assert!(!ran.exists(), "a prep step ran");
+
+    let view = crate::library::View::here();
+    assert!(
+        !crate::library::lists(&view, "custom:aaaaaaaaaaaa"),
+        "the box's command is listed"
+    );
+    assert!(crate::library::lists(&view, "custom:bbbbbbbbbbbb"));
+}
+
 /// On a person's own Linux account every write to plugins or emulators is refused, each group
 /// with its sentence; every read, and a catalog refresh, passes.
 #[test]
