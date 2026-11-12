@@ -671,7 +671,7 @@ internal fun TouchLibraryScene() {
                     Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
                 }
                 Text(
-                    "Living Room PC — Library",
+                    stringResource(io.unom.punktfunk.kit.R.string.lib_title_host, "Living Room PC"),
                     style = MaterialTheme.typography.titleLarge,
                     modifier = Modifier.weight(1f),
                 )
@@ -684,12 +684,15 @@ internal fun TouchLibraryScene() {
     }
 }
 
-/** A believable shelf: four titles with art plus the Steam launcher entry (brand-mark tile). */
+/** A believable shelf: seven titles with art plus the Steam launcher entry (brand-mark tile). */
 private fun shotGames() = listOf(
     GameEntry("custom:aurora", "custom", "Aurora Drift", Artwork("shot://art/aurora", null, null)),
     GameEntry("steam:starfall", "steam", "Starfall Vale", Artwork("shot://art/starfall", null, null)),
     GameEntry("heroic:neon", "heroic", "Neon Circuit", Artwork("shot://art/neon", null, null)),
     GameEntry("gog:ember", "gog", "Ember Peaks", Artwork("shot://art/ember", null, null)),
+    GameEntry("steam:tide", "steam", "Tidebound", Artwork("shot://art/tide", null, null)),
+    GameEntry("steam:glacier", "steam", "Glacier Run", Artwork("shot://art/glacier", null, null)),
+    GameEntry("steam:echo", "steam", "Echo Station", Artwork("shot://art/echo", null, null)),
     GameEntry("steam:launcher", "steam", "Steam", Artwork(null, null, null), role = "launcher", icon = "steam"),
 )
 
@@ -699,6 +702,9 @@ private fun shotLibraryLoader(context: Context): ImageLoader {
         .intercept("shot://art/starfall", poster(context, "STARFALL VALE", ::drawStarfall).asImage())
         .intercept("shot://art/neon", poster(context, "NEON CIRCUIT", ::drawNeon).asImage())
         .intercept("shot://art/ember", poster(context, "EMBER PEAKS", ::drawEmber).asImage())
+        .intercept("shot://art/tide", poster(context, "TIDEBOUND", ::drawAurora, turn = 1).asImage())
+        .intercept("shot://art/glacier", poster(context, "GLACIER RUN", ::drawStarfall, turn = 2).asImage())
+        .intercept("shot://art/echo", poster(context, "ECHO STATION", ::drawNeon, turn = 1).asImage())
         .default(ColorDrawable(0xFF221E44.toInt()).asImage())
         .build()
     return ImageLoader.Builder(context).components { add(engine) }.build()
@@ -722,10 +728,19 @@ private class ShotRand(var state: ULong) {
     fun range(lo: Float, hi: Float) = lo + next() * (hi - lo)
 }
 
-private fun poster(context: Context, title: String, draw: (Canvas) -> Unit): Drawable {
+/** [turn] swaps the colour channels round, 1 or 2 steps: a second title out of one design. */
+private fun poster(context: Context, title: String, draw: (Canvas) -> Unit, turn: Int = 0): Drawable {
+    val art = Bitmap.createBitmap(POSTER_W, POSTER_H, Bitmap.Config.ARGB_8888)
+    draw(Canvas(art))
     val bmp = Bitmap.createBitmap(POSTER_W, POSTER_H, Bitmap.Config.ARGB_8888)
     val canvas = Canvas(bmp)
-    draw(canvas)
+    val channels = when (turn) {
+        1 -> floatArrayOf(0f, 1f, 0f, 0f, 0f, 0f, 0f, 1f, 0f, 0f, 1f, 0f, 0f, 0f, 0f, 0f, 0f, 0f, 1f, 0f)
+        2 -> floatArrayOf(0f, 0f, 1f, 0f, 0f, 1f, 0f, 0f, 0f, 0f, 0f, 1f, 0f, 0f, 0f, 0f, 0f, 0f, 1f, 0f)
+        else -> null
+    }
+    val paint = Paint().apply { channels?.let { colorFilter = android.graphics.ColorMatrixColorFilter(it) } }
+    canvas.drawBitmap(art, 0f, 0f, paint)
     posterTitle(canvas, title)
     return BitmapDrawable(context.resources, bmp)
 }
