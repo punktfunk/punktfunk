@@ -2811,6 +2811,17 @@ fn dial_box(
     locks: impl FnOnce(&str) -> serde_json::Value,
     dials: Vec<Dial<'_>>,
 ) -> (Vec<Heard>, std::path::PathBuf) {
+    dial_host(port, false, locks, dials)
+}
+
+/// [`dial_box`], on the kid's seat host when `seat_host`: it reads the box's files read only, as
+/// a Windows seat host reads the box's config dir.
+fn dial_host(
+    port: u16,
+    seat_host: bool,
+    locks: impl FnOnce(&str) -> serde_json::Value,
+    dials: Vec<Dial<'_>>,
+) -> (Vec<Heard>, std::path::PathBuf) {
     use crate::native::unlock::fake::{self, Fake};
     let dir = crate::test_support::scratch();
     let seat_id = format!("{port:032x}");
@@ -2831,7 +2842,11 @@ fn dial_box(
     if !locks.is_null() {
         std::fs::write(&lock_file, locks.to_string()).unwrap();
     }
-    let profiles = crate::profiles::Profiles::load_with(Some(dir.join("profiles.json")), None);
+    let path = dir.join("profiles.json");
+    let profiles = match seat_host {
+        true => crate::profiles::Profiles::load_box(path, Some(seat_id)),
+        false => crate::profiles::Profiles::load_with(Some(path), None),
+    };
     let sup = Fake::new(vec![seat], |_| Ok(pf_seats::ipc::CommandResult::Left));
     let _armed = fake::arm(&fp, Arc::new(sup));
     let host = spawn_profile_host(port, dials.len() as u32, np, Arc::new(profiles));
@@ -2914,6 +2929,32 @@ fn a_locked_profile_opens_only_for_its_devices() {
     };
     let (heard, _) = dial_box(19803, mine, dials());
     assert_eq!(heard, [Heard::Played, kid_seat(19803)]);
+}
+
+/// A seat host reads the box's own lock file, as a Windows seat host reads the box's config dir:
+/// a device not on the list is refused there and never asked for the PIN only the box takes; a
+/// device on it goes on.
+#[test]
+fn a_seat_host_checks_the_box_s_lock_file() {
+    let _registry = crate::session_status::tests::registry_lock();
+    let _serial = SESSION_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    let pin = serde_json::to_value(pf_seats::locks::PinHash::new("2468").unwrap()).unwrap();
+    let other = |_: &str| {
+        let lock = serde_json::json!({"locked": true, "pin": pin,
+            "devices": [listed(&"ab".repeat(32))]});
+        serde_json::json!({"version": 1, "profiles": {KID_PROFILE: lock}})
+    };
+    let dials = vec![(KID_PROFILE, offers(true), Sends::Nothing)];
+    let (heard, _) = dial_host(19805, true, other, dials);
+    assert_eq!(heard, [not_allowed()]);
+
+    let mine = |fp: &str| {
+        let lock = serde_json::json!({"locked": true, "devices": [listed(fp)]});
+        serde_json::json!({"version": 1, "profiles": {KID_PROFILE: lock}})
+    };
+    let dials = vec![(KID_PROFILE, offers(true), Sends::Nothing)];
+    let (heard, _) = dial_host(19806, true, mine, dials);
+    assert_eq!(heard, [kid_seat(19806)]);
 }
 
 /// A session on a locked profile ends once its device is signed out, with the sentence that says
