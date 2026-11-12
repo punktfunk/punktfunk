@@ -28,6 +28,7 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -40,7 +41,10 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -65,13 +69,17 @@ fun SectionLabel(text: String) {
  * the preset actions ("Connect with: …", "Pin as card: …") stay legible next to the host actions
  * in one flat menu — Compose has no submenus, and the Windows client made the same call.
  * [detail] is a second line under the label. A row with no [onClick] is a section's title, with
- * its note as [detail]; a row not [enabled] says why in [detail].
+ * its note as [detail], or with [subhead] a smaller label over a group inside the section. A row
+ * not [enabled] says why in [detail]. A non-null [selected] makes the row one choice of its
+ * section, drawn with a radio button.
  */
 data class HostMenuItem(
     val label: String,
     val startsSection: Boolean = false,
     val enabled: Boolean = true,
     val detail: String? = null,
+    val selected: Boolean? = null,
+    val subhead: Boolean = false,
     val onClick: (() -> Unit)?,
 )
 
@@ -114,7 +122,7 @@ fun HostCard(
     profileName: String? = null,
     profilePicture: String? = null,
     profileArt: io.unom.punktfunk.ProfileArt? = null,
-    /** "Streams LG TV" when a connect mirrors a host monitor; null on its own screen. */
+    /** The screen a connect gets when it is not the only screen: "Second screen", "Streams LG TV". */
     screenLine: String? = null,
     /** Keep [screenLine]'s space, for the same reason as [reservePresetSlot]. */
     reserveScreenLine: Boolean = false,
@@ -242,7 +250,14 @@ fun HostCard(
                         menuItems.forEach { item ->
                             if (item.startsSection) HorizontalDivider()
                             val onClick = item.onClick
-                            if (onClick == null) {
+                            if (onClick == null && item.subhead) {
+                                Text(
+                                    item.label,
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.padding(start = 12.dp, end = 12.dp, top = 8.dp, bottom = 2.dp),
+                                )
+                            } else if (onClick == null) {
                                 Column(Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
                                     Text(
                                         item.label,
@@ -265,10 +280,23 @@ fun HostCard(
                                             item.detail?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
                                         }
                                     },
+                                    leadingIcon = if (item.selected != null) {
+                                        { RadioButton(selected = item.selected, onClick = null, enabled = item.enabled) }
+                                    } else {
+                                        null
+                                    },
                                     enabled = item.enabled,
                                     onClick = {
                                         menu = false
                                         onClick()
+                                    },
+                                    modifier = if (item.selected != null) {
+                                        Modifier.semantics {
+                                            role = Role.RadioButton
+                                            selected = item.selected
+                                        }
+                                    } else {
+                                        Modifier
                                     },
                                 )
                             }
