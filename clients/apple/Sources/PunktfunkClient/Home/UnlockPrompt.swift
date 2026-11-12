@@ -90,7 +90,8 @@ struct UnlockPromptView: View {
         .fullScreenCover(isPresented: $entering) {
             TVTextEntry(
                 title: ask.pin ? label : L10n.appleUnlockPasswordFor(name: ask.profileName),
-                text: "", keyboardType: ask.pin ? .numberPad : .default, secure: true
+                text: "", keyboardType: ask.pin ? .numberPad : .default, secure: !ask.pin,
+                secret: ask.pin
             ) {
                 if !$0.isEmpty { password = $0 }
                 entering = false
