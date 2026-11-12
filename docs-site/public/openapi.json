@@ -3582,7 +3582,7 @@
           "library"
         ],
         "summary": "Hide or un-hide one library title.",
-        "description": "Curation, not access control: the title leaves every play surface and launch resolution\nbut is not deleted. The operator console still lists it (`hidden: true`) so it can return.\nThe id is not required to exist now — a plugin mid-sync or an unmounted drive would\notherwise refuse a choice that should stick. With `as`, the hide is that profile's own; it\ncannot bring back a title the box hides. A paired device that is that locked profile's person\nmay set it too. Emits `library.changed` only on a real change.",
+        "description": "Curation, not access control: the title leaves every play surface and launch resolution\nbut is not deleted. The operator console still lists it (`hidden: true`) so it can return.\nThe id is not required to exist now — a plugin mid-sync or an unmounted drive would\notherwise refuse a choice that should stick. With `as`, the hide is that profile's own; it\ncannot bring back a title the box hides. A paired device that is that locked profile's person\nmay set it too, hiding only a title the profile's library lists. Emits `library.changed` only\non a real change.",
         "operationId": "setLibraryEntryHidden",
         "parameters": [
           {
@@ -3656,7 +3656,7 @@
             }
           },
           "404": {
-            "description": "`as` names no profile on this host",
+            "description": "`as` names no profile on this host, or a device hides a title the profile's library doesn't list",
             "content": {
               "application/json": {
                 "schema": {
@@ -4291,7 +4291,7 @@
           "library"
         ],
         "summary": "Set one game's overrides",
-        "description": "`{ \"set\": id }` points the game at a shared override; fields alone are its own values;\n`{ \"none\": true }` leaves it to the device, whatever the source sets; `{}` clears its entry,\nand the game takes its source's. The id is not required to exist now, as with hiding.\nWith `as`, the entry is that profile's own and `set` may name the box's shared override or\nthe profile's; `{}` hands the game back to the box's entry. A paired device that is that\nlocked profile's person may set it too. Emits `library.changed`.",
+        "description": "`{ \"set\": id }` points the game at a shared override; fields alone are its own values;\n`{ \"none\": true }` leaves it to the device, whatever the source sets; `{}` clears its entry,\nand the game takes its source's. The id is not required to exist now, as with hiding.\nWith `as`, the entry is that profile's own and `set` may name the box's shared override or\nthe profile's; `{}` hands the game back to the box's entry. A paired device that is that\nlocked profile's person may set it too, for a title the profile's library lists. Emits\n`library.changed`.",
         "operationId": "setGameOverrides",
         "parameters": [
           {
@@ -4365,7 +4365,7 @@
             }
           },
           "404": {
-            "description": "`set` names no shared override, or `as` names no profile on this host",
+            "description": "`set` names no shared override, `as` names no profile on this host, or a device names a title the profile's library doesn't list",
             "content": {
               "application/json": {
                 "schema": {

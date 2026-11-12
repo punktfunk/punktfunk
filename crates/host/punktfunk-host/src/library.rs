@@ -379,6 +379,11 @@ pub fn all_games_for(view: &View) -> Vec<GameEntry> {
         .collect()
 }
 
+/// Whether `view`'s library lists title `id`, hidden or not.
+pub(crate) fn lists(view: &View, id: &str) -> bool {
+    sorted_games_for(view).iter().any(|g| g.id == id)
+}
+
 /// The library in `view` including hidden titles, each flagged.
 ///
 /// Only the console list on the operator lane calls this: a hidden entry has to

@@ -276,6 +276,38 @@ async fn a_locked_profile_s_device_changes_its_layer_alone() {
     }
 }
 
+/// What a device adds stays bounded by the library: it hides a title or sets its entry only when
+/// its profile's library lists it, and takes either away whatever the title. The console still
+/// writes a title that is gone for now.
+#[tokio::test]
+async fn a_device_adds_only_what_its_library_lists() {
+    use serde_json::json;
+    let tmp = ConfigDirOverride::new();
+    let (app, _) = locked_box(tmp.path());
+    let ghost = "steam:999999";
+    let hide = format!("/api/v1/library/hidden/{ghost}");
+    let game = format!("/api/v1/library/overrides/games/{ghost}");
+    for (path, adds, takes) in [
+        (&hide, json!({"hidden": true}), json!({"hidden": false})),
+        (&game, json!({"hz": 50}), json!({})),
+    ] {
+        let at = |body| call(&Method::PUT, path, Some(SEAT_P), &Some(body));
+        let before = files(tmp.path());
+        let (status, j) = as_device(&app, at(adds), LISTED).await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "{path}: {j}");
+        assert_eq!(files(tmp.path()), before, "{path}");
+        let (status, j) = as_device(&app, at(takes), LISTED).await;
+        assert_eq!(status, StatusCode::OK, "{path}: {j}");
+    }
+    let console = call(
+        &Method::PUT,
+        &hide,
+        Some(SEAT_P),
+        &Some(json!({"hidden": true})),
+    );
+    assert_eq!(send(&app, console).await.0, StatusCode::OK);
+}
+
 /// An open profile, a device off a locked one's list, and one that needs its PIN hear the same
 /// sentence: no device learns which profiles are locked.
 #[tokio::test]

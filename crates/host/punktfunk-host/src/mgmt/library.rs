@@ -208,6 +208,23 @@ pub(crate) struct Scoped {
     mine: Option<String>,
 }
 
+/// The 404 for a device's write that `adds` an entry for title `id` when `view`'s library lists no
+/// such title: what a device writes stays bounded by the library. Taking an entry away needs none.
+fn unlisted(
+    who: &AsProfile,
+    view: &crate::library::View,
+    id: &str,
+    adds: bool,
+) -> Option<Response> {
+    let refused = adds && who.device.is_some() && !crate::library::lists(view, id);
+    refused.then(|| {
+        api_error(
+            StatusCode::NOT_FOUND,
+            "this profile's library lists no such title",
+        )
+    })
+}
+
 impl AsProfile {
     /// The view this call is for. A profile the box doesn't hold, an id that is no minted one,
     /// and one the asking device may not open are 404 before it touches a path.
@@ -637,7 +654,8 @@ pub(crate) struct HiddenState {
 /// The id is not required to exist now — a plugin mid-sync or an unmounted drive would
 /// otherwise refuse a choice that should stick. With `as`, the hide is that profile's own; it
 /// cannot bring back a title the box hides. A paired device that is that locked profile's person
-/// may set it too. Emits `library.changed` only on a real change.
+/// may set it too, hiding only a title the profile's library lists. Emits `library.changed` only
+/// on a real change.
 #[utoipa::path(
     put,
     path = "/library/hidden/{id}",
@@ -653,7 +671,7 @@ pub(crate) struct HiddenState {
         (status = BAD_REQUEST, description = "Empty entry id", body = ApiError),
         (status = UNAUTHORIZED, description = "Missing or invalid bearer token", body = ApiError),
         (status = FORBIDDEN, description = "A device that isn't the person of the profile `as` names, or a plugin", body = ApiError),
-        (status = NOT_FOUND, description = "`as` names no profile on this host", body = ApiError),
+        (status = NOT_FOUND, description = "`as` names no profile on this host, or a device hides a title the profile's library doesn't list", body = ApiError),
         (status = INTERNAL_SERVER_ERROR, description = "Couldn't save the settings", body = ApiError),
     )
 )]
@@ -667,6 +685,9 @@ pub(crate) async fn set_library_entry_hidden(
         return api_error(StatusCode::BAD_REQUEST, "entry id must not be empty");
     }
     let scoped = scoped!(who, st);
+    if let Some(refused) = unlisted(&who, &scoped.view, &id, toggle.hidden) {
+        return refused;
+    }
     match crate::library::set_entry_hidden(&scoped.view, &id, toggle.hidden) {
         Ok(hidden) => {
             tracing::info!(entry = %id, hidden, "management API: library entry visibility set");
@@ -1655,7 +1676,8 @@ pub(crate) async fn delete_override_set(
 /// and the game takes its source's. The id is not required to exist now, as with hiding.
 /// With `as`, the entry is that profile's own and `set` may name the box's shared override or
 /// the profile's; `{}` hands the game back to the box's entry. A paired device that is that
-/// locked profile's person may set it too. Emits `library.changed`.
+/// locked profile's person may set it too, for a title the profile's library lists. Emits
+/// `library.changed`.
 #[utoipa::path(
     put,
     path = "/library/overrides/games/{id}",
@@ -1671,7 +1693,7 @@ pub(crate) async fn delete_override_set(
         (status = BAD_REQUEST, description = "Empty id, a value out of range, or `set` or `none` beside another field", body = ApiError),
         (status = UNAUTHORIZED, description = "Missing or invalid bearer token", body = ApiError),
         (status = FORBIDDEN, description = "A device that isn't the person of the profile `as` names, or a plugin", body = ApiError),
-        (status = NOT_FOUND, description = "`set` names no shared override, or `as` names no profile on this host", body = ApiError),
+        (status = NOT_FOUND, description = "`set` names no shared override, `as` names no profile on this host, or a device names a title the profile's library doesn't list", body = ApiError),
         (status = INTERNAL_SERVER_ERROR, description = "Couldn't save the overrides", body = ApiError),
     )
 )]
@@ -1685,6 +1707,9 @@ pub(crate) async fn set_game_overrides(
         return api_error(StatusCode::BAD_REQUEST, "entry id must not be empty");
     }
     let scoped = scoped!(who, st);
+    if let Some(refused) = unlisted(&who, &scoped.view, &id, !entry.is_empty()) {
+        return refused;
+    }
     match crate::library::set_game_overrides(&scoped.view, &id, entry) {
         Ok(entry) => {
             tracing::info!(entry = %id, "management API: game overrides set");
