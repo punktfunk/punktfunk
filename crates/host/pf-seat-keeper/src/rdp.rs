@@ -1,8 +1,8 @@
 //! Pinned IronRDP keeper and credential-free trust handshake.
 //!
-//! Both roles connect only to `127.0.0.2`: the seat listener on its own port when it listens,
-//! else Remote Desktop's 3389. They advertise CredSSP/NLA without
-//! legacy TLS login, and require a HYBRID security selection. `trust` stops
+//! Both roles connect only to `127.0.0.2`, on the one port [`keeper::rdp_port`] names: the
+//! seat listener's while it is in place, else Remote Desktop's 3389. They advertise CredSSP/NLA
+//! without legacy TLS login, and require a HYBRID security selection. `trust` stops
 //! immediately after RDP negotiation and the TLS handshake, before CredSSP, and
 //! reports the observed SHA-256 leaf pin. Runtime TLS verifies that exact pin
 //! before `connect_finalize` can serialize credentials. The keeper requests a
@@ -29,8 +29,6 @@ use zeroize::Zeroize as _;
 type WinResult<T> = Result<T, BackendError>;
 
 const LOOPBACK: IpAddr = IpAddr::V4(Ipv4Addr::new(127, 0, 0, 2));
-const RDP_ADDRESS: SocketAddr = SocketAddr::new(LOOPBACK, 3389);
-const SEAT_ADDRESS: SocketAddr = SocketAddr::new(LOOPBACK, keeper::SEAT_LISTENER_PORT);
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(15);
 const ACTIVE_READ_TIMEOUT: Duration = Duration::from_secs(2);
@@ -255,17 +253,12 @@ fn connector_config(
     }
 }
 
-/// The seat listener, or Remote Desktop's own when nothing listens there: same TermService, same
-/// certificate, but only the seat listener's sessions get pad audio endpoints.
+/// The listener [`keeper::rdp_port`] names: same TermService and certificate either way, but
+/// only the seat listener's sessions get pad audio endpoints. A refusal there is a failed connect.
 fn connect() -> WinResult<TcpStream> {
-    match TcpStream::connect_timeout(&SEAT_ADDRESS, CONNECT_TIMEOUT) {
-        Err(error) if error.kind() == std::io::ErrorKind::ConnectionRefused => {
-            TcpStream::connect_timeout(&RDP_ADDRESS, CONNECT_TIMEOUT)
-                .map_err(|error| io_error("rdp_connect", "connect to 127.0.0.2:3389", error))
-        }
-        connected => connected
-            .map_err(|error| io_error("rdp_connect", &format!("connect to {SEAT_ADDRESS}"), error)),
-    }
+    let address = SocketAddr::new(LOOPBACK, keeper::rdp_port());
+    TcpStream::connect_timeout(&address, CONNECT_TIMEOUT)
+        .map_err(|error| io_error("rdp_connect", &format!("connect to {address}"), error))
 }
 
 /// Connects `connector` and runs it to the TLS upgrade, then the TLS handshake against
