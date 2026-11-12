@@ -131,7 +131,8 @@ fn ltr_disabled() -> bool {
     crate::knobs::get().no_qsv_ltr != 0
 }
 
-/// Frames between LTR marks. Default ~1/4 s so a loss usually finds a recent slot.
+/// Frames between LTR marks while the client sends no confirmations. Default ~1/4 s so a loss
+/// usually finds a recent slot.
 fn ltr_mark_interval(fps: u32) -> i64 {
     super::policy::ltr_interval().unwrap_or_else(|| (fps as i64 / 4).max(1))
 }
@@ -911,6 +912,8 @@ pub struct QsvEncoder {
     ltr_mark_interval: i64,
     /// The newest frame the client confirmed, while the host holds confirmed references.
     reference_floor: Option<crate::Acked>,
+    /// What the client confirmed it decoded clean, whatever the link: the kept pair's marks.
+    confirmed: Option<crate::Acked>,
     ltr_test_force_at: Option<i64>,
     /// Refuse this frame after the LTR decision, as a failed surface fetch would.
     #[cfg(test)]
@@ -990,6 +993,7 @@ impl QsvEncoder {
             ltr: LtrMirror::default(),
             ltr_mark_interval: ltr_mark_interval(fps),
             reference_floor: None,
+            confirmed: None,
             ltr_test_force_at: ltr_test_force_at(),
             #[cfg(test)]
             fail_submit_at: None,
@@ -1368,8 +1372,9 @@ impl QsvEncoder {
         }
         let floor = self.reference_floor.filter(|_| self.codec != Codec::Av1);
         let interval = self.ltr_mark_interval;
+        let confirmed = self.confirmed.as_ref();
         self.ltr
-            .step(forced, cur_idx, interval, floor, false, false)
+            .step(forced, cur_idx, interval, confirmed, floor, false, false)
     }
 }
 
@@ -1736,6 +1741,10 @@ impl Encoder for QsvEncoder {
 
     fn set_reference_floor(&mut self, acked: Option<crate::Acked>) {
         self.reference_floor = acked;
+    }
+
+    fn note_confirmed(&mut self, acked: Option<crate::Acked>) {
+        self.confirmed = acked;
     }
 
     /// Withdraw anchor trust from every live LTR and drop a queued force

@@ -132,10 +132,12 @@ impl VulkanVideoEncoder {
         // The record paths read this frame's wave; bookkeeping advances it.
         self.wave = plan.wave;
         let poc: i32 = if is_idr { 0 } else { self.poc };
-        let mut setup_idx = (self.enc_count % DPB_SLOTS as u64) as usize;
-        if !is_idr && setup_idx == ref_slot {
-            setup_idx = (setup_idx + 1) % DPB_SLOTS as usize;
-        }
+        // An IDR empties the DPB, kept pictures included.
+        let setup_idx = if is_idr {
+            (self.enc_count % DPB_SLOTS as u64) as usize
+        } else {
+            setup_slot(self.enc_count, ref_slot, &self.slot_wire, &self.kept)
+        };
         CodingPlan {
             frame: plan,
             is_idr,
@@ -977,6 +979,11 @@ impl VulkanVideoEncoder {
         }
         self.slot_wire[setup_idx] = if plan.dirty { -1 } else { wire };
         self.slot_poc[setup_idx] = poc;
+        let slot_wire = &self.slot_wire;
+        self.kept
+            .step(wire, !plan.dirty, self.confirmed.as_ref(), |w| {
+                slot_wire.contains(&w)
+            });
         if let Some(w) = plan.wave.filter(|w| w.closes()) {
             tracing::debug!(
                 cycle = w.cycle,

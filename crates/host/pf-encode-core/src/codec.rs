@@ -276,6 +276,11 @@ pub trait Encoder: Send {
     /// `recovery_anchor`. With none resident the backend keeps its chain, never an IDR. Set
     /// before each submit. Default: no-op.
     fn set_reference_floor(&mut self, _acked: Option<Acked>) {}
+    /// What the client confirmed it decoded clean, before each submit whatever the link: the
+    /// backend keeps the newest confirmed picture resident ([`super::rfi::Kept`]), so the next
+    /// loss finds an anchor however long its report took. `None` before the first
+    /// confirmation. Default: no-op.
+    fn note_confirmed(&mut self, _acked: Option<Acked>) {}
     /// Escalate to pipelined retrieve under GPU contention: `poll` stops waiting
     /// on the newest in-flight AU (a retrieve thread on NVENC, a completion probe
     /// on Vulkan/VA-API), so AUs may ride ~one loop tick behind their submit.
