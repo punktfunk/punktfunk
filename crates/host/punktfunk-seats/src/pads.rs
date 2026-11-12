@@ -28,7 +28,7 @@ use std::path::Path;
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, LazyLock, Mutex, MutexGuard};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 pub const SOCKET_PATH: &str = pf_paths::seat::PADS_SOCKET;
 /// Relayed pads one seat may hold at once: its players' controllers, with room for a swap.
@@ -50,6 +50,14 @@ static PENDING: LazyLock<Mutex<HashMap<String, usize>>> = LazyLock::new(Mutex::d
 const PENDING_PER_UID: usize = 4;
 /// Unread connections from every uid together, each a thread of the unit's own task limit.
 const PENDING_TOTAL: usize = 16;
+/// Pads a seat may make back to back: every pad and USB device it may hold, since a player's
+/// pads arrive together.
+const MADE_BURST: u32 = (MAX_PER_SEAT + vhci::MAX_PER_SEAT) as u32;
+/// Past [`MADE_BURST`], one pad a second: a player plugs pads in by hand, and a loop making
+/// and dropping them costs root a scope, a vhci attach and udev runs each time.
+const MADE_GAP: Duration = Duration::from_secs(1);
+/// When each account's next pad is due ([`admit_made`]).
+static MADE: LazyLock<Mutex<HashMap<String, Instant>>> = LazyLock::new(Mutex::default);
 
 /// One of a key's slots in `held`, an account's or a peer uid's, given back on drop.
 struct Slot {
@@ -58,7 +66,23 @@ struct Slot {
 }
 
 impl Slot {
+    /// A slot for a pad made now: within `cap` and its account's pace ([`admit_made`]).
     fn take(held: &'static Mutex<HashMap<String, usize>>, key: &str, cap: usize) -> Option<Slot> {
+        let admitted = admit_made(
+            &mut held.lock().unwrap_or_else(|e| e.into_inner()),
+            &mut MADE.lock().unwrap_or_else(|e| e.into_inner()),
+            key,
+            cap,
+            Instant::now(),
+        );
+        admitted.then(|| Slot {
+            held,
+            key: key.to_owned(),
+        })
+    }
+
+    /// A slot for a pad a restart kept: within `cap`, never paced.
+    fn kept(held: &'static Mutex<HashMap<String, usize>>, key: &str, cap: usize) -> Option<Slot> {
         admit(
             &mut held.lock().unwrap_or_else(|e| e.into_inner()),
             key,
@@ -94,6 +118,25 @@ impl Drop for Slot {
 /// Counts one more unread connection from `uid`; `false` at its cap or the total.
 fn admit_pending(pending: &mut HashMap<String, usize>, uid: &str) -> bool {
     pending.values().sum::<usize>() < PENDING_TOTAL && admit(pending, uid, PENDING_PER_UID)
+}
+
+/// Counts one more pad `account` makes at `now`; `false` at `cap`, or when it made
+/// [`MADE_BURST`] and the next is not yet due, [`MADE_GAP`] after the one before. `due` holds
+/// each account's next due time; a refusal leaves it as it was.
+fn admit_made(
+    held: &mut HashMap<String, usize>,
+    due: &mut HashMap<String, Instant>,
+    account: &str,
+    cap: usize,
+    now: Instant,
+) -> bool {
+    let next = due.get(account).map_or(now, |&at| at.max(now));
+    let full = held.get(account).is_some_and(|&count| count >= cap);
+    if full || next > now + MADE_GAP * (MADE_BURST - 1) {
+        return false;
+    }
+    due.insert(account.to_owned(), next + MADE_GAP);
+    admit(held, account, cap)
 }
 
 /// Counts one more for `account`; `false` at `cap`.
@@ -172,7 +215,7 @@ pub fn resume() -> Vec<(String, OwnedFd)> {
         other,
     } = pad_broker::kept();
     for kept in pads {
-        let Some(slot) = Slot::take(&HELD, &kept.account, MAX_PER_SEAT) else {
+        let Some(slot) = Slot::kept(&HELD, &kept.account, MAX_PER_SEAT) else {
             pad_broker::forget(&kept.name);
             continue;
         };
@@ -203,7 +246,7 @@ pub fn resume() -> Vec<(String, OwnedFd)> {
         tracing::info!(port, "seat USB device kept across a restart");
         // A socket no row names is shut down by `watch_usb` and holds no slot.
         let slot = vhci::account_at(port)
-            .and_then(|account| Slot::take(&SERVED, &account, vhci::MAX_PER_SEAT));
+            .and_then(|account| Slot::kept(&SERVED, &account, vhci::MAX_PER_SEAT));
         let spawned = std::thread::Builder::new()
             .name("seat-usb".into())
             .spawn(move || {
@@ -426,7 +469,7 @@ fn create(stream: UnixStream, account: &str, kind: PadKind, index: u8, seat: u16
         tracing::warn!(
             account,
             cap = MAX_PER_SEAT,
-            "seat asked for one pad too many"
+            "seat asked for one pad too many, or too fast"
         );
         answer(&stream, account, Status::Capacity);
         return;
@@ -469,7 +512,7 @@ fn serve_usb(stream: UnixStream, account: &str, hello: &Hello) {
         tracing::warn!(
             account,
             cap = vhci::MAX_PER_SEAT,
-            "seat asked for one USB device too many"
+            "seat asked for one USB device too many, or too fast"
         );
         answer(&stream, account, Status::Capacity);
         return;
@@ -592,6 +635,33 @@ mod tests {
             !held.contains_key("pf-seat-1"),
             "a seat with no pads is forgotten"
         );
+    }
+
+    /// A seat makes every pad it may hold at once, then one a second; another seat has its own
+    /// pace, and a refusal at the cap costs no turn.
+    #[test]
+    fn a_seat_makes_its_pads_at_once_then_one_a_second() {
+        let (mut held, mut due) = (HashMap::new(), HashMap::new());
+        let t0 = Instant::now();
+        let mut make = |account: &str, at: Duration| {
+            admit_made(&mut held, &mut due, account, usize::MAX, t0 + at)
+        };
+        for _ in 0..MADE_BURST {
+            assert!(make("pf-seat-1", Duration::ZERO));
+        }
+        assert!(!make("pf-seat-1", Duration::ZERO), "one past the burst");
+        assert!(make("pf-seat-2", Duration::ZERO), "another seat");
+        assert!(!make("pf-seat-1", MADE_GAP / 2));
+        assert!(make("pf-seat-1", MADE_GAP));
+        assert!(!make("pf-seat-1", MADE_GAP));
+
+        let (mut held, mut due) = (HashMap::new(), HashMap::new());
+        assert!(admit_made(&mut held, &mut due, "pf-seat-1", 1, t0));
+        for _ in 0..MADE_BURST * 2 {
+            assert!(!admit_made(&mut held, &mut due, "pf-seat-1", 1, t0));
+        }
+        release(&mut held, "pf-seat-1");
+        assert!(admit_made(&mut held, &mut due, "pf-seat-1", 1, t0));
     }
 
     /// Unread connections: four per uid, sixteen in all, and a slot back once one is read.
