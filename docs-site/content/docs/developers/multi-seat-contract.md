@@ -319,6 +319,35 @@ session by design, and display activation fails while its session is inactive.
   an account with `SeatSteam` and the box's Steam for any other. Their targets are kept in the
   Seats key's `SteamLinks` and put back when seats go off.
 
+## A profile's lock
+
+`profile-locks.json` sits beside the box's pairing store. The box's own host, the plain host or
+the door, is its one writer, `0600` on Linux and SYSTEM and Administrators on Windows; it is never
+in `profiles.json`. Its `profiles` map each profile id to `locked`, an optional `pin`
+(`iterations`, `salt`, `hash`: PBKDF2-HMAC-SHA256, 600,000 iterations, a 16-byte salt) and the
+`devices` list of a person's row's `devices.json`. Removing a profile removes its entry;
+unlocking keeps the list and the PIN.
+
+- **The check.** A device opens a profile when the profile is unlocked, or its list admits the
+  device: `stay`, or present. Any other device is refused, or asked for the PIN when the profile
+  has one. Every host asks it after a connect resolves its profile and before the profile is
+  placed or played, the door and a seat host alike. A wake, the picker (`enumerate`), the door's
+  forwarding of a device's own play, and a GameStream launch or resume (as the owner) ask it too.
+  A Punktfunk session whose device stops being admitted ends within a second; a GameStream
+  session runs on until it ends.
+- **A file that doesn't read.** Every profile is refused to every device, every edit is refused,
+  and the host logs it. A missing file locks nothing.
+- **The PIN.** Only the box's own host checks it, sent as `ProfileUnlock` kind 1. A device waits
+  after wrong ones as after a wrong account password; 10 wrong for one profile within 15 minutes,
+  over all devices, close PIN entry for it until the oldest is 15 minutes old. Counts live in
+  memory. A right PIN makes the device present, or `stay` when the message asks. Each try writes
+  one line under `punktfunk::audit`, never the PIN.
+- **A seat host** reads the box's file, read only, and never takes a PIN. A Windows seat reads it
+  from `PUNKTFUNK_TRUST_DIR`. A Linux seat reads the [trust copy](#linux-seats), which holds its
+  own profiles' locks with no PIN; a seat whose every profile is locked gets only the pairing
+  records its locks admit, as a person's row does, and the owner's row counts every profile that
+  shares the owner's desktop. A lock file there that doesn't read gives an empty pairing list.
+
 ## Checking a seat can actually stream
 
 Run this inside the seat's session:
@@ -412,9 +441,9 @@ the installed unit.
   `punktfunk-games`, so no secret relies on group read.
 - **The trust copy.** The seat reads `trust/<id>/`, not the box directory:
   `punktfunk1-paired.json`, `profiles.json`, `display-settings.json` (from the library copy,
-  the owner's), `seat-defaults.json` and `profiles/`, `root:<seat user>` `0640`. The daemon
-  recopies a file within 2 seconds of its change while the seat runs. The box's key never
-  crosses. A seat other than the owner's also finds the box's library there, its
+  the owner's), `seat-defaults.json` and `profiles/`, `root:<seat user>` `0640`, and the seat's
+  [profile locks](#a-profiles-lock) when the box has any. The daemon recopies a file within 2
+  seconds of its change while the seat runs. The box's key never crosses. A seat other than the owner's also finds the box's library there, its
   `PUNKTFUNK_LIBRARY_DIR`.
 - **The box's library.** The owner's host writes the library; its plugins scan the owner's home.
   From the owner's `~/.config/punktfunk` the daemon copies `library.json`, `library-hidden.json`,
