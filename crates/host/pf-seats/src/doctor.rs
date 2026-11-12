@@ -142,7 +142,8 @@ pub(crate) fn report_rows(facts: BoxFacts) -> Vec<Diagnostic> {
             "A firewall rule lets other computers reach Remote Desktop, which seats keep to this \
              PC. Turn the rule off in Windows Defender Firewall, or turn on Allow Remote Desktop \
              from the network under Profiles → Seats.",
-        ));
+        )
+        .worded("seatcheck_rdp_network"));
     }
     if let Some(missing) = &facts.missing_file {
         rows.push(

@@ -30,6 +30,7 @@
 	"apierr_account_missing": "There is no account called {account} on this host.",
 	"apierr_account_missing_windows": "No Windows account {account} on this host.",
 	"apierr_account_name_lowercase": "Enter the account's Linux user name, in lowercase.",
+	"apierr_account_network_denied": "Couldn't check {account}'s password — this host's security policy denies it sign-in from the network. In Local Security Policy, remove the entry that covers it from Deny access to this computer from the network, then try again.",
 	"apierr_account_not_ordinary": "{account} is a system account, not a person's.",
 	"apierr_account_password_missing": "Enter the account's password.",
 	"apierr_account_policy": "{account} isn't allowed to sign in over Remote Desktop on this host.",
@@ -519,6 +520,7 @@
 	"seatcheck_logind_missing": "systemd-logind isn't running, so a seat can't get a session.",
 	"seatcheck_logind_ok": "systemd-logind is running",
 	"seatcheck_probe": "Couldn't read this host's Remote Desktop and graphics settings.",
+	"seatcheck_rdp_network": "A firewall rule lets other computers reach Remote Desktop, which seats keep to this host. Turn the rule off in Windows Defender Firewall, or turn on Allow Remote Desktop from the network under Profiles → Seats.",
 	"seatcheck_rdp_pin_missing": "Remote Desktop's certificate isn't recorded, so seats can't sign in. Turn seats off and on under Profiles → Seats.",
 	"seatcheck_rdp_pin_ok": "Remote Desktop's certificate is recorded.",
 	"seatcheck_rds_grace_days": [

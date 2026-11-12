@@ -663,6 +663,8 @@ fn network_logon_denied(account: &str) -> BackendError {
              Deny access to this computer from the network, then try again."
         ),
     )
+    .said("account_network_denied")
+    .param("account", account)
 }
 
 /// Puts `account` in Remote Desktop Users. `true`: this call added it.
