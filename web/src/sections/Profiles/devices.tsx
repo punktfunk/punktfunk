@@ -130,54 +130,66 @@ export const DevicesList: FC<{
 	empty = m.profiles_devices_none(),
 	action,
 	flush,
-}) => (
-	<div className={cn("space-y-2", !flush && "sm:pl-14")}>
-		<div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
-			<h3 className="text-sm font-medium">{m.profiles_devices_title()}</h3>
-			<div className="flex flex-wrap gap-2">
-				{action}
-				{!error && devices && devices.length > 0 && (
-					<Button variant="outline" size="sm" onClick={onSignOutAll}>
-						{m.profiles_devices_sign_out_all()}
-					</Button>
+}) => {
+	const all = !error && devices && devices.length > 0 && (
+		<Button variant="outline" size="sm" onClick={onSignOutAll}>
+			{m.profiles_devices_sign_out_all()}
+		</Button>
+	);
+	return (
+		<div className={cn("space-y-2", !flush && "sm:pl-14")}>
+			<div
+				className={cn(
+					"flex items-center justify-between gap-4",
+					action && "flex-wrap gap-y-2",
+				)}
+			>
+				<h3 className="text-sm font-medium">{m.profiles_devices_title()}</h3>
+				{action ? (
+					<div className="flex flex-wrap gap-2">
+						{action}
+						{all}
+					</div>
+				) : (
+					all
 				)}
 			</div>
+			{account && (
+				<p className="text-sm text-muted-foreground">
+					{m.profiles_devices_trust({ account })}
+				</p>
+			)}
+			{error ? (
+				<p className="text-sm text-destructive">{error}</p>
+			) : devices?.length === 0 ? (
+				<p className="text-sm text-muted-foreground">{empty}</p>
+			) : (
+				<ul className="divide-y">
+					{devices?.map((d) => (
+						<li
+							key={d.fingerprint}
+							className="flex items-center justify-between gap-4 py-2"
+						>
+							<div className="min-w-0">
+								<p className="truncate text-sm">{deviceName(d)}</p>
+								<p className="text-xs text-muted-foreground">
+									{[
+										KIND_WORD[d.kind]?.(),
+										m.profiles_device_last_used({
+											when: fmtDateTimeSecs(d.last_unix),
+										}),
+									]
+										.filter(Boolean)
+										.join(" · ")}
+								</p>
+							</div>
+							<Button variant="ghost" size="sm" onClick={() => onSignOut(d)}>
+								{m.profiles_device_sign_out()}
+							</Button>
+						</li>
+					))}
+				</ul>
+			)}
 		</div>
-		{account && (
-			<p className="text-sm text-muted-foreground">
-				{m.profiles_devices_trust({ account })}
-			</p>
-		)}
-		{error ? (
-			<p className="text-sm text-destructive">{error}</p>
-		) : devices?.length === 0 ? (
-			<p className="text-sm text-muted-foreground">{empty}</p>
-		) : (
-			<ul className="divide-y">
-				{devices?.map((d) => (
-					<li
-						key={d.fingerprint}
-						className="flex items-center justify-between gap-4 py-2"
-					>
-						<div className="min-w-0">
-							<p className="truncate text-sm">{deviceName(d)}</p>
-							<p className="text-xs text-muted-foreground">
-								{[
-									KIND_WORD[d.kind]?.(),
-									m.profiles_device_last_used({
-										when: fmtDateTimeSecs(d.last_unix),
-									}),
-								]
-									.filter(Boolean)
-									.join(" · ")}
-							</p>
-						</div>
-						<Button variant="ghost" size="sm" onClick={() => onSignOut(d)}>
-							{m.profiles_device_sign_out()}
-						</Button>
-					</li>
-				))}
-			</ul>
-		)}
-	</div>
-);
+	);
+};
