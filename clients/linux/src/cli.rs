@@ -169,7 +169,7 @@ pub fn headless_library(target: &str) -> glib::ExitCode {
         Some(pin),
         profile,
     ) {
-        Ok(games) => {
+        Ok((games, _)) => {
             // A fourth column, appended: `game` or `launcher` (design D4). Appended rather than
             // folded into an existing field so anything reading the first three columns is
             // untouched.

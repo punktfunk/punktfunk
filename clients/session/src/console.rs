@@ -200,7 +200,7 @@ impl Launcher {
                     port,
                     pin,
                     self.identity.clone(),
-                    launch,
+                    (launch, profile.as_deref()),
                     gamepad,
                     native,
                     hdr,
@@ -1756,9 +1756,9 @@ fn spawn_fetch(
             }
             // Whatever we already know about this host, on screen before a single packet goes
             // out. Keyed on the pinned fingerprint, so a box that came back on a new DHCP lease
-            // is still recognised as the same host with the same library.
+            // is still recognised as the same host, and on the profile the shelf is for.
             let mut cached_games = None;
-            if let Some(cached) = pf_client_core::library_cache::load(&fp_hex) {
+            if let Some(cached) = pf_client_core::library_cache::load(&fp_hex, profile.as_deref()) {
                 if !cached.games.is_empty() && mine() {
                     shared.set_games_cached(&req, to_model(&cached.games));
                     cached_games = Some(cached.games);
@@ -1778,11 +1778,11 @@ fn spawn_fetch(
             let started = Instant::now();
             let mut last_packet = started;
             let mut last_err = None;
-            let mut fetched = None;
+            let (mut fetched, mut served) = (None, None);
             loop {
                 match library::fetch_games(&addr, mgmt, port, &identity, pin, profile.as_deref()) {
-                    Ok(games) => {
-                        fetched = Some(games);
+                    Ok((games, fetched_as)) => {
+                        (fetched, served) = (Some(games), fetched_as);
                         break;
                     }
                     Err(e) => {
@@ -1847,7 +1847,7 @@ fn spawn_fetch(
             if live {
                 shared.set_games(&req, to_model(&games));
                 // Remembered AFTER it is on screen: the disk write is not on the path to a shelf.
-                pf_client_core::library_cache::store(&fp_hex, &games);
+                pf_client_core::library_cache::store(&fp_hex, served, &games);
                 // What the host has up right now, so a title the player can return to says so.
                 // Deliberately after the catalog — a slow `/status` must not hold the titles
                 // back — and never fatal: an older host answers nothing and every badge stays off.

@@ -511,15 +511,15 @@ fn query_value(s: &str) -> String {
         .collect()
 }
 
-/// The catalog as `profile` plays it (`as=`), else the box's. `get` answers one path's status
-/// and body. A host older than the paged route refuses it, so `GET /api/v1/library` answers
-/// whole instead. A profile the host no longer holds (404 `profile_unknown`) is asked once more
-/// as the box, and that answer stands. `clients/shared/library-profile-vectors.json` pins this
-/// here, in Swift and in Kotlin.
+/// The catalog as `profile` plays it (`as=`), else the box's, with the profile it was fetched
+/// as. `get` answers one path's status and body. A host older than the paged route refuses it,
+/// so `GET /api/v1/library` answers whole instead. A profile the host no longer holds (404
+/// `profile_unknown`) is asked once more as the box, and that answer stands, as the box's.
+/// `clients/shared/library-profile-vectors.json` pins this here, in Swift and in Kotlin.
 pub fn fetch_catalog(
     profile: Option<&str>,
     mut get: impl FnMut(&str) -> Result<(u16, Vec<u8>), LibraryError>,
-) -> Result<Vec<GameEntry>, LibraryError> {
+) -> Result<(Vec<GameEntry>, Option<&str>), LibraryError> {
     let gone = std::cell::Cell::new(false);
     let mut walk = |profile: Option<&str>| {
         let mut body = |mut path: String| {
@@ -556,22 +556,22 @@ pub fn fetch_catalog(
         }
     };
     match walk(profile) {
-        Err(_) if gone.replace(false) => walk(None),
-        walked => walked,
+        Err(_) if gone.replace(false) => walk(None).map(|games| (games, None)),
+        walked => walked.map(|games| (games, profile)),
     }
 }
 
 /// [`fetch_catalog`] over [`HostApi`]'s lanes. 401/403 → [`LibraryError::NotPaired`]; pin
 /// failure → [`LibraryError::PinMismatch`].
 #[cfg(desktop)]
-pub fn fetch_games(
+pub fn fetch_games<'p>(
     addr: &str,
     mgmt_port: u16,
     stream_port: u16,
     identity: &(String, String),
     pin: Option<[u8; 32]>,
-    profile: Option<&str>,
-) -> Result<Vec<GameEntry>, LibraryError> {
+    profile: Option<&'p str>,
+) -> Result<(Vec<GameEntry>, Option<&'p str>), LibraryError> {
     let https = agent(identity, pin)?;
     let api = HostApi::new(addr, mgmt_port, stream_port, identity, pin);
     fetch_catalog(profile, |path| {
@@ -1922,6 +1922,8 @@ mod tests {
     #[derive(Deserialize)]
     struct ProfileExpect {
         asked: Vec<String>,
+        #[serde(rename = "as")]
+        served: Option<String>,
         ids: Option<Vec<String>>,
     }
 
@@ -1939,7 +1941,11 @@ mod tests {
                 }))
             });
             assert_eq!(asked, c.expect.asked, "{}: asked", c.name);
-            let shown = shown.ok().map(|g| g.into_iter().map(|g| g.id).collect());
+            let served = shown.as_ref().ok().and_then(|(_, p)| p.map(str::to_string));
+            assert_eq!(served, c.expect.served, "{}: as", c.name);
+            let shown = shown
+                .ok()
+                .map(|(g, _)| g.into_iter().map(|g| g.id).collect());
             assert_eq!(shown, c.expect.ids, "{}: ids", c.name);
         }
     }

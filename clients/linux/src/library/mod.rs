@@ -841,10 +841,11 @@ impl LibraryPage {
             .name("punktfunk-library".into())
             .spawn(move || {
                 let send = |l| sender.send(LibraryMsg::Loaded(generation, l)).is_ok();
-                // Keyed on the pin, so a box on a new DHCP lease is the same library.
+                // Keyed on the pin, so a box on a new DHCP lease is the same library, and on
+                // the profile, so a shelf never shows another profile's titles.
                 if let Some(cached) = fp
                     .as_deref()
-                    .and_then(pf_client_core::library_cache::load)
+                    .and_then(|fp| pf_client_core::library_cache::load(fp, profile.as_deref()))
                     .filter(|c| !c.games.is_empty())
                 {
                     if !send(Loaded::Cached(cached.games)) {
@@ -859,11 +860,11 @@ impl LibraryPage {
                     pin,
                     profile.as_deref(),
                 );
-                if let (Some(fp), Ok(games)) = (&fp, &fetched) {
+                if let (Some(fp), Ok((games, served))) = (&fp, &fetched) {
                     // `store` keeps the last real catalog over an empty answer.
-                    pf_client_core::library_cache::store(fp, games);
+                    pf_client_core::library_cache::store(fp, *served, games);
                 }
-                if !send(Loaded::Fetched(fetched)) {
+                if !send(Loaded::Fetched(fetched.map(|(games, _)| games))) {
                     return;
                 }
                 send(Loaded::Running(library::fetch_running(

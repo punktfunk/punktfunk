@@ -1,5 +1,5 @@
 {
-  "$comment": "Which library a client asks a host for (design: phase 1, the profile view). Every client's test replays these: pf-client-core library.rs, Swift LibraryClientTests, Kotlin LibraryClientTest. `pick` is the profile id this device saved for the host, null for none. `host` answers each path, matched as written, with `status` and `body`; a path it does not list answers 404 with no body, as a host without that route does. `expect.asked` is every path the client asked, in order, and `expect.ids` the catalog it shows, or null when the load fails.",
+  "$comment": "Which library a client asks a host for (design: phase 1, the profile view). Every client's test replays these: pf-client-core library.rs, Swift LibraryClientTests, Kotlin LibraryClientTest. `pick` is the profile id this device saved for the host, null for none. `host` answers each path, matched as written, with `status` and `body`; a path it does not list answers 404 with no body, as a host without that route does. `expect.asked` is every path the client asked, in order, `expect.ids` the catalog it shows, or null when the load fails, and `expect.as` the profile that catalog was fetched as, which its cache entry is filed under (null: the box's).",
   "cases": [
     {
       "name": "no saved pick: today's request",
@@ -10,7 +10,7 @@
           {"id": "custom:kid1", "store": "custom", "title": "Quail", "art": {}}
         ]}}
       },
-      "expect": {"asked": ["/api/v1/library/page?limit=200"], "ids": ["steam:570", "custom:kid1"]}
+      "expect": {"asked": ["/api/v1/library/page?limit=200"], "as": null, "ids": ["steam:570", "custom:kid1"]}
     },
     {
       "name": "no saved pick on a host older than the paged route: today's whole list",
@@ -20,7 +20,7 @@
           {"id": "steam:570", "store": "steam", "title": "Dota 2", "art": {}}
         ]}
       },
-      "expect": {"asked": ["/api/v1/library/page?limit=200", "/api/v1/library"], "ids": ["steam:570"]}
+      "expect": {"asked": ["/api/v1/library/page?limit=200", "/api/v1/library"], "as": null, "ids": ["steam:570"]}
     },
     {
       "name": "a saved pick: the library as that profile plays it",
@@ -30,7 +30,7 @@
           {"id": "custom:kid1", "store": "custom", "title": "Quail", "art": {}}
         ]}}
       },
-      "expect": {"asked": ["/api/v1/library/page?limit=200&as=a1b2c3d4e5f6"], "ids": ["custom:kid1"]}
+      "expect": {"asked": ["/api/v1/library/page?limit=200&as=a1b2c3d4e5f6"], "as": "a1b2c3d4e5f6", "ids": ["custom:kid1"]}
     },
     {
       "name": "every page asks as the profile",
@@ -48,7 +48,7 @@
           "/api/v1/library/page?limit=200&as=a1b2c3d4e5f6",
           "/api/v1/library/page?limit=200&cursor=c2&as=a1b2c3d4e5f6"
         ],
-        "ids": ["custom:kid1", "steam:570"]
+        "as": "a1b2c3d4e5f6", "ids": ["custom:kid1", "steam:570"]
       }
     },
     {
@@ -65,7 +65,7 @@
       },
       "expect": {
         "asked": ["/api/v1/library/page?limit=200&as=a1b2c3d4e5f6", "/api/v1/library/page?limit=200"],
-        "ids": ["steam:570", "custom:kid1"]
+        "as": null, "ids": ["steam:570", "custom:kid1"]
       }
     },
     {
@@ -89,7 +89,7 @@
           "/api/v1/library/page?limit=200&cursor=c2&as=a1b2c3d4e5f6",
           "/api/v1/library/page?limit=200"
         ],
-        "ids": ["steam:570", "custom:kid1"]
+        "as": null, "ids": ["steam:570", "custom:kid1"]
       }
     },
     {
@@ -102,7 +102,7 @@
       },
       "expect": {
         "asked": ["/api/v1/library/page?limit=200&as=a1b2c3d4e5f6", "/api/v1/library?as=a1b2c3d4e5f6"],
-        "ids": ["steam:570"]
+        "as": "a1b2c3d4e5f6", "ids": ["steam:570"]
       }
     },
     {
@@ -116,7 +116,7 @@
       },
       "expect": {
         "asked": ["/api/v1/library/page?limit=200&as=a1b2c3d4e5f6", "/api/v1/library/page?limit=200"],
-        "ids": null
+        "as": null, "ids": null
       }
     }
   ]
