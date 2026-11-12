@@ -10,22 +10,14 @@ the host first: [Arch](/docs/arch), [Ubuntu](/docs/ubuntu) or [Fedora](/docs/fed
 ## What works
 
 - Each client gets its own virtual output at its size and refresh rate, with a name starting
-  `PF-`, created over Umbriel's IPC and removed when the client leaves. A resize mid-stream works, and a
-  reconnect inside the [keep-alive](/docs/virtual-displays#keep-alive) window gets the same output
-  back.
+  `PF-`, created over Umbriel's IPC and removed when the client leaves. A resize mid-stream works.
 - The host captures it straight from the compositor into the GPU encoder, with no copy. No chooser
   appears. A [real monitor](/docs/virtual-displays#stream-a-real-monitor-instead) streams the
   same way.
 - Keyboard and mouse go in through the wlroots virtual pointer and keyboard protocols, so Umbriel's
-  keybinds fire on keys from the client. The clipboard goes through `ext-data-control`.
+  keybinds fire on keys from the client.
 - Library launches open on a workspace of the streamed output, and the host switches back when the
-  game ends: see [Automation](/docs/automation#a-launch-on-its-own-workspace). A client can move a
-  window onto the stream, make it full-screen or close it.
-- **Turn off** under [Your monitors while streaming](/docs/virtual-displays#topology) switches your
-  monitors off while you stream and back on afterwards. Monitors set to **Stay on** stay lit. A
-  [gamescope](/docs/gamescope) session started on the Umbriel desktop switches them off and on too.
-
-It finds Umbriel on every connect; you don't export `UMBRIEL_SOCKET`.
+  game ends: see [Automation](/docs/automation#a-launch-on-its-own-workspace).
 
 ## Install
 
@@ -43,7 +35,7 @@ Use an Umbriel built on **2026-09-28 or later**: older builds can't create virtu
 
 The repository lines and keys are in
 [Umbriel's install guide](https://docs.noctalia.dev/umbriel/installation/). The host doesn't need
-`xdg-desktop-portal-umbriel`; the NixOS module installs it anyway.
+`xdg-desktop-portal-umbriel`.
 
 ## Noctalia
 
@@ -65,7 +57,8 @@ Use your bar's name in place of `default`. To scope the dock, set `enabled` the 
 
 ## host.env
 
-Nothing is required: the host finds Umbriel on every connect.
+Nothing is required: the host finds Umbriel on every connect, so you don't export
+`UMBRIEL_SOCKET`.
 
 Leave `PUNKTFUNK_COMPOSITOR` unset: a pin turns off detection and session following. It accepts
 `umbriel` if you need it. Every other option is in [Configuration](/docs/configuration).
@@ -95,9 +88,8 @@ lingering so the host starts at boot: `sudo loginctl enable-linger "$USER"`.
 
 - Streams need a GPU encoder. The host captures Umbriel only straight from the compositor, never
   through a screen cast: see [below](#no-direct-capture).
-- SDR only: virtual outputs carry no HDR. HDR on Linux needs
-  [gamescope](/docs/gamescope#hdr-on-gamescope) or [Hyprland](/docs/hyprland) — see
-  [HDR](/docs/hdr#other-linux-desktops).
+- SDR only. HDR on Linux needs [gamescope](/docs/gamescope#hdr-on-gamescope) or
+  [Hyprland](/docs/hyprland) — see [HDR](/docs/hdr#other-linux-desktops).
 - No per-device scale: the streamed output is always at scale 1, and **Scale its screen at**
   doesn't apply.
 - Saving an output change in Umbriel's config turns your monitors back on mid-stream: see
