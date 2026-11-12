@@ -8,8 +8,8 @@ use pf_client_core::discovery::{DiscoveredHost, DiscoveryEvent};
 use pf_l10n::client;
 
 /// Whether something holds the shell, so a controller connecting waits for the next first pad
-/// instead of opening the console: a connect, a stream, a pairing, a speed test, or a
-/// who-plays question (`picker`, `seat`).
+/// instead of opening the console: a connect, a stream, a pairing, a trust question, a speed
+/// test, or a who-plays question (`picker`, `seat`).
 pub(super) fn console_waits(screen: &Screen, picker: bool, seat: bool) -> bool {
     picker
         || seat
@@ -20,6 +20,7 @@ pub(super) fn console_waits(screen: &Screen, picker: bool, seat: bool) -> bool {
                 | Screen::Waking
                 | Screen::RequestAccess
                 | Screen::Pair
+                | Screen::Trust
                 | Screen::SpeedTest
         )
 }
@@ -93,7 +94,8 @@ pub(super) fn link_prompt(
 mod tests {
     use super::*;
 
-    const ALL: [Screen; 12] = [
+    const ALL: [Screen; 13] = [
+        Screen::Trust,
         Screen::Hosts,
         Screen::Connecting,
         Screen::RequestAccess,
@@ -116,6 +118,7 @@ mod tests {
             Screen::Waking,
             Screen::Stream,
             Screen::Pair,
+            Screen::Trust,
             Screen::SpeedTest,
         ];
         for s in ALL {
