@@ -250,6 +250,35 @@ export const runAction = callable<
 /** Wake a saved host and wait for it, up to 90 s. `unresolved`: no MAC is known. */
 export const wake = callable<[ref: string], CliResult>("wake");
 
+/** One row of the host's Screen section (`punktfunk screen <ref> --json`), as data to word. */
+export interface ScreenRow {
+  kind: "role" | "monitor" | "own"; // `own`: a host without roles
+  id: string; // `only` | `main` | `second`, a connector, or `own`
+  label: string | null; // the host's name for a monitor
+  detail: string; // a monitor's connector and mode
+  header: boolean; // the first monitor under "Show a monitor"
+  checked: boolean; // what a connect gets now
+  pickable: boolean;
+  in_use_by: string | null; // the device streaming this monitor now
+  off: boolean;
+}
+
+/** Why nothing can be picked: the host's settings file, its access, or the host's preset. */
+export type ScreenNote = "locked" | "host_decides" | "preset";
+
+export interface ScreensResult extends CliResult {
+  rows?: ScreenRow[];
+  note?: ScreenNote | null;
+  preset?: string | null; // the preset's name, with note `preset`
+  may_choose?: boolean;
+  notice?: string; // a refused pick: the CLI's sentence
+}
+
+/** The host's Screen section for this Deck. A host that is off lists no rows. */
+export const screens = callable<[ref: string], ScreensResult>("screens");
+/** Pick a row by id; the answer is the rows read back. */
+export const pickScreen = callable<[ref: string, rowId: string], ScreensResult>("pick_screen");
+
 // ---- Steam / plugin business (only a Decky plugin can do these) ------------------------
 
 export const runnerInfo = callable<[], RunnerInfo>("runner_info");

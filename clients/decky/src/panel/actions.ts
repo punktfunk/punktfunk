@@ -1,7 +1,17 @@
 // The QAM panel's one-tap actions. Each ends in a toast, or in closing the menus, so the tap has
 // feedback even when the panel is gone.
 import { Navigation } from "@decky/ui";
-import { endGame, type HostAction, hostAction, killStream, runAction, wake } from "../backend";
+import {
+  endGame,
+  type HostAction,
+  hostAction,
+  killStream,
+  pickScreen,
+  runAction,
+  type ScreenRow,
+  type ScreensResult,
+  wake,
+} from "../backend";
 import type { HostView } from "../hosts/model";
 import { refreshHosts } from "../hosts/store";
 import { t } from "../i18n";
@@ -103,6 +113,37 @@ export async function runHostAction(host: HostView, a: HostAction): Promise<void
       ? t("hostcard_action_sent_body", { host: host.name, action })
       : r?.notice || t("hostcard_action_unavailable_body", { action }),
   );
+}
+
+/** This plugin's words for a Screen row: a role, an older host's own screen, else the host's
+ *  name for the monitor. */
+export function screenLabel(row: ScreenRow): string {
+  if (row.kind === "monitor") {
+    return row.label || row.id;
+  }
+  switch (row.id) {
+    case "only":
+      return t("screen_role_only");
+    case "main":
+      return t("screen_role_main");
+    case "second":
+      return t("screen_role_second");
+    default:
+      return t("screen_own");
+  }
+}
+
+/** Make a Screen row this Deck's screen on the host; a toast names it, or says why not. The
+ *  rows the host answers with after the pick, or null when it failed. */
+export async function pickHostScreen(host: HostView, row: ScreenRow): Promise<ScreensResult | null> {
+  const label = screenLabel(row);
+  const r = await pickScreen(host.ref, row.id).catch(() => null);
+  if (r?.ok) {
+    toast(row.kind === "monitor" ? t("screen_streams", { screen: label }) : label);
+    return r;
+  }
+  toast(r?.notice || t("hostcard_action_unavailable_body", { action: label }));
+  return null;
 }
 
 /** End the title the last game-page stream launched, then the stream — only once the host says

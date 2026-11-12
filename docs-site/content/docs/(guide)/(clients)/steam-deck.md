@@ -48,6 +48,13 @@ the running stream, your hosts, then **Punktfunk**, **Troubleshooting** and **Ab
   while the host sleeps, and the [host power](/docs/host-power) actions this Deck may run while it's
   on. A host with nothing to pick has no ▾. Pin presets in the Punktfunk app; the panel only shows
   them.
+- **Screen**, in the same menu, picks how this Deck uses the host's
+  [screens](/docs/client-settings#screen) from the next stream on. **Only screen** turns the host's
+  monitors off while you stream. **Main screen** leaves them on and opens apps on the Deck.
+  **Second screen** makes the Deck one more screen beside them. Under **Show a monitor**, pick a
+  monitor to stream what it shows. The check marks what the next stream gets. Picking needs
+  **Choose its screen** in this Deck's [access](/docs/access-levels#individual-grants). Without it,
+  or while the host's preset picks the screen, the menu shows the current pick and says why.
 - **Needs access** lists hosts that haven't let this Deck in yet. Tap one and choose **Request
   access** or **Use a PIN instead…**. See [Request access](#request-access), or
   [pair with a PIN](/docs/pairing#pair-with-a-pin). After that, the host moves to **Hosts**.
