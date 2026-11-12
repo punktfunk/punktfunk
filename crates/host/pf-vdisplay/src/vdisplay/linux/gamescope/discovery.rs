@@ -224,20 +224,23 @@ pub(super) fn wait_for_node(
     }
 }
 
-/// Digits only: the per-instance `stream available on node ID:` line is ANSI-colored. Read
+/// The [`PRIVATE_NODE`] id, else the public one. gamescope logs the private line first, so a
+/// read that sees the public line sees both. Digits only: the lines are ANSI-colored. Read
 /// lossily: the nested app's output shares the file.
 fn node_from_log(log: &std::path::Path) -> Option<u32> {
     let log = String::from_utf8_lossy(&std::fs::read(log).ok()?).into_owned();
-    for line in log.lines().rev() {
-        if let Some(pos) = line.find("stream available on node ID:") {
-            let tail = &line[pos + "stream available on node ID:".len()..];
+    [
+        "private capture stream on node ID:",
+        "stream available on node ID:",
+    ]
+    .iter()
+    .find_map(|mark| {
+        log.lines().rev().find_map(|line| {
+            let tail = &line[line.find(mark)? + mark.len()..];
             let digits: String = tail.chars().filter(|c| c.is_ascii_digit()).collect();
-            if let Ok(id) = digits.parse() {
-                return Some(id);
-            }
-        }
-    }
-    None
+            digits.parse().ok()
+        })
+    })
 }
 
 /// This instance's `GAMESCOPE_WAYLAND_DISPLAY` name, from `Running compositor on wayland
@@ -395,14 +398,19 @@ fn pw_nodes() -> Option<Vec<DumpNode>> {
     Some(dump_nodes(dump.as_array()?))
 }
 
-/// The capturable gamescope node `scope` ranks highest; the first listed wins a tie.
+/// The node a `+pfhdr34` gamescope publishes for us. Steam's Game Recording reads the other one,
+/// whose reliable frames would go to one link only.
+const PRIVATE_NODE: &str = "gamescope-capture";
+
+/// The capturable gamescope node `scope` ranks highest. A tie goes to [`PRIVATE_NODE`], then to
+/// the first listed.
 fn best_node(nodes: &[DumpNode], scope: Scope<'_>) -> Option<u32> {
     let best = |pick: &dyn Fn(&DumpNode) -> bool| -> Option<u32> {
         nodes
             .iter()
             .filter(|n| pick(n))
-            .filter_map(|n| Some((scope.rank(n.pid)?, n.id)))
-            .fold(None, |acc: Option<(u8, u32)>, (r, id)| match acc {
+            .filter_map(|n| Some(((scope.rank(n.pid)?, n.name == PRIVATE_NODE), n.id)))
+            .fold(None, |acc: Option<((u8, bool), u32)>, (r, id)| match acc {
                 Some((best, _)) if best >= r => acc,
                 _ => Some((r, id)),
             })
@@ -1155,6 +1163,37 @@ mod tests {
             best_node(&nodes, Scope::Spawned(std::process::id())),
             Some(78)
         );
+    }
+
+    /// The private node wins inside its gamescope and never across another's rank.
+    #[test]
+    fn the_private_node_wins_only_its_own_gamescope() {
+        let me = std::process::id();
+        let mut dump = seat_then_box(me, 1);
+        dump.push(
+            serde_json::json!({"id": 99, "type": "PipeWire:Interface:Node", "info": {
+            "props": {"node.name": "gamescope-capture", "media.class": "Video/Source",
+            "client.id": 40}}}),
+        );
+        let nodes = dump_nodes(&dump);
+        assert_eq!(best_node(&nodes, Scope::Spawned(me)), Some(99));
+        assert_eq!(best_node(&nodes, Scope::Box), Some(91));
+    }
+
+    #[test]
+    fn the_spawn_log_names_the_private_node_first() {
+        let dir = std::env::temp_dir().join(format!("pf-gs-private-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let log = dir.join("spawn.log");
+        std::fs::write(&log, "stream available on node ID: 42\n").unwrap();
+        assert_eq!(node_from_log(&log), Some(42));
+        std::fs::write(
+            &log,
+            "private capture stream on node ID: 43\nstream available on node ID: 42\n",
+        )
+        .unwrap();
+        assert_eq!(node_from_log(&log), Some(43));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
