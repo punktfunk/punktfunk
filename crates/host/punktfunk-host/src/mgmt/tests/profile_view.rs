@@ -3,16 +3,16 @@
 use super::*;
 
 /// The owner, the box's own session.
-const OWNER: &str = "0f0f0f0f0f0f";
+pub(super) const OWNER: &str = "0f0f0f0f0f0f";
 /// A profile with a seat of its own.
-const SEAT_P: &str = "a1b2c3d4e5f6";
+pub(super) const SEAT_P: &str = "a1b2c3d4e5f6";
 /// A profile that shares the owner's desktop.
-const SHARER: &str = "0a0b0c0d0e0f";
+pub(super) const SHARER: &str = "0a0b0c0d0e0f";
 /// [`SEAT_P`]'s row in the seats ledger.
 const SEAT: &str = "0123456789abcdef0123456789abcdef";
 
 /// The owner, [`SEAT_P`] and [`SHARER`].
-fn profiles() -> serde_json::Value {
+pub(super) fn profiles() -> serde_json::Value {
     let p = |id: &str, account: serde_json::Value| serde_json::json!({"id": id, "display_name": id, "os_account": account});
     serde_json::json!({"profiles": [
         p(OWNER, serde_json::json!({"kind": "operator"})),
@@ -32,7 +32,7 @@ pub(super) fn profiles_state(dir: &std::path::Path, profiles: serde_json::Value)
 }
 
 /// The box's library in `dir`, and a layer for [`SEAT_P`] that changes every row it touches.
-fn write_fixture(dir: &std::path::Path) {
+pub(super) fn write_fixture(dir: &std::path::Path) {
     let write = |rel: &str, v: serde_json::Value| {
         let path = dir.join(rel);
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
