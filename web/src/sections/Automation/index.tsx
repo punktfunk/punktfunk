@@ -7,9 +7,11 @@ import { useGetHooks } from "@/api/gen/hooks/hooks";
 import type { HookEntry } from "@/api/gen/model/hookEntry";
 import { useListNativeClients } from "@/api/gen/native/native";
 import { hookAction, hookFilterSummary, useSaveHooks } from "@/api/hooks";
+import { useSeat } from "@/api/seat";
 import { useDialogs } from "@/components/dialogs";
 import { PasswordConfirmDialog } from "@/components/password-confirm";
 import { QueryState } from "@/components/query-state";
+import { SeatScope, SeatTitle } from "@/components/seat-scope";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -17,17 +19,38 @@ import { useLocale } from "@/lib/i18n";
 import { m } from "@/paraglide/messages";
 import { HookForm } from "./HookForm";
 
+/** **Automation**, for the owner or a person whose seat has a host of its own. */
+export const SectionAutomation: FC = () => (
+	<SeatScope page="automation">
+		<AutomationHere />
+	</SeatScope>
+);
+
+/** A seat on a person's own account runs no hook: one sentence stands in for the list. */
+export const AutomationHere: FC = () => {
+	useLocale();
+	const seat = useSeat();
+	if (!seat?.own) return <Automation />;
+	return (
+		<Section maxWidth={false}>
+			<div className="flex flex-col gap-card">
+				<SeatTitle title={m.automation_title()} />
+				<p className="max-w-prose text-sm text-muted-foreground">
+					{m.seat_own_automation({ name: seat.name })}
+				</p>
+			</div>
+		</Section>
+	);
+};
+
 /**
- * **Automation** — the operator's event hooks (`GET/PUT /api/v1/hooks`).
- *
- * The host has run these since the API existed and the console never showed them: the only way to
- * see or change what your machine does when a stream starts was to edit the config file by hand.
+ * The event hooks of the page's host (`GET/PUT /api/v1/hooks`).
  *
  * The whole list is written in one PUT (the host has no per-hook route), so this edits a local copy
  * and saves explicitly — no auto-save. That is deliberate for a screen whose contents are shell
  * commands: a half-typed command should never reach the host because a poll landed.
  */
-export const SectionAutomation: FC = () => {
+const Automation: FC = () => {
 	useLocale();
 	const { confirm } = useDialogs();
 	const query = useGetHooks();
@@ -98,7 +121,7 @@ export const SectionAutomation: FC = () => {
 		<Section maxWidth={false}>
 			<div className="flex flex-col gap-card">
 				<div className="space-y-1">
-					<h1 className="text-2xl font-semibold">{m.automation_title()}</h1>
+					<SeatTitle title={m.automation_title()} />
 					<p className="max-w-prose text-sm text-muted-foreground">
 						{m.automation_subtitle()}
 					</p>
