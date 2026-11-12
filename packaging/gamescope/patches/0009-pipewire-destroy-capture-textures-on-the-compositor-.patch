@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: luxus <luxus@users.noreply.github.com>
 Date: Thu, 13 Aug 2026 23:15:48 +0200
-Subject: [PATCH 09/37] pipewire: destroy capture textures on the compositor
+Subject: [PATCH 09/38] pipewire: destroy capture textures on the compositor
  thread
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8

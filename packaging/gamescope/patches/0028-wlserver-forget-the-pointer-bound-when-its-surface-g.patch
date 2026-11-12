@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: =?UTF-8?q?Enrico=20B=C3=BChler?= <enrico.buehler@unom.io>
 Date: Fri, 25 Sep 2026 02:08:49 +0000
-Subject: [PATCH 28/37] wlserver: forget the pointer bound when its surface
+Subject: [PATCH 28/38] wlserver: forget the pointer bound when its surface
  goes away
 
 The X window extent that bounds the pointer is cached against a raw

@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: =?UTF-8?q?Enrico=20B=C3=BChler?= <enrico.buehler@unom.io>
 Date: Fri, 2 Oct 2026 02:08:43 +0200
-Subject: [PATCH 30/37] pipewire: keep the planar capture's RGB intermediate in
+Subject: [PATCH 30/38] pipewire: keep the planar capture's RGB intermediate in
  device memory
 
 An NV12 or P010 capture composites into a pooled RGB texture and converts

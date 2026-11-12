@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: =?UTF-8?q?Enrico=20B=C3=BChler?= <enrico.buehler@unom.io>
 Date: Tue, 1 Sep 2026 16:23:41 +0200
-Subject: [PATCH 11/37] =?UTF-8?q?headless:=20support=20adaptive=20sync=20?=
+Subject: [PATCH 11/38] =?UTF-8?q?headless:=20support=20adaptive=20sync=20?=
  =?UTF-8?q?=E2=80=94=20paint=20on=20the=20game's=20commit?=
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8

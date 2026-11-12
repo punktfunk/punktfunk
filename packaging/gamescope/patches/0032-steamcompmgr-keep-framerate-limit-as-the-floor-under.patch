@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: =?UTF-8?q?Enrico=20B=C3=BChler?= <enrico.buehler@unom.io>
 Date: Fri, 2 Oct 2026 20:00:25 +0200
-Subject: [PATCH 32/37] steamcompmgr: keep --framerate-limit as the floor under
+Subject: [PATCH 32/38] steamcompmgr: keep --framerate-limit as the floor under
  a request for 0
 
 The CLI limit seeds the refresh-cycle override, and any later request

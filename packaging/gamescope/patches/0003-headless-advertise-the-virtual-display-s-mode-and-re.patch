@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: =?UTF-8?q?Enrico=20B=C3=BChler?= <enrico.buehler@unom.io>
 Date: Sat, 8 Aug 2026 13:13:09 +0000
-Subject: [PATCH 03/37] headless: advertise the virtual display's mode and
+Subject: [PATCH 03/38] headless: advertise the virtual display's mode and
  refresh rates
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8

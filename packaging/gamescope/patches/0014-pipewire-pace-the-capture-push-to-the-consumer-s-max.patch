@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: unom <packages@unom.io>
 Date: Wed, 16 Sep 2026 00:51:43 +0200
-Subject: [PATCH 14/37] pipewire: pace the capture push to the consumer's
+Subject: [PATCH 14/38] pipewire: pace the capture push to the consumer's
  maxFramerate
 
 With adaptive sync a headless gamescope paints on every game commit, and paint_pipewire composites and pushes a frame each time. A consumer that encodes at its own rate throws the surplus away, so a game at 190 fps costs the box two extra 4K composites per wire frame for nothing.

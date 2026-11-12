@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: =?UTF-8?q?Enrico=20B=C3=BChler?= <enrico.buehler@unom.io>
 Date: Thu, 17 Sep 2026 18:00:00 +0200
-Subject: [PATCH 18/37] steamcompmgr: build capture LUTs from the live
+Subject: [PATCH 18/38] steamcompmgr: build capture LUTs from the live
  SDR-on-HDR state
 
 paint_pipewire() composites a 10-bit or P010 capture with the screenshot

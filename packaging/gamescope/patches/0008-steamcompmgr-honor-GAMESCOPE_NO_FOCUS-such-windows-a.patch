@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: enricobuehler <enrico.buehler@unom.io>
 Date: Tue, 11 Aug 2026 21:48:29 +0200
-Subject: [PATCH 08/37] =?UTF-8?q?steamcompmgr:=20honor=20GAMESCOPE=5FNO=5F?=
+Subject: [PATCH 08/38] =?UTF-8?q?steamcompmgr:=20honor=20GAMESCOPE=5FNO=5F?=
  =?UTF-8?q?FOCUS=20=E2=80=94=20such=20windows=20are=20never=20focus=20cand?=
  =?UTF-8?q?idates?=
 MIME-Version: 1.0

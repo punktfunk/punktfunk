@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: =?UTF-8?q?Enrico=20B=C3=BChler?= <enrico.buehler@unom.io>
 Date: Thu, 12 Nov 2026 16:00:00 +0100
-Subject: [PATCH 36/37] pipewire: give a streaming host a private capture node
+Subject: [PATCH 36/38] pipewire: give a streaming host a private capture node
 
 Steam's Game Recording links to the node the gamescope_pipewire protocol
 announces as soon as a game starts, and sets the stream's focus appid to

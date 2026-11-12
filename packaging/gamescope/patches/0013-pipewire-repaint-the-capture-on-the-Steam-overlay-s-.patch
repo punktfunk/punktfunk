@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: unom <packages@unom.io>
 Date: Wed, 23 Sep 2026 23:22:06 +0200
-Subject: [PATCH 13/37] pipewire: repaint the capture on the Steam overlay's
+Subject: [PATCH 13/38] pipewire: repaint the capture on the Steam overlay's
  commits
 
 paint_pipewire() pushes a frame only when the focus or override window

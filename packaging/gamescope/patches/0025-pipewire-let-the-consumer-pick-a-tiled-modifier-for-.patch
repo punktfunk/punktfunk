@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: =?UTF-8?q?Enrico=20B=C3=BChler?= <enrico.buehler@unom.io>
 Date: Fri, 18 Sep 2026 14:50:35 +0200
-Subject: [PATCH 25/37] pipewire: let the consumer pick a tiled modifier for
+Subject: [PATCH 25/38] pipewire: let the consumer pick a tiled modifier for
  packed RGB
 
 The capture node offers its dmabufs as DRM_FORMAT_MOD_LINEAR and nothing

@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: =?UTF-8?q?Enrico=20B=C3=BChler?= <enrico.buehler@unom.io>
 Date: Mon, 10 Aug 2026 01:55:00 +0200
-Subject: [PATCH 07/37] pipewire: never leave pw_buffer->user_data pointing at
+Subject: [PATCH 07/38] pipewire: never leave pw_buffer->user_data pointing at
  a freed buffer
 
 A gamescope session driving a PipeWire capture consumer dies as soon as the

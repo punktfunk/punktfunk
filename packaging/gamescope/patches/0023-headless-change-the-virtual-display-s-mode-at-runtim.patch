@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: =?UTF-8?q?Enrico=20B=C3=BChler?= <enrico.buehler@unom.io>
 Date: Fri, 18 Sep 2026 12:00:00 +0200
-Subject: [PATCH 23/37] headless: change the virtual display's mode at runtime
+Subject: [PATCH 23/38] headless: change the virtual display's mode at runtime
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
 Content-Transfer-Encoding: 8bit

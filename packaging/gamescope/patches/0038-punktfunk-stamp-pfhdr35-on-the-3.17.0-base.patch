@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: unom <packages@unom.io>
 Date: Thu, 12 Nov 2026 16:21:46 +0100
-Subject: [PATCH 37/37] punktfunk: stamp pfhdr35 on the 3.17.0 base
+Subject: [PATCH 38/38] punktfunk: stamp pfhdr35 on the 3.17.0 base
 
 The stack moves to upstream 3.17.0. Upstream now aligns upload ring
 allocations to the device's uniform offset limit, so the patch that

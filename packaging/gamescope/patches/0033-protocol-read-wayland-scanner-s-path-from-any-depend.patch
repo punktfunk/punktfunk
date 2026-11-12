@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: punktfunk <packages@unom.io>
 Date: Sun, 4 Oct 2026 00:39:36 +0200
-Subject: [PATCH 33/37] protocol: read wayland-scanner's path from any
+Subject: [PATCH 33/38] protocol: read wayland-scanner's path from any
  dependency type
 
 `get_variable(pkgconfig: 'wayland_scanner')` only answers for a pkg-config

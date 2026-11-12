@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: =?UTF-8?q?Enrico=20B=C3=BChler?= <enrico.buehler@unom.io>
 Date: Tue, 28 Jul 2026 15:41:45 +0200
-Subject: [PATCH 02/37] pipewire: optionally composite the cursor into the
+Subject: [PATCH 02/38] pipewire: optionally composite the cursor into the
  capture stream
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8

@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: =?UTF-8?q?Enrico=20B=C3=BChler?= <enrico.buehler@unom.io>
 Date: Fri, 25 Sep 2026 02:08:49 +0000
-Subject: [PATCH 27/37] pipewire: repaint the composited cursor on a shape
+Subject: [PATCH 27/38] pipewire: repaint the composited cursor on a shape
  change or a hide
 
 `--pipewire-composite-cursor` repaints the capture when the pointer moves

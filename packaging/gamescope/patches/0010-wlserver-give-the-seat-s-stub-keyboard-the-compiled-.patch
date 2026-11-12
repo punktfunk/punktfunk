@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: enricobuehler <enrico.buehler@unom.io>
 Date: Sat, 15 Aug 2026 20:15:12 +0200
-Subject: [PATCH 10/37] wlserver: give the seat's stub keyboard the compiled
+Subject: [PATCH 10/38] wlserver: give the seat's stub keyboard the compiled
  keymap
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8

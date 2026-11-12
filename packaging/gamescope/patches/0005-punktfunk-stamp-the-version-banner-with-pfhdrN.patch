@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: =?UTF-8?q?Enrico=20B=C3=BChler?= <enrico.buehler@unom.io>
 Date: Sat, 8 Aug 2026 13:17:37 +0000
-Subject: [PATCH 05/37] punktfunk: stamp the version banner with +pfhdrN
+Subject: [PATCH 05/38] punktfunk: stamp the version banner with +pfhdrN
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
 Content-Transfer-Encoding: 8bit

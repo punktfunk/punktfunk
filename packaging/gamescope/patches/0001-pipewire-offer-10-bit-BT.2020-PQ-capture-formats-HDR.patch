@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: =?UTF-8?q?Enrico=20B=C3=BChler?= <enrico.buehler@unom.io>
 Date: Tue, 28 Jul 2026 13:53:41 +0200
-Subject: [PATCH 01/37] pipewire: offer 10-bit BT.2020 PQ capture formats (HDR
+Subject: [PATCH 01/38] pipewire: offer 10-bit BT.2020 PQ capture formats (HDR
  streams)
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8

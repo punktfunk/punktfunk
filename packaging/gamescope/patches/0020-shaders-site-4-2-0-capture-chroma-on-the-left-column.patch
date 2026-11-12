@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: =?UTF-8?q?Enrico=20B=C3=BChler?= <enrico.buehler@unom.io>
 Date: Thu, 17 Sep 2026 20:00:00 +0200
-Subject: [PATCH 20/37] shaders: site 4:2:0 capture chroma on the left column
+Subject: [PATCH 20/38] shaders: site 4:2:0 capture chroma on the left column
 
 cs_rgb_to_nv12 and cs_rgb_to_p010 average each 2x2 luma block, which puts
 the chroma sample at the block centre (H.273 chroma location 1). H.264,

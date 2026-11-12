@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: unom <packages@unom.io>
 Date: Wed, 23 Sep 2026 23:20:14 +0200
-Subject: [PATCH 12/37] fix(steamcompmgr): persist the CLI framerate limit
+Subject: [PATCH 12/38] fix(steamcompmgr): persist the CLI framerate limit
 
 The CLI cap must survive the refresh-policy update in every paint.
 Writing only the derived target loses it when the persistent override is

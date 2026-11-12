@@ -47,7 +47,8 @@ The patches here add the missing half, and nothing else. See
 | `0034-pipewire-give-a-planar-capture-DRM-LINEAR-s-layout-o.patch` | On NVIDIA, allocate a planar capture dmabuf with `DRM_FORMAT_MOD_LINEAR`, external memory, and its plane views listed. The plain LINEAR image gave no layout promise, and a pre-Turing card's page kind moved bytes under the consumer's LINEAR import: a striped picture. A driver that refuses the shape does not get NV12/P010 offered, so the consumer takes packed RGB. Also stamps `+pfhdr32` | **Yes** — upstream's planar export has the same fault |
 | `0035-pipewire-write-NVIDIA-s-planar-capture-into-a-buffer.patch` | On NVIDIA, a planar capture is an exportable storage buffer, not an image: luma rows, then chroma rows at the same pitch, exported as a two-plane LINEAR dmabuf. The NV12/P010 pass writes it word by word, so every byte sits where the export says. A pre-Turing card still striped `0035`'s LINEAR image for every importer. A driver that cannot export such a buffer keeps `0035`'s image. Also stamps `+pfhdr33` | **Yes** — upstream's planar export has the same fault |
 | `0036-pipewire-give-a-streaming-host-a-private-capture-node.patch` | Publish a second capture node, `gamescope-capture`, that the `gamescope_pipewire` protocol never names. It is reliable and always shows the whole session. The announced node goes back to upstream's recycling. Steam's Game Recording links to that node when a game starts and sets its focus appid; PipeWire 1.6 hands a reliable frame to one link only, so a host sharing the node froze. Also stamps `+pfhdr34` | No — upstream has one node and one reader |
-| `0037-punktfunk-stamp-pfhdr35-on-the-3.17.0-base.patch` | Stamp `+pfhdr35`, so a banner tells this base from 3.16.31 | **No** — ours only, as `0005` |
+| `0037-pipewire-paint-the-focus-window-s-popups-and-subsurf.patch` | Paint the focus window's xdg popups and subsurfaces into the capture, at the capture's scale. `paint_window` draws them only for the base plane, which the capture does not paint, so a native Wayland app streamed without its menus, dropdowns and tooltips. The repaint test follows the tree: each popup and subsurface, its buffer and its position, so one that opens or closes over a still window pushes a frame. `vulkan_screenshot` waits on their acquire points | **Yes** — upstream's own capture loses them the same way |
+| `0038-punktfunk-stamp-pfhdr35-on-the-3.17.0-base.patch` | Stamp `+pfhdr35`, so a banner tells this base from 3.16.31 | **No** — ours only, as `0005` |
 
 ### Why the headless patch matters
 
@@ -158,7 +159,7 @@ The number is a **monotonic patch-set revision**, so one probe answers every cap
 | `+pfhdr32` | …and a planar capture dmabuf on NVIDIA carries `DRM_FORMAT_MOD_LINEAR`'s layout; `+pfhdr31` stripes the picture on pre-Turing cards (no new capability) |
 | `+pfhdr33` | …written into a storage buffer, so its bytes sit at that layout; `+pfhdr32` still stripes it on pre-Turing cards (no new capability) |
 | `+pfhdr34` | …and a private `gamescope-capture` node beside the one Steam reads; the host captures it when present |
-| `+pfhdr35` | …on upstream 3.17.0, which carries 31 itself (no new capability) |
+| `+pfhdr35` | …on upstream 3.17.0, which carries 31 itself, with a native Wayland app's popups and subsurfaces in the capture (no new capability) |
 
 Require `+pfhdr10` for headless `--adaptive-sync` with a CLI cap: `+pfhdr9` clears that cap
 on the first paint unless Steam or a control command supplies an override. The Arch package is

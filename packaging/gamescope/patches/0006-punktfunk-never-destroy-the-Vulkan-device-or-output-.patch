@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: =?UTF-8?q?Enrico=20B=C3=BChler?= <enrico.buehler@unom.io>
 Date: Sat, 8 Aug 2026 19:17:25 +0200
-Subject: [PATCH 06/37] punktfunk: never destroy the Vulkan device or output at
+Subject: [PATCH 06/38] punktfunk: never destroy the Vulkan device or output at
  exit
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8

@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: =?UTF-8?q?Enrico=20B=C3=BChler?= <enrico.buehler@unom.io>
 Date: Fri, 2 Oct 2026 18:25:17 +0200
-Subject: [PATCH 31/37] pipewire: offer the 10-bit capture formats as SDR too
+Subject: [PATCH 31/38] pipewire: offer the 10-bit capture formats as SDR too
 
 The packed 10-bit formats and P010 have carried a MANDATORY
 BT.2020 + PQ description since they were added, so a consumer

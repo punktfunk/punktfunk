@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: =?UTF-8?q?Enrico=20B=C3=BChler?= <enrico.buehler@unom.io>
 Date: Thu, 17 Sep 2026 18:00:00 +0200
-Subject: [PATCH 19/37] color: extrapolate the inverse shaper past its range
+Subject: [PATCH 19/38] color: extrapolate the inverse shaper past its range
 
 calcColorTransform places the 3D LUT grid in shaper space and finds each
 grid point's source value with ApplyLut1D_Inverse_Linear, which clamps to

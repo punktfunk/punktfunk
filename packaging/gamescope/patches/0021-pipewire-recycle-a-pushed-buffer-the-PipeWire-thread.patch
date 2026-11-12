@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: =?UTF-8?q?Enrico=20B=C3=BChler?= <enrico.buehler@unom.io>
 Date: Thu, 17 Sep 2026 22:48:30 +0200
-Subject: [PATCH 21/37] pipewire: recycle a pushed buffer the PipeWire thread
+Subject: [PATCH 21/38] pipewire: recycle a pushed buffer the PipeWire thread
  has not taken
 
 push_pipewire_buffer() hands a painted buffer to the PipeWire thread through

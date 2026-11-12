@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: =?UTF-8?q?Enrico=20B=C3=BChler?= <enrico.buehler@unom.io>
 Date: Wed, 23 Sep 2026 23:33:57 +0200
-Subject: [PATCH 26/37] pipewire: export a planar capture's chroma plane where
+Subject: [PATCH 26/38] pipewire: export a planar capture's chroma plane where
  the driver put it
 
 An NV12 or P010 capture buffer is one LINEAR Vulkan image with two

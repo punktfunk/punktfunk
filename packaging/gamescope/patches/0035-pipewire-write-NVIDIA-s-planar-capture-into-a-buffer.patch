@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: punktfunk <packages@unom.io>
 Date: Sat, 7 Nov 2026 12:00:00 +0100
-Subject: [PATCH 35/37] pipewire: write NVIDIA's planar capture into a buffer
+Subject: [PATCH 35/38] pipewire: write NVIDIA's planar capture into a buffer
 
 With 0035 a GTX 1080 Ti still streamed the NV12 capture striped: 32-byte
 sectors moved inside each KiB. An EGL import, a map of the allocation's own
