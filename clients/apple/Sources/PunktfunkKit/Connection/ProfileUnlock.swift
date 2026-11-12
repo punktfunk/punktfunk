@@ -56,6 +56,27 @@ public final class UnlockSecret: @unchecked Sendable, CustomStringConvertible,
 
     public var count: Int { live }
 
+    /// Room for `capacity` bytes, none typed yet: a PIN entered key by key.
+    public convenience init(capacity: Int) {
+        self.init(capacity: capacity) { _ in 0 }
+    }
+
+    /// `byte` after the others, while there is room. False when full.
+    @discardableResult
+    public func append(_ byte: UInt8) -> Bool {
+        guard live < storage.count else { return false }
+        storage[live] = byte
+        live += 1
+        return true
+    }
+
+    /// Zero the last byte and drop it.
+    public func removeLast() {
+        guard live > 0 else { return }
+        live -= 1
+        storage[live] = 0
+    }
+
     func withBytes<R>(_ body: (UnsafeBufferPointer<UInt8>) throws -> R) rethrows -> R {
         try body(UnsafeBufferPointer(rebasing: storage[0..<live]))
     }

@@ -270,6 +270,23 @@ final class ProfileUnlockTests: XCTestCase {
         XCTAssertEqual(UnlockSecret(capacity: 4) { _ in -1 }.count, 0)
     }
 
+    /// The TV's pad types into the secret key by key: no room past its capacity, a delete
+    /// drops one, and what it holds reads as the PIN.
+    func testAPinTypedKeyByKeyStaysInItsSecret() throws {
+        let pin = UnlockSecret(capacity: 8)
+        XCTAssertEqual(pin.count, 0)
+        for digit in "123456789".utf8 { pin.append(digit) }
+        XCTAssertEqual(pin.withBytes { Array($0) }, Array("12345678".utf8), "full at 8")
+        XCTAssertFalse(pin.append(UInt8(ascii: "0")))
+        pin.removeLast()
+        pin.removeLast()
+        XCTAssertEqual(pin.withBytes { Array($0) }, Array("123456".utf8))
+        guard case .success(let sent) = ProfileUnlock.pin(pin) else { return XCTFail("no PIN") }
+        XCTAssertEqual(sent.withBytes { Data($0) }, Data("123456".utf8))
+        for _ in 0..<9 { pin.removeLast() }
+        XCTAssertEqual(pin.count, 0)
+    }
+
     func testAnUnlockDialsOncePinnedAndPrintsNoSecret() throws {
         let unlock = try XCTUnwrap(ProfileUnlock.password(UnlockSecret("hunter2")))
         XCTAssertFalse("\(unlock)".contains("hunter2"))
