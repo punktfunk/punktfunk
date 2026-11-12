@@ -8126,7 +8126,7 @@
           "profiles"
         ],
         "summary": "Lock a profile",
-        "description": "From now only the devices on its list open it, and a device that brings its PIN when it has\none. `devices`, paired devices, join the list in the same step, so a lock keeps the ones\nsomeone plays on; a session from any other device ends. On a profile already locked it\ntakes only devices the profile lets in, so it never widens who opens it. Admin lane only.",
+        "description": "From now its list is exactly `devices`, paired devices, so a lock keeps the ones someone\nplays on, and with `pin` that is its PIN; a session from any other device ends. One step: on\nany refusal nothing changed. On a profile already locked it changes nothing and takes only\ndevices the profile lets in and no PIN, so it never widens who opens it: the device and PIN\nroutes change a locked profile. Admin lane only.",
         "operationId": "lockProfile",
         "parameters": [
           {
@@ -8140,7 +8140,7 @@
           }
         ],
         "requestBody": {
-          "description": "The devices that keep opening it; none when absent",
+          "description": "Its devices and PIN; an empty list and the PIN it has when absent",
           "content": {
             "application/json": {
               "schema": {
@@ -8168,7 +8168,7 @@
             }
           },
           "400": {
-            "description": "Not a device fingerprint",
+            "description": "Not a device fingerprint, or a PIN that isn't 4 to 8 digits",
             "content": {
               "application/json": {
                 "schema": {
@@ -8198,17 +8198,7 @@
             }
           },
           "409": {
-            "description": "A person's own account, a profile on the owner's lock, a lock file that doesn't read, or a locked profile asked to let in another device",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ApiError"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "The list is full",
+            "description": "A person's own account, a profile on the owner's lock, a lock file that doesn't read, or a locked profile asked for another device or a PIN",
             "content": {
               "application/json": {
                 "schema": {
@@ -15878,7 +15868,47 @@
             "items": {
               "type": "string"
             },
-            "description": "Paired devices, by certificate SHA-256 hex, that keep opening it: they join its list,\nuntil signed out, as it locks. A profile already locked takes only devices it lets in."
+            "description": "Paired devices, by certificate SHA-256 hex: the list it locks with, in place of any an\nearlier lock left. A profile already locked takes only devices it lets in."
+          },
+          "pin": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "4 to 8 digits: its PIN from now. Absent keeps the PIN it has. A profile already locked\ntakes none.",
+            "example": "2468"
+          }
+        }
+      },
+      "LockSummary": {
+        "type": "object",
+        "description": "A profile's lock, as the profile list shows it.",
+        "required": [
+          "locked",
+          "pin",
+          "failed_pins"
+        ],
+        "properties": {
+          "failed_pins": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Wrong PINs in the last 15 minutes over all devices. At 10, PIN entry waits.",
+            "minimum": 0
+          },
+          "locked": {
+            "type": "boolean",
+            "description": "Only the devices on its list, and a device that brings its PIN, open it. Also `true` for\nevery profile while the lock file doesn't read."
+          },
+          "pin": {
+            "type": "boolean",
+            "description": "It has a PIN."
+          },
+          "shared_with": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The owner profile whose lock opens it, for a profile that shares the owner's desktop:\nthe other fields are that lock's."
           }
         }
       },
@@ -16860,19 +16890,21 @@
       },
       "PlayingDevice": {
         "type": "object",
-        "description": "A paired device playing as a profile now.",
+        "description": "A device playing as a profile now.",
         "required": [
-          "fingerprint",
           "name"
         ],
         "properties": {
           "fingerprint": {
-            "type": "string",
-            "description": "SHA-256 of the device's certificate, lowercase hex."
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "SHA-256 of the device's certificate, lowercase hex. Absent when its session matches no\nsingle paired device: it can't be kept, only warned about."
           },
           "name": {
             "type": "string",
-            "description": "The name it paired with."
+            "description": "The name it paired with, else the name its session gave."
           }
         }
       },
@@ -17377,6 +17409,17 @@
                 ],
                 "description": "The device whose seat became this profile, lowercase hex."
               },
+              "lock": {
+                "oneOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "$ref": "#/components/schemas/LockSummary",
+                    "description": "Its lock. Absent for a profile on a person's own account, which opens with its password."
+                  }
+                ]
+              },
               "steam_home": {
                 "type": "boolean",
                 "description": "This host keeps a Steam home for it, with that Steam's sign-in and saved games. A removal\nwith `erase` deletes it."
@@ -17452,37 +17495,27 @@
         }
       },
       "ProfileLock": {
-        "type": "object",
-        "description": "A profile's lock, as the console shows it.",
-        "required": [
-          "locked",
-          "pin",
-          "failed_pins",
-          "playing"
-        ],
-        "properties": {
-          "failed_pins": {
-            "type": "integer",
-            "format": "int32",
-            "description": "Wrong PINs in the last 15 minutes over all devices. At 10, PIN entry waits.",
-            "minimum": 0
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/LockSummary"
           },
-          "locked": {
-            "type": "boolean",
-            "description": "Only the devices on its list, and a device that brings its PIN, open it."
-          },
-          "pin": {
-            "type": "boolean",
-            "description": "It has a PIN."
-          },
-          "playing": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/PlayingDevice"
-            },
-            "description": "The paired devices playing as it now, on its desktop's other profiles too: the ones a\nlock would cut off unless they are kept."
+          {
+            "type": "object",
+            "required": [
+              "playing"
+            ],
+            "properties": {
+              "playing": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/PlayingDevice"
+                },
+                "description": "The devices playing as it now, on its desktop's other profiles too: the ones a lock would\ncut off unless they are kept."
+              }
+            }
           }
-        }
+        ],
+        "description": "A profile's lock, as the console shows it."
       },
       "ProfilePin": {
         "type": "object",
@@ -19206,6 +19239,7 @@
           "fingerprint",
           "name",
           "kind",
+          "moonlight",
           "added_unix",
           "last_unix"
         ],
@@ -19227,6 +19261,10 @@
             "format": "int64",
             "description": "When it last unlocked or rejoined, unix seconds."
           },
+          "moonlight": {
+            "type": "boolean",
+            "description": "A Moonlight pairing rather than a Punktfunk one. Never on a person's own account."
+          },
           "name": {
             "type": "string",
             "description": "The name it paired with."
@@ -19239,6 +19277,7 @@
         "enum": [
           "for_now",
           "stay",
+          "added",
           "key"
         ]
       },

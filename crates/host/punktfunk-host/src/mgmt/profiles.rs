@@ -100,6 +100,8 @@ pub(crate) struct SignedInDevice {
     /// The name it paired with.
     name: String,
     kind: SignedInKind,
+    /// A Moonlight pairing rather than a Punktfunk one. Never on a person's own account.
+    pub(super) moonlight: bool,
     /// When it first signed in, unix seconds.
     added_unix: i64,
     /// When it last unlocked or rejoined, unix seconds.
@@ -114,11 +116,19 @@ impl From<pf_seats::ipc::DeviceEntry> for SignedInDevice {
             kind: match d.kind {
                 DeviceKind::ForNow => SignedInKind::ForNow,
                 DeviceKind::Stay => SignedInKind::Stay,
+                DeviceKind::Added => SignedInKind::Added,
                 DeviceKind::Key => SignedInKind::Key,
             },
+            moonlight: false,
             added_unix: d.added_unix,
             last_unix: d.last_unix,
         }
+    }
+}
+
+impl SignedInDevice {
+    pub(super) fn fingerprint(&self) -> &str {
+        &self.fingerprint
     }
 }
 
@@ -130,6 +140,8 @@ pub(crate) enum SignedInKind {
     ForNow,
     /// Gets back on without the password or PIN until it is signed out.
     Stay,
+    /// The operator put it on a locked profile's list: it opens it until signed out.
+    Added,
     /// Proves itself with its unlock key on every connect.
     Key,
 }
@@ -209,6 +221,10 @@ pub(crate) struct ProfileAdmin {
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     #[schema(required = false)]
     steam_home: bool,
+    /// Its lock. Absent for a profile on a person's own account, which opens with its password.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(required = false)]
+    lock: Option<super::locks::LockSummary>,
 }
 
 /// `PUT /profiles/default`.
@@ -930,11 +946,14 @@ pub(super) fn start_seat(id: &str) {
 
 fn admin(st: &MgmtState, profiles: &Profiles, p: &Profile, seats: &Snapshot) -> ProfileAdmin {
     let owner = profiles.owner_id();
+    // As `person_seat` decides it: only a door's ledger names a person's own account.
+    let own_account = st.door.is_some() && seats.person_row(&p.os_account).is_some();
     ProfileAdmin {
         public: public(st, p, owner.as_deref(), None, seats, true),
         legacy_device: p.legacy_device.clone(),
         default: profiles.default_profile_id().as_deref() == Some(p.id.as_str()),
         steam_home: keeps_steam_home(&p.id),
+        lock: (!own_account).then(|| super::locks::summary(profiles, &p.id)),
     }
 }
 

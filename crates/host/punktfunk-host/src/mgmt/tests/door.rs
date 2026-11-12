@@ -620,6 +620,10 @@ async fn a_door_adds_a_moonlight_device_the_owner_s_host_paired() {
     assert_eq!(status, StatusCode::OK, "{body}");
     assert_eq!(body[0]["fingerprint"], moonlight.as_str());
     assert_eq!(body[0]["name"], "Living room");
+    assert_eq!(
+        body[0]["moonlight"], true,
+        "the list tags it from the owner's"
+    );
     let (status, body) = send(&app, add(&"cd".repeat(32))).await;
     assert_eq!(status, StatusCode::NOT_FOUND);
     assert_eq!(body["code"], "profile_device_not_paired");
@@ -628,6 +632,7 @@ async fn a_door_adds_a_moonlight_device_the_owner_s_host_paired() {
         .into_iter()
         .map(|(t, c)| (t, c.target))
         .collect();
+    // The add, the list it answers, the refused add.
     let clients = (Target::Owner, "clients".to_string());
-    assert_eq!(asked, [clients.clone(), clients]);
+    assert_eq!(asked, [clients.clone(), clients.clone(), clients]);
 }

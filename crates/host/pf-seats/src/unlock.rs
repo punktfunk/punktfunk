@@ -45,6 +45,10 @@ pub struct Entry {
     pub name: String,
     #[serde(default)]
     pub stay: bool,
+    /// The operator put it on a profile's list: it stays until signed out. Never on a person's
+    /// own account.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub added: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub key: Option<UnlockKey>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -74,10 +78,11 @@ impl Entry {
     }
 
     fn kind(&self) -> DeviceKind {
-        match (&self.key, self.stay) {
-            (Some(_), _) => DeviceKind::Key,
-            (None, true) => DeviceKind::Stay,
-            (None, false) => DeviceKind::ForNow,
+        match (&self.key, self.added, self.stay) {
+            (Some(_), ..) => DeviceKind::Key,
+            (None, true, _) => DeviceKind::Added,
+            (None, false, true) => DeviceKind::Stay,
+            (None, false, false) => DeviceKind::ForNow,
         }
     }
 }
@@ -155,6 +160,7 @@ impl DeviceList {
                     fingerprint: device.fingerprint.clone(),
                     name: String::new(),
                     stay: false,
+                    added: false,
                     key: None,
                     present: None,
                     added_unix: now,

@@ -1424,6 +1424,7 @@
 	"profiles_device_for_now": "Status under a device's name in the list, joined with the last-used text by ' · '. The sign-in lasts only for now.",
 	"profiles_device_stay": "Status under a device's name in the list: the sign-in is kept until the device is signed out.",
 	"profiles_device_key": "Status under a device's name in the list: the device opens the desktop by its own fingerprint or face unlock.",
+	"profiles_device_added": "Status under a device's name in a locked profile's list: the console's user put it there, and it stays until signed out.",
 	"profiles_device_last_used": "Under a device's name in the list. when: a formatted date and time.",
 	"profiles_device_sign_out": "Verb. Button on each device row, and confirm button of its dialog.",
 	"profiles_device_sign_out_title": "Title of the confirm dialog for signing out one device. device: the device's name.",
