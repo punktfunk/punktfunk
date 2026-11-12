@@ -164,5 +164,5 @@ sudo usermod -aG punktfunk-update $USER
 
 ## Removing a client
 
-See [Uninstalling → Clients](/docs/uninstall#clients): the command for each client, and what stays
+See [Uninstalling → Clients](/docs/uninstall-client): the command for each client, and what stays
 behind on the device and the host.

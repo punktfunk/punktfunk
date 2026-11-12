@@ -110,7 +110,7 @@ Touch and mouse modes are explained on [Mouse, touch and pen](/docs/input), the 
 
 | Setting | Default | What it does | Where |
 |---|---|---|---|
-| **Forward controllers** | On | Off, this device's controllers aren't sent. Use it when a pad reaches the host another way, such as [USB passthrough](/docs/automation#recipe-full-controller-passthrough-virtualhere). On Linux and Windows, off also disables the [controller exit chord](/docs/shortcuts#leaving-with-a-controller). | All |
+| **Forward controllers** | On | Off, this device's controllers aren't sent. Use it when a pad reaches the host another way, such as [USB passthrough](/docs/plugin-setup#recipe-full-controller-passthrough-virtualhere). On Linux and Windows, off also disables the [controller exit chord](/docs/shortcuts#leaving-with-a-controller). | All |
 | **Controller type** | Automatic | The virtual pad the host creates; Automatic matches each controller. An Xbox pad has no gyro: for motion, pick DualSense, DualShock 4 or Steam Deck. | All. **Steam Controller 2**: Linux, Windows, console. |
 | **Controller rumble** | On | Off, controllers don't vibrate from the stream or in the menus, whatever the game sends. A DualSense's haptics follow **Controller haptics**; a Steam Controller 2 in passthrough follows Steam on the host. | Linux, Windows, Android, Apple |
 | **Use controller** | Automatic (all controllers) | Forward only the controller you pick. | Linux, Windows, Apple, console |
@@ -208,7 +208,7 @@ it really sends.
 
 | You ask for | The host |
 |---|---|
-| A resolution and refresh rate | Builds a display at exactly that mode. A host [streaming a real monitor](/docs/virtual-displays#stream-a-real-monitor-instead) keeps that monitor's mode and your device scales. A size the encoder can't take fails the connect. |
+| A resolution and refresh rate | Builds a display at exactly that mode. A host [streaming a real monitor](/docs/stream-a-monitor) keeps that monitor's mode and your device scales. A size the encoder can't take fails the connect. |
 | A bitrate | Clamps it to 500 kbps – 8 Gbps. PyroWave reads only zero (**Automatic**) or not (**Fixed**, at your quality). |
 | A PyroWave quality | Holds it between 0.5 and 2 bits per pixel, under its **PyroWave bitrate cap**. A host that doesn't read it uses its own **PyroWave quality**. |
 | A codec | Uses it if it can encode it, otherwise HEVC, AV1, H.264 in that order. |

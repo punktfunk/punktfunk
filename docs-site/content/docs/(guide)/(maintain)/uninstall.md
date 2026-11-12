@@ -5,6 +5,14 @@ description: Remove the Punktfunk host or a client for each install method, and 
 
 Remove Punktfunk the way you installed it, then clear what stays behind if you want a clean slate.
 
+- A Linux host from packages, the Bazzite sysext or NixOS: [Linux hosts](#linux-hosts), below.
+- A host built on a Steam Deck or another SteamOS box:
+  [Uninstalling a SteamOS Host](/docs/uninstall-steamos).
+- The Windows host: [Uninstalling the Windows Host](/docs/uninstall-windows).
+- A client app, on any device: [Uninstalling a Client](/docs/uninstall-client).
+- Plugins, on any host: [Plugins and the script runner](#plugins-and-the-script-runner), before
+  you remove the host.
+
 Removal never deletes the config directory: `~/.config/punktfunk` on Linux, `%ProgramData%\punktfunk`
 for the Windows host. It holds the host's identity, paired devices, console password, `host.env`,
 library, logs and [plugins](/docs/plugins), so a reinstall picks up where you left off.
@@ -38,7 +46,7 @@ seat profiles, which deletes their accounts.
    | Bazzite sysext | [See below](#bazzite--fedora-atomic-systemd-sysext) |
    | Arch / CachyOS (pacman) | `sudo pacman -Rns punktfunk-host punktfunk-web punktfunk-scripting punktfunk-client`, then delete the `[punktfunk]` (or `[punktfunk-canary]`) section from `/etc/pacman.conf` |
    | Omarchy | `punktfunk-omarchy remove` first, then as Arch |
-   | Steam Deck on-device build | [See below](#steamos--steam-deck-host-on-device-build) |
+   | Steam Deck on-device build | [Uninstalling a SteamOS Host](/docs/uninstall-steamos) |
    | NixOS | [See below](#nixos) |
 
 3. Clear what stays behind — the config directory, the tray's autostart entry, the three groups the
@@ -86,76 +94,8 @@ Then do steps 3 and 4.
 
 ### SteamOS / Steam Deck host (on-device build)
 
-There is no uninstall script. `sh install.sh --uninstall` only stops the services; do the rest by
-hand, in this order.
-
-1. Stop and remove the user services:
-
-   ```sh
-   systemctl --user disable --now punktfunk-host punktfunk-web \
-     punktfunk-scripting punktfunk-rebuild-check
-   rm -f ~/.config/systemd/user/punktfunk-*.service
-   rm -rf ~/.config/systemd/user/punktfunk-*.service.d
-   systemctl --user daemon-reload
-   sudo loginctl disable-linger "$USER"      # only if nothing else on the Deck needs it
-   ```
-
-2. Remove the build container and the files under your home:
-
-   ```sh
-   distrobox rm -f pf2                       # the build container (~1 GB)
-   rm -f  ~/.local/bin/punktfunk-scripting ~/.local/bin/punktfunk-gamescope
-   rm -rf ~/.local/lib/punktfunk-scripting ~/.local/share/punktfunk-scripting
-   rm -f  ~/.local/share/punktfunk/gamescope.stamp
-   rm -f  ~/.local/share/applications/io.unom.punktfunk.host.desktop
-   rm -f  ~/.local/bin/punktfunk-tray ~/.config/autostart/io.unom.punktfunk.tray.desktop
-   rm -f  ~/.local/share/applications/io.unom.punktfunk.starthost.desktop
-   rm -f  ~/.local/share/icons/hicolor/*/apps/punktfunk-tray*.png
-   rm -rf ~/punktfunk                        # the source checkout and its build
-   ```
-
-   The container shares your home, so `~/.cargo`, `~/.rustup` and `~/.bun` are there too. Delete
-   them only if nothing else of yours uses Rust or bun.
-
-3. If you set up [Reachable without logging in](/docs/profiles#on-linux), turn it off under
-   **Profiles** first, then remove it. The last line deletes every seat's home and the shared
-   games folder:
-
-   ```sh
-   sudo systemctl disable --now punktfunk-web-door punktfunk-door punktfunk-seats \
-     var-lib-punktfunk.mount 'var-lib-punktfunk\x2dseats.mount'
-   sudo rm -rf /opt/punktfunk /etc/systemd/system/punktfunk-seat@.service.d
-   sudo rm -f /etc/systemd/system/punktfunk-{seats,seat@,door,web-door,door-on@,door-off@}.service \
-     /etc/systemd/system/var-lib-punktfunk*.mount \
-     /etc/systemd/system/user@.service.d/50-punktfunk-seats.conf \
-     /etc/systemd/user/punktfunk-scripting.service /etc/pam.d/punktfunk-seat \
-     /etc/polkit-1/rules.d/49-punktfunk-door.rules \
-     /etc/udev/rules.d/65-punktfunk-seats.rules /etc/tmpfiles.d/punktfunk-seats.conf
-   sudo rm -rf /home/.steamos/offload/var/lib/punktfunk /home/.steamos/offload/var/lib/punktfunk-seats
-   ```
-
-   Each seat's account stays: `getent passwd | grep punktfunk-seat=` lists them for
-   `sudo userdel`, and `sudo userdel punktfunk` removes the door's. Then drop the groups it used:
-   `sudo groupdel punktfunk-door; sudo groupdel punktfunk-update; sudo groupdel punktfunk-games`.
-
-4. Remove the root-owned tuning. Don't skip it: the keep-list entry carries these files through
-   every SteamOS update.
-
-   ```sh
-   sudo rm -f /etc/atomic-update.conf.d/punktfunk.conf \
-              /etc/udev/rules.d/60-punktfunk.rules \
-              /etc/modules-load.d/punktfunk.conf \
-              /etc/sysctl.d/99-punktfunk-net.conf \
-              /etc/NetworkManager/dispatcher.d/90-punktfunk-frame-adapter \
-              /etc/systemd/system/user@.service.d/50-punktfunk-nice.conf
-   sudo udevadm control --reload-rules
-   sudo systemctl daemon-reload
-   ```
-
-5. Optional: `rm -rf ~/.config/punktfunk` for a clean slate, and
-   `sudo gpasswd -d "$USER" punktfunk; sudo groupdel punktfunk`. If you had no KDE RemoteDesktop
-   grant before, the installer seeded `~/.local/share/flatpak/db/kde-authorized`; delete it if
-   nothing else relies on it. Your `input` group membership is harmless to keep.
+The on-device build has no uninstall script; remove it by hand with
+[Uninstalling a SteamOS Host](/docs/uninstall-steamos).
 
 ### NixOS
 
@@ -163,56 +103,6 @@ Remove what you declared: the `services.punktfunk.*` options, `punktfunk.nixosMo
 the `punktfunk` flake input. Then `sudo nixos-rebuild switch`. The unit, udev rules, tuning,
 firewall ports and group memberships go with the generation; store paths stay until you
 garbage-collect, and `~/.config/punktfunk` stays regardless.
-
-## Windows host
-
-Uninstall **Punktfunk Host** from **Settings → Apps → Installed apps**, or run
-`winget uninstall unom.PunktfunkHost`. Both remove the service, the drivers, the scheduled tasks and
-the firewall rules ([full list](/docs/windows-host#uninstalling)). Left behind on purpose:
-
-- **`%ProgramData%\punktfunk`**, your config and pairings:
-  `Remove-Item -Recurse -Force "$env:ProgramData\punktfunk"`.
-- **The winget source**, if you added it: `winget source remove -n punktfunk` (admin PowerShell).
-- **Seat accounts**, `pf_seat1` to `pf_seat4`, if you used [seats](/docs/windows-seats). Remove
-  their profiles under **Profiles** before you uninstall, or delete the accounts in **Computer
-  Management** → **Local Users and Groups** afterwards.
-- **VB-CABLE**, if an older Punktfunk installed it. Other apps may use it; remove it with its own
-  uninstaller (**VB-Audio Virtual Cable** in Installed apps).
-- **The old unom certificate**, if you imported it by hand for release 0.28.1 or earlier. Current
-  releases don't need it: in `certlm.msc`, delete the certificate issued to **unom** (thumbprint
-  `CD1EFDEEEC9743AFC38F56C5AF30C5A3009BE941`) from **Trusted Publishers** and **Trusted Root
-  Certification Authorities**.
-
-### A Punktfunk display or gamepad stays in Device Manager
-
-An older build could leave one behind. While the host is still installed, run from an elevated
-prompt:
-
-```powershell
-punktfunk-host driver uninstall
-punktfunk-host driver uninstall --gamepad
-punktfunk-host driver uninstall --audio
-```
-
-Already uninstalled? Install the current version and uninstall it again; its uninstaller runs all
-three.
-
-## Clients
-
-Removing a client doesn't unpair it: unpair the device in the host's
-[web console](/docs/web-console) too.
-
-| Client | Remove | Left behind |
-|---|---|---|
-| Linux Flatpak | `flatpak uninstall --user --delete-data io.unom.punktfunk` | A `~/.config/punktfunk` an older version used, if any; the Flatpak remote (`flatpak remotes --user`, then `flatpak remote-delete --user <name>`) |
-| Linux packages | `sudo apt purge punktfunk-client`, `sudo dnf remove punktfunk-client` or `sudo pacman -Rns punktfunk-client`; drop the repo as for hosts | `~/.config/punktfunk` |
-| Windows installer | **Punktfunk** in **Settings → Apps → Installed apps**, or `& "$env:LOCALAPPDATA\Programs\Punktfunk\unins000.exe" /VERYSILENT`. Portable zip: delete the folder | `%APPDATA%\punktfunk` |
-| Windows MSIX | `Get-AppxPackage *unom.punktfunk \| Remove-AppxPackage` | `%APPDATA%\punktfunk`, if present |
-| macOS | Quit it and drag it from **Applications** to the Trash | — |
-| iPhone, iPad, Apple TV | Delete the app; if you joined the beta, stop testing in **TestFlight** | — |
-| Android, Android TV | Uninstall from Google Play or **Settings → Apps**; leave the testing program on the Play listing if you joined canary | — |
-| Steam Deck (Decky) | Uninstall **Punktfunk** from Decky's plugin list ([Steam Deck → Uninstalling](/docs/steam-deck#uninstalling)) | The Steam shortcuts, the Steam Input template, the client and its settings: `~/.var/app/io.unom.punktfunk` for the Flatpak, `~/.config/punktfunk` for a native client |
-| LG webOS TV | Remove it from the TV's launcher | — |
 
 ## Plugins and the script runner
 

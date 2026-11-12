@@ -91,7 +91,7 @@ To stream Gaming Mode exactly as the TV shows it, pick that screen under **Displ
 **Stream this monitor** in the console, or set `PUNKTFUNK_CAPTURE_MONITOR=HDMI-A-1` (names from
 `punktfunk-host list-monitors`). Nothing is stopped or relaunched and no mode is imposed. A headless
 gamescope has no screen to list. See
-[Stream a real monitor instead](/docs/virtual-displays#stream-a-real-monitor-instead).
+[Stream a real monitor instead](/docs/stream-a-monitor).
 
 With **Your monitors while streaming** → **Turn off**, managed and bare-spawn sessions switch the
 box's screen off for the stream and back on after. GNOME can't be asked to, and the log says so.

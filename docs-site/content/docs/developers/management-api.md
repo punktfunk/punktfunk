@@ -71,7 +71,7 @@ the token and certificate for you.
 ## Events
 
 `GET /api/v1/events` is a Server-Sent Events stream of host lifecycle events: clients, sessions,
-streams, pairing, displays, library, updates. [Events & hooks](/docs/automation) has the event
+streams, pairing, displays, library, updates. [Host events](/docs/host-events) has the event
 catalogue, the frame format, resume with `Last-Event-ID`, and the `?kinds=` filter.
 
 ## TypeScript SDK

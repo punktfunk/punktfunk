@@ -135,9 +135,20 @@ JSON (`true`, `30`, `null` to clear) or a bare string. Restart the host to apply
 
 ## `plugins`
 
-`punktfunk-host plugins add|remove|list|enable|disable|status|grant|access|revoke` does what
-the console's **Plugins** page does. A plugin is code on your host; read [Plugins](/docs/plugins)
-first.
+`punktfunk-host plugins` does what the console's **Plugins** page does. A plugin is code on your
+host; read [Plugins](/docs/plugins) first.
+
+| Command | What it does |
+|---|---|
+| `punktfunk-host plugins add <name…>` | Install plugins and restart the runner. |
+| `punktfunk-host plugins remove <name…>` | Uninstall plugins, drop their library titles, restart the runner. |
+| `punktfunk-host plugins list` | List installed plugins and their versions. |
+| `punktfunk-host plugins enable` | Enable and start the runner. |
+| `punktfunk-host plugins disable` | Stop and disable the runner. |
+| `punktfunk-host plugins status` | Show whether the runner is installed, enabled and running. |
+| `punktfunk-host plugins grant <plugin> <dir> [--write]` | Let a plugin reach a folder; read-only unless `--write`. |
+| `punktfunk-host plugins access` | List grants, pending requests and denials. |
+| `punktfunk-host plugins revoke <plugin> <dir>` | Take one grant back. |
 
 ## `library`
 
@@ -236,7 +247,7 @@ elevated: the file is readable by Administrators and SYSTEM only. A silent insta
 ## `list-monitors`
 
 Prints the physical monitors by connector name, the name `PUNKTFUNK_CAPTURE_MONITOR` takes to
-[stream a real monitor](/docs/virtual-displays#stream-a-real-monitor-instead). Run it inside the
+[stream a real monitor](/docs/stream-a-monitor). Run it inside the
 session you want to stream.
 
 ```

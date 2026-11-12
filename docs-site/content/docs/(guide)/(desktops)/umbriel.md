@@ -12,7 +12,7 @@ the host first: [Arch](/docs/arch), [Ubuntu](/docs/ubuntu) or [Fedora](/docs/fed
 - Each client gets its own virtual output at its size and refresh rate, with a name starting
   `PF-`, created over Umbriel's IPC and removed when the client leaves. A resize mid-stream works.
 - The host captures it straight from the compositor into the GPU encoder, with no copy. No chooser
-  appears. A [real monitor](/docs/virtual-displays#stream-a-real-monitor-instead) streams the
+  appears. A [real monitor](/docs/stream-a-monitor) streams the
   same way.
 - Keyboard and mouse go in through the wlroots virtual pointer and keyboard protocols, so Umbriel's
   keybinds fire on keys from the client.

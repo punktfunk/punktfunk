@@ -12,7 +12,7 @@ it is current; **Check for update** checks right away. Once a newer release exis
 card unfolds below it with the channel you follow, how the host was installed, and either an
 **Update now** button or the command that updates this install. The host checks a signed feed on
 `git.unom.io` while the console is open. The host also fires `update.available`
-and `update.applied` on the [event stream](/docs/automation).
+and `update.applied` on the [event stream](/docs/host-events#the-event-stream).
 
 The channel comes from the repository you installed from (on a Steam Deck, the branch
 `~/punktfunk` follows), and the card never switches it — see [Release Channels](/docs/channels).

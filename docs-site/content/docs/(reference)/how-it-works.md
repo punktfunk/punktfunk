@@ -24,7 +24,7 @@ own mode.
 | **Windows** | Punktfunk's own display driver, which also shows the secure desktop (UAC, lock screen) |
 
 You can stream one of your real monitors instead — see
-[Virtual displays](/docs/virtual-displays#stream-a-real-monitor-instead).
+[Stream a real monitor](/docs/stream-a-monitor).
 
 ## From screen to wire
 

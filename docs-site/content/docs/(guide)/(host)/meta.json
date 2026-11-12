@@ -3,6 +3,7 @@
   "pages": [
     "web-console",
     "virtual-displays",
+    "stream-a-monitor",
     "play-together",
     "access-levels",
     "profiles",
@@ -12,6 +13,7 @@
     "wake-on-lan",
     "host-power",
     "plugins",
+    "plugin-setup",
     "automation"
   ]
 }

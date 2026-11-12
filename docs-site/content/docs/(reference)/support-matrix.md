@@ -45,7 +45,7 @@ Each session gets its own display at the client's resolution and refresh rate â€
    brightness, so Windows keeps per-client display settings and apps tone-map to your screen.
 2. Through Windows Graphics Capture: the pointer is part of the picture, and permission prompts
    and the lock screen aren't. See
-   [Stream a real monitor](/docs/virtual-displays#stream-a-real-monitor-instead).
+   [Stream a real monitor](/docs/stream-a-monitor).
 3. The host starts a gamescope at the client's mode, relaunches the box's Game Mode session at it
    (SteamOS, Bazzite), or attaches to one already running. An attached session on a box with a
    screen connected keeps its own mode, so the client gets a mirror. See [gamescope](/docs/gamescope).

@@ -59,7 +59,7 @@ manager, and enable lingering so the host starts at boot:
 
 - sway gets far less testing than [KDE](/docs/kde) and [GNOME](/docs/gnome); scroll is untested on
   real hardware.
-- The streamed output is SDR. A [real monitor](/docs/virtual-displays#stream-a-real-monitor-instead)
+- The streamed output is SDR. A [real monitor](/docs/stream-a-monitor)
   that sway shows in HDR streams HDR. Otherwise HDR on Linux needs
   [gamescope](/docs/gamescope#hdr-on-gamescope) or [Hyprland](/docs/hyprland).
 

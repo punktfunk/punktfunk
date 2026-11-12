@@ -123,7 +123,7 @@ game runs on the host, the tile reads **Resume** and the game's name.
 Where the game opens (your desktop, a gamescope session, or a headless session of its own) is
 display policy: see [Dedicated game sessions](/docs/virtual-displays#dedicated-game-sessions).
 Whether quitting the game ends the session, and the reverse, is under
-[When a game ends](/docs/virtual-displays#when-a-game-ends-and-when-a-session-does).
+[When a game ends](/docs/when-a-game-ends).
 
 ## Stream settings for a game
 
