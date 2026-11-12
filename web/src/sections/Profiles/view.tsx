@@ -55,6 +55,7 @@ import { seatCheckText, seatDetail } from "@/lib/host-messages";
 import type { Loadable } from "@/lib/query";
 import { cn } from "@/lib/utils";
 import { m } from "@/paraglide/messages";
+import { LockAction, type LockCard, LockChip, LockLines } from "./lock";
 import {
 	AccentPicker,
 	type Choice,
@@ -134,7 +135,7 @@ export type DoorControl = {
 };
 
 /** The page: one card per profile, the owner first, and **Add profile**. A profile on a person's
- * own account shows its signed-in devices under its row. */
+ * own account shows its signed-in devices under its row; every other card carries its lock. */
 export const ProfilesView: FC<{
 	profiles: Loadable<ProfileAdmin[]>;
 	onAdd: () => void;
@@ -149,6 +150,10 @@ export const ProfilesView: FC<{
 	door?: DoorControl;
 	/** A Linux door: the signed-in devices of a profile on a person's own account. */
 	devices?: (p: ProfileAdmin) => ReactNode;
+	/** The lock a profile's card shows; `undefined` while it loads or where it has none. */
+	lock?: (p: ProfileAdmin) => LockCard | undefined;
+	/** The host's sentence when it can't read its locks, so every profile stays locked. */
+	lockProblem?: { message: string; onRetry: () => void } | null;
 }> = ({
 	profiles,
 	onAdd,
@@ -160,6 +165,8 @@ export const ProfilesView: FC<{
 	seats,
 	door,
 	devices,
+	lock,
+	lockProblem,
 }) => {
 	const list = profiles.data ?? [];
 	const ownerName = list.find((p) => p.owner)?.display_name ?? "";
@@ -186,6 +193,17 @@ export const ProfilesView: FC<{
 					error={profiles.error}
 					refetch={profiles.refetch}
 				>
+					{lockProblem && (
+						<div
+							role="alert"
+							className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2"
+						>
+							<p className="text-sm text-destructive">{lockProblem.message}</p>
+							<Button variant="outline" size="sm" onClick={lockProblem.onRetry}>
+								{m.common_retry()}
+							</Button>
+						</div>
+					)}
 					<Card>
 						<CardContent className="flex flex-col gap-4 pt-6">
 							{list.map((p) => (
@@ -196,6 +214,7 @@ export const ProfilesView: FC<{
 									seats={seats}
 									linux={door !== undefined}
 									devices={p.seat?.account ? devices?.(p) : undefined}
+									lock={lock?.(p)}
 									busy={busyId === p.id}
 									onRename={() => onRename(p)}
 									onPicture={(f) => onPicture(p, f)}
@@ -284,6 +303,7 @@ const ProfileRow: FC<{
 	linux: boolean;
 	/** Below the row: the profile's signed-in devices. */
 	devices?: ReactNode;
+	lock?: LockCard;
 	busy: boolean;
 	onRename: () => void;
 	onPicture: (file: File) => void;
@@ -295,6 +315,7 @@ const ProfileRow: FC<{
 	seats,
 	linux,
 	devices,
+	lock,
 	busy,
 	onRename,
 	onPicture,
@@ -334,6 +355,7 @@ const ProfileRow: FC<{
 								{STATE_WORD[p.seat.state]()}
 							</Badge>
 						)}
+						{lock && <LockChip lock={lock} />}
 					</div>
 					<p className="text-sm text-muted-foreground">{facts.join(" · ")}</p>
 					{p.seat?.account && (
@@ -343,6 +365,7 @@ const ProfileRow: FC<{
 								: m.profiles_seat_account_line)({ account: p.seat.account })}
 						</p>
 					)}
+					{lock && <LockLines lock={lock} />}
 				</div>
 			</div>
 			<div className="flex shrink-0 items-center justify-end gap-1">
@@ -391,6 +414,7 @@ const ProfileRow: FC<{
 						<KeyRound className="size-4" />
 					</Button>
 				)}
+				{lock && <LockAction lock={lock} disabled={busy} />}
 				<Button
 					variant="ghost"
 					size="icon"
