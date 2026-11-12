@@ -117,8 +117,8 @@ fn routed_local_ipv4() -> Option<Ipv4Addr> {
     }
 }
 
-/// The `proto` TXT values of a compatible host; absent is an older host. Hosts still advertise
-/// `punktfunk/1`, which every shipped client accepts; `punktfunk/2` is read so they can move.
+/// The `proto` TXT values of a compatible host; absent is an older host. A current host says
+/// `punktfunk/2`; `punktfunk/1` stays so an older host still lists.
 const PROTOS: [&str; 2] = ["punktfunk/1", "punktfunk/2"];
 
 /// One resolved `_punktfunk._udp` advert.
@@ -345,7 +345,7 @@ mod tests {
     #[test]
     fn an_advert_reads_into_the_host_record() {
         let h = advert(&[
-            ("proto", "punktfunk/1"),
+            ("proto", "punktfunk/2"),
             ("id", "id-1"),
             ("fp", "ab12"),
             ("pair", "required"),
@@ -376,6 +376,7 @@ mod tests {
     #[test]
     fn another_proto_or_no_ipv4_is_no_host() {
         assert!(advert(&[("proto", "sunshine/1")]).is_none());
+        assert!(advert(&[("proto", "punktfunk/1")]).is_some());
         assert!(advert(&[("proto", "punktfunk/2")]).is_some());
         assert!(advert_from_txt("x.local.", 9777, &[], |_| None).is_none());
     }
