@@ -1,12 +1,13 @@
-// GET /_plugin-health/<id> — is this plugin's UI actually up?
+// GET /_plugin-health/<id> — is this plugin's UI up, and at which page path?
 //
-// The console needs this to decide between mounting the iframe and showing the offline card. The
-// browser cannot read the plugin origin without CORS, so the console's own origin probes it
-// server-side, through the same dial as the proxy (and its retry on a rotated secret).
+// The console probes the plugin server-side, through the same dial as the proxy (and its retry on
+// a rotated secret), and only then mounts the iframe. A live plugin's answer carries `path`, the
+// credential-bearing `/plugin-ui/…/` its frame and "open in new tab" use.
 //
-// Session-gated like every other console route (it is not under a public prefix), so an
-// unauthenticated LAN peer cannot enumerate which plugins are running.
+// Session-gated like every other console route, and readable only by the console's own origin, so
+// neither a LAN peer nor a plugin page can mint a path.
 import { defineEventHandler, getRouterParam, setResponseStatus } from "h3";
+import { mintPluginPagePath } from "../../util/pluginPage";
 import { callPlugin, PLUGIN_ID_RE } from "../../util/pluginProxy";
 
 export default defineEventHandler(async (event) => {
@@ -26,5 +27,5 @@ export default defineEventHandler(async (event) => {
 			error: resp ? `health ${resp.status}` : `plugin "${id}" is not running`,
 		};
 	}
-	return { ok: true };
+	return { ok: true, path: mintPluginPagePath(id) };
 });

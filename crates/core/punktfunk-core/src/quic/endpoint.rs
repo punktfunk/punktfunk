@@ -19,8 +19,18 @@ use std::sync::{Arc, Mutex};
 /// a lingering session; long enough that a wifi roam does not false-close.
 pub const DEFAULT_IDLE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(8);
 
+/// Bidirectional streams a client may hold open on the host: the management lane's 16 requests
+/// in flight plus as many it answers 429, or a session's control stream and clipboard fetches.
+/// cbindgen:ignore
+pub const HOST_MAX_BIDI_STREAMS: u32 = 32;
+
+/// The most a client, admitted or not, can make the host hold unread on one connection. Above
+/// quinn's 1.25 MB stream window, so one upload keeps its full rate.
+/// cbindgen:ignore
+pub const HOST_RECEIVE_WINDOW: u32 = 4 << 20;
+
 fn stream_transport() -> Arc<quinn::TransportConfig> {
-    stream_transport_idle(DEFAULT_IDLE_TIMEOUT, None)
+    Arc::new(stream_transport_idle(DEFAULT_IDLE_TIMEOUT, None))
 }
 
 /// Idle clamped to 1 s..1 h so the QUIC VarInt millisecond conversion cannot
@@ -30,7 +40,7 @@ fn stream_transport() -> Arc<quinn::TransportConfig> {
 fn stream_transport_idle(
     idle: std::time::Duration,
     initial_rtt: Option<std::time::Duration>,
-) -> Arc<quinn::TransportConfig> {
+) -> quinn::TransportConfig {
     use std::time::Duration;
     let idle = idle.clamp(Duration::from_secs(1), Duration::from_secs(3600));
     let keep_alive = (idle / 2).min(Duration::from_secs(4));
@@ -67,7 +77,7 @@ fn stream_transport_idle(
     };
     mtud.upper_bound(probe_ceiling);
     t.mtu_discovery_config(Some(mtud));
-    Arc::new(t)
+    t
 }
 
 /// Client `max_udp_payload_size` advertisement. A peer's MTU search is
@@ -175,7 +185,13 @@ fn server_config(
     // The host's media waits out quinn's path validation after a client changes IP, and that
     // timer starts from this RTT.
     let initial_rtt = crate::transport::shared::HOST_INITIAL_RTT;
-    server_config.transport_config(stream_transport_idle(idle, Some(initial_rtt)));
+    let mut transport = stream_transport_idle(idle, Some(initial_rtt));
+    // No client opens a unidirectional stream, and the host accepts none on this plane.
+    transport
+        .max_concurrent_uni_streams(0u32.into())
+        .max_concurrent_bidi_streams(HOST_MAX_BIDI_STREAMS.into())
+        .receive_window(HOST_RECEIVE_WINDOW.into());
+    server_config.transport_config(Arc::new(transport));
     Ok(server_config)
 }
 
@@ -456,6 +472,35 @@ mod tests {
     fn absurd_idle_timeout_is_clamped_not_a_panic() {
         let _ = super::stream_transport_idle(std::time::Duration::MAX, None);
         let _ = super::stream_transport_idle(std::time::Duration::ZERO, None);
+    }
+
+    /// No unidirectional stream, no bidirectional one past the cap, no unread bytes past the
+    /// window. Credit past a limit comes only from the host reading, which it never does here,
+    /// so an open or write that does not resolve at once never will.
+    #[tokio::test]
+    async fn a_client_cannot_open_or_fill_past_the_host_limits() {
+        use tokio::time::timeout;
+        let (_server_ep, _client_ep, _host_conn, conn) =
+            crate::quic::test_util::connect_pair().await;
+        let stuck = std::time::Duration::from_millis(50);
+        assert!(timeout(stuck, conn.open_uni()).await.is_err());
+        let mut streams = Vec::new();
+        for _ in 0..super::HOST_MAX_BIDI_STREAMS {
+            streams.push(timeout(stuck, conn.open_bi()).await.unwrap().unwrap());
+        }
+        assert!(timeout(stuck, conn.open_bi()).await.is_err());
+        let chunk = vec![0u8; 64 * 1024];
+        let mut sent = 0;
+        for (send, _) in &mut streams {
+            let before = sent;
+            while let Ok(Ok(n)) = timeout(stuck, send.write(&chunk)).await {
+                sent += n;
+            }
+            if sent == before {
+                break;
+            }
+        }
+        assert_eq!(sent, super::HOST_RECEIVE_WINDOW as usize);
     }
 
     /// Loopback MTU is 64 KiB, so only endpoint config can cap the search.

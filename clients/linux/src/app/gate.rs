@@ -94,21 +94,6 @@ pub fn wake_and_connect(
     });
 }
 
-/// The certificate fingerprint as grouped monospaced hex — 4-char groups over 2 lines,
-/// far easier to compare against the host's log than one 64-char run.
-fn grouped_fingerprint(fp: &str) -> String {
-    let groups: Vec<&str> = fp
-        .as_bytes()
-        .chunks(4)
-        .map(|c| std::str::from_utf8(c).unwrap_or(""))
-        .collect();
-    groups
-        .chunks(8)
-        .map(|line| line.join(" "))
-        .collect::<Vec<_>>()
-        .join("\n")
-}
-
 /// First contact with a discovered host that opted into TOFU: show the advertised
 /// fingerprint and let the user trust it, run the PIN ceremony instead, or walk away.
 /// Trusting starts a session pinned to the advertised fp; it persists once the child
@@ -127,7 +112,7 @@ pub fn tofu_dialog(
             client::trust_explain()
         )),
     );
-    let fp_label = gtk::Label::new(Some(&grouped_fingerprint(&fp)));
+    let fp_label = gtk::Label::new(Some(&trust::grouped(&fp)));
     fp_label.add_css_class("monospace");
     fp_label.set_selectable(true);
     fp_label.set_justify(gtk::Justification::Center);
@@ -307,16 +292,25 @@ pub(super) fn present_waiting(
     window: &adw::ApplicationWindow,
     waiting_slot: &WaitingSlot,
     host_name: &str,
+    identity: &(String, String),
     on_cancel: impl Fn() + 'static,
 ) -> adw::AlertDialog {
     let body = client::dial_approve_no_pin(host_name);
-    present_wait(
+    let waiting = present_wait(
         window,
         waiting_slot,
         client::pair_waiting_for_approval(),
         Some(&body),
         on_cancel,
-    )
+    );
+    // The host's console shows the same code beside this request.
+    if let Some(code) = trust::device_code(identity) {
+        let label = gtk::Label::new(Some(&client::pair_device_code(&code)));
+        label.add_css_class("monospace");
+        label.set_halign(gtk::Align::Center);
+        waiting.set_extra_child(Some(&label));
+    }
+    waiting
 }
 
 /// A wait dialog with `heading`, `body` and Cancel, filed in `waiting_slot` as
@@ -354,9 +348,15 @@ fn request_access(
     let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
     let waiting = {
         let cancel = cancel.clone();
-        present_waiting(window, &waiting_slot, &req.host.name, move || {
-            cancel.store(true, std::sync::atomic::Ordering::SeqCst);
-        })
+        present_waiting(
+            window,
+            &waiting_slot,
+            &req.host.name,
+            &identity,
+            move || {
+                cancel.store(true, std::sync::atomic::Ordering::SeqCst);
+            },
+        )
     };
 
     let (tx, rx) = async_channel::bounded(1);

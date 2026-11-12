@@ -86,6 +86,11 @@ impl PadKind {
         PadIdentity::of(self)
     }
 
+    /// Whether the kind is a uinput pad; the rest are uhid.
+    pub fn is_uinput(self) -> bool {
+        self.uinput().is_some()
+    }
+
     /// The uhid identity of a uhid kind at `index`, as the backend itself builds it.
     fn uhid(self, index: u8) -> Option<Identity> {
         use crate::eightbitdo_proto::Model;
@@ -152,9 +157,10 @@ impl PadKind {
     }
 }
 
-/// The marker on a seat's pad: `punktfunk-seat:<account>/<rest>`, what the udev fence reads.
-pub fn seat_phys(account: &str, rest: &str) -> String {
-    format!("punktfunk-seat:{account}/{rest}")
+/// The stamp on a seat's pad: `punktfunk-seat:<mark>/<rest>`. The mark is the seat's account,
+/// or on a uhid pad the token the supervisor's record holds; the udev fence trusts the record.
+pub fn seat_phys(mark: &str, rest: &str) -> String {
+    format!("punktfunk-seat:{mark}/{rest}")
 }
 
 /// The seat a PlayStation pad's MAC carries ([`pf_driver_proto::gamepad::mark_ps_seat`]): 16
@@ -493,22 +499,21 @@ enum Brokered {
     Uhid(UhidDevice),
 }
 
-/// Build `kind` as the supervisor, stamped as `account`'s pad `index`. The udev fence reads
-/// the stamp (`packaging/linux/65-punktfunk-seats.rules`); a PlayStation pad's MAC carries
-/// `seat` ([`ps_seat`]), which the supervisor took from its ledger.
-pub fn build(kind: PadKind, index: u8, account: &str, seat: u16) -> Result<BrokeredPad> {
+/// Build `kind` as the supervisor, pad `index` stamped with `mark` ([`seat_phys`]). A
+/// PlayStation pad's MAC carries `seat` ([`ps_seat`]), which the supervisor took from its ledger.
+pub fn build(kind: PadKind, index: u8, mark: &str, seat: u16) -> Result<BrokeredPad> {
     let dev = if let Some(identity) = kind.uinput() {
         Brokered::Uinput(build_pad(
             identity,
-            Some(&seat_phys(account, &index.to_string())),
+            Some(&seat_phys(mark, &index.to_string())),
         )?)
     } else {
         let mut id = kind
             .uhid(index)
             .ok_or_else(|| anyhow!("no table for the {} pad", kind.label()))?;
-        // The backend's own `punktfunk/<tag>/<index>`, under the seat's name.
+        // The backend's own `punktfunk/<tag>/<index>`, under the seat's mark.
         let own = id.phys.trim_start_matches("punktfunk/").to_owned();
-        id.phys = seat_phys(account, &own);
+        id.phys = seat_phys(mark, &own);
         Brokered::Uhid(UhidDevice::open(&id.as_create2())?)
     };
     Ok(BrokeredPad {
@@ -536,6 +541,14 @@ pub fn relay_pair() -> Result<(UnixDatagram, OwnedFd)> {
 const LISTEN_FDS_START: RawFd = 3;
 
 impl BrokeredPad {
+    /// A uinput pad's name in sysfs, `inputN`, from its own fd; `None` for a uhid pad.
+    pub fn sysname(&self) -> Option<Result<String>> {
+        match &self.dev {
+            Brokered::Uinput(dev) => Some(dev.sysname()),
+            Brokered::Uhid(_) => None,
+        }
+    }
+
     fn kernel_fd(&self) -> BorrowedFd<'_> {
         match &self.dev {
             Brokered::Uinput(dev) => dev.as_fd(),

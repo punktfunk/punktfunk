@@ -202,6 +202,9 @@ const DOWNLOADS_POLL: f64 = 2.0;
 pub struct ConsoleOptions {
     /// Hostname registered as the default pairing device name.
     pub device_name: String,
+    /// This device's code, as [`punktfunk_core::fp::device_code`] spells it. The host's web
+    /// console shows the same one beside a request for access. `None` shows no code.
+    pub device_code: Option<String>,
     /// The About row's version, verbatim. `None` shows this kit's version: right where the
     /// app ships from this workspace.
     pub version: Option<String>,
@@ -260,6 +263,7 @@ impl ConsoleOptions {
     pub fn desktop(device_name: String, system_keyboard: bool) -> ConsoleOptions {
         ConsoleOptions {
             device_name,
+            device_code: None,
             version: None,
             system_keyboard,
             tv: false,
@@ -471,6 +475,7 @@ impl Shell {
                 pyrowave_ok: opts.pyrowave_ok,
                 av1_ok: opts.av1_ok,
                 name: opts.device_name,
+                code: opts.device_code,
                 version: opts.version.unwrap_or_else(|| crate::VERSION.into()),
             },
             hosts: Vec::new(),
@@ -689,6 +694,9 @@ impl Shell {
         self.sync_hosts();
         if let Some(text) = self.console.take_notice() {
             self.show_toast(text);
+        }
+        if let Some(code) = self.console.take_device_code() {
+            self.device.code = Some(code);
         }
         self.feed_top();
         self.sync_pair();

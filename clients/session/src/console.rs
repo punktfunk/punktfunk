@@ -288,7 +288,8 @@ pub fn run(target: Option<&str>) -> u8 {
         label: window_label,
         seed,
     } = console_entry(target, &known, fake, trust::Settings::load);
-    let opts = ConsoleOptions::desktop(trust::device_name(), is_steam_deck());
+    let mut opts = ConsoleOptions::desktop(trust::device_name(), is_steam_deck());
+    opts.device_code = trust::device_code(&identity);
     let (overlay, handles) = match SkiaOverlay::console(opts, entry) {
         Ok(v) => v,
         Err(e) => {

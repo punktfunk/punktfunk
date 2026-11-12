@@ -545,6 +545,24 @@ pub extern "system" fn Java_io_unom_punktfunk_kit_NativeBridge_nativeConsoleNoti
     .resolve::<LogErrorAndDefault>()
 }
 
+/// `NativeBridge.nativeConsoleSetDeviceCode(handle, code)` — this device's code, once its
+/// identity has loaded. The console shows it while a request waits for approval.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_io_unom_punktfunk_kit_NativeBridge_nativeConsoleSetDeviceCode(
+    mut env: EnvUnowned,
+    _this: JObject,
+    handle: jlong,
+    code: JString,
+) {
+    env.with_env(|env| -> jni::errors::Result<()> {
+        if let (Some(h), Ok(c)) = (CONSOLES.get(handle), code.try_to_string(env)) {
+            h.handles.console.set_device_code(c);
+        }
+        Ok(())
+    })
+    .resolve::<LogErrorAndDefault>()
+}
+
 /// `NativeBridge.nativeConsoleLibraryBegin(handle)` — a fetch is starting: `Loading`, and the
 /// posters a superseded fetch left go.
 #[unsafe(no_mangle)]

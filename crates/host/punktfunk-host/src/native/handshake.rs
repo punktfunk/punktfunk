@@ -603,8 +603,8 @@ struct Terms {
 }
 
 /// `ClientHello` → `ServerHello` → `Ready`. Borrows the control streams; the caller keeps them
-/// for mid-stream renegotiation. A joiner that can't stream the owner's HDR display is refused
-/// before `ServerHello`.
+/// for mid-stream renegotiation. A joiner that can't stream the owner's HDR display, or the
+/// format of a capture it shares, is refused before `ServerHello`.
 pub(super) async fn negotiate(
     n: Negotiation<'_>,
     send: &mut super::link::CtlSend,
@@ -653,22 +653,17 @@ pub(super) async fn negotiate(
         "audio channels"
     );
 
-    let studio_asked = crate::session_plan::StudioAsk::of(&n.first.features);
-    let owner_hdr = joined.as_ref().map(|(d, _)| d.hdr);
-    let (bit_depth, session_hdr, chroma) = negotiate_video_format(
-        FormatFacts::of(
-            &hello,
-            studio_asked,
-            compositor,
-            gamescope_route.as_ref(),
-            &n.knobs,
-            owner_hdr,
-        ),
-        codec,
-        encoder.clone(),
-        hello.mode,
-    )
-    .await?;
+    let facts = FormatFacts::of(
+        &hello,
+        crate::session_plan::StudioAsk::of(&n.first.features),
+        compositor,
+        gamescope_route.as_ref(),
+        &n.knobs,
+        joined.as_ref().map(|(d, _)| d),
+    );
+    let (studio_asked, owner_hdr) = (facts.studio_asked, facts.owner_hdr);
+    let (bit_depth, session_hdr, chroma) =
+        negotiate_video_format(facts.clone(), codec, encoder.clone(), hello.mode).await?;
     if owner_hdr.is_some_and(|o| crate::vdisplay::admission::joined_hdr(o, session_hdr).is_none()) {
         // Out of the table first, as `admit_mode`'s refusal.
         drop(reservation);
@@ -678,6 +673,15 @@ pub(super) async fn negotiate(
         );
         n.conn.refuse_said(REJECT_BUSY_CODE, &said).await;
         anyhow::bail!("join refused: the shared display is HDR and this session can't be");
+    }
+    let resolved = (bit_depth, session_hdr, chroma);
+    if let Some(Err(gap)) = facts.joined_format(codec, &encoder, resolved) {
+        drop(reservation);
+        let (id, text) = gap.said();
+        n.conn
+            .refuse_said(REJECT_BUSY_CODE, &super::Said::new(id, text))
+            .await;
+        anyhow::bail!("join refused: this session can't take the shared capture's {gap:?}");
     }
 
     // After depth + chroma: PyroWave Automatic is a ~bpp pin that scales with both, at the
@@ -1436,25 +1440,53 @@ pub(super) struct FormatFacts {
     pub(super) studio_asked: crate::session_plan::StudioAsk,
     /// A joiner's: whether the owner's display shows HDR.
     pub(super) owner_hdr: Option<bool>,
+    /// A joiner's: the format of the capture it shares, the ceiling of its own.
+    pub(super) owner_format: Option<crate::vdisplay::admission::SampleFormat>,
 }
 
 impl FormatFacts {
+    /// `owner` is the display a joiner was admitted onto.
     pub(super) fn of(
         hello: &Hello,
         studio_asked: crate::session_plan::StudioAsk,
         compositor: Option<crate::vdisplay::Compositor>,
         gamescope_route: Option<&crate::vdisplay::GamescopeRoute>,
         knobs: &SessionKnobs,
-        owner_hdr: Option<bool>,
+        owner: Option<&crate::vdisplay::admission::LiveDisplay>,
     ) -> FormatFacts {
+        let owner_format = owner.and_then(|d| d.format);
         FormatFacts {
             video_caps: hello.video_caps,
             compositor,
             gamescope_route: gamescope_route.cloned(),
             sdr10_widen: knobs.sdr10_widen,
-            studio_asked,
-            owner_hdr,
+            studio_asked: asked_under(owner_format, studio_asked),
+            owner_hdr: owner.map(|d| d.hdr),
+            owner_format,
         }
+    }
+
+    /// What this session streams a shared capture at, or what it misses of it. `resolved` is
+    /// [`Self::resolve`]'s answer for `codec`; `None` for a session that shares no capture.
+    pub(super) fn joined_format(
+        &self,
+        codec: crate::encode::Codec,
+        encoder: &crate::encode::Resolved,
+        (bit_depth, hdr, chroma): (u8, bool, crate::encode::ChromaFormat),
+    ) -> Option<Result<(), crate::vdisplay::admission::FormatGap>> {
+        let can = crate::vdisplay::admission::SampleFormat {
+            bit_depth,
+            chroma_444: chroma.is_444(),
+            full_range: crate::session_plan::full_range_for(
+                encoder,
+                self.studio_asked,
+                codec,
+                hdr,
+                bit_depth,
+            ),
+        };
+        let joined = crate::vdisplay::admission::joined_format(self.owner_format?, can);
+        Some(joined.map(|_| ()))
     }
 
     /// Bit depth, HDR verdict, and chroma for `codec` at `mode`, each gated by host, client,
@@ -1469,8 +1501,11 @@ impl FormatFacts {
     ) -> (u8, bool, crate::encode::ChromaFormat) {
         let (compositor, gamescope_route) = (self.compositor, self.gamescope_route.as_ref());
         // 10-bit only when host, client, codec, capture, and GPU all allow it. Resolved before
-        // Welcome so `color` matches the stream (a can't-10-bit GPU yields 8-bit SDR).
-        let host_wants_10bit = pf_host_config::config().ten_bit;
+        // Welcome so `color` matches the stream (a can't-10-bit GPU yields 8-bit SDR). A shared
+        // capture's depth and chroma are a joiner's ceiling: no session converts its samples.
+        let shared = self.owner_format;
+        let host_wants_10bit =
+            pf_host_config::config().ten_bit && shared.is_none_or(|f| f.bit_depth == 10);
         let client_supports_10bit = self.video_caps & punktfunk_core::quic::VIDEO_CAP_10BIT != 0;
         // `VIDEO_CAP_HDR` is BT.2020 PQ. `VIDEO_CAP_10BIT` alone is 10-bit SDR (Main10, display
         // untouched).
@@ -1532,7 +1567,8 @@ impl FormatFacts {
 
         // 4:4:4 only when host, client, ingest chain, and GPU all allow it. Resolved before
         // Welcome so the client sizes its decoder from what we will actually emit.
-        let host_wants_444 = pf_host_config::config().four_four_four;
+        let host_wants_444 =
+            pf_host_config::config().four_four_four && shared.is_none_or(|f| f.chroma_444);
         let client_supports_444 = self.video_caps & punktfunk_core::quic::VIDEO_CAP_444 != 0;
         // Ingest chain, not capturer: Windows 4:4:4 needs direct-NVENC RGB ingest (AMF cannot;
         // QSV/ffmpeg has no RGB 4:4:4 wiring). PyroWave does its own RGB→YCbCr; its gate is
@@ -1601,6 +1637,21 @@ impl FormatFacts {
         let session_hdr = session_hdr && bit_depth == 10;
 
         (bit_depth, session_hdr, chroma)
+    }
+}
+
+/// The range ask of a session on a `shared` capture: limited where the capture is, whatever
+/// the client asked. A full-range capture leaves the client's ask, which then refuses it.
+fn asked_under(
+    shared: Option<crate::vdisplay::admission::SampleFormat>,
+    asked: crate::session_plan::StudioAsk,
+) -> crate::session_plan::StudioAsk {
+    match shared {
+        Some(f) if !f.full_range => crate::session_plan::StudioAsk {
+            sdr: true,
+            hdr: true,
+        },
+        _ => asked,
     }
 }
 
@@ -1853,6 +1904,32 @@ mod tests {
         );
         assert_eq!(join(VIDEO_CAP_10BIT, true), None, "HDR display, SDR client");
         assert!(hdr_asked(hdr_client, None), "not a joiner: its own ask");
+    }
+
+    /// A joiner of a limited-range capture streams limited range; a full-range one leaves its
+    /// ask alone, and a session with no shared capture keeps its own.
+    #[test]
+    fn a_joiner_asks_a_shared_captures_range() {
+        use crate::session_plan::StudioAsk;
+        use crate::vdisplay::admission::SampleFormat;
+        let shared = |full_range| {
+            Some(SampleFormat {
+                bit_depth: 8,
+                chroma_444: false,
+                full_range,
+            })
+        };
+        let (none, both) = (
+            StudioAsk::default(),
+            StudioAsk {
+                sdr: true,
+                hdr: true,
+            },
+        );
+        assert_eq!(asked_under(shared(false), none), both);
+        assert_eq!(asked_under(shared(true), both), both);
+        assert_eq!(asked_under(shared(true), none), none);
+        assert_eq!(asked_under(None, none), none);
     }
 
     /// The host lowers what a client asked for and never raises it: it knows no panel, so a

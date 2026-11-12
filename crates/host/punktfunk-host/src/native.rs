@@ -919,6 +919,14 @@ pub(crate) fn setup_failed_sentence(e: &anyhow::Error) -> Option<Said> {
             "This Umbriel session can't be captured directly; the stream needs a GPU encoder.",
         ));
     }
+    #[cfg(target_os = "linux")]
+    if e.downcast_ref::<pf_capture::SharedCaptureTaken>().is_some() {
+        return Some(Said::new(
+            "close_join_other_codec",
+            "Couldn't join the shared screen — this device streams with a video codec that \
+             can't share it. Set the same video codec on both devices, then join again.",
+        ));
+    }
     e.downcast_ref::<pf_vdisplay::DisplayAsleep>()
         .map(|d| Said::new("close_display_asleep", &d.user_message()))
 }
@@ -2043,7 +2051,7 @@ fn display_half(
         compositor,
         gamescope_route.as_ref(),
         &knobs,
-        joined.as_ref().map(|(d, _)| d.hdr),
+        joined.as_ref().map(|(d, _)| d),
     );
     let reframe_to = handshake::reframe_to(hello.video_fit, handshake::joined_view(&joined), view);
     // Read back from Welcome, not recomputed (would re-probe and could drift).

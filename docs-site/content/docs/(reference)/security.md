@@ -62,8 +62,15 @@ There are no accounts and no cloud. Trust is set up device to device, then pinne
 `serve --open` turns required pairing off: the host advertises `pair=optional` and accepts unpaired
 clients. Clients then offer **trust-on-first-use** (TOFU): the first connect shows the host's
 fingerprint, you compare it with the one the host logs at startup, and the client pins it. TOFU
-can't catch an impostor on that first connect; PIN pairing can. Clients never offer TOFU to a host
-that requires pairing, to one typed in by hand, or to one whose policy is unknown.
+can't catch an impostor on that first connect; PIN pairing can. Clients never connect this way to
+a host that requires pairing, to one typed in by hand, or to one whose policy is unknown.
+
+**Request access** proves less than a PIN. Approving a request admits the device to the host, but
+nothing proves to the device that it reached your host: it trusts the fingerprint it found on the
+network, and for an address typed in by hand, some clients trust whichever machine answers there.
+The **device code** closes that gap: the waiting device and the console show the same code only
+when the request in your console came straight from that device. If the codes differ, deny the
+request. Where a device shows no code, a PIN is the way to be sure of the host.
 
 ### GameStream / Moonlight compatibility is the weak-crypto path
 
@@ -103,6 +110,10 @@ paired, gets that level. What narrows it:
 - **Locked secrets.** The management token, the host identity key and the console password are
   readable by Administrators and SYSTEM only.
 
+The web console runs as `LocalSystem` too, so a flaw in it would give an attacker that level. It
+already refuses the internet, and `PUNKTFUNK_UI_BIND=127.0.0.1` keeps it on the host machine
+([above](#what-protects-you)).
+
 None of this stops an attacker who is already an administrator — they own the machine anyway. A
 virtual display is also a real monitor: any process in your session can capture it like a physical
 one. The host streams the composed desktop, so a window hidden from recording tools
@@ -113,8 +124,8 @@ password vault.
 
 ### The Linux host runs as your user
 
-The Linux host runs in your desktop session as your own account, not root, so a compromise is
-scoped to that user.
+The Linux host runs in your desktop session as your own account, not root, and its web console
+runs as that account too, so a compromise is scoped to that user.
 
 ### Linux seats share your games
 

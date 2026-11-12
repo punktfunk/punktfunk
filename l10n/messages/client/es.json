@@ -83,6 +83,7 @@
 	"link_unknown_host": "Ningún host guardado coincide con “{name}”.",
 	"link_unknown_preset": "Ese enlace pide un preajuste llamado “{preset}”, que no está en este dispositivo.",
 	"pair_action": "Emparejar",
+	"pair_device_code": "Código del dispositivo: {code}",
 	"pair_device_name": "Nombre del dispositivo",
 	"pair_device_name_placeholder": "Cómo aparece este dispositivo en el host",
 	"pair_failed": "El emparejamiento no se completó — inténtalo de nuevo desde la página Dispositivos de la consola web del host.",

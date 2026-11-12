@@ -72,6 +72,7 @@
 	"link_unknown_host": "Kein gespeicherter Host passt zu „{name}“.",
 	"link_unknown_preset": "Der Link verlangt eine Voreinstellung namens „{preset}“, die es auf diesem Gerät nicht gibt.",
 	"pair_action": "Koppeln",
+	"pair_device_code": "Gerätecode: {code}",
 	"pair_device_name": "Gerätename",
 	"pair_device_name_placeholder": "So führt der Host dieses Gerät",
 	"pair_failed": "Die Kopplung wurde nicht abgeschlossen – versuch es erneut über die Seite „Geräte“ der Web-Konsole des Hosts.",

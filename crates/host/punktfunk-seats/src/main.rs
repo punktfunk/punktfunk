@@ -298,6 +298,11 @@ mod linux {
         pf_seats::logging::to_stderr();
         // Adopts systemd's kept fds close-on-exec before anything here can spawn a child.
         crate::uinput::resume(pads::resume());
+        // Before the broker makes a pad: a uhid pad's record waits unbound for the fence.
+        pf_seats::linux::fence::vouch::prune(
+            std::path::Path::new(pf_seats::linux::fence::vouch::DIR),
+            std::path::Path::new("/sys"),
+        );
         socket::ensure_door_group();
         crate::uinput::listen_for_drain();
         let state = PathBuf::from(pf_seats::linux::STATE_DIR);

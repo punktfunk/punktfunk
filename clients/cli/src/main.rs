@@ -727,6 +727,10 @@ from the config directory for a true factory reset."
         let name = value(args, "--name").unwrap_or_else(trust::device_name);
         let pin = access_pin(&KnownHosts::load(), fp.as_deref(), addr, port);
         eprintln!("waiting for {addr} to approve this device…");
+        // The host's console shows the same code beside this request.
+        if let Some(code) = trust::device_code(&identity) {
+            eprintln!("device code: {code}");
+        }
         let paired = trust::request_access_to_host(addr, port, &identity, pin, &name, None)
             .map(|fp| trust::save_paired(addr, addr, port, fp, &[]));
         report_paired(

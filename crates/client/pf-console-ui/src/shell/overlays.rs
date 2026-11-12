@@ -79,14 +79,20 @@ impl Shell {
                 if let Some(line) = &c.starting {
                     Some((c.appear, true, line.clone(), String::new(), vec![cancel()]))
                 } else if c.request_access {
+                    let mut body = match &c.title {
+                        Some(host) => pf_l10n::client::dial_approve_no_pin(host),
+                        None => pf_l10n::console::console_dial_approve_no_pin_unnamed().into(),
+                    };
+                    // A second line: the host's console shows the same code.
+                    if let Some(code) = &self.device.code {
+                        body.push('\n');
+                        body.push_str(&pf_l10n::client::pair_device_code(code));
+                    }
                     Some((
                         c.appear,
                         true,
                         pf_l10n::client::pair_waiting_for_approval().into(),
-                        match &c.title {
-                            Some(host) => pf_l10n::client::dial_approve_no_pin(host),
-                            None => pf_l10n::console::console_dial_approve_no_pin_unnamed().into(),
-                        },
+                        body,
                         vec![cancel()],
                     ))
                 } else {

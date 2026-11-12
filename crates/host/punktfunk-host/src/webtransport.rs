@@ -223,7 +223,7 @@ pub(crate) async fn serve(
                 .with_bind_address_v6(v6, wtransport::config::Ipv6DualStackConfig::Allow),
             v4 => ServerConfig::builder().with_bind_address(v4),
         }
-        .with_identity(identity)
+        .with_custom_transport(identity, plane_transport())
         // A browser tab that is throttled in the background must not look like a dead peer.
         .keep_alive_interval(Some(Duration::from_secs(3)))
         .build();
@@ -350,6 +350,20 @@ fn wanted_origins(
         Some(d) => d.browser.then_some(d.browser_origins),
         None => own.webtransport.then(|| own.webtransport_origins.clone()),
     }
+}
+
+/// Unidirectional streams a browser may open: HTTP/3 needs three, and the page opens none.
+const UNI_STREAMS: u32 = 16;
+
+/// The plane's QUIC limits, the native plane's: what one browser, admitted or not, can make the
+/// host hold unread.
+fn plane_transport() -> wtransport::config::QuicTransportConfig {
+    use punktfunk_core::quic::endpoint::{HOST_MAX_BIDI_STREAMS, HOST_RECEIVE_WINDOW};
+    let mut t = wtransport::config::QuicTransportConfig::default();
+    t.max_concurrent_uni_streams(UNI_STREAMS.into())
+        .max_concurrent_bidi_streams(HOST_MAX_BIDI_STREAMS.into())
+        .receive_window(HOST_RECEIVE_WINDOW.into());
+    t
 }
 
 /// Sessions one peer address may hold before admission.
@@ -796,6 +810,56 @@ mod tests {
             .collect::<Option<_>>()
             .expect("under the total cap");
         assert!(pool.take(other).is_none(), "the plane is full");
+    }
+
+    /// A browser's session comes up under the plane's limits, and what it writes to streams the
+    /// host never reads stops at the connection window. Eight streams would hold 10 MB without it.
+    #[tokio::test]
+    async fn a_browser_cannot_fill_past_the_plane_s_window() {
+        let window = punktfunk_core::quic::endpoint::HOST_RECEIVE_WINDOW as usize;
+        let identity = Identity::self_signed(["localhost"]).unwrap();
+        let cert = identity.certificate_chain().as_slice()[0].hash();
+        let loopback: SocketAddr = "127.0.0.1:0".parse().unwrap();
+        let server = Endpoint::server(
+            ServerConfig::builder()
+                .with_bind_address(loopback)
+                .with_custom_transport(identity, plane_transport())
+                .build(),
+        )
+        .unwrap();
+        let url = format!("https://127.0.0.1:{}/", server.local_addr().unwrap().port());
+        tokio::spawn(async move {
+            let _held = server.accept().await.await.unwrap().accept().await.unwrap();
+            std::future::pending::<()>().await;
+        });
+        let page = Endpoint::client(
+            wtransport::ClientConfig::builder()
+                .with_bind_address(loopback)
+                .with_server_certificate_hashes([cert])
+                .build(),
+        )
+        .unwrap()
+        .connect(url)
+        .await
+        .unwrap();
+
+        let stuck = Duration::from_millis(50);
+        let chunk = vec![0u8; 64 * 1024];
+        let mut sent = 0;
+        let mut streams = Vec::new();
+        for _ in 0..8 {
+            // A full window holds back the next stream's own header too.
+            let open = async { page.open_bi().await.unwrap().await.unwrap() };
+            let Ok((mut tx, rx)) = tokio::time::timeout(stuck, open).await else {
+                break;
+            };
+            while let Ok(Ok(n)) = tokio::time::timeout(stuck, tx.write(&chunk)).await {
+                sent += n;
+            }
+            streams.push((tx, rx));
+        }
+        assert!(sent > window / 2, "the streams took data: {sent}");
+        assert!(sent <= window, "{sent} bytes unread on one connection");
     }
 
     /// `--open` and an empty origin list are each an operator's choice; together they are a

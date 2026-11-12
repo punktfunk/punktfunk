@@ -190,6 +190,15 @@ struct ContentView: View {
             fullscreenAlways: fullscreenAlways)
     }
 
+    /// This device's code as a paragraph under the approval wait's message. The identity is
+    /// loaded by the time a request waits, so this reads the store's cached copy.
+    private var deviceCodeLine: String {
+        guard let code = (try? ClientIdentityStore.shared.load())?.identity.deviceCode else {
+            return ""
+        }
+        return "\n\n" + L10n.pairDeviceCode(code: code)
+    }
+
     /// A console that could not be built hands the screen back to this app's own UI.
     private var gamepadUIActive: Bool {
         !consoleFailed
@@ -244,7 +253,7 @@ struct ContentView: View {
             ) { req in
                 Button(L10n.commonCancel, role: .cancel) { flow.cancelApproval(req) }
             } message: { req in
-                Text(L10n.dialApproveNoPin(host: req.host.displayName))
+                Text(L10n.dialApproveNoPin(host: req.host.displayName) + deviceCodeLine)
             }
             // Who is playing: shown by a connect when its host lists several profiles.
             .sheet(item: $profileAsk) { ProfilePickerView(ask: $0) }

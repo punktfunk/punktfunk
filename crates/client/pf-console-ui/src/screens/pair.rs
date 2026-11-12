@@ -201,7 +201,8 @@ impl PairScreen {
         }
     }
 
-    fn rows(&self) -> Vec<RowSpec> {
+    /// `code` is this device's, noted under the request row while it waits.
+    fn rows(&self, code: Option<&str>) -> Vec<RowSpec> {
         // Spaced digits, not ●: the host already shows the PIN, and ● hides typos.
         let pin_display: String = self
             .pin
@@ -221,6 +222,9 @@ impl PairScreen {
                     };
                     let mut r = RowSpec::action(label, !self.busy);
                     r.header = Some(pf_l10n::console::console_pair_no_pin_needed());
+                    if self.busy && self.requesting {
+                        r.note = code.map(pf_l10n::client::pair_device_code);
+                    }
                     r
                 }
                 Role::Pin => {
@@ -375,7 +379,7 @@ impl ScreenView for PairScreen {
             rect.right,
             rect.bottom - tray_h as f32 - status_h as f32,
         );
-        let rows = self.rows();
+        let rows = self.rows(ctx.device.code.as_deref());
         self.list.lift = self.keyboard.lift(rect, k);
         self.list.render(
             canvas,
@@ -510,6 +514,11 @@ mod tests {
         assert!(fx.connect.is_none(), "a request never streams");
         assert!(fx.nav.is_none(), "the screen waits for the answer");
         assert!(s.busy && s.requesting);
+        // The waiting row carries this device's code, for the host's console to match.
+        let code = "4F2A 91C3 07BE D512";
+        let note = s.rows(Some(code)).remove(0).note;
+        assert!(note.is_some_and(|n| n.contains(code)));
+        assert!(s.rows(None)[0].note.is_none());
     }
 
     #[test]
@@ -544,7 +553,7 @@ mod tests {
         let s = PairScreen::new(&host, "deck");
         let pseudo = |t: &str| t.starts_with('[') && t.ends_with(']');
         pf_l10n::with_language("en-XA", || {
-            for row in s.rows() {
+            for row in s.rows(None) {
                 assert!(pseudo(&row.label), "{}", row.label);
                 assert!(row.header.is_none_or(pseudo), "{:?}", row.header);
             }

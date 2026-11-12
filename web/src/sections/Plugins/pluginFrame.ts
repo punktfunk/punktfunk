@@ -54,16 +54,15 @@ export type FrameAction =
 	| { kind: "navigate"; splat: string };
 
 /**
- * The request in a `message` event, or `null` when it is not the plugin frame's own: only the
- * frame, speaking from the plugin origin, may ask for the palette or move the address bar.
+ * The request in a `message` event, or `null` when it is not the plugin frame's own. Only the
+ * frame's window may ask for the palette or move the address bar; its sandboxed page has an
+ * opaque origin, so `event.origin` is always `"null"` and the window is the identity.
  */
 export function frameAction(
 	fromFrame: boolean,
-	origin: string,
-	expected: string,
 	data: unknown,
 ): FrameAction | null {
-	if (!fromFrame || origin !== expected) return null;
+	if (!fromFrame) return null;
 	const msg = data as { type?: string; path?: unknown } | null | undefined;
 	if (msg?.type === "pf-ui:theme-request") return { kind: "theme" };
 	if (msg?.type === "pf-ui:navigate" && typeof msg.path === "string") {

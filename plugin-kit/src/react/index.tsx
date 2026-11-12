@@ -1,9 +1,11 @@
-// Browser/React glue for plugin UIs served through the console's /plugin-ui/<id>/ proxy.
+// Browser/React glue for plugin UIs served through the console's /plugin-ui/<id>-<credential>/
+// proxy. The page is sandboxed into an opaque origin: no cookies or web storage, and requests
+// authenticate by that first path segment, so build URLs from `resolvePluginBase()` or relative.
 // Design-system-free on purpose: ResultGate takes render props (the plugin wraps it once
 // with its @unom/ui skeleton/error visuals), so the kit's only peer here is react.
 //
 // Routing model (fixes the broken deep-link restore of the first-generation UIs): the
-// console pins the iframe src to the deep-linked PATH (`/plugin-ui/<id>/<route>`), so
+// console pins the iframe src to the deep-linked PATH (`/plugin-ui/<id>-…/<route>`), so
 // route init must read the last pathname segment — the hash is only a standalone-tab
 // fallback. Navigation posts `pf-ui:navigate` so the console mirrors the route into its
 // own URL (replace: true; the iframe src stays pinned — no reload loop).
@@ -12,7 +14,10 @@ import { Option, Schema } from "effect";
 import { AsyncResult, Atom } from "effect/reactivity";
 import { type ReactNode, useEffect, useState } from "react";
 
-/** `/plugin-ui/<id>` when served through the console proxy, "" in dev/standalone. */
+/**
+ * The page's first segment, `/plugin-ui/<id>-<credential>`, when served through the console proxy;
+ * "" in dev/standalone. The credential must stay in it: the console refuses a path without one.
+ */
 export const resolvePluginBase = (): string => {
 	const m = window.location.pathname.match(/^\/plugin-ui\/[a-z][a-z0-9-]*/);
 	return m ? m[0] : "";
@@ -25,14 +30,11 @@ export const useIsEmbedded = (): boolean =>
 /**
  * Mirror a route into the console's address bar (best-effort, embedded only).
  *
- * The `"*"` target origin is load-bearing and must stay: the console frames plugin UIs from a
- * DIFFERENT ORIGIN than its own (they get their own port, so a plugin cannot act as the logged-in
- * operator — security-review 2026-08-05 H-3). Narrowing this to `window.location.origin` would
- * target the PLUGIN's origin, not the console's, and every message would be silently dropped.
+ * The `"*"` target origin is load-bearing and must stay: the console is a DIFFERENT ORIGIN, and
+ * `window.location.origin` names the plugin listener's, so every message would be dropped.
  *
  * `"*"` is safe here because the payload is a route path the plugin itself just navigated to —
- * nothing secret — and the console verifies `event.origin` against the plugin origin before acting
- * on it, so the trust decision is made on the receiving side where it belongs.
+ * nothing secret — and the console acts only on messages whose `event.source` is this frame.
  */
 export const postNavigate = (path: string): void => {
 	try {

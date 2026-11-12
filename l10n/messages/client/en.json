@@ -89,6 +89,7 @@
 	"link_unknown_host": "No saved host matches “{name}”.",
 	"link_unknown_preset": "That link asks for a preset called “{preset}”, which isn't on this device.",
 	"pair_action": "Pair",
+	"pair_device_code": "Device code: {code}",
 	"pair_device_name": "Device name",
 	"pair_device_name_placeholder": "How the host lists this device",
 	"pair_failed": "Pairing didn't finish — try again from the Devices page of the host's web console.",
