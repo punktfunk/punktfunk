@@ -52,6 +52,7 @@ mod plugin_access;
 mod plugin_channel;
 mod plugins;
 mod profiles;
+mod seating;
 mod session;
 mod settings;
 pub(crate) mod shared;
@@ -619,9 +620,9 @@ fn api_router_parts() -> (Router<Arc<MgmtState>>, utoipa::openapi::OpenApi) {
         .routes(routes!(store::put_source, store::delete_source))
         .routes(routes!(store::get_runtime, store::set_runtime))
         .routes(routes!(profiles::enumerate_profiles))
-        .routes(routes!(profiles::get_seating, profiles::put_seating))
-        .routes(routes!(profiles::get_seats_doctor))
-        .routes(routes!(profiles::put_door))
+        .routes(routes!(seating::get_seating, seating::put_seating))
+        .routes(routes!(seating::get_seats_doctor))
+        .routes(routes!(seating::put_door))
         .routes(routes!(profiles::list_profiles, profiles::create_profile))
         .routes(routes!(profiles::list_windows_accounts))
         .routes(routes!(profiles::set_default_profile))
