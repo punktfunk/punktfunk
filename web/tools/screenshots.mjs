@@ -125,13 +125,19 @@ async function main() {
 			await page.goto(url, { waitUntil: "networkidle", timeout: 30_000 });
 			// Story root mounted with real content.
 			await page.waitForSelector("#storybook-root > *", { timeout: 20_000 });
-			// The story's play function has run to its end: a menu it opens has settled.
+			// The story's play function has run to its end: a menu it opens has settled. A story
+			// with none rests in `completing`.
 			await page
 				.waitForFunction(
 					() =>
-						["finished", "errored", "aborted"].includes(
-							window.__STORYBOOK_PREVIEW__?.currentRender?.phase,
-						),
+						[
+							"played",
+							"completing",
+							"completed",
+							"finished",
+							"errored",
+							"aborted",
+						].includes(window.__STORYBOOK_PREVIEW__?.currentRender?.phase),
 					null,
 					{ timeout: 10_000 },
 				)
