@@ -372,6 +372,28 @@ async fn a_vouched_install_is_the_device_s_never_the_operator_s() {
     assert_eq!(status, StatusCode::NOT_FOUND, "the operator");
 }
 
+/// The door answers a profile's view of the library from its own copy, for the console and
+/// for a device alike.
+#[tokio::test]
+async fn the_door_answers_a_profile_s_library_itself() {
+    let fp = "aa11bb22cc33dd44ee55ff6600112233445566778899aabbccddeeff00112233";
+    let seats = FakeSeats::new(box_snapshot(None));
+    let app = test_app_door(test_state(), Some(paired(&[fp])), seats.clone());
+    for path in [
+        "/api/v1/library?as=a1a1a1a1a1a1",
+        "/api/v1/library/page?as=a1a1a1a1a1a1",
+    ] {
+        let (status, _) = send(&app, get_req(path)).await;
+        assert_eq!(status, StatusCode::OK, "{path}");
+        let mut req = get_req(path);
+        req.extensions_mut()
+            .insert(PeerCertFingerprint(Some(fp.to_string())));
+        let resp = app.clone().oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK, "{path}, a device");
+    }
+    assert!(seats.calls().is_empty(), "nothing left the door");
+}
+
 /// The seats' sessions, games and downloads are on the door's `/status`; a device sees the
 /// others' rows without their identity.
 #[tokio::test]
