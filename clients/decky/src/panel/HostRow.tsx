@@ -153,19 +153,19 @@ const ProfileItem: FC<{ profile: HostProfile; picked: boolean }> = ({ profile: p
 /** A host action row: a danger one asks first, an unavailable one says why when pressed. */
 function actionItem(host: HostView, a: HostAction): ReactNode {
   const label = actionLabel(a);
-  const run = () =>
-    a.danger && a.available
-      ? showModal(
-          <ConfirmModal
-            strTitle={t("host_power_confirm_title", { action: label })}
-            strDescription={t("hostcard_action_confirm_body", { host: host.name })}
-            strOKButtonText={label}
-            onOK={() => void runHostAction(host, a)}
-          />,
-        )
-      : void runHostAction(host, a);
+  const run = () => void runHostAction(host, a);
+  const confirm = () => {
+    showModal(
+      <ConfirmModal
+        strTitle={t("host_power_confirm_title", { action: label })}
+        strDescription={t("hostcard_action_confirm_body", { host: host.name })}
+        strOKButtonText={label}
+        onOK={run}
+      />,
+    );
+  };
   return (
-    <MenuItem key={`do:${a.id}`} onSelected={run}>
+    <MenuItem key={`do:${a.id}`} onSelected={a.danger && a.available ? confirm : run}>
       {a.available ? label : t("hostcard_action_unavailable", { action: label })}
     </MenuItem>
   );
