@@ -46,18 +46,22 @@ export const hideLabel = (hidden: boolean, who?: string): string =>
 			: m.library_hide_action();
 
 /**
- * A value that is a profile's own: the brand colour and a person. `mark` says whose when the
- * label is the value itself (**Only for Anna**), to a pointer and a screen reader.
+ * A value that is a profile's own: the brand colour and a person. `mark` says whose, to a pointer
+ * and a screen reader: before a value (**Only for Anna**), or instead of a `short` label that
+ * says the same (**Hidden** for **Hidden for Anna**). A long label ends in an ellipsis.
  */
 export const OwnBadge: FC<{
 	label: string;
 	mark?: string;
+	short?: boolean;
 	className?: string;
-}> = ({ label, mark, className }) => (
-	<Badge className={cn("min-w-0 gap-1", className)} title={mark}>
+}> = ({ label, mark, short, className }) => (
+	<Badge className={cn("max-w-full min-w-0 gap-1", className)} title={mark}>
 		<UserRound className="size-3 shrink-0" aria-hidden />
 		{mark && <span className="sr-only">{mark}</span>}
-		<span className="truncate">{label}</span>
+		<span className="truncate" aria-hidden={(short && !!mark) || undefined}>
+			{label}
+		</span>
 	</Badge>
 );
 
@@ -161,7 +165,8 @@ export const GameCard: FC<GameCardProps> = ({
 							{game.title}
 						</div>
 					)}
-					<div className="absolute top-1.5 left-1.5 flex flex-wrap gap-1">
+					{/* Inset on both sides, so a long badge ends in its ellipsis inside the card. */}
+					<div className="absolute top-1.5 right-1.5 left-1.5 flex flex-wrap gap-1">
 						{emulated && (
 							<Badge
 								variant="outline"
@@ -173,8 +178,10 @@ export const GameCard: FC<GameCardProps> = ({
 						{hidden &&
 							(who ? (
 								<OwnBadge
-									label={m.profile_view_hidden_badge({ name: who })}
-									className={cn("max-w-full", small)}
+									label={m.library_hidden_badge()}
+									mark={m.profile_view_hidden_badge({ name: who })}
+									short
+									className={small}
 								/>
 							) : (
 								<Badge
@@ -189,7 +196,7 @@ export const GameCard: FC<GameCardProps> = ({
 								<OwnBadge
 									label={stream}
 									mark={m.profile_view_own({ name: who ?? "" })}
-									className={cn("max-w-full", small)}
+									className={small}
 								/>
 							) : (
 								<Badge

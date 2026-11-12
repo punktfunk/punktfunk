@@ -98,7 +98,13 @@ export const GameRow: FC<GameCardProps> = ({
 									mark={m.profile_view_own({ name: who ?? "" })}
 								/>
 							) : (
-								<Badge variant="secondary">{stream}</Badge>
+								<Badge
+									variant="secondary"
+									className="max-w-full truncate"
+									title={stream}
+								>
+									{stream}
+								</Badge>
 							))}
 						<InstallBadge
 							{...(game.install ? { install: game.install } : {})}
