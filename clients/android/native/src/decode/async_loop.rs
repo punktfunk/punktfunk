@@ -1089,7 +1089,8 @@ impl DecodeTally {
 }
 
 /// The receiver rule's decoder class for this session ([`Intake`]): AV1 only, strict on the
-/// Tensor G5 decoder, lenient on the rest. `debug.punktfunk.au_admission` = `strict` /
+/// Tensor G5 and Realtek decoders, lenient on the rest. Realtek's hangs on the first wave frame
+/// after a loss. `debug.punktfunk.au_admission` = `strict` /
 /// `lenient` / `off` overrides the pick.
 fn admission(codec: u8, decoder: &str) -> Option<DecoderClass> {
     if codec != punktfunk_core::quic::CODEC_AV1 {
@@ -1099,7 +1100,13 @@ fn admission(codec: u8, decoder: &str) -> Option<DecoderClass> {
         Some("off") => return None,
         Some("strict") => DecoderClass::Strict,
         Some("lenient") => DecoderClass::Lenient,
-        _ if decoder == "c2.google.av1.decoder" => DecoderClass::Strict,
+        _ if matches!(
+            decoder,
+            "c2.google.av1.decoder" | "OMX.realtek.video.dec.av1"
+        ) =>
+        {
+            DecoderClass::Strict
+        }
         _ => DecoderClass::Lenient,
     };
     log::info!("decode: AV1 AU admission {class:?} for {decoder}");
