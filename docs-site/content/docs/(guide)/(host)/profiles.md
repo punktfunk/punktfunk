@@ -219,7 +219,8 @@ password.
 - Locking the owner profile also keeps Moonlight to the Moonlight devices on its list.
 - A profile that shares your desktop opens with your lock, your devices and your PIN: one
   desktop, one lock. A profile on its own Windows account (take turns) has a lock of its own.
-- **Unlock** keeps the list and the PIN for the next lock.
+- **Unlock** keeps the PIN for the next lock. Locking again starts from the devices you choose
+  then.
 
 The locks live in `profile-locks.json` beside the host's pairings, readable by the host alone. A
 file the host can't read keeps every profile locked, and the console says so: fix or remove it.
