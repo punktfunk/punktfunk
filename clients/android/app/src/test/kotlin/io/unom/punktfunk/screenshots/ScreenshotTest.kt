@@ -261,6 +261,15 @@ class ScreenshotTest {
     @Config(sdk = [36], qualifiers = "w1280dp-h800dp-xhdpi")
     fun tablet10Controllers() = shootRoot("controllers", device = "tablet10") { ControllersScene() }
 
+    // The grids on a tablet held sideways, where they fill the screen. Portrait leaves most of it empty.
+    @Test
+    @Config(sdk = [36], qualifiers = "w1280dp-h800dp-xhdpi")
+    fun tablet10HostsLandscape() = shootRoot("hosts-landscape", device = "tablet10") { HostsScene() }
+
+    @Test
+    @Config(sdk = [36], qualifiers = "w1280dp-h800dp-xhdpi")
+    fun tablet10LibraryLandscape() = shootRoot("library-landscape", device = "tablet10") { TouchLibraryScene() }
+
     // The picture alone at a 16:10 tablet's size, for a store frame on a rendered tablet.
     @Test
     @Config(sdk = [36], qualifiers = "w1280dp-h800dp-xhdpi")
