@@ -426,7 +426,7 @@
 //
 // The wire is versioned by ALPN, not by this. Pin the integer in `punktfunk-ffi`
 // (`abi_version_is_pinned`). Per-bump notes live in `CHANGELOG.md`.
-#define PUNKTFUNK_ABI_VERSION 69
+#define PUNKTFUNK_ABI_VERSION 70
 
 // This client silenced its own speakers (`client::NativeClient::set_audio_muted`). The host
 // keeps sending, so a session joined to the same sink still hears the game.
@@ -703,14 +703,23 @@
 // Starting one is [`GRANT_LAUNCH`]: launching a missing title installs it anyway.
 #define PUNKTFUNK_GRANT_MANAGE_GAMES 128
 
+// Choosing the screen this device streams and what the host's monitors do meanwhile: its
+// own pick on the mgmt cert lane and a preset's wish in the Hello. Without it the operator's
+// answer applies.
+#define PUNKTFUNK_GRANT_DISPLAY 256
+
 // An omitted Welcome or registry mask reads as this: every bit above.
-#define PUNKTFUNK_GRANT_ALL 255
+#define PUNKTFUNK_GRANT_ALL 511
 
 // Stored "Full control" before [`GRANT_POWER`]. [`normalize_legacy_full`] lifts it.
 #define PUNKTFUNK_GRANT_ALL_PRE_POWER 63
 
 // Stored "Full control" before [`GRANT_MANAGE_GAMES`]. [`normalize_legacy_full`] lifts it.
 #define PUNKTFUNK_GRANT_ALL_PRE_MANAGE 127
+
+// "Full control" before [`GRANT_DISPLAY`]. [`normalize_legacy_full`] lifts it; a store that
+// can tell it from "all but the screen choice" uses [`lift_pre_manage`] instead.
+#define PUNKTFUNK_GRANT_ALL_PRE_DISPLAY 255
 
 // The management API rejects these; it never silently clears unknown bits
 // (that would grant less than the caller asked).
