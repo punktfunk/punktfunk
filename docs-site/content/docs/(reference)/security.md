@@ -68,7 +68,9 @@ a host that requires pairing, to one typed in by hand, or to one whose policy is
 **Request access** proves less than a PIN. Approving a request admits the device to the host, but
 nothing proves to the device that it reached your host: it trusts the fingerprint it found on the
 network, and for an address typed in by hand, some clients trust whichever machine answers there.
-To be sure of the host, pair with a PIN.
+The **device code** closes that gap: the waiting device and the console show the same code only
+when the request in your console came straight from that device. If the codes differ, deny the
+request. Where a device shows no code, a PIN is the way to be sure of the host.
 
 ### GameStream / Moonlight compatibility is the weak-crypto path
 

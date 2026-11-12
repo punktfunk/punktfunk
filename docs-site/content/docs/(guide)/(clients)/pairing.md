@@ -9,7 +9,8 @@ its own after that. There are no accounts and nothing leaves your network.
 ## Approve it from the console (no PIN)
 
 1. On the new device, pick the host and choose **Request access**.
-2. In the console, open **Devices**. The device is listed under **Waiting for approval**.
+2. In the console, open **Devices**. The device is listed under **Waiting for approval**. If the
+   device shows a **device code** while it waits, check that the console shows the same code.
 3. Click **Approve**, set its [access](#choosing-access-when-you-admit-a-device), enter your
    **Console password** and click **Approve**. The device is now paired, even while another
    device is streaming. Pick the host on it to start streaming.
