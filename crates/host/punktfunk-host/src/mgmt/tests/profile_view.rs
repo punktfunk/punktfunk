@@ -674,6 +674,35 @@ async fn a_seat_host_lists_what_the_box_lists_as_its_profile() {
         .unwrap();
     assert_eq!(send(&app, drop).await.0, StatusCode::CONFLICT);
     assert!(crate::session_settings::of_profile(&here).is_some());
+
+    // A launch it can't resolve: held back by a hide or a source switch, the profile's or the
+    // box's, or a title this desktop can't start (Playnite is one account's), or none at all.
+    let why = |id: &str| crate::library::launch_refusal(&here, id).0;
+    for id in ["steam:70", "steam:570", "lutris:4", "custom:r1"] {
+        assert_eq!(why(id), "launch_title_not_in_library", "{id}");
+    }
+    for id in ["custom:p1", "steam:999999"] {
+        assert_eq!(why(id), "launch_title_not_on_desktop", "{id}");
+    }
+}
+
+/// The box says its library lacks every title it doesn't start: it has no desktop of a seat's
+/// to blame. [`crate::library::held_back`] is the view's own hide and switch rules.
+#[tokio::test]
+async fn the_box_refuses_a_title_it_does_not_list_by_its_library() {
+    let tmp = ConfigDirOverride::new();
+    write_fixture(tmp.path());
+    let view = crate::library::View::of(SEAT_P, false, crate::library::Reach::seat(false));
+    for id in ["steam:70", "steam:570", "lutris:4", "custom:r1"] {
+        assert!(crate::library::held_back(&view, id), "{id}");
+    }
+    for id in ["custom:p1", "steam:400", "steam:999999"] {
+        assert!(!crate::library::held_back(&view, id), "{id}");
+    }
+    for id in ["steam:70", "custom:p1", "steam:999999"] {
+        let why = crate::library::launch_refusal(&view, id).0;
+        assert_eq!(why, "launch_title_not_in_library", "{id}");
+    }
 }
 
 /// The box's answers for [`SEAT_P`], then the seat's half of the test in a child.

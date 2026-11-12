@@ -55,9 +55,10 @@ pub(super) async fn prepare_launch(
 }
 
 /// One library lookup in the session profile's `view`: command, title, process identity. The
-/// client picks an existing id, never a command. An id this host can't start, or one the profile
-/// hides, is refused onto `outcome`. Clients list the box's whole library, so a seat is asked for
-/// titles it never could. Blocking: plugin entries ask over loopback from this async context.
+/// client picks an existing id, never a command. An id this host can't start, or one the view
+/// holds back, is refused onto `outcome` with [`crate::library::launch_refusal`]'s reason.
+/// Clients list the box's whole library, so a seat is asked for titles it never could. Blocking:
+/// plugin entries ask over loopback from this async context.
 async fn resolve_launch(
     launch: Option<&str>,
     view: crate::library::View,
@@ -67,44 +68,34 @@ async fn resolve_launch(
         return Ok(None);
     };
     let owned = id.to_string();
-    let found = tokio::task::spawn_blocking(move || crate::library::resolve_launch(&view, &owned))
-        .await
-        .context("resolve the session's library launch")?;
+    let found = tokio::task::spawn_blocking(move || {
+        crate::library::resolve_launch(&view, &owned)
+            .ok_or_else(|| crate::library::launch_refusal(&view, &owned))
+    })
+    .await
+    .context("resolve the session's library launch")?;
     match &found {
-        Some(t) => tracing::info!(
+        Ok(t) => tracing::info!(
             launch_id = id,
             title = %t.game.title,
             command = t.command.as_deref().unwrap_or("-"),
             "resolved library launch for this session"
         ),
-        None => {
+        Err((message, sentence)) => {
             tracing::warn!(
                 launch_id = id,
                 "client requested a title this host can't start — ignoring"
             );
-            let (id, sentence) = if pf_paths::seat::box_library_dir().is_some() {
-                (
-                    "launch_title_not_on_desktop",
-                    "Couldn't start that title — this desktop doesn't have its emulator, \
-                     launcher or game files.",
-                )
-            } else {
-                (
-                    "launch_title_not_in_library",
-                    "Couldn't start that title — this host doesn't have it in its library any \
-                     more.",
-                )
-            };
             let _ = outcome.send(
                 punktfunk_core::quic::LaunchOutcome::new(
                     punktfunk_core::quic::LaunchOutcomeKind::Refused,
                     sentence,
                 )
-                .worded(id, &[]),
+                .worded(message, &[]),
             );
         }
     }
-    Ok(found)
+    Ok(found.ok())
 }
 
 /// The verdict for a game a joiner asked for: the shared screen plays its first device's game.

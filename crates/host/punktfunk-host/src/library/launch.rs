@@ -103,6 +103,36 @@ pub fn resolve_launch(view: &View, id: &str) -> Option<LaunchTarget> {
     plat::launch_target(entry, game)
 }
 
+/// Whether the box's library has `id` and `view` leaves it out by a hide or a source switch,
+/// the box's or its profile's: the rules [`all_games_for`] applies, not what this host can play.
+pub fn held_back(view: &View, id: &str) -> bool {
+    let Some(e) = load_custom().into_iter().find(|e| library_id_for(e) == id) else {
+        return false;
+    };
+    let (by_box, by_profile) = hidden_layers(view);
+    by_box.contains(id)
+        || by_profile.contains(id)
+        || source_id_for(&e).is_some_and(|src| disabled_scanners(view).contains(src))
+}
+
+/// The message id and sentence a launch of `id` that [`resolve_launch`] found nothing for in
+/// `view` is refused with. A host that reads the box's library tells a title held back in `view`
+/// from one this desktop can't start; the box says its library lacks the title.
+pub fn launch_refusal(view: &View, id: &str) -> (&'static str, &'static str) {
+    if pf_paths::seat::box_library_dir().is_some() && !held_back(view, id) {
+        (
+            "launch_title_not_on_desktop",
+            "Couldn't start that title — this desktop doesn't have its emulator, launcher or game \
+             files.",
+        )
+    } else {
+        (
+            "launch_title_not_in_library",
+            "Couldn't start that title — this host doesn't have it in its library any more.",
+        )
+    }
+}
+
 /// Recipe for an `exec` entry, built from the owning plugin's manifest, or an `emulator` entry,
 /// built by hermir. `None` for every other kind, so both OS resolvers try this first.
 ///
