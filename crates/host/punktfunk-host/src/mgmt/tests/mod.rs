@@ -56,6 +56,7 @@ mod plugins;
 mod profile_view;
 mod profiles;
 mod routes;
+mod seat_plugins;
 mod sessions;
 mod tunnel;
 
@@ -196,7 +197,8 @@ fn test_app_door(
     ))
 }
 
-/// A seat host whose person token is `token` and whose own profile is `profile`.
+/// A seat host whose person token is `token` and whose own profile is `profile`. It reads the
+/// box's library where the environment names one, as `run` does.
 fn test_app_seat(state: Arc<AppState>, token: &str, profile: &'static str) -> Router {
     let stats = state.stats.clone();
     let person = super::person_session::PersonAuth::new(token.to_string(), move || {
@@ -216,7 +218,7 @@ fn test_app_seat(state: Arc<AppState>, token: &str, profile: &'static str) -> Ro
         false,
         None,
         false,
-        false,
+        pf_paths::seat::box_library_dir().is_some(),
         None,
         Some(person),
     ))

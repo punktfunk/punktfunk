@@ -123,15 +123,25 @@ const DEVICE: &str = "c9c9c9c9c9c9c9c9c9c9c9c9c9c9c9c9c9c9c9c9c9c9c9c9c9c9c9c9c9
 /// Runs the test `name` of this module again as a child on a person's own account, with its
 /// config and library dirs. `marker` names the child its library dir.
 fn on_own_account(name: &str, marker: &str) {
+    let module = module_path!().split_once("::").expect("crate::module").1;
+    on_seat(&format!("{module}::{name}"), marker, true);
+}
+
+/// Runs the test at `path` (`module::name`, below the crate) again as a child on a seat host,
+/// made or on a person's own account (`own`), with its config and library dirs. `marker` names
+/// the child its library dir.
+pub(super) fn on_seat(path: &str, marker: &str, own: bool) {
     let config = tempfile::tempdir().unwrap();
     let library = tempfile::tempdir().unwrap();
-    let module = module_path!().split_once("::").expect("crate::module").1;
     let mut child = std::process::Command::new(std::env::current_exe().expect("this test binary"));
-    child.args(["--exact", &format!("{module}::{name}"), "--nocapture"]);
+    child.args(["--exact", path, "--nocapture"]);
     for (key, _) in std::env::vars_os() {
         if key.to_string_lossy().starts_with("PUNKTFUNK_") {
             child.env_remove(key);
         }
+    }
+    if own {
+        child.env("PUNKTFUNK_SEAT_OWN_ACCOUNT", "1");
     }
     let out = child
         .env(marker, library.path())
@@ -139,7 +149,6 @@ fn on_own_account(name: &str, marker: &str) {
         .env("PUNKTFUNK_LIBRARY_DIR", library.path())
         .env("PUNKTFUNK_SEAT_SESSION", "1")
         .env("PUNKTFUNK_SEAT_ID", "0123456789abcdef0123456789abcdef")
-        .env("PUNKTFUNK_SEAT_OWN_ACCOUNT", "1")
         .output()
         .expect("run the child");
     let stdout = String::from_utf8_lossy(&out.stdout);
