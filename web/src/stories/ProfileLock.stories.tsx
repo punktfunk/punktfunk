@@ -1,13 +1,13 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import type { ComponentProps } from "react";
 import { expect, userEvent, within } from "storybook/test";
+import type { LockSummary } from "@/api/gen/model/lockSummary";
 import type { ProfileAdmin } from "@/api/gen/model/profileAdmin";
 import type { SignedInDevice } from "@/api/gen/model/signedInDevice";
 import { useDialogs } from "@/components/dialogs";
 import { m } from "@/paraglide/messages";
 import { DevicesList } from "@/sections/Profiles/devices";
 import {
-	type LockCard,
 	LockFlowDialog,
 	LockManageDialog,
 	type LockRow,
@@ -57,37 +57,54 @@ const signedIn = (
 	kind,
 	added_unix: accessNowUnix - 30 * 86_400,
 	last_unix: accessNowUnix - ago,
+	moonlight: row.moonlight,
 });
 
-/** Each card's lock, by profile name; the rest have none. */
-const locks =
-	(by: Record<string, LockCard>) =>
-	(p: ProfileAdmin): LockCard | undefined =>
-		by[p.display_name];
-const open: LockCard = { state: "open", onOpen: noop };
-const openShared: LockCard = { state: "open", owner: "Enrico", onOpen: noop };
-const locked = (failedPins = 0): LockCard => ({
-	state: "locked",
-	failedPins,
-	onOpen: noop,
-});
-const lockedShared: LockCard = {
-	state: "locked",
-	owner: "Enrico",
-	onOpen: noop,
+const OPEN: LockSummary = { locked: false, pin: false, failed_pins: 0 };
+const OWNER_ID = "4f1c3a9b0e27";
+
+/**
+ * `list` as the host lists it: each profile's own lock by name, a sharer of the owner's desktop
+ * with the owner's, and a person's own account (`own`) with none.
+ */
+const listed = (
+	list: ProfileAdmin[],
+	by: Record<string, LockSummary> = {},
+	own: string[] = [],
+): ProfileAdmin[] => {
+	const owner = by[list.find((p) => p.owner)?.display_name ?? ""] ?? OPEN;
+	return list.map((p) => {
+		if (own.includes(p.display_name)) return p;
+		const sharer = !p.owner && (!p.seat || p.seat.kind === "shared");
+		const lock = sharer
+			? { ...owner, shared_with: OWNER_ID }
+			: (by[p.display_name] ?? OPEN);
+		return { ...p, lock };
+	});
 };
+const loaded = (data: ProfileAdmin[]) => ({
+	data,
+	isLoading: false,
+	error: null,
+});
+const locked = (failed_pins = 0): LockSummary => ({
+	locked: true,
+	pin: failed_pins > 0,
+	failed_pins,
+});
 
 const meta = {
 	title: "Pages/Profile lock",
 	component: ProfilesView,
 	parameters: { layout: "padded" },
 	args: {
-		profiles: { data: profilesEvery, isLoading: false, error: null },
+		profiles: loaded(listed(profilesEvery)),
 		onAdd: noop,
 		onRename: noop,
 		onPicture: noop,
 		onRemovePicture: noop,
 		onRemove: noop,
+		onLock: noop,
 		busyId: null,
 	},
 } satisfies Meta<typeof ProfilesView>;
@@ -97,43 +114,30 @@ type Story = StoryObj<typeof meta>;
 
 /** Nothing locked on a Linux box: one lock icon per card and nothing else. Anna and Kid share
  * Enrico's desktop, so theirs locks Enrico's. */
-export const CardsNothingLocked: Story = {
-	args: {
-		lock: locks({ Enrico: open, Anna: openShared, Kid: openShared }),
-	},
-};
+export const CardsNothingLocked: Story = {};
 
-/** Enrico's desktop is locked, with three wrong PINs: Anna and Kid open with his lock. */
+/** The list says Enrico's desktop is locked, with three wrong PINs: Anna and Kid open with his
+ * lock. */
 export const CardsOwnerLocked: Story = {
-	args: {
-		lock: locks({
-			Enrico: locked(3),
-			Anna: lockedShared,
-			Kid: lockedShared,
-		}),
-	},
+	args: { profiles: loaded(listed(profilesEvery, { Enrico: locked(3) })) },
 };
 
 /** A door with Oma on her own account: her signed-in devices stay as they are, Leon's desktop is
  * locked, the rest are open. */
 export const CardsDoor: Story = {
 	args: {
-		profiles: {
-			data: profilesDoor.map((p) =>
-				p.display_name === "Oma" && p.seat
-					? { ...p, seat: { ...p.seat, account: "oma" } }
-					: p,
+		profiles: loaded(
+			listed(
+				profilesDoor.map((p) =>
+					p.display_name === "Oma" && p.seat
+						? { ...p, seat: { ...p.seat, account: "oma" } }
+						: p,
+				),
+				{ Leon: locked() },
+				["Oma"],
 			),
-			isLoading: false,
-			error: null,
-		},
+		),
 		door: { on: true, changing: false, onChange: noop },
-		lock: locks({
-			Enrico: open,
-			Anna: openShared,
-			Kid: openShared,
-			Leon: locked(),
-		}),
 		devices: () => (
 			<DevicesList
 				account="oma"
@@ -148,47 +152,7 @@ export const CardsDoor: Story = {
 
 /** A Windows Server host: Kid's seat is locked, every other own desktop has the lock icon. */
 export const CardsWindows: Story = {
-	args: {
-		profiles: { data: profilesWindows, isLoading: false, error: null },
-		lock: locks({
-			Enrico: open,
-			Anna: openShared,
-			Kid: locked(1),
-			Leon: open,
-			Mia: open,
-			Oma: open,
-			Alice: open,
-		}),
-	},
-};
-
-/** The host can't read its lock file: every profile stays locked, and the page says so once. */
-export const CardsLocksUnreadable: Story = {
-	args: {
-		lock: locks({
-			Enrico: { state: "unreadable" },
-			Anna: { state: "unreadable", owner: "Enrico" },
-			Kid: { state: "unreadable", owner: "Enrico" },
-		}),
-		lockProblem: {
-			message:
-				"This host couldn't read its profile locks, so every profile stays locked. Fix or remove profile-locks.json, then try again.",
-			onRetry: noop,
-		},
-	},
-};
-
-/** Enrico's lock didn't read: its sentence and **Retry** on his card; his sharers wait for it. */
-export const CardsLockReadFailed: Story = {
-	args: {
-		lock: locks({
-			Enrico: {
-				state: "failed",
-				error: "The host didn't answer. Try again in a moment.",
-				onRetry: noop,
-			},
-		}),
-	},
+	args: { profiles: loaded(listed(profilesWindows, { Kid: locked(1) })) },
 };
 
 /** The lock dialog for `name`, as the host answers it. */
@@ -273,7 +237,19 @@ export const LockFlowNobody: Story = {
 	render: () => flow({ kept: [], playing: [] }),
 };
 
-/** A profile locked before keeps its PIN and its devices until they are unchosen or removed. */
+/** A session that matches no paired device can't be kept: it is named, and Lock turns red. */
+export const LockFlowUnmatched: Story = {
+	render: () =>
+		flow({
+			playing: [
+				{ fingerprint: DECK.fingerprint, name: DECK.name },
+				{ name: "Shield TV" },
+			],
+		}),
+};
+
+/** Locked before: the devices it let in then are chosen again, and its PIN stays unless removed
+ * here. The lock holds exactly what is chosen. */
 export const LockFlowRelock: Story = {
 	render: () =>
 		flow({
@@ -302,8 +278,22 @@ export const LockFlowListFailed: Story = {
 		}),
 };
 
+const LAPTOP: LockRow = {
+	fingerprint: fp("e"),
+	name: "Office laptop",
+	moonlight: false,
+};
+const BEDROOM: LockRow = {
+	fingerprint: fp("f"),
+	name: "Bedroom TV",
+	moonlight: true,
+};
+
+/** One device of each kind: two the operator added, a Moonlight one among them. */
 const DEVICES = [
-	signedIn(DECK, "stay", 600),
+	signedIn(DECK, "added", 600),
+	signedIn(SHIELD, "added", 2 * 86_400),
+	signedIn(LAPTOP, "stay", 5 * 86_400),
 	signedIn(PHONE, "key", 3 * 86_400),
 	signedIn(TV, "for_now", 120),
 ];
@@ -319,7 +309,7 @@ const manage = (
 		devices={DEVICES}
 		devicesError={null}
 		onRetry={noop}
-		candidates={[SHIELD]}
+		candidates={[BEDROOM]}
 		onSignOut={noop}
 		onSignOutAll={noop}
 		onAdd={done}
@@ -339,7 +329,8 @@ const AsksSignOut = () => {
 	});
 };
 
-/** Kid is locked: three devices, each with how it is signed in, a PIN, and three wrong PINs. */
+/** Kid is locked: each device with how it got in, Moonlight ones tagged, a PIN, and three wrong
+ * PINs. */
 export const Manage: Story = { render: () => manage() };
 
 /** No device and no PIN: nobody can play as Kid, and the dialog says what to do. */
