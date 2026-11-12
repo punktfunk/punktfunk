@@ -91,7 +91,13 @@ async fn a_person_s_own_account_refuses_what_would_run_code_as_them() {
 
     let raw = serde_json::json!({"spec": "punktfunk-plugin-x", "accept_unverified": true});
     let (s, body) = send(&app, json_req(Method::POST, "/api/v1/store/install", raw)).await;
-    assert_eq!(s, StatusCode::FORBIDDEN, "{body}");
+    if cfg!(windows) {
+        // A Windows seat runs no plugin of its own, so it refuses every install first.
+        assert_eq!(s, StatusCode::CONFLICT, "{body}");
+        assert_eq!(body["code"], "seat_runs_no_plugins", "{body}");
+    } else {
+        assert_eq!(s, StatusCode::FORBIDDEN, "{body}");
+    }
 
     let copy = serde_json::json!({"exe": "/bin/sh"});
     let adopt = "/api/v1/emulators/rpcs3/adopt";

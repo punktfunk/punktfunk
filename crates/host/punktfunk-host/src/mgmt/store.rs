@@ -421,8 +421,9 @@ pub(crate) async fn list_installed() -> Response {
 ///
 /// `{source, id}` installs the catalog pin after re-checking integrity, or `{spec,
 /// accept_unverified: true}` installs unreviewed code the operator owns. `202` + job id; watch at
-/// `GET /store/jobs/{id}`. A seat host on a person's own account installs from the built-in
-/// source alone: anything else would run code the box chose as that person.
+/// `GET /store/jobs/{id}`. A Windows seat host installs none: the box's runner, which it shares,
+/// never reads them. A seat host on a person's own account installs from the built-in source
+/// alone: anything else would run code the box chose as that person.
 ///
 /// One package operation at a time (`409` otherwise): `bun` shares a lockfile and `node_modules`.
 #[utoipa::path(
@@ -434,7 +435,7 @@ pub(crate) async fn list_installed() -> Response {
     responses(
         (status = ACCEPTED, description = "Install job started", body = JobRef),
         (status = BAD_REQUEST, description = "Unknown entry, bad spec, or missing acknowledgement", body = ApiError),
-        (status = CONFLICT, description = "Another package operation is in flight", body = ApiError),
+        (status = CONFLICT, description = "Another package operation is in flight, or a Windows seat host", body = ApiError),
         (status = UNAUTHORIZED, description = "Missing or invalid bearer token", body = ApiError),
         (status = FORBIDDEN, description = "Not authorized for the plugin token, or a plugin from outside the built-in source on a seat host on a person's own account", body = ApiError),
     )
@@ -443,6 +444,15 @@ pub(crate) async fn install_plugin(
     State(st): State<Arc<MgmtState>>,
     ApiJson(req): ApiJson<InstallRequest>,
 ) -> Response {
+    // A Windows seat host shares the box's runner, which never reads this host's plugins.
+    if cfg!(windows) && pf_paths::seat::role().is_seat_host() {
+        return api_error_coded(
+            StatusCode::CONFLICT,
+            "seat_runs_no_plugins",
+            "This seat uses the host's plugins, so none can be installed here. Install them on \
+             the host.",
+        );
+    }
     let plan =
         match (
             req.source.as_deref(),
