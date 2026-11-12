@@ -28,6 +28,7 @@ import {
 } from "@/components/ui/dialog";
 import { Segmented } from "@/components/ui/segmented";
 import { m } from "@/paraglide/messages";
+import { GRANT_DISPLAY } from "@/sections/Devices/access";
 import { describePolicy } from "./describePolicy";
 import {
 	conflictLabel,
@@ -118,13 +119,39 @@ export function screenChoices(
 	];
 }
 
+/**
+ * Who answers the screen question: the env pin, else the operator for a device whose access
+ * lacks Choose its screen, else the device when it wrote its row. `undefined` grants is a host
+ * that reports no access: its device rows read as before.
+ */
+export function screenDecider(
+	locked: boolean,
+	setBy: ClientOverlay["set_by"],
+	grants: number | null | undefined,
+): "env" | "operator" | "device" | undefined {
+	if (locked) return "env";
+	if (grants != null && (grants & GRANT_DISPLAY) === 0) return "operator";
+	return setBy === "device" ? "device" : undefined;
+}
+
 export const ClientPolicySheet: FC<{
 	open: boolean;
 	onOpenChange: (open: boolean) => void;
 	/** Pairing fingerprint — what the overlay is keyed by, never an address. */
 	fingerprint: string;
 	deviceName: string;
-}> = ({ open, onOpenChange, fingerprint, deviceName }) => {
+	/** The device's access mask; `null` is full, `undefined` a host that reports none. */
+	grants?: number | null;
+	/** Opens the device's access editor. */
+	onEditAccess?: () => void;
+}> = ({
+	open,
+	onOpenChange,
+	fingerprint,
+	deviceName,
+	grants,
+	onEditAccess,
+}) => {
 	const qc = useQueryClient();
 	const settings = useGetDisplaySettings();
 	const monitors = useGetDisplayMonitors();
@@ -140,6 +167,7 @@ export const ClientPolicySheet: FC<{
 	const locked = pinLocked(hostPin, settings.data?.settings);
 	const screen = screenOf(overlay);
 	const mirror = locked ? hostPin : screen ? monitorOf(screen) : hostPin;
+	const decider = screenDecider(locked, overlay.set_by, grants);
 
 	const invalidate = () =>
 		qc.invalidateQueries({ queryKey: getGetDisplaySettingsQueryKey() });
@@ -189,11 +217,27 @@ export const ClientPolicySheet: FC<{
 									<Question
 										label={m.display_q_screen()}
 										help={
-											locked
-												? m.display_monitor_env_locked()
-												: overlay.set_by === "device"
-													? m.display_screen_set_by_device()
-													: undefined
+											decider === "env" ? (
+												m.display_monitor_env_locked()
+											) : decider === "operator" ? (
+												<>
+													{m.display_screen_you_decide({ name: deviceName })}
+													{onEditAccess && (
+														<>
+															{" "}
+															<Button
+																variant="link"
+																className="h-auto p-0 text-xs"
+																onClick={onEditAccess}
+															>
+																{m.access_edit_title()}
+															</Button>
+														</>
+													)}
+												</>
+											) : decider === "device" ? (
+												m.display_screen_set_by_device()
+											) : undefined
 										}
 									>
 										<Segmented<string>

@@ -39,6 +39,8 @@ list monitors.
 
 The host keeps the pick for this device, so a preset can't change it. The web console shows it,
 and can change it, in the device's [display settings](/docs/virtual-displays#per-device-settings).
+Picking needs **Choose its screen** in this device's
+[access](/docs/access-levels#individual-grants); without it the host decides the screen.
 
 ## Reset all settings
 

@@ -1,4 +1,5 @@
-// A device's screen: what its row says in the summary, what the sheet offers, what a pick sends.
+// A device's screen: what its row says in the summary, what the sheet offers, what a pick sends,
+// who decides it.
 import { describe, expect, test } from "bun:test";
 import type { ApiMonitorInfo } from "@/api/gen/model";
 import { baseLocale, overwriteGetLocale } from "@/paraglide/runtime";
@@ -6,6 +7,7 @@ import {
 	nextOverlay,
 	overlaySummary,
 	screenChoices,
+	screenDecider,
 } from "./ClientPolicySheet";
 
 overwriteGetLocale(() => baseLocale);
@@ -81,5 +83,23 @@ describe("nextOverlay", () => {
 		expect(
 			nextOverlay({ capture_monitor: "DP-2" }, { topology: "extend" }),
 		).toEqual({ screen: { monitor: "DP-2" }, topology: "extend" });
+	});
+});
+
+describe("screenDecider", () => {
+	test("a device without Choose its screen is the operator's call", () => {
+		expect(screenDecider(false, "device", 0xff)).toBe("operator");
+		expect(screenDecider(false, undefined, 0x01)).toBe("operator");
+	});
+
+	test("a granted device's own pick says so", () => {
+		expect(screenDecider(false, "device", 0x1ff)).toBe("device");
+		expect(screenDecider(false, "device", null)).toBe("device");
+		expect(screenDecider(false, undefined, 0x100)).toBeUndefined();
+	});
+
+	test("the env pin outranks both; a host without access reads as before", () => {
+		expect(screenDecider(true, "device", 0)).toBe("env");
+		expect(screenDecider(false, "device", undefined)).toBe("device");
 	});
 });

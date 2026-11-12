@@ -111,9 +111,11 @@ Open **Display settings…** from a device's row in **Devices**. Each question o
 host** or an answer for this device only:
 
 - **Screen it streams** (Linux and Windows hosts): **Own screen**, or one of your monitors. **Own
-  screen** keeps this device off a monitor the whole host streams. A device can also pick its
+  screen** keeps this device off a monitor the whole host streams. A device whose access includes
+  **Choose its screen** ([Access levels](/docs/access-levels#individual-grants)) can also pick its
   screen in its own app ([Screen](/docs/client-settings#screen)); the sheet then says **Chosen on
-  the device.** The latest pick wins, from either side;
+  the device.** The latest pick wins, from either side. Without the grant the sheet says **You
+  decide this for** the device, and the device's own pick does not count;
 - the keep-alive (including **Keep for** a number of seconds), second-device and remember
   questions above;
 - **Your monitors while streaming**. On a Windows host the first device to connect decides it for
