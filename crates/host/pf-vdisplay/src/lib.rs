@@ -151,6 +151,15 @@ impl Compositor {
         )
     }
 
+    /// Makes the streamed screen the desktop's main one under `primary`. The tiling backends
+    /// only focus it, so there `primary` is `extend` (`exclusive_wanted`).
+    pub fn has_primary(self) -> bool {
+        matches!(
+            self,
+            Compositor::Kwin | Compositor::Mutter | Compositor::Windows
+        )
+    }
+
     /// Puts a launch on a workspace of its own (`claim_workspace`).
     pub fn places_launch_workspace(self) -> bool {
         matches!(
@@ -722,12 +731,12 @@ pub fn resolve_topology(t: policy::Topology) -> policy::Topology {
     }
 }
 
-/// Topology applied at create, for the client this display is being created for, and the
-/// one every readout names.
+/// Topology applied at create when the session carries none ([`create_topology`]), for the
+/// client this display is being created for, and the one every readout names.
 ///
 /// Precedence: configured console policy — that client's overlay over the host's
-/// (`design/web-console-overhaul.md` §6.1) — else `unconfigured_topology`, the platform's
-/// own rule. Always concrete.
+/// (`design/web-console-overhaul.md` §6.1), without a topology the device set itself — else
+/// `unconfigured_topology`, the platform's own rule. Always concrete.
 ///
 /// `None` for a client is the host policy, which is also what an unidentified session
 /// (shared identity, GameStream) gets.
@@ -736,6 +745,35 @@ pub fn effective_topology(client: Option<[u8; 32]>) -> policy::Topology {
         Some(p) => resolve_topology(p.effective_for(policy::fp_hex(client).as_deref()).topology),
         None => unconfigured_topology(),
     }
+}
+
+/// The topology a session of the device `fp` (hex) wants
+/// ([`policy::DisplayPolicy::topology_for`]), `auto` resolved. `None` on an unconfigured host or a contract seat, whose backends keep
+/// [`effective_topology`].
+pub fn wanted_topology(fp: Option<&str>, may_choose: bool) -> Option<policy::Topology> {
+    let p = policy::prefs().configured()?;
+    Some(resolve_topology(p.topology_for(fp, may_choose)))
+}
+
+/// The topology a backend's `create` applies: the one its session carries
+/// ([`VirtualDisplay::set_topology`]), else [`effective_topology`] for `client`.
+pub(crate) fn create_topology(
+    carried: Option<policy::Topology>,
+    client: Option<[u8; 32]>,
+) -> policy::Topology {
+    carried.unwrap_or_else(|| effective_topology(client))
+}
+
+/// The devices (fingerprint hex) holding a live or kept screen on this host or mirroring one
+/// of its monitors, for [`policy::first_session_rule`]. `None` is one whose device is not
+/// known: a shared identity slot, or a session that named no device.
+pub fn screen_holders() -> Vec<Option<String>> {
+    registry::snapshot()
+        .displays
+        .into_iter()
+        .map(|d| identity::slot_owner(d.identity_slot))
+        .chain(streamed_monitors().into_iter().map(|(_, device)| device))
+        .collect()
 }
 
 // The Windows manager applies its own unconfigured rule (`PUNKTFUNK_NO_ISOLATE`).
@@ -1203,5 +1241,53 @@ mod tests {
         ) {
             assert!(a.env.wayland_display.is_none());
         }
+    }
+
+    /// A create applies the topology its session carries over the one stored for its device;
+    /// the session wants the device's own only while it may choose. Unconfigured, it carries none.
+    #[test]
+    fn a_create_takes_the_carried_topology_over_the_store() {
+        let name = "a_create_takes_the_carried_topology_over_the_store";
+        crate::fake::in_child(module_path!(), name, &[], || {
+            use policy::{ClientOverlay, DisplayPolicy, DisplayTarget, Preset, Topology};
+            let fp = [9; 32];
+            let hex = policy::fp_hex(Some(fp)).unwrap();
+            assert_eq!(wanted_topology(Some(&hex), true), None, "unconfigured");
+            let mut row = ClientOverlay::default();
+            row.set_device_pick(Some(DisplayTarget::Own), Some(Topology::Extend));
+            let mut p = DisplayPolicy {
+                preset: Preset::Custom,
+                topology: Topology::Exclusive,
+                ..DisplayPolicy::default()
+            };
+            p.clients.insert(hex.clone(), row);
+            policy::prefs().set(p).unwrap();
+
+            assert_eq!(wanted_topology(Some(&hex), true), Some(Topology::Extend));
+            assert_eq!(
+                wanted_topology(Some(&hex), false),
+                Some(Topology::Exclusive)
+            );
+            assert_eq!(create_topology(None, Some(fp)), Topology::Exclusive);
+            let carried = Some(Topology::Extend);
+            assert_eq!(create_topology(carried, Some(fp)), Topology::Extend);
+            assert!(backend::exclusive_wanted("test", None, Some(fp)));
+            assert!(!backend::exclusive_wanted("test", carried, Some(fp)));
+        });
+    }
+
+    /// Only the backends that can make the streamed screen the main one offer `primary`.
+    #[test]
+    fn primary_is_real_where_the_desktop_has_a_main_screen() {
+        let with: Vec<_> = Compositor::all()
+            .iter()
+            .copied()
+            .chain([Compositor::Windows])
+            .filter(|c| c.has_primary())
+            .collect();
+        assert_eq!(
+            with,
+            [Compositor::Kwin, Compositor::Mutter, Compositor::Windows]
+        );
     }
 }

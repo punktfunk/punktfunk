@@ -90,6 +90,8 @@ const MAX_VERSION: u32 = 5;
 #[derive(Default)]
 pub struct KwinDisplay {
     client_fp: Option<[u8; 32]>,
+    /// The session's topology ([`VirtualDisplay::set_topology`]).
+    topology: Option<crate::policy::Topology>,
     /// Slot the last [`create`](VirtualDisplay::create) resolved, so the registry keys
     /// arrangement and `/display/state` to the same id this backend named the output with.
     last_slot: Option<u32>,
@@ -149,9 +151,8 @@ impl KwinDisplay {
         pre_enabled: &[(String, String)],
     ) {
         use crate::policy::Topology;
-        // Per device: `set_client_identity` runs before `create`, so this display knows
-        // whose it is and can honour that device's own topology (§6.1).
-        let kind = match crate::effective_topology(self.client_fp) {
+        // The session's topology, else this display's device's: both are set before `create`.
+        let kind = match crate::create_topology(self.topology, self.client_fp) {
             Topology::Exclusive => TopologyKind::Exclusive,
             Topology::Primary => TopologyKind::Primary,
             Topology::Extend | Topology::Auto => TopologyKind::Extend,
@@ -189,6 +190,10 @@ impl VirtualDisplay for KwinDisplay {
         self.client_fp = fingerprint;
         let default = crate::policy::Identity::Shared;
         self.last_slot = crate::identity::peek_slot(fingerprint, (0, 0), default);
+    }
+
+    fn set_topology(&mut self, topology: Option<crate::policy::Topology>) {
+        self.topology = topology;
     }
 
     fn accepts_kept(&self, identity_slot: Option<u32>, _output_name: Option<&str>) -> bool {

@@ -33,6 +33,30 @@ pub(crate) fn open_for(
     Ok(vd)
 }
 
+/// The topology the own screen of a session of `client` opens under on `compositor`: what it
+/// wants ([`wanted_topology`]), then the first-session rule against every other device's screen
+/// here. `None` leaves the backend its own read. Logs when an earlier device decided it.
+pub(crate) fn session_topology(
+    client: Option<[u8; 32]>,
+    may_choose: bool,
+    compositor: Compositor,
+) -> Option<policy::Topology> {
+    let me = policy::fp_hex(client);
+    let wanted = wanted_topology(me.as_deref(), may_choose)?;
+    let holders = screen_holders();
+    let rule =
+        policy::first_session_rule(wanted, me.as_deref(), &holders, compositor.has_primary());
+    let Some((kept, first)) = rule else {
+        return Some(wanted);
+    };
+    let first = first
+        .as_deref()
+        .map_or_else(|| "unknown".into(), device_label);
+    tracing::info!(%first, ?wanted, topology = ?kept,
+        "monitors stay as the first session left them");
+    Some(kept)
+}
+
 /// The heads of `compositor`, else of the live session's. Blocking: one compositor IPC.
 pub(crate) fn heads(compositor: Option<Compositor>) -> anyhow::Result<Vec<PhysicalMonitor>> {
     #[cfg(windows)]

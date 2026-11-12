@@ -235,6 +235,8 @@ struct PendingCast {
 pub struct NiriDisplay {
     /// Whose display this is, for the per-device topology and scale resolved inside `create`.
     client_fp: Option<[u8; 32]>,
+    /// The session's topology ([`VirtualDisplay::set_topology`]).
+    topology: Option<crate::policy::Topology>,
     /// The identity slot `create` resolves for `client_fp`, peeked by `set_client_identity`
     /// before it: the owner key of this output once kept, and the budget's own-display exemption.
     last_slot: Option<u32>,
@@ -264,6 +266,7 @@ impl NiriDisplay {
     pub fn new() -> Result<Self> {
         Ok(NiriDisplay {
             client_fp: None,
+            topology: None,
             last_slot: None,
             handoff_cast: false,
             pending_cast: None,
@@ -298,6 +301,10 @@ impl VirtualDisplay for NiriDisplay {
         self.client_fp = fingerprint;
         let default = crate::policy::Identity::Shared;
         self.last_slot = crate::identity::peek_slot(fingerprint, (0, 0), default);
+    }
+
+    fn set_topology(&mut self, topology: Option<crate::policy::Topology>) {
+        self.topology = topology;
     }
 
     fn last_identity_slot(&self) -> Option<u32> {
@@ -420,7 +427,7 @@ impl VirtualDisplay for NiriDisplay {
         );
         // Last fallible step: nothing after it can fail, so no path turns heads off and then
         // unwinds past the journal hand-off.
-        if crate::backend::exclusive_wanted("niri", self.client_fp) {
+        if crate::backend::exclusive_wanted("niri", self.topology, self.client_fp) {
             desktop::disable_other_heads(&name, &mut self.pending_undo);
         }
         if let Some(prev) = self.prev_output.replace(name.clone()) {

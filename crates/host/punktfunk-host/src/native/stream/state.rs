@@ -928,6 +928,7 @@ fn display_request(
     }
     let params = crate::vdisplay::SessionParams {
         screen: ctx.screen.clone(),
+        topology: ctx.topology,
         client_fp: ctx.conn.peer_fingerprint(),
         client_hdr: ctx.client_hdr,
         hdr: ctx.common.hdr,

@@ -478,6 +478,8 @@ pub(super) struct Negotiated {
     pub(super) mirrored: bool,
     /// The screen this session wants ([`session_screen`]); every open of it re-checks it is free.
     pub(super) screen: Option<crate::vdisplay::policy::DisplayTarget>,
+    /// The topology its own screen opens under ([`session_screen`]); rebuilds reuse it.
+    pub(super) topology: Option<crate::vdisplay::policy::Topology>,
     /// The client asked for a game, and joining a shared screen dropped it.
     pub(super) launch_dropped: bool,
 }
@@ -604,6 +606,8 @@ struct Terms {
     mirrored: bool,
     /// The screen this session wants ([`session_screen`]), which every open re-checks.
     wanted: Option<crate::vdisplay::policy::DisplayTarget>,
+    /// [`Negotiated::topology`].
+    topology: Option<crate::vdisplay::policy::Topology>,
 }
 
 /// `ClientHello` → `ServerHello` → `Ready`. Borrows the control streams; the caller keeps them
@@ -637,7 +641,7 @@ pub(super) async fn negotiate(
         compositor = d.compositor;
         gamescope_route = d.route.clone();
     }
-    let (wanted, screen) = session_screen(&n, joined.is_some()).await?;
+    let (wanted, screen, topology) = session_screen(&n, joined.is_some(), compositor).await?;
     let mirrored = matches!(screen, Some(ScreenEcho::Monitor(_)));
     // A joiner's view rides `joined`; a mirrored head keeps its own fit.
     let view = view.filter(|_| joined.is_none() && !mirrored);
@@ -739,6 +743,7 @@ pub(super) async fn negotiate(
         screen,
         mirrored,
         wanted,
+        topology,
     };
     let server_hello = server_hello(&n, &t, welcome(&n, &t));
     let host_link = crate::telemetry::net_health::host_link(
@@ -777,27 +782,35 @@ pub(super) async fn negotiate(
         encoder: t.encoder,
         mirrored: t.mirrored,
         screen: t.wanted,
+        topology: t.topology,
         launch_dropped,
     })
 }
 
-/// The screen this session wants and the one the Welcome states, decided once. The device's
-/// own pick counts only with `GRANT_DISPLAY` in its mask. A monitor the session cannot mirror
-/// now is stated as its own screen. A joiner streams the owner's display and states none; a
-/// synthetic source wants none. Blocks on a compositor read.
+/// What [`session_screen`] settles: the screen wanted, the one the Welcome states, and the
+/// topology an own screen opens under.
+type SessionScreen = (
+    Option<crate::vdisplay::policy::DisplayTarget>,
+    Option<ScreenEcho>,
+    Option<crate::vdisplay::policy::Topology>,
+);
+
+/// The screen this session wants, the one the Welcome states, and the topology of its own
+/// screen ([`crate::vdisplay::session_topology`]), decided once. The device's own pick counts
+/// only with `GRANT_DISPLAY` in its mask. A monitor the session cannot mirror now is stated as
+/// its own screen. A joiner streams the owner's display and states none; neither it nor a
+/// mirror carries a topology. A synthetic source wants none. Blocks on a compositor read.
 async fn session_screen(
     n: &Negotiation<'_>,
     joined: bool,
-) -> Result<(
-    Option<crate::vdisplay::policy::DisplayTarget>,
-    Option<ScreenEcho>,
-)> {
+    compositor: Option<crate::vdisplay::Compositor>,
+) -> Result<SessionScreen> {
     if !matches!(n.source, Punktfunk1Source::Virtual) {
-        return Ok((None, None));
+        return Ok((None, None, None));
     }
     let client = n.conn.peer_fingerprint();
     let may_choose = n.grants & punktfunk_core::quic::GRANT_DISPLAY != 0;
-    let (wanted, echo) = tokio::task::spawn_blocking(move || {
+    let (wanted, echo, topology) = tokio::task::spawn_blocking(move || {
         let fp = crate::vdisplay::policy::fp_hex(client);
         let wanted = crate::vdisplay::screen_target(fp.as_deref(), may_choose).0;
         let echo = (!joined).then(|| {
@@ -807,11 +820,17 @@ async fn session_screen(
                 _ => ScreenEcho::Own,
             }
         });
-        (wanted, echo)
+        let topology = match (&echo, compositor) {
+            (Some(ScreenEcho::Own), Some(c)) => {
+                crate::vdisplay::session_topology(client, may_choose, c)
+            }
+            _ => None,
+        };
+        (wanted, echo, topology)
     })
     .await
     .context("resolve screen task")?;
-    Ok((Some(wanted), echo))
+    Ok((Some(wanted), echo, topology))
 }
 
 /// The Welcome's shard payload. Before Welcome: a path a previous session proved jumbo is given
@@ -1013,6 +1032,7 @@ fn prepare_at_welcome(
         encoder: t.encoder.clone(),
         mirrored: t.mirrored,
         screen: t.wanted.clone(),
+        topology: t.topology,
         // As `SessionContext::reframe_to` and `join_live` carry them.
         reframe_to: reframe_to(t.hello.video_fit, joined_view(&t.joined), t.view),
         join_live: t.joined.is_some(),

@@ -101,6 +101,8 @@ pub(in crate::native) struct DisplayPrep {
     pub(in crate::native) mirrored: bool,
     /// The screen the session wants ([`crate::vdisplay::SessionParams::screen`]).
     pub(in crate::native) screen: Option<crate::vdisplay::policy::DisplayTarget>,
+    /// The topology of its own screen ([`crate::vdisplay::SessionParams::topology`]).
+    pub(in crate::native) topology: Option<crate::vdisplay::policy::Topology>,
 }
 
 /// A virtual-display session's plan on `compositor`, `pyrowave_bpp` and `encoder` the
@@ -194,6 +196,7 @@ pub(in crate::native) fn prepare_display(
         encoder,
         mirrored,
         screen,
+        topology,
     } = prep;
     let plan = resolve_plan(
         &encoder,
@@ -220,6 +223,7 @@ pub(in crate::native) fn prepare_display(
     let mut vd = crate::vdisplay::open_for(compositor, client_identity, screen.clone())?;
     crate::vdisplay::SessionParams {
         screen,
+        topology,
         client_fp: client_identity,
         client_hdr,
         hdr,

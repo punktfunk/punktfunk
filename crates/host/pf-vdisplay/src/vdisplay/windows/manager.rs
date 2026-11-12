@@ -201,6 +201,8 @@ struct Ask {
     slot: u32,
     mode: Mode,
     client_fp: Option<[u8; 32]>,
+    /// The session's topology; `None` reads `client_fp`'s ([`topology_action`]).
+    topology: Option<crate::policy::Topology>,
     client_hdr: Option<pf_frame::HdrMeta>,
     hw_cursor: bool,
     quit: Option<Arc<AtomicBool>>,
@@ -1116,11 +1118,14 @@ impl VirtualDisplayManager {
     /// before any driver access. The returned [`MonitorLease`] releases only its matching
     /// generation. A device that dies under the ADD or whose seat adapter left is retired once
     /// that transition commits, then reopened outside any and climbed once more. `hdr` is the
-    /// session's verdict, which only a seat needs this early.
+    /// session's verdict, which only a seat needs this early. `topology` is the session's, which
+    /// a group's first monitor applies.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn acquire(
         &'static self,
         mode: Mode,
         client_fp: Option<[u8; 32]>,
+        topology: Option<crate::policy::Topology>,
         client_hdr: Option<pf_frame::HdrMeta>,
         hdr: bool,
         hw_cursor: bool,
@@ -1134,6 +1139,7 @@ impl VirtualDisplayManager {
             slot,
             mode,
             client_fp,
+            topology,
             client_hdr,
             hw_cursor,
             quit,
@@ -1369,7 +1375,7 @@ impl VirtualDisplayManager {
     ) -> Result<Monitor> {
         r.first = t.slots.is_empty();
         if r.first {
-            t.group.topology = topology_action(ask.client_fp);
+            t.group.topology = topology_action(ask.topology, ask.client_fp);
         }
         wake_console_display()?;
         let slot_plan = process_slot_plan().map_err(anyhow::Error::new)?;
@@ -3078,7 +3084,7 @@ mod tests {
         }
         let hold = ccd.hold_next_isolate();
         let acquire = std::thread::spawn(move || {
-            mgr.acquire(m(1920, 1080, 60), None, None, false, false, None)
+            mgr.acquire(m(1920, 1080, 60), None, None, None, false, false, None)
                 .map(|_| ())
         });
         hold.entered

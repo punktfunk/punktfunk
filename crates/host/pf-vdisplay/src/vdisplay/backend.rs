@@ -192,6 +192,10 @@ pub struct SessionParams {
     /// it is still free and falls back to the device's own screen. `None` resolves by
     /// `client_fp`. The opener reads it; no backend does.
     pub screen: Option<crate::policy::DisplayTarget>,
+    /// [`VirtualDisplay::set_topology`]: the topology this session's own screen opens under,
+    /// settled once with the device's access and the first-session rule. `None` reads the
+    /// device's by `client_fp` at create.
+    pub topology: Option<crate::policy::Topology>,
     /// [`VirtualDisplay::set_client_identity`]: per-device topology, KWin slot, Mutter scale.
     pub client_fp: Option<[u8; 32]>,
     /// [`VirtualDisplay::set_client_hdr`].
@@ -216,6 +220,7 @@ impl SessionParams {
     /// Hand every field to `vd`'s setter. Call it before `vd`'s next `create`.
     pub fn apply(&self, vd: &mut dyn VirtualDisplay) {
         vd.set_client_identity(self.client_fp);
+        vd.set_topology(self.topology);
         vd.set_join_live(self.join_live);
         vd.set_client_hdr(self.client_hdr);
         vd.set_hdr(self.hdr);
@@ -286,6 +291,10 @@ pub trait VirtualDisplay: Send {
     /// Windows: EDID serial. KWin: per-slot output name. Mutter: host-side persistence (virtual
     /// monitors cannot carry identity). `None` = anonymous / GameStream → auto slot. Default no-op.
     fn set_client_identity(&mut self, _fingerprint: Option<[u8; 32]>) {}
+    /// The topology the next [`create`](Self::create) applies ([`SessionParams::topology`]).
+    /// `None` reads [`crate::effective_topology`] there. Default no-op: a backend that applies
+    /// no topology.
+    fn set_topology(&mut self, _topology: Option<crate::policy::Topology>) {}
     /// `mode_conflict: join` admitted this session: share a live display of the same mode
     /// instead of creating one. Honored by a backend with a [`join_cast`](Self::join_cast).
     /// Default no-op.
@@ -428,12 +437,16 @@ pub trait VirtualDisplay: Send {
     }
 }
 
-/// Whether [`crate::policy::Topology`] for `client_fp` darkens the desk here. `primary` logs
-/// and answers `false`: Wayland has no primary output, only a focused one, and the streamed
-/// head already holds focus.
-pub(crate) fn exclusive_wanted(tag: &str, client_fp: Option<[u8; 32]>) -> bool {
+/// Whether the session's `topology`, else `client_fp`'s ([`crate::create_topology`]), darkens
+/// the desk here. `primary` logs and answers `false`: Wayland has no primary output, only a
+/// focused one, and the streamed head already holds focus.
+pub(crate) fn exclusive_wanted(
+    tag: &str,
+    topology: Option<crate::policy::Topology>,
+    client_fp: Option<[u8; 32]>,
+) -> bool {
     use crate::policy::Topology;
-    match crate::effective_topology(client_fp) {
+    match crate::create_topology(topology, client_fp) {
         Topology::Extend | Topology::Auto => false,
         Topology::Primary => {
             tracing::info!(

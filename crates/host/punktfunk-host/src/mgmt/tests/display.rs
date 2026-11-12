@@ -525,47 +525,141 @@ async fn display_targets_answer_each_lane() {
         !body["yours"].is_null(),
         "a device reads its own pick: {body}"
     );
+    if !cfg!(any(target_os = "linux", target_os = "windows")) {
+        assert!(body.get("role").is_none(), "no mirror backend: {body}");
+    }
 }
 
-/// A device writes only `screen`, and only on its own row. Refusals come before any write;
-/// the accepted write is asserted on the pure parts, since `policy::prefs()` is bound to the
-/// developer's config dir at its first use in this binary.
+/// A device writes its screen, or its screen with a topology, and only on its own row.
+/// Refusals come before any write; the accepted write is asserted on the pure parts, since
+/// `policy::prefs()` is bound to the developer's config dir at its first use in this binary.
 #[tokio::test]
-async fn a_device_sets_only_its_own_screen() {
-    use crate::vdisplay::policy::{ClientOverlay, DisplayTarget, KeepAlive, SetBy};
+async fn a_device_writes_only_its_own_pick() {
+    use crate::mgmt::display::device_pick;
+    use crate::vdisplay::policy::{ClientOverlay, DisplayTarget, KeepAlive, SetBy, Topology};
+    use serde_json::json;
     let fp = "deadbeefcafe";
     let app = paired_app("screen", fp);
     let put = |row: &str, body: serde_json::Value| {
         json_req(Method::PUT, &format!("/api/v1/display/clients/{row}"), body)
     };
-    let own = serde_json::json!({"screen": "own"});
-    assert_eq!(
-        send_cert(&app, put("0123456789ab", own.clone()), fp).await,
-        StatusCode::FORBIDDEN,
-        "another device's row"
-    );
-    let more = serde_json::json!({"screen": "own", "keep_alive": {"mode": "forever"}});
-    assert_eq!(
-        send_cert(&app, put(fp, more), fp).await,
-        StatusCode::FORBIDDEN,
-        "a field beside the screen"
-    );
+    let (forbidden, unreadable) = (StatusCode::FORBIDDEN, StatusCode::UNPROCESSABLE_ENTITY);
+    let refused = [
+        (
+            "0123456789ab",
+            json!({"screen": "own"}),
+            forbidden,
+            "another device's row",
+        ),
+        (
+            fp,
+            json!({"screen": "own", "keep_alive": {"mode": "forever"}}),
+            forbidden,
+            "a field beside the pick",
+        ),
+        (
+            fp,
+            json!({"screen": "own", "topology": "auto"}),
+            unreadable,
+            "auto is the host's",
+        ),
+        (
+            fp,
+            json!({"screen": "own", "topology": "sideways"}),
+            unreadable,
+            "no such topology",
+        ),
+        (
+            fp,
+            json!({"screen": "own", "topology": null}),
+            unreadable,
+            "a null topology",
+        ),
+        (
+            fp,
+            json!({"topology": "extend"}),
+            unreadable,
+            "a topology alone",
+        ),
+        (fp, json!({"screen": "tv"}), unreadable, "no such screen"),
+    ];
+    for (row, body, status, why) in refused {
+        assert_eq!(send_cert(&app, put(row, body), fp).await, status, "{why}");
+    }
 
-    let hdmi = serde_json::json!({"screen": {"monitor": "HDMI-A-1"}});
-    let screen = crate::mgmt::display::device_screen(fp, &fp.to_uppercase(), hdmi).unwrap();
-    assert_eq!(screen, Some(DisplayTarget::Monitor("HDMI-A-1".into())));
+    let pick = |body| device_pick(fp, &fp.to_uppercase(), body).unwrap();
+    let own = Some(DisplayTarget::Own);
+    assert_eq!(pick(json!({"screen": "own"})), (own.clone(), None));
+    let second = json!({"screen": "own", "topology": "extend"});
+    assert_eq!(pick(second), (own, Some(Topology::Extend)));
+    assert_eq!(pick(json!({"screen": null})), (None, None));
+    assert_eq!(pick(json!({})), (None, None), "no screen clears");
+
+    let (screen, topology) =
+        pick(json!({"screen": {"monitor": "HDMI-A-1"}, "topology": "primary"}));
     let mut row = ClientOverlay {
         keep_alive: Some(KeepAlive::Forever),
+        topology: Some(Topology::Exclusive),
         ..ClientOverlay::default()
     };
-    row.set_screen(screen, SetBy::Device);
+    row.set_device_pick(screen, topology);
     assert_eq!(
         row.keep_alive,
         Some(KeepAlive::Forever),
         "the rest of the row stays"
     );
+    assert_eq!(row.topology, None, "a monitor drops the topology");
     assert_eq!(row.set_by, Some(SetBy::Device));
     assert_eq!(row.capture_monitor.as_deref(), Some("HDMI-A-1"));
+}
+
+/// `role` is absent off the desk, offers `main` only where the desktop has a main screen, and
+/// names a device's own role only from its counted pick.
+#[test]
+fn screen_roles_exist_only_on_the_desk() {
+    use crate::mgmt::display::screen_roles;
+    use crate::vdisplay::{policy::Topology, Compositor};
+    use serde_json::json;
+    let roles = |seat, c: Compositor, physical, yours| {
+        serde_json::to_value(screen_roles(
+            seat,
+            Some(c),
+            physical,
+            yours,
+            Topology::Exclusive,
+        ))
+        .unwrap()
+    };
+    assert_eq!(
+        roles(false, Compositor::Kwin, Some(true), Some(Topology::Extend)),
+        json!({"yours": "second", "host_default": "only", "offered": ["only", "main", "second"]})
+    );
+    assert_eq!(
+        roles(false, Compositor::Hyprland, None, Some(Topology::Primary)),
+        json!({"yours": "second", "host_default": "only", "offered": ["only", "second"]}),
+        "unreadable heads keep the roles; primary extends on a tiling desktop"
+    );
+    assert_eq!(
+        roles(false, Compositor::Windows, Some(true), None)["yours"],
+        serde_json::Value::Null
+    );
+    assert!(
+        roles(true, Compositor::Kwin, Some(true), None).is_null(),
+        "a contract seat"
+    );
+    assert!(
+        roles(false, Compositor::Gamescope, Some(true), None).is_null(),
+        "gamescope"
+    );
+    assert!(
+        roles(false, Compositor::Kwin, Some(false), None).is_null(),
+        "no monitor"
+    );
+    let unknown = screen_roles(false, None, None, None, Topology::Primary).unwrap();
+    assert_eq!(
+        serde_json::to_value(unknown).unwrap()["offered"],
+        json!(["only", "second"])
+    );
 }
 
 /// A device without `GRANT_DISPLAY` reads that it may not choose, and its write is refused

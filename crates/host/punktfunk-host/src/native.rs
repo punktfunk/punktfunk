@@ -2043,6 +2043,7 @@ fn display_half(
         features,
         mirrored,
         screen,
+        topology,
         ..
     } = n;
     // Read back from what the ServerHello agreed, like `cursor_forward` below.
@@ -2086,6 +2087,7 @@ fn display_half(
         join_live: joined.is_some(),
         mirrored,
         screen,
+        topology,
         reframe_to,
         frame_map: lanes.frame_map,
         #[cfg(target_os = "linux")]

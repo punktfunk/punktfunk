@@ -31,6 +31,7 @@ pub(crate) enum Call {
     SetGamescopeRoute(Option<crate::GamescopeRoute>),
     SetSessionIsolation(Option<crate::SessionIsolation>),
     SetClientIdentity(Option<[u8; 32]>),
+    SetTopology(Option<crate::policy::Topology>),
     SetJoinLive(bool),
     SetQuitFlag,
     SetClientHdr(Option<pf_frame::HdrMeta>),
@@ -285,6 +286,10 @@ impl VirtualDisplay for FakeDisplay {
         self.log(Call::SetClientIdentity(fingerprint));
     }
 
+    fn set_topology(&mut self, topology: Option<crate::policy::Topology>) {
+        self.log(Call::SetTopology(topology));
+    }
+
     fn set_join_live(&mut self, on: bool) {
         self.log(Call::SetJoinLive(on));
     }
@@ -535,6 +540,7 @@ mod tests {
         };
         let params = crate::SessionParams {
             screen: None,
+            topology: Some(crate::policy::Topology::Extend),
             client_fp: Some([7; 32]),
             client_hdr: Some(pf_frame::HdrMeta::default()),
             hdr: true,
@@ -550,6 +556,7 @@ mod tests {
         let calls = fake.take_calls();
         let want = [
             Call::SetClientIdentity(Some([7; 32])),
+            Call::SetTopology(Some(crate::policy::Topology::Extend)),
             Call::SetJoinLive(true),
             Call::SetClientHdr(Some(pf_frame::HdrMeta::default())),
             Call::SetHdr(true),

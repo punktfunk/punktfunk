@@ -487,6 +487,7 @@ pub(super) mod tests {
                 no_overlay_means_off_output: false,
                 vd_params: crate::vdisplay::SessionParams {
                     screen: None,
+                    topology: None,
                     client_fp: None,
                     client_hdr: None,
                     hdr: false,
