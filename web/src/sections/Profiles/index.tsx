@@ -115,11 +115,7 @@ export const SectionProfiles: FC = () => {
 	const [removing, setRemoving] = useState<ProfileAdmin | null>(null);
 	const [editing, setEditing] = useState<ProfileAdmin | null>(null);
 	const [passwordFor, setPasswordFor] = useState<ProfileAdmin | null>(null);
-	// A person's own Linux account opens with its password and lists its devices instead.
-	const locks = useProfileLocks(
-		profiles.data ?? [],
-		(p) => linux && door && !!p.seat?.account,
-	);
+	const locks = useProfileLocks(profiles.data ?? []);
 	const refresh = () =>
 		qc.invalidateQueries({ queryKey: getListProfilesQueryKey() });
 	const failed = (fallback: string) => (e: unknown) =>
@@ -295,8 +291,7 @@ export const SectionProfiles: FC = () => {
 				devices={
 					linux && door ? (p) => <SignedInDevices profile={p} /> : undefined
 				}
-				lock={locks.card}
-				lockProblem={locks.problem}
+				onLock={locks.onLock}
 			/>
 			{locks.dialogs}
 			{editing && (

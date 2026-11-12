@@ -1,16 +1,17 @@
-// A profile's lock: whose lock a card shows, what it shows of a read, and the calls a lock makes.
+// A profile's lock: what a card shows from the profile list, and the one call a lock makes.
 import { afterEach, expect, test } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
-import { ApiError } from "@/api/fetcher";
+import type { LockSummary } from "@/api/gen/model/lockSummary";
 import type { ProfileAdmin } from "@/api/gen/model/profileAdmin";
 import type { ProfileLock } from "@/api/gen/model/profileLock";
+import type { SignedInDevice } from "@/api/gen/model/signedInDevice";
 import { baseLocale, overwriteGetLocale } from "@/paraglide/runtime";
+import { DevicesList } from "./devices";
 import {
 	LockAction,
 	LockChip,
 	LockLines,
 	lockCard,
-	lockHolder,
 	lockWith,
 	signOutAsk,
 	validPin,
@@ -20,48 +21,36 @@ overwriteGetLocale(() => baseLocale);
 
 const profile = (
 	id: string,
+	lock?: LockSummary,
 	more: Partial<ProfileAdmin> = {},
 ): ProfileAdmin => ({
 	id,
-	display_name: id,
+	display_name: id.charAt(0).toUpperCase() + id.slice(1),
 	owner: false,
 	home: "desktop",
 	last_used_unix: 0,
 	default: false,
+	lock,
 	...more,
 });
-const OWNER = profile("enrico", { owner: true });
-const LOCKED: ProfileLock = {
-	locked: true,
-	pin: false,
-	failed_pins: 3,
-	playing: [],
-};
-const coded = (status: number, code: string) =>
-	new ApiError(status, { error: "The host's sentence.", code });
+const LOCKED: LockSummary = { locked: true, pin: false, failed_pins: 3 };
+const OWNER = profile("enrico", LOCKED, { owner: true });
+const SHARER = profile("anna", { ...LOCKED, shared_with: "enrico" });
+const OWN_ACCOUNT = profile("oma");
 
-test("a sharer opens with the owner's lock, a desktop of its own with its own", () => {
-	expect(lockHolder(OWNER, OWNER, false)).toEqual({
-		id: "enrico",
-		shared: false,
+test("a card reads its lock from the list, and a sharer names the owner's", () => {
+	const list = [OWNER, SHARER, OWN_ACCOUNT];
+	expect(lockCard(OWNER, list)).toEqual({
+		locked: true,
+		holder: "enrico",
+		failedPins: 3,
 	});
-	expect(lockHolder(profile("anna"), OWNER, false)).toEqual({
-		id: "enrico",
-		shared: true,
+	expect(lockCard(SHARER, list)).toEqual({
+		locked: true,
+		holder: "enrico",
+		owner: "Enrico",
 	});
-	const doorSharer = profile("kid", {
-		seat: { kind: "shared", state: "stopped", port: 1 },
-	});
-	expect(lockHolder(doorSharer, OWNER, false)?.id).toBe("enrico");
-	const seat = profile("leon", {
-		seat: { kind: "desktop", state: "ready", port: 1 },
-	});
-	expect(lockHolder(seat, OWNER, false)).toEqual({ id: "leon", shared: false });
-	const turns = profile("mia", {
-		seat: { kind: "desktop", state: "ready", port: 1, take_turns: true },
-	});
-	expect(lockHolder(turns, OWNER, false)?.id).toBe("mia");
-	expect(lockHolder(seat, OWNER, true)).toBeNull();
+	expect(lockCard(OWN_ACCOUNT, list)).toBeUndefined();
 });
 
 test("a PIN is 4 to 8 ASCII digits", () => {
@@ -71,45 +60,16 @@ test("a PIN is 4 to 8 ASCII digits", () => {
 	);
 });
 
-test("a card shows the lock it reads, and nothing where the host has none", () => {
-	expect(lockCard(undefined, { error: null })).toBeUndefined();
-	expect(lockCard(undefined, { data: LOCKED, error: null })).toEqual({
-		state: "locked",
-		owner: undefined,
-		failedPins: 3,
-	});
-	expect(lockCard("Enrico", { data: LOCKED, error: null })).toEqual({
-		state: "locked",
-		owner: "Enrico",
-		failedPins: undefined,
-	});
-	const unread = coded(409, "profile_locks_unreadable");
-	expect(lockCard(undefined, { error: unread })?.state).toBe("unreadable");
-	expect(lockCard("Enrico", { error: unread })?.state).toBe("unreadable");
-	for (const quiet of [
-		coded(409, "profile_lock_own_account"),
-		coded(409, "profile_lock_shared"),
-		new ApiError(404, null),
-	])
-		expect(lockCard(undefined, { error: quiet })).toBeUndefined();
-	const down = new ApiError(503, { error: "The host didn't answer." });
-	expect(lockCard(undefined, { error: down })).toEqual({
-		state: "failed",
-		error: "The host didn't answer.",
-	});
-	expect(lockCard("Enrico", { error: down })).toBeUndefined();
-});
-
 test("an open card has one action, a locked one a status and its wrong PINs", () => {
-	const open = renderToStaticMarkup(
-		<LockAction lock={{ state: "open", onOpen: () => {} }} />,
+	const open = { locked: false, holder: "kid", onOpen: () => {} };
+	expect(renderToStaticMarkup(<LockAction lock={open} />)).toContain(
+		'aria-label="Lock profile"',
 	);
-	expect(open).toContain('aria-label="Lock profile"');
-	const sharer = renderToStaticMarkup(
-		<LockAction lock={{ state: "open", owner: "Enrico", onOpen: () => {} }} />,
-	);
-	expect(sharer).toContain("Lock Enrico&#x27;s desktop");
-	const locked = { state: "locked" as const, failedPins: 1, onOpen: () => {} };
+	expect(
+		renderToStaticMarkup(<LockAction lock={{ ...open, owner: "Enrico" }} />),
+	).toContain("Lock Enrico&#x27;s desktop");
+	expect(renderToStaticMarkup(<LockChip lock={open} />)).toBe("");
+	const locked = { ...open, locked: true, failedPins: 1 };
 	expect(renderToStaticMarkup(<LockAction lock={locked} />)).toBe("");
 	expect(renderToStaticMarkup(<LockChip lock={locked} />)).toContain("<button");
 	expect(renderToStaticMarkup(<LockLines lock={locked} />)).toContain(
@@ -121,11 +81,6 @@ test("an open card has one action, a locked one a status and its wrong PINs", ()
 	expect(
 		renderToStaticMarkup(<LockLines lock={{ ...locked, owner: "Enrico" }} />),
 	).toContain("Opens with Enrico&#x27;s lock.");
-	const unreadable = renderToStaticMarkup(
-		<LockChip lock={{ state: "unreadable" }} />,
-	);
-	expect(unreadable).toContain("Locked");
-	expect(unreadable).not.toContain("<button");
 });
 
 const realFetch = globalThis.fetch;
@@ -133,75 +88,72 @@ afterEach(() => {
 	globalThis.fetch = realFetch;
 });
 
-/** Each call, answered by `reply(method, url)`. */
-function answer(reply: (call: string) => [number, unknown?]): string[] {
-	const calls: string[] = [];
+/** Each call with its body, answered with `status`. */
+function answer(status: number, body: unknown): [string, unknown][] {
+	const calls: [string, unknown][] = [];
 	globalThis.fetch = (async (
 		url: string | URL | Request,
 		init?: RequestInit,
 	) => {
-		const call = `${init?.method ?? "GET"} ${String(url)}`;
-		calls.push(call);
-		const [status, body] = reply(call);
-		return new Response(body === undefined ? null : JSON.stringify(body), {
-			status,
-		});
+		const sent = typeof init?.body === "string" ? JSON.parse(init.body) : null;
+		calls.push([`${init?.method ?? "GET"} ${String(url)}`, sent]);
+		return new Response(JSON.stringify(body), { status });
 	}) as typeof fetch;
 	return calls;
 }
 
-const OLD = "a".repeat(64);
-const KEPT = "b".repeat(64);
-const NEW = "c".repeat(64);
+const DECK = "b".repeat(64);
+const ANSWER: ProfileLock = { ...LOCKED, playing: [] };
 
-test("a lock sets the PIN, drops what it doesn't keep, then locks with the rest", async () => {
-	const calls = answer(() => [200, LOCKED]);
-	const seen: ProfileLock[] = [];
-	await lockWith(
-		"kid",
-		[OLD, KEPT],
-		{ devices: [KEPT, NEW], pin: "2468", password: "pw" },
-		(l) => seen.push(l),
-	);
-	expect(calls).toEqual([
-		"PUT /api/v1/profiles/kid/lock/pin",
-		`DELETE /api/v1/profiles/kid/devices/${OLD}`,
-		"POST /api/v1/profiles/kid/lock",
+test("a lock is one call, and only a PIN brings the password along", async () => {
+	const plain = answer(200, ANSWER);
+	await lockWith("kid", { devices: [DECK], pin: "", password: "" });
+	expect(plain).toEqual([
+		["POST /api/v1/profiles/kid/lock", { devices: [DECK] }],
 	]);
-	expect(seen).toHaveLength(2);
+	const pinned = answer(200, ANSWER);
+	await lockWith("kid", { devices: [], pin: "2468", password: "pw" });
+	expect(pinned).toEqual([
+		[
+			"POST /api/v1/profiles/kid/lock",
+			{ devices: [], pin: "2468", password: "pw" },
+		],
+	]);
 });
 
-test("a refused password changes nothing", async () => {
-	const calls = answer(() => [401, { error: "Wrong password." }]);
-	const failed = await lockWith(
-		"kid",
-		[OLD],
-		{ devices: [], pin: "2468", password: "nope" },
-		() => {},
-	).catch((e) => e);
-	expect((failed as ApiError).status).toBe(401);
-	expect(calls).toEqual(["PUT /api/v1/profiles/kid/lock/pin"]);
+const device = (more: Partial<SignedInDevice>): SignedInDevice => ({
+	fingerprint: DECK,
+	name: "Deck",
+	kind: "stay",
+	added_unix: 0,
+	last_unix: 0,
+	moonlight: false,
+	...more,
 });
 
-test("a lock without a PIN never asks for the password", async () => {
-	const calls = answer(() => [200, LOCKED]);
-	await lockWith(
-		"kid",
-		[],
-		{ devices: [KEPT], pin: "", password: "" },
-		() => {},
+test("a locked profile's list says who added a device and tags Moonlight", () => {
+	const html = renderToStaticMarkup(
+		<DevicesList
+			flush
+			devices={[
+				device({ kind: "added" }),
+				device({
+					fingerprint: "c".repeat(64),
+					name: "Shield",
+					moonlight: true,
+				}),
+			]}
+			error={null}
+			onSignOut={() => {}}
+			onSignOutAll={() => {}}
+		/>,
 	);
-	expect(calls).toEqual(["POST /api/v1/profiles/kid/lock"]);
+	expect(html).toContain("Added by you");
+	expect(html).toContain("Stays signed in · Moonlight");
 });
 
 test("a sign-out says how the device gets back in, PIN or not", () => {
-	const deck = {
-		fingerprint: KEPT,
-		name: "Deck",
-		kind: "stay" as const,
-		added_unix: 0,
-		last_unix: 0,
-	};
+	const deck = device({});
 	const one = signOutAsk("Kid", false, deck);
 	expect(one.title).toBe("Sign Deck out?");
 	expect(one.description).toContain("until you add it back.");

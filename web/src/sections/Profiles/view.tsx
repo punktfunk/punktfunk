@@ -55,7 +55,13 @@ import { seatCheckText, seatDetail } from "@/lib/host-messages";
 import type { Loadable } from "@/lib/query";
 import { cn } from "@/lib/utils";
 import { m } from "@/paraglide/messages";
-import { LockAction, type LockCard, LockChip, LockLines } from "./lock";
+import {
+	LockAction,
+	type LockCard,
+	LockChip,
+	LockLines,
+	lockCard,
+} from "./lock";
 import {
 	AccentPicker,
 	type Choice,
@@ -150,10 +156,8 @@ export const ProfilesView: FC<{
 	door?: DoorControl;
 	/** A Linux door: the signed-in devices of a profile on a person's own account. */
 	devices?: (p: ProfileAdmin) => ReactNode;
-	/** The lock a profile's card shows; `undefined` while it loads or where it has none. */
-	lock?: (p: ProfileAdmin) => LockCard | undefined;
-	/** The host's sentence when it can't read its locks, so every profile stays locked. */
-	lockProblem?: { message: string; onRetry: () => void } | null;
+	/** Opens the lock dialog of `holder`, the profile whose lock a card shows. */
+	onLock?: (holder: string, locked: boolean) => void;
 }> = ({
 	profiles,
 	onAdd,
@@ -165,11 +169,16 @@ export const ProfilesView: FC<{
 	seats,
 	door,
 	devices,
-	lock,
-	lockProblem,
+	onLock,
 }) => {
 	const list = profiles.data ?? [];
 	const ownerName = list.find((p) => p.owner)?.display_name ?? "";
+	const lockOf = (p: ProfileAdmin): LockCard | undefined => {
+		const lock = lockCard(p, list);
+		return lock && onLock
+			? { ...lock, onOpen: () => onLock(lock.holder, lock.locked) }
+			: lock;
+	};
 	return (
 		<Section maxWidth={false}>
 			<div className="flex flex-col gap-card">
@@ -193,17 +202,6 @@ export const ProfilesView: FC<{
 					error={profiles.error}
 					refetch={profiles.refetch}
 				>
-					{lockProblem && (
-						<div
-							role="alert"
-							className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2"
-						>
-							<p className="text-sm text-destructive">{lockProblem.message}</p>
-							<Button variant="outline" size="sm" onClick={lockProblem.onRetry}>
-								{m.common_retry()}
-							</Button>
-						</div>
-					)}
 					<Card>
 						<CardContent className="flex flex-col gap-4 pt-6">
 							{list.map((p) => (
@@ -214,7 +212,7 @@ export const ProfilesView: FC<{
 									seats={seats}
 									linux={door !== undefined}
 									devices={p.seat?.account ? devices?.(p) : undefined}
-									lock={lock?.(p)}
+									lock={lockOf(p)}
 									busy={busyId === p.id}
 									onRename={() => onRename(p)}
 									onPicture={(f) => onPicture(p, f)}

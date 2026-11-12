@@ -1,12 +1,12 @@
 // A profile's lock on the Profiles page: its part of the card, the dialog that locks it, and the
 // dialog that manages a locked one. The box host keeps every lock. A profile that shares the
 // owner's desktop opens with the owner's lock; one on a person's own account has none.
-import { useQueries, useQueryClient } from "@tanstack/react-query";
+import { type QueryClient, useQueryClient } from "@tanstack/react-query";
 import { toast } from "@unom/ui/toast";
 import { Lock, TriangleAlert } from "lucide-react";
 import { type FC, type ReactNode, useState } from "react";
-import { ApiError } from "@/api/fetcher";
 import { useListPairedClients } from "@/api/gen/clients/clients";
+import type { LockProfile } from "@/api/gen/model/lockProfile";
 import type { PlayingDevice } from "@/api/gen/model/playingDevice";
 import type { ProfileAdmin } from "@/api/gen/model/profileAdmin";
 import type { ProfileDeviceAdd } from "@/api/gen/model/profileDeviceAdd";
@@ -18,11 +18,10 @@ import {
 	addProfileDevice,
 	clearProfilePin,
 	getGetProfileLockQueryKey,
-	getGetProfileLockQueryOptions,
 	getListProfileDevicesQueryKey,
+	getListProfilesQueryKey,
 	lockProfile,
 	setProfilePin,
-	signOutProfileDevice,
 	unlockProfile,
 	useGetProfileLock,
 	useListProfileDevices,
@@ -54,50 +53,47 @@ import {
 	SelectValue,
 } from "@/components/ui/select";
 import { Spinner } from "@/components/ui/spinner";
-import { apiErrorCode, apiErrorMessage } from "@/lib/errors";
+import { apiErrorMessage } from "@/lib/errors";
 import { digitsOnly } from "@/lib/ime";
 import { cn } from "@/lib/utils";
 import { m } from "@/paraglide/messages";
 import { deviceName, pairedListView } from "@/sections/Devices/pairedRows";
 import { DevicesList, signOut } from "./devices";
 
-/** Whose lock opens a profile: its own, or the owner's when it shares the owner's desktop. */
-export type Holder = { id: string; shared: boolean };
-
-/** The lock `p` opens with; `null` on a person's own account, which opens with its password. */
-export function lockHolder(
-	p: ProfileAdmin,
-	owner: ProfileAdmin | undefined,
-	ownAccount: boolean,
-): Holder | null {
-	if (ownAccount) return null;
-	const shares = !p.owner && (!p.seat || p.seat.kind === "shared");
-	return owner && shares
-		? { id: owner.id, shared: true }
-		: { id: p.id, shared: false };
-}
-
 /** A PIN the host takes: 4 to 8 ASCII digits. */
 export const validPin = (pin: string): boolean => /^[0-9]{4,8}$/.test(pin);
 
-/** What a card shows of the lock its profile opens with. */
+/** What a card shows of the lock its profile opens with, as the profile list reports it. */
 export type LockCard = {
-	/** `unreadable`: the host keeps every profile locked until its lock file reads. */
-	state: "open" | "locked" | "unreadable" | "failed";
-	/** The owner's name, when the profile opens with the owner's lock. */
+	locked: boolean;
+	/** The profile whose lock it is: its own, or the owner's for a sharer of the desktop. */
+	holder: string;
+	/** The owner's name, when it opens with the owner's lock. */
 	owner?: string;
-	/** Wrong PINs in the last 15 minutes, on the profile's own lock. */
+	/** Wrong PINs in the last 15 minutes, on a lock of its own. */
 	failedPins?: number;
-	/** `failed`: the host's sentence. */
-	error?: string;
-	onRetry?: () => void;
 	/** Opens the dialog that locks it, or the one that manages it when locked. */
 	onOpen?: () => void;
 };
 
-/** The status beside the name: **Locked**, which opens the lock's dialog when it can. */
+/** What `p`'s card shows of its lock: `undefined` on a person's own account, which has none. */
+export function lockCard(
+	p: ProfileAdmin,
+	list: readonly ProfileAdmin[],
+): LockCard | undefined {
+	const lock = p.lock;
+	if (!lock) return undefined;
+	const holder = lock.shared_with ?? p.id;
+	if (lock.shared_with) {
+		const owner = list.find((o) => o.id === holder)?.display_name ?? holder;
+		return { locked: lock.locked, holder, owner };
+	}
+	return { locked: lock.locked, holder, failedPins: lock.failed_pins };
+}
+
+/** The status beside the name: **Locked**, which opens the lock's dialog. */
 export const LockChip: FC<{ lock: LockCard }> = ({ lock }) => {
-	if (lock.state !== "locked" && lock.state !== "unreadable") return null;
+	if (!lock.locked) return null;
 	const look = cn(badgeVariants({ variant: "outline" }), "gap-1");
 	const body = (
 		<>
@@ -105,7 +101,7 @@ export const LockChip: FC<{ lock: LockCard }> = ({ lock }) => {
 			{m.profiles_locked()}
 		</>
 	);
-	return lock.onOpen && lock.state === "locked" ? (
+	return lock.onOpen ? (
 		<button
 			type="button"
 			aria-haspopup="dialog"
@@ -122,21 +118,9 @@ export const LockChip: FC<{ lock: LockCard }> = ({ lock }) => {
 	);
 };
 
-/** The lines under the card's facts: whose lock it uses, wrong PINs, or why it didn't read. */
+/** The line under a locked card's facts: whose lock it uses, or its wrong PINs. */
 export const LockLines: FC<{ lock: LockCard }> = ({ lock }) => {
-	if (lock.state === "failed") {
-		return (
-			<div role="alert" className="flex flex-wrap items-center gap-x-3">
-				<p className="text-sm text-destructive">{lock.error}</p>
-				{lock.onRetry && (
-					<Button variant="ghost" size="sm" onClick={lock.onRetry}>
-						{m.common_retry()}
-					</Button>
-				)}
-			</div>
-		);
-	}
-	if (lock.state !== "locked") return null;
+	if (!lock.locked) return null;
 	if (lock.owner) {
 		return (
 			<p className="text-sm text-muted-foreground">
@@ -156,7 +140,7 @@ export const LockAction: FC<{ lock: LockCard; disabled?: boolean }> = ({
 	lock,
 	disabled,
 }) => {
-	if (lock.state !== "open" || !lock.onOpen) return null;
+	if (lock.locked || !lock.onOpen) return null;
 	const label = lock.owner
 		? m.profiles_lock_owner_action({ owner: lock.owner })
 		: m.profiles_lock_action();
@@ -176,117 +160,59 @@ export const LockAction: FC<{ lock: LockCard; disabled?: boolean }> = ({
 };
 
 /**
- * What a card shows of a lock read, without its callbacks: `undefined` while it loads, and for a
- * host without locks or a profile it says takes none. `owner` names the lock a sharer opens
- * with; a sharer leaves a failed read to the owner's card.
+ * Locks profile `id` with exactly `devices`, in one step that changes nothing when refused. A
+ * PIN rides along with the console password; without one the body carries neither, and the
+ * console asks for none.
  */
-export function lockCard(
-	owner: string | undefined,
-	read: { data?: ProfileLock; error: unknown },
-): LockCard | undefined {
-	const code = apiErrorCode(read.error);
-	if (code === "profile_locks_unreadable")
-		return { state: "unreadable", owner };
-	if (read.error) {
-		const none =
-			code === "profile_lock_shared" ||
-			code === "profile_lock_own_account" ||
-			(read.error instanceof ApiError && read.error.status === 404);
-		if (none || owner) return undefined;
-		return {
-			state: "failed",
-			error: apiErrorMessage(read.error) ?? m.common_error(),
-		};
-	}
-	if (!read.data) return undefined;
-	return {
-		state: read.data.locked ? "locked" : "open",
-		owner,
-		failedPins: owner ? undefined : read.data.failed_pins,
-	};
-}
+export const lockWith = (
+	id: string,
+	v: { devices: string[]; pin: string; password: string },
+): Promise<ProfileLock> =>
+	lockProfile(
+		id,
+		(v.pin
+			? { devices: v.devices, pin: v.pin, password: v.password }
+			: { devices: v.devices }) as LockProfile,
+	);
 
 /**
- * Locks profile `id` with exactly `devices`. The PIN goes first, the one step that asks for the
- * password, so a refusal changes nothing. Then whatever a past lock left on the list that isn't
- * kept is signed out, and the lock takes the rest. `seen` gets each answer.
+ * Writes `next`, the host's answer for `holder`'s lock, into the profile list at once: the
+ * holder's row and every row that shares its lock. The list is read again behind it.
  */
-export async function lockWith(
-	id: string,
-	listed: string[],
-	v: { devices: string[]; pin: string; password: string },
-	seen: (lock: ProfileLock) => void,
-): Promise<void> {
-	if (v.pin)
-		seen(
-			await setProfilePin(id, {
-				pin: v.pin,
-				password: v.password,
-			} as ProfilePin),
-		);
-	const keep = new Set(v.devices.map((f) => f.toLowerCase()));
-	for (const fp of listed) {
-		if (!keep.has(fp.toLowerCase())) await signOutProfileDevice(id, fp);
-	}
-	seen(await lockProfile(id, { devices: v.devices }));
+function showLock(qc: QueryClient, holder: string, next: ProfileLock) {
+	const { playing: _, ...summary } = next;
+	qc.setQueryData<ProfileAdmin[]>(getListProfilesQueryKey(), (rows) =>
+		rows?.map((p) =>
+			p.id === holder
+				? { ...p, lock: { ...summary, shared_with: null } }
+				: p.lock?.shared_with === holder
+					? { ...p, lock: { ...summary, shared_with: holder } }
+					: p,
+		),
+	);
+	void qc.invalidateQueries({ queryKey: getListProfilesQueryKey() });
 }
 
-/** The page's part: each card's lock, the line when the lock file doesn't read, the dialogs. */
-export function useProfileLocks(
-	list: ProfileAdmin[],
-	ownAccount: (p: ProfileAdmin) => boolean,
-) {
-	const owner = list.find((p) => p.owner);
-	const holderOf = (p: ProfileAdmin) => lockHolder(p, owner, ownAccount(p));
-	const holders = list.filter((p) => holderOf(p)?.shared === false);
-	const queries = useQueries({
-		queries: holders.map((p) =>
-			getGetProfileLockQueryOptions(p.id, {
-				query: { refetchInterval: 15_000 },
-			}),
-		),
-	});
-	const lockOf = new Map(holders.map((p, i) => [p.id, queries[i]]));
+/** The page's part: what a card's lock action opens, and the dialogs. */
+export function useProfileLocks(list: ProfileAdmin[]) {
 	const [open, setOpen] = useState<{ id: string; locked: boolean } | null>(
 		null,
 	);
-
-	const card = (p: ProfileAdmin): LockCard | undefined => {
-		const holder = holderOf(p);
-		const q = holder && lockOf.get(holder.id);
-		if (!holder || !q) return undefined;
-		const shown = lockCard(holder.shared ? owner?.display_name : undefined, q);
-		if (shown?.state === "failed")
-			return { ...shown, onRetry: () => void q.refetch() };
-		const locked = shown?.state === "locked";
-		return shown?.state === "open" || locked
-			? { ...shown, onOpen: () => setOpen({ id: holder.id, locked }) }
-			: shown;
-	};
-
-	const unreadable = queries.find(
-		(q) => apiErrorCode(q.error) === "profile_locks_unreadable",
-	);
-	const problem = unreadable
-		? {
-				message: apiErrorMessage(unreadable.error) ?? m.common_error(),
-				onRetry: () => {
-					for (const q of queries) void q.refetch();
-				},
-			}
-		: null;
-
 	const target = open && list.find((p) => p.id === open.id);
 	const dialogs = target ? (
 		<LockDialogs
 			key={target.id}
 			profile={target}
 			locked={open.locked}
-			sharers={target.owner && list.some((p) => holderOf(p)?.shared)}
+			sharers={list.some((p) => p.lock?.shared_with === target.id)}
 			onClose={() => setOpen(null)}
 		/>
 	) : null;
-	return { card, problem, dialogs };
+	return {
+		onLock: (holder: string, locked: boolean) =>
+			setOpen({ id: holder, locked }),
+		dialogs,
+	};
 }
 
 /** A device the lock dialog offers. */
@@ -296,16 +222,13 @@ export type LockRow = {
 	moonlight: boolean;
 };
 
-/** The paired devices, then devices that play or are on the list but aren't among them. */
-function lockRows(
-	paired: LockRow[],
-	extra: { fingerprint: string; name: string }[],
-): LockRow[] {
+/** The paired devices, then a playing one the lists don't have yet. Only these can be kept. */
+function lockRows(paired: LockRow[], playing: PlayingDevice[]): LockRow[] {
 	const rows = [...paired];
-	for (const d of extra) {
-		const fp = d.fingerprint.toLowerCase();
-		if (rows.some((r) => r.fingerprint.toLowerCase() === fp)) continue;
-		rows.push({ fingerprint: fp, name: deviceName(d), moonlight: false });
+	for (const d of playing) {
+		const fp = d.fingerprint?.toLowerCase();
+		if (!fp || rows.some((r) => r.fingerprint === fp)) continue;
+		rows.push({ fingerprint: fp, name: d.name, moonlight: false });
 	}
 	return rows;
 }
@@ -358,7 +281,10 @@ const LockDialogs: FC<{
 	// A list that didn't load hides devices the lock would cut off: the lock waits for it.
 	const loadError =
 		paired.nativeError ?? paired.moonlightError ?? devices.error;
-	const set = (next: ProfileLock) => qc.setQueryData(key, next);
+	const set = (next: ProfileLock) => {
+		qc.setQueryData(key, next);
+		showLock(qc, p.id, next);
+	};
 	const reread = () =>
 		qc.invalidateQueries({ queryKey: getListProfileDevicesQueryKey(p.id) });
 	const name = p.display_name;
@@ -380,21 +306,19 @@ const LockDialogs: FC<{
 
 	if (!locked) {
 		const ready = !paired.loading && !devices.isLoading && !!lock.data;
+		const playing = lock.data?.playing ?? [];
 		return (
 			<LockFlowDialog
 				name={name}
 				owner={p.owner}
 				sharers={sharers}
-				rows={
-					ready
-						? lockRows(pairedRows, [...(lock.data?.playing ?? []), ...listed])
-						: undefined
-				}
+				rows={ready ? lockRows(pairedRows, playing) : undefined}
+				// What plays now, and what a past lock let in: chosen until unchosen.
 				kept={[
-					...(lock.data?.playing ?? []).map((d) => d.fingerprint),
+					...playing.flatMap((d) => (d.fingerprint ? [d.fingerprint] : [])),
 					...listed.map((d) => d.fingerprint),
 				]}
-				playing={lock.data?.playing ?? []}
+				playing={playing}
 				hasPin={lock.data?.pin === true}
 				error={
 					loadError ? (apiErrorMessage(loadError) ?? m.common_error()) : null
@@ -406,16 +330,8 @@ const LockDialogs: FC<{
 				}}
 				onRemovePin={removePin}
 				onLock={async (v) => {
-					try {
-						await lockWith(
-							p.id,
-							listed.map((d) => d.fingerprint),
-							v,
-							set,
-						);
-					} finally {
-						void reread();
-					}
+					set(await lockWith(p.id, v));
+					void reread();
 					onClose();
 				}}
 				onClose={onClose}
@@ -539,8 +455,9 @@ const Warning: FC<{ children: ReactNode }> = ({ children }) => (
 
 /**
  * **Lock**: what locking does, the paired devices to keep with the ones playing and the ones a
- * past lock kept already chosen, and an optional PIN. A device playing now that isn't chosen is
- * named before the lock. A PIN asks for the console password; the lock alone doesn't.
+ * past lock kept already chosen, and an optional PIN. A device playing now that isn't chosen,
+ * or that matches no paired device and can't be, is named before the lock. A PIN asks for the
+ * console password; the lock alone doesn't.
  */
 export const LockFlowDialog: FC<{
 	name: string;
@@ -589,7 +506,9 @@ export const LockFlowDialog: FC<{
 	const keep = new Set(kept.map((f) => f.toLowerCase()));
 	const chosen = (fp: string) => picked[fp] ?? keep.has(fp);
 	const devices = (rows ?? []).map((r) => r.fingerprint).filter(chosen);
-	const cutOff = playing.filter((d) => !chosen(d.fingerprint.toLowerCase()));
+	const cutOff = playing.filter(
+		(d) => !d.fingerprint || !chosen(d.fingerprint.toLowerCase()),
+	);
 	const wantsPin = !hasPin && pin !== "";
 	const ready =
 		rows !== undefined &&
@@ -654,7 +573,7 @@ export const LockFlowDialog: FC<{
 								{rows.map((r) => {
 									const id = `lock-device-${r.fingerprint.slice(0, 16)}`;
 									const live = playing.some(
-										(d) => d.fingerprint.toLowerCase() === r.fingerprint,
+										(d) => d.fingerprint?.toLowerCase() === r.fingerprint,
 									);
 									const detail = [
 										live && m.devices_streaming(),
@@ -711,9 +630,14 @@ export const LockFlowDialog: FC<{
 						)}
 					</fieldset>
 					<div aria-live="polite" className="space-y-1">
-						{cutOff.map((d) => (
-							<Warning key={d.fingerprint}>
-								{m.profiles_lock_cut_off({ device: deviceName(d) })}
+						{cutOff.map((d, i) => (
+							<Warning key={d.fingerprint ?? `${d.name}-${i}`}>
+								{m.profiles_lock_cut_off({
+									device: deviceName({
+										name: d.name,
+										fingerprint: d.fingerprint ?? "",
+									}),
+								})}
 							</Warning>
 						))}
 						{rows !== undefined &&
