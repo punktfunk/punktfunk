@@ -2,6 +2,7 @@
 
 use ndk::media::media_codec::{AsyncNotifyCallback, MediaCodec, MediaCodecDirection};
 use ndk::native_window::NativeWindow;
+use pf_bitstream::h265::conceal::{Concealment, H265Concealer};
 use pf_bitstream::h265::poc_widen::PocWidener;
 use punktfunk_core::client::{Decoded, NativeClient};
 use punktfunk_core::error::PunktfunkError;
@@ -463,6 +464,10 @@ fn run_codec(
     );
     let mut state = State::new(sink, Intake::new(class, await_keyframe));
     state.widen = poc_widener(
+        client.video_format().codec,
+        &ctx.codec.name().unwrap_or_default(),
+    );
+    state.conceal = h265_concealer(
         client.video_format().codec,
         &ctx.codec.name().unwrap_or_default(),
     );
@@ -992,6 +997,9 @@ struct State {
     sink: Box<dyn Sink>,
     /// Recodes each fed AU with a 16-bit POC ([`poc_widener`]). `None` on other decoders.
     widen: Option<PocWidener>,
+    /// Moves a fed AU's lost current reference to a held picture ([`h265_concealer`]). `None`
+    /// on other decoders.
+    conceal: Option<H265Concealer>,
     /// The codec's input side: the slots it offered, the parked deliveries, the open AU.
     inputs: Feed,
     ready: Vec<OutputReady>,
@@ -1129,6 +1137,22 @@ fn poc_widener(codec: u8, decoder: &str) -> Option<PocWidener> {
     Some(PocWidener::new())
 }
 
+/// The HEVC concealer for this session: a Realtek decoder, which shows garbage past the host's
+/// anchor once fed a picture whose current reference was lost. `debug.punktfunk.h265_conceal`
+/// = `on` / `off` overrides the pick.
+fn h265_concealer(codec: u8, decoder: &str) -> Option<H265Concealer> {
+    let forced = match sysprop(c"debug.punktfunk.h265_conceal").as_deref() {
+        Some("on") => Some(true),
+        Some("off") => Some(false),
+        _ => None,
+    };
+    if !crate::codec_format::conceals_h265(codec, decoder, forced) {
+        return None;
+    }
+    log::info!("decode: lost HEVC references concealed in the bitstream for {decoder}");
+    Some(H265Concealer::new())
+}
+
 /// One feeder delivery as the intake rules see it.
 fn delivery(f: &Frame) -> Delivery {
     Delivery {
@@ -1157,6 +1181,7 @@ impl State {
         State {
             sink,
             widen: None,
+            conceal: None,
             inputs: Feed::default(),
             ready: Vec::new(),
             fed: 0,
@@ -1362,10 +1387,31 @@ impl State {
                 self.inputs.no_buffer(idx, frame);
                 break;
             };
-            // The widener sees exactly what the codec is fed, in feed order.
+            // The concealer, then the widener, see exactly what the codec is fed, in feed order.
+            let mut concealed = None;
+            if frame.part.is_some() && self.conceal.take().is_some() {
+                log::warn!("decode: this HEVC stream comes in parts — fed as it came");
+            }
+            if let Some(c) = self.conceal.as_mut() {
+                match c.conceal(&frame.data) {
+                    Concealment::Intact => {}
+                    Concealment::Rewritten(bytes) => {
+                        log::info!(
+                            "decode: frame {} names a lost reference — moved to a held picture",
+                            frame.frame_index
+                        );
+                        concealed = Some(bytes);
+                    }
+                    Concealment::Unrecoverable => {
+                        self.spoil(ctx, pass, idx, &piece, Cause::Unrecoverable);
+                        continue;
+                    }
+                }
+            }
+            let data: &[u8] = concealed.as_deref().unwrap_or(&frame.data);
             let mut wide = None;
             if let Some(w) = self.widen.as_mut() {
-                wide = frame.part.is_none().then(|| w.widen(&frame.data)).flatten();
+                wide = frame.part.is_none().then(|| w.widen(data)).flatten();
                 if wide.is_none() {
                     log::warn!("decode: this HEVC stream takes no 16-bit POC — fed as it came");
                     self.widen = None;
@@ -1374,7 +1420,7 @@ impl State {
                     let _ = ctx.client.request_keyframe();
                 }
             }
-            let au: &[u8] = wide.as_deref().unwrap_or(&frame.data);
+            let au: &[u8] = wide.as_deref().unwrap_or(data);
             if au.len() > dst.len() {
                 self.oversized_dropped += 1;
                 log::warn!(
@@ -1383,6 +1429,7 @@ impl State {
                     dst.len(),
                     self.oversized_dropped
                 );
+                self.unfold_concealed();
                 self.spoil(ctx, pass, idx, &piece, Cause::Oversize);
                 continue;
             }
@@ -1401,11 +1448,19 @@ impl State {
             if let Err(e) = codec.queue_input_buffer_by_index(idx, 0, n, piece.pts_us, flags) {
                 log::warn!("decode: queue_input_buffer_by_index: {e}");
                 self.refusing();
+                self.unfold_concealed();
                 self.spoil(ctx, pass, idx, &piece, Cause::Refused);
                 continue;
             }
             self.refused = InputStall::default();
             self.note_queued(ctx, &frame, &piece, pass);
+        }
+    }
+
+    /// The concealer folded an AU the codec never took: it holds nothing until the next IDR.
+    fn unfold_concealed(&mut self) {
+        if let Some(c) = self.conceal.as_mut() {
+            c.flush();
         }
     }
 

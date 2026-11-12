@@ -168,6 +168,15 @@ pub(crate) fn widens_poc(codec: u8, codec_name: &str, forced: Option<bool>) -> b
     codec == punktfunk_core::quic::CODEC_HEVC && forced.unwrap_or(amlogic)
 }
 
+/// Whether each fed HEVC AU goes through the concealer first: a Realtek decoder, which does not
+/// conceal a lost current reference and keeps showing garbage past the host's anchor. `forced`
+/// is the debug override.
+pub(crate) fn conceals_h265(codec: u8, codec_name: &str, forced: Option<bool>) -> bool {
+    let name = codec_name.to_ascii_lowercase();
+    let realtek = name.starts_with("omx.realtek") || name.starts_with("c2.realtek");
+    codec == punktfunk_core::quic::CODEC_HEVC && forced.unwrap_or(realtek)
+}
+
 /// Whether a decoder tolerates `operating-rate = Short.MAX` rather than regressing on it. Follows
 /// Moonlight's allowlist: only Qualcomm decoders honour the sentinel. The Adreno 620 generation
 /// is the known exception Moonlight excludes by GPU model, which native code cannot see; it rides
@@ -250,6 +259,37 @@ mod tests {
             CODEC_AV1,
             "c2.amlogic.av1.decoder",
             Some(true)
+        ));
+    }
+
+    #[test]
+    fn only_realtek_hevc_is_concealed() {
+        use punktfunk_core::quic::{CODEC_AV1, CODEC_HEVC};
+        assert!(super::conceals_h265(
+            CODEC_HEVC,
+            "OMX.realtek.video.dec.hevc",
+            None
+        ));
+        assert!(!super::conceals_h265(
+            CODEC_HEVC,
+            "c2.qti.hevc.decoder",
+            None
+        ));
+        assert!(!super::conceals_h265(
+            CODEC_AV1,
+            "OMX.realtek.video.dec.av1",
+            None
+        ));
+        // The override moves the decoder pick, never the codec.
+        assert!(super::conceals_h265(
+            CODEC_HEVC,
+            "c2.qti.hevc.decoder",
+            Some(true)
+        ));
+        assert!(!super::conceals_h265(
+            CODEC_HEVC,
+            "OMX.realtek.video.dec.hevc",
+            Some(false)
         ));
     }
 
