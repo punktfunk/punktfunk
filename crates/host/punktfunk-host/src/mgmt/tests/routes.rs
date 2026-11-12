@@ -187,7 +187,8 @@ fn every_route_is_classified_for_the_plugin_and_cert_lanes() {
         ("GET", "/api/v1/library/page", true, true),
         ("GET", "/api/v1/library/art/{id}/{kind}", true, true),
         ("GET", "/api/v1/library/scanners", true, false),
-        ("PUT", "/api/v1/library/scanners/{id}", true, false),
+        // A device turns a source off or on for the locked profile it is the person of.
+        ("PUT", "/api/v1/library/scanners/{id}", true, true),
         // Hide is curation: the operator's, or a locked profile's person's for that profile alone
         // (`mgmt::tests::person`). Never the plugin lane, unlike the scanner toggle.
         ("PUT", "/api/v1/library/hidden/{id}", false, true),

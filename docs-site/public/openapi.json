@@ -5486,7 +5486,7 @@
           "library"
         ],
         "summary": "Enable or disable a library source.",
-        "description": "Takes effect on the next library read. Disabling hides titles; the plugin may keep\nreconciling while off. Nothing is deleted. With `as`, the switch is that profile's own: it\nturns a source off for the profile, and cannot turn on one the box turned off. Emits\n`library.changed` when the state changes.",
+        "description": "Takes effect on the next library read. Disabling hides titles; the plugin may keep\nreconciling while off. Nothing is deleted. With `as`, the switch is that profile's own: it\nturns a source off for the profile, and cannot turn on one the box turned off. A paired device\nthat is that locked profile's person may set it too. Emits `library.changed` when the state\nchanges.",
         "operationId": "setLibraryScanner",
         "parameters": [
           {
@@ -5543,7 +5543,7 @@
             }
           },
           "403": {
-            "description": "A plugin toggled another plugin's source, or named a profile",
+            "description": "A plugin toggled another plugin's source or named a profile, or a device that isn't the person of the profile `as` names",
             "content": {
               "application/json": {
                 "schema": {

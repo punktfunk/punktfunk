@@ -712,8 +712,9 @@ pub(crate) async fn list_library_scanners(
 ///
 /// Takes effect on the next library read. Disabling hides titles; the plugin may keep
 /// reconciling while off. Nothing is deleted. With `as`, the switch is that profile's own: it
-/// turns a source off for the profile, and cannot turn on one the box turned off. Emits
-/// `library.changed` when the state changes.
+/// turns a source off for the profile, and cannot turn on one the box turned off. A paired device
+/// that is that locked profile's person may set it too. Emits `library.changed` when the state
+/// changes.
 #[utoipa::path(
     put,
     path = "/library/scanners/{id}",
@@ -727,7 +728,7 @@ pub(crate) async fn list_library_scanners(
     responses(
         (status = OK, description = "Toggle stored; the full scanner list", body = [crate::library::ScannerInfo]),
         (status = UNAUTHORIZED, description = "Missing or invalid bearer token", body = ApiError),
-        (status = FORBIDDEN, description = "A plugin toggled another plugin's source, or named a profile", body = ApiError),
+        (status = FORBIDDEN, description = "A plugin toggled another plugin's source or named a profile, or a device that isn't the person of the profile `as` names", body = ApiError),
         (status = NOT_FOUND, description = "No such scanner on this platform, or `as` names no profile on this host", body = ApiError),
         (status = INTERNAL_SERVER_ERROR, description = "Couldn't save the settings", body = ApiError),
     )
