@@ -864,5 +864,6 @@
 	"notice_pin_unsustainable": "Toast once per stream when a fixed bitrate overruns this device. rate = megabits per second, a whole number. 'Automatic' is the Bitrate setting's option (player_bitrate_kbps_automatic).",
 	"notice_shared_screen": "Toast once at stream start when this device joins a screen another device opened (Play together).",
 	"notice_falling_behind": "Toast once per stream after five seconds of skipped frames. width, height = the stream's size in pixels.",
+	"notice_decoder_stuck": "Toast once per stream when the device's own video decoder stops answering. Only restarting the TV box, phone or tablet clears it.",
 	"hosts_error_name_empty": "Toast when the host page's Name row is applied empty."
 }

@@ -22,8 +22,9 @@ use punktfunk_core::fp::{hex, parse_hex32};
 use std::collections::HashMap;
 use std::panic::AssertUnwindSafe;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicU8, Ordering};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{mpsc, Arc, Mutex, OnceLock};
 use std::thread::JoinHandle;
+use std::time::Duration;
 
 use slot::PlaneSlot;
 
@@ -242,18 +243,57 @@ pub(crate) fn unpack_src_crop(packed: u64) -> [f32; 4] {
     [f(48), f(32), f(16), f(0)]
 }
 
-/// A video worker thread. Dropping it raises `shutdown` and joins the thread.
+/// How long a stop waits for a video thread. Stops run on the UI thread, and a vendor codec
+/// call that hangs never returns; Android kills an app whose UI thread blocks for 5 s.
+const VIDEO_STOP_WAIT: Duration = Duration::from_secs(2);
+
+/// A video worker thread. Dropping it raises `shutdown` and joins the thread, or leaves it to
+/// finish alone once [`VIDEO_STOP_WAIT`] has passed.
 struct VideoThread {
     shutdown: Arc<AtomicBool>,
+    /// Disconnects when the thread's body returns.
+    done: mpsc::Receiver<()>,
     join: Option<JoinHandle<()>>,
+}
+
+impl VideoThread {
+    /// Runs `body` on a thread named `name`, handing it the shutdown flag.
+    fn spawn(
+        name: &str,
+        body: impl FnOnce(Arc<AtomicBool>) + Send + 'static,
+    ) -> std::io::Result<VideoThread> {
+        let shutdown = Arc::new(AtomicBool::new(false));
+        let sd = shutdown.clone();
+        let (done_tx, done) = mpsc::channel::<()>();
+        let join = std::thread::Builder::new()
+            .name(name.into())
+            .spawn(move || {
+                let _done = done_tx;
+                body(sd);
+            })?;
+        Ok(VideoThread {
+            shutdown,
+            done,
+            join: Some(join),
+        })
+    }
 }
 
 impl Drop for VideoThread {
     fn drop(&mut self) {
         self.shutdown.store(true, Ordering::SeqCst);
-        if let Some(j) = self.join.take() {
-            let _ = j.join();
+        let Some(j) = self.join.take() else {
+            return;
+        };
+        if self.done.recv_timeout(VIDEO_STOP_WAIT) == Err(mpsc::RecvTimeoutError::Timeout) {
+            log::warn!(
+                "video thread left running past the stop wait thread={} wait_ms={}",
+                j.thread().name().unwrap_or("?"),
+                VIDEO_STOP_WAIT.as_millis()
+            );
+            return;
         }
+        let _ = j.join();
     }
 }
 
@@ -264,26 +304,19 @@ impl SessionHandle {
     pub(crate) fn start_drain(&self) {
         let client = self.client.clone();
         self.drain.replace(|| {
-            let shutdown = Arc::new(AtomicBool::new(false));
-            let sd = shutdown.clone();
-            let spawned = std::thread::Builder::new()
-                .name("pf-video-drain".into())
-                .spawn(move || {
-                    while !sd.load(Ordering::Relaxed) {
-                        // `NoFrame` is the 5 ms timeout — re-check the flag and poll again.
-                        // Anything else is a closed session, and there is nothing left to drain.
-                        match client.next_frame(std::time::Duration::from_millis(5)) {
-                            Ok(_) => {}
-                            Err(punktfunk_core::PunktfunkError::NoFrame) => {}
-                            Err(_) => break,
-                        }
+            let spawned = VideoThread::spawn("pf-video-drain", move |sd| {
+                while !sd.load(Ordering::Relaxed) {
+                    // `NoFrame` is the 5 ms timeout — re-check the flag and poll again.
+                    // Anything else is a closed session, and there is nothing left to drain.
+                    match client.next_frame(std::time::Duration::from_millis(5)) {
+                        Ok(_) => {}
+                        Err(punktfunk_core::PunktfunkError::NoFrame) => {}
+                        Err(_) => break,
                     }
-                });
+                }
+            });
             match spawned {
-                Ok(join) => Some(VideoThread {
-                    shutdown,
-                    join: Some(join),
-                }),
+                Ok(thread) => Some(thread),
                 Err(e) => {
                     log::error!("video drain thread spawn failed: {e}");
                     None
@@ -309,6 +342,8 @@ impl Drop for SessionHandle {
         self.mic.stop();
         #[cfg(target_os = "android")]
         self.stop_pad_audio();
+        // A video thread left stuck in a codec call still holds the client; close regardless.
+        self.client.close();
     }
 }
 

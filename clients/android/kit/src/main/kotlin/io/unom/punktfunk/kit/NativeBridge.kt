@@ -459,8 +459,17 @@ object NativeBridge {
      */
     external fun nativeVideoDecodedSize(handle: Long): IntArray?
 
-    /** Stop + join the decode thread without closing the session. No-op on `0`. */
+    /**
+     * Stop the decode thread without closing the session, waiting at most 2 s for it. No-op on
+     * `0`.
+     */
     external fun nativeStopVideo(handle: Long)
+
+    /**
+     * Whether a call into the device's video decoder has gone unanswered for 5 s: the device's
+     * decoder service hung, and only a restart of the device brings it back. `false` on `0`.
+     */
+    external fun nativeVideoDecoderStuck(handle: Long): Boolean
 
     /**
      * The background keep-alive's video drain: pop access units and discard them while no decode

@@ -1305,6 +1305,7 @@
 	"notice_pin_unsustainable": "Dieses Gerät schafft die fest eingestellten {rate} Mbit/s nicht. Stelle die Bitrate auf Automatisch oder senke sie.",
 	"notice_shared_screen": "Du teilst dir diesen Bildschirm mit einem anderen Gerät. Die Größe legt das Gerät fest, das sich zuerst verbunden hat.",
 	"notice_falling_behind": "Dieses Gerät kommt bei {width}×{height} mit dem Stream nicht mit. Senke die Auflösung oder die Bildwiederholrate.",
+	"notice_decoder_stuck": "Der Videodecoder dieses Geräts reagiert nicht mehr. Starte das Gerät neu und streame dann erneut.",
 	"hosts_error_name_empty": "Gib einen Namen für den Host ein.",
 	"dial_session_not_started": "Die Sitzung ist nicht gestartet. Sieh im Client-Log nach."
 }

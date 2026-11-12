@@ -426,7 +426,7 @@
 //
 // The wire is versioned by ALPN, not by this. Pin the integer in `punktfunk-ffi`
 // (`abi_version_is_pinned`). Per-bump notes live in `CHANGELOG.md`.
-#define PUNKTFUNK_ABI_VERSION 68
+#define PUNKTFUNK_ABI_VERSION 69
 
 // This client silenced its own speakers (`client::NativeClient::set_audio_muted`). The host
 // keeps sending, so a session joined to the same sink still hears the game.
@@ -1584,6 +1584,9 @@ typedef struct JitterTuning JitterTuning;
 // [`ReanchorGate::on_local_recovery`] pairs the SEI against the arm, because only the gate
 // knows when the loss was. Lanes without a parser leave this [`Default`].
 typedef struct LocalRecovery LocalRecovery;
+
+// Opaque handle: one AV1 elementary stream's [`Av1Concealer`].
+typedef struct PunktfunkAv1Concealer PunktfunkAv1Concealer;
 
 #if defined(PUNKTFUNK_FEATURE_QUIC)
 // Live `punktfunk/2` connection (one QUIC connection and its media, pumped on internal threads).
@@ -4161,7 +4164,46 @@ PunktfunkStatus punktfunk_h265_concealer_conceal(PunktfunkH265Concealer *c,
                                                  uint8_t **out_buf,
                                                  uintptr_t *out_len);
 
-// Release a buffer [`punktfunk_h265_concealer_conceal`] returned. NULL is a no-op.
+// Create an AV1 reference concealer for one elementary stream (key frame first). Free with
+// [`punktfunk_av1_concealer_free`]. Never returns NULL.
+PunktfunkAv1Concealer *punktfunk_av1_concealer_new(void);
+
+// Free a concealer created by [`punktfunk_av1_concealer_new`]. NULL is a no-op.
+//
+// # Safety
+// `c` was returned by [`punktfunk_av1_concealer_new`] and is not used after this call.
+void punktfunk_av1_concealer_free(PunktfunkAv1Concealer *c);
+
+// The `concealed` verdict [`punktfunk_au_admission_note`] takes for one whole AV1 temporal
+// unit with wire `flags`, judged before the rule runs. `PUNKTFUNK_CONCEALED_DECODABLE` for an
+// error-resilient wave start: [`punktfunk_av1_concealer_conceal`] rewrites its stale
+// reference once the rule admits it. `PUNKTFUNK_CONCEALED_NONE` for every other AU. The
+// concealer is left as it was.
+//
+// # Safety
+// `c` is a valid handle; `au` points to `len` readable bytes; `out_concealed` is writable.
+PunktfunkStatus punktfunk_av1_concealer_verdict(const PunktfunkAv1Concealer *c,
+                                                const uint8_t *au,
+                                                uintptr_t len,
+                                                uint32_t flags,
+                                                uint32_t *out_concealed);
+
+// Fold one temporal unit the decoder is fed, in decode order. Outs as
+// [`punktfunk_h265_concealer_conceal`]; release a `Rewritten` buffer with
+// [`punktfunk_h265_concealer_release`]. An AU the rule withholds never reaches this: the
+// concealer mirrors the decoder's slots.
+//
+// # Safety
+// `c` is a valid handle; `au` points to `len` readable bytes; the out pointers are writable.
+PunktfunkStatus punktfunk_av1_concealer_conceal(PunktfunkAv1Concealer *c,
+                                                const uint8_t *au,
+                                                uintptr_t len,
+                                                PunktfunkConcealment *out_kind,
+                                                uint8_t **out_buf,
+                                                uintptr_t *out_len);
+
+// Release a buffer [`punktfunk_h265_concealer_conceal`] or
+// [`punktfunk_av1_concealer_conceal`] returned. NULL is a no-op.
 //
 // # Safety
 // `buf`/`len` are exactly what one `conceal` call returned, released once.
