@@ -50,6 +50,8 @@ pub(crate) struct Negotiated {
     pub(crate) profile: Option<String>,
     /// The screen the host says this session streams; `None` from a host that does not say.
     pub(crate) screen: Option<crate::quic::v2::hello::ScreenEcho>,
+    /// The role the host says this session got; `None` from a host that does not say.
+    pub(crate) role: Option<crate::quic::v2::hello::RoleEcho>,
     /// The host counts axis-unit scroll (`FEATURE_SCROLL_AXIS_UNITS`).
     pub(crate) scroll_axis_units: bool,
     /// The size the host encodes the Welcome's mode at; `None` encodes the mode.

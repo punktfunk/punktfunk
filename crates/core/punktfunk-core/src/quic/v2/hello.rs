@@ -74,6 +74,8 @@ pub struct ClientHello {
     /// the display at the mode and scales the picture to this before encoding. `None` encodes
     /// the mode.
     pub view: Option<(u32, u32)>,
+    /// The screen a preset asks for; `None` leaves it to the host card's pick.
+    pub screen_wish: Option<ScreenWish>,
 }
 
 impl ClientHello {
@@ -160,6 +162,10 @@ impl V2Message for ClientHello {
             .when(views.is_some(), |f| {
                 f.bytes(31, views.as_deref().unwrap_or_default())
             })
+            .when(self.screen_wish.is_some(), |f| {
+                let wish = self.screen_wish.as_ref().map(ScreenWish::wire);
+                f.bytes(32, &wish.unwrap_or_default())
+            })
     }
 
     fn from_body(body: &[u8]) -> Result<Self> {
@@ -190,6 +196,7 @@ impl V2Message for ClientHello {
         let mut features = FeatureSet::default();
         let (mut profile, mut access_only) = (None, false);
         let (mut screens, mut view, mut views) = (Vec::new(), None, None);
+        let mut screen_wish = None;
         let mut seen = Vec::new();
         let mut r = FieldReader::new(body);
         while let Some((tag, v)) = r.next_field()? {
@@ -248,6 +255,7 @@ impl V2Message for ClientHello {
                 29 => h.audio_bitstreams = u8_of(v)?,
                 30 => view = <Option<(u32, u32)> as FieldValue>::get(v)?,
                 31 => views = Some(v),
+                32 => screen_wish = ScreenWish::of_wire(v),
                 _ => {}
             }
         }
@@ -276,6 +284,7 @@ impl V2Message for ClientHello {
             access_only,
             screens,
             view,
+            screen_wish,
         })
     }
 }
@@ -327,6 +336,164 @@ impl ScreenEcho {
     }
 }
 
+/// How a preset asks to use the host's screens: one of the three roles, or a copy of a monitor
+/// by connector. The host weighs it only for a device it lets choose; a wish it can't honour is
+/// not made. Spelled `only`, `main`, `second` or `monitor:<connector>`; tag 32 carries `1`,
+/// `2`, `3`, or `4` and the connector.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ScreenWish {
+    Only,
+    Main,
+    Second,
+    Monitor(String),
+}
+
+impl ScreenWish {
+    /// The preset spelling. Anything else, and an empty or oversized connector, is no wish.
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "only" => Some(ScreenWish::Only),
+            "main" => Some(ScreenWish::Main),
+            "second" => Some(ScreenWish::Second),
+            _ => label(s.strip_prefix("monitor:")?.as_bytes(), CONNECTOR_MAX)
+                .map(ScreenWish::Monitor),
+        }
+    }
+
+    fn wire(&self) -> Vec<u8> {
+        match self {
+            ScreenWish::Only => vec![1],
+            ScreenWish::Main => vec![2],
+            ScreenWish::Second => vec![3],
+            ScreenWish::Monitor(c) => [&[4], c.as_bytes()].concat(),
+        }
+    }
+
+    fn of_wire(v: &[u8]) -> Option<Self> {
+        match v {
+            [1] => Some(ScreenWish::Only),
+            [2] => Some(ScreenWish::Main),
+            [3] => Some(ScreenWish::Second),
+            [4, c @ ..] => label(c, CONNECTOR_MAX).map(ScreenWish::Monitor),
+            _ => None,
+        }
+    }
+}
+
+/// Writes the spelling [`ScreenWish::parse`] reads.
+impl std::fmt::Display for ScreenWish {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ScreenWish::Only => f.write_str("only"),
+            ScreenWish::Main => f.write_str("main"),
+            ScreenWish::Second => f.write_str("second"),
+            ScreenWish::Monitor(c) => write!(f, "monitor:{c}"),
+        }
+    }
+}
+
+/// A session's role among the host's screens: the only one, the main one beside the host's
+/// monitors, or one more beside them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(
+    feature = "serde",
+    derive(serde::Serialize, serde::Deserialize),
+    serde(rename_all = "lowercase")
+)]
+pub enum Role {
+    Only,
+    Main,
+    Second,
+}
+
+impl Role {
+    pub fn to_u8(self) -> u8 {
+        match self {
+            Role::Only => 1,
+            Role::Main => 2,
+            Role::Second => 3,
+        }
+    }
+
+    /// `0` is no role, so it reads as `None` like an unknown byte.
+    pub fn from_u8(v: u8) -> Option<Self> {
+        match v {
+            1 => Some(Role::Only),
+            2 => Some(Role::Main),
+            3 => Some(Role::Second),
+            _ => None,
+        }
+    }
+}
+
+/// Why a session's screen is not the one its device asked for.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(
+    feature = "serde",
+    derive(serde::Serialize, serde::Deserialize),
+    serde(rename_all = "snake_case")
+)]
+pub enum RoleReason {
+    AsAsked,
+    /// The device may not choose its screen on this host.
+    NotAllowed,
+    /// An earlier session decided what the host's monitors do.
+    MonitorsHeld,
+    /// The monitor asked for is off, taken or missing.
+    Unavailable,
+    /// This desktop has no monitors.
+    NoMonitors,
+}
+
+impl RoleReason {
+    pub fn to_u8(self) -> u8 {
+        match self {
+            RoleReason::AsAsked => 0,
+            RoleReason::NotAllowed => 1,
+            RoleReason::MonitorsHeld => 2,
+            RoleReason::Unavailable => 3,
+            RoleReason::NoMonitors => 4,
+        }
+    }
+
+    pub fn from_u8(v: u8) -> Option<Self> {
+        match v {
+            0 => Some(RoleReason::AsAsked),
+            1 => Some(RoleReason::NotAllowed),
+            2 => Some(RoleReason::MonitorsHeld),
+            3 => Some(RoleReason::Unavailable),
+            4 => Some(RoleReason::NoMonitors),
+            _ => None,
+        }
+    }
+}
+
+/// The role a session got and why it differs from the one asked, as its `ServerHello` says.
+/// Tag 30 carries the role byte (`0` none) and the reason byte; anything else is no echo.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RoleEcho {
+    /// `None` when the session has no role: it copies a monitor, or the host has none.
+    pub role: Option<Role>,
+    pub reason: RoleReason,
+}
+
+impl RoleEcho {
+    fn wire(self) -> [u8; 2] {
+        [self.role.map_or(0, Role::to_u8), self.reason.to_u8()]
+    }
+
+    fn of_wire(v: &[u8]) -> Option<Self> {
+        let &[role, reason] = v else { return None };
+        Some(RoleEcho {
+            role: match role {
+                0 => None,
+                r => Some(Role::from_u8(r)?),
+            },
+            reason: RoleReason::from_u8(reason)?,
+        })
+    }
+}
+
 /// `host → client`: the session.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ServerHello {
@@ -346,6 +513,8 @@ pub struct ServerHello {
     /// The size the host encodes the first screen at when it scales the mode down for the
     /// client's view. `None` encodes the mode, as an older host always does.
     pub picture: Option<(u32, u32)>,
+    /// The role this session got among the host's screens. `None` from a host that does not say.
+    pub role: Option<RoleEcho>,
 }
 
 impl V2Message for ServerHello {
@@ -393,7 +562,9 @@ impl V2Message for ServerHello {
             .when(self.screen.is_some(), |f| {
                 f.bytes(28, self.screen.as_ref().map_or(&[][..], ScreenEcho::wire))
             });
-        self.picture.put(f, 29)
+        self.picture.put(f, 29).when(self.role.is_some(), |f| {
+            f.bytes(30, &self.role.map_or([0; 2], RoleEcho::wire))
+        })
     }
 
     fn from_body(body: &[u8]) -> Result<Self> {
@@ -427,7 +598,7 @@ impl V2Message for ServerHello {
         };
         let (mut session_id, mut clock_origin_ns, mut suite) = (None, 0, None);
         let mut features = FeatureSet::default();
-        let (mut profile, mut screen, mut picture) = (None, None, None);
+        let (mut profile, mut screen, mut picture, mut role) = (None, None, None, None);
         let mut seen = Vec::new();
         let mut r = FieldReader::new(body);
         while let Some((tag, v)) = r.next_field()? {
@@ -484,6 +655,7 @@ impl V2Message for ServerHello {
                 27 => profile = label(v, PROFILE_ID_MAX),
                 28 => screen = ScreenEcho::of_wire(v),
                 29 => picture = <Option<(u32, u32)> as FieldValue>::get(v)?,
+                30 => role = RoleEcho::of_wire(v),
                 _ => {}
             }
         }
@@ -513,6 +685,7 @@ impl V2Message for ServerHello {
             profile,
             screen,
             picture,
+            role,
         })
     }
 }
@@ -691,12 +864,12 @@ mod tests {
         /// changes nothing.
         #[test]
         fn hellos_settle_after_one_trip(h in hello_strategy(), w in welcome_strategy()) {
-            let ch = ClientHello { hello: h, client_label: None, abr_features: 0, preset: None, link: LinkFacts::default(), probe_only: false, pyrowave_bpp_x100: 0, slices: 0, resume: None, suites: vec![], features: FeatureSet::default(), profile: None, access_only: false, screens: vec![], view: None };
+            let ch = ClientHello { hello: h, client_label: None, abr_features: 0, preset: None, link: LinkFacts::default(), probe_only: false, pyrowave_bpp_x100: 0, slices: 0, resume: None, suites: vec![], features: FeatureSet::default(), profile: None, access_only: false, screens: vec![], view: None, screen_wish: None };
             let once = ClientHello::from_body(&ch.fields().into_body()).unwrap();
             let twice = ClientHello::from_body(&once.fields().into_body()).unwrap();
             prop_assert_eq!(twice, once);
 
-            let sh = ServerHello { welcome: w, session_id: [7; 16], clock_origin_ns: 1, suite: None, features: FeatureSet::default(), profile: None, screen: None, picture: None };
+            let sh = ServerHello { welcome: w, session_id: [7; 16], clock_origin_ns: 1, suite: None, features: FeatureSet::default(), profile: None, screen: None, picture: None, role: None };
             let once = ServerHello::from_body(&sh.fields().into_body()).unwrap();
             let twice = ServerHello::from_body(&once.fields().into_body()).unwrap();
             prop_assert_eq!(twice, once);
@@ -790,6 +963,101 @@ mod tests {
             None,
             "an older build's read"
         );
+    }
+
+    /// A wish reads and writes the preset spelling and rides tag 32 as one byte, or `4` and the
+    /// connector. Anything else is no wish, never a failed handshake.
+    #[test]
+    fn a_screen_wish_rides_client_hello() {
+        let wishes = [
+            ("only", ScreenWish::Only, &[1u8][..]),
+            ("main", ScreenWish::Main, &[2]),
+            ("second", ScreenWish::Second, &[3]),
+            (
+                "monitor:HDMI-A-1",
+                ScreenWish::Monitor("HDMI-A-1".into()),
+                b"\x04HDMI-A-1",
+            ),
+        ];
+        for (spelled, wish, wire) in wishes {
+            assert_eq!(ScreenWish::parse(spelled).as_ref(), Some(&wish));
+            assert_eq!(wish.to_string(), spelled);
+            let mut ch = ClientHello::from_body(&Fields::new().into_body()).unwrap();
+            ch.screen_wish = Some(wish);
+            let body = ch.fields().into_body();
+            let field = [&[32, wire.len() as u8][..], wire].concat();
+            assert!(body.ends_with(&field), "{spelled}: {body:02x?}");
+            assert_eq!(ClientHello::from_body(&body).unwrap(), ch);
+        }
+        let long = format!("monitor:{}", "x".repeat(CONNECTOR_MAX + 1));
+        for nothing in ["", "Only", "monitor", "monitor:", "other", long.as_str()] {
+            assert_eq!(ScreenWish::parse(nothing), None, "{nothing:?}");
+        }
+
+        let read = |v: &[u8]| {
+            let body = Fields::new().bytes(32, v).into_body();
+            ClientHello::from_body(&body).unwrap().screen_wish
+        };
+        let oversized = [&[4u8][..], &[b'x'; CONNECTOR_MAX + 1]].concat();
+        for bad in [&[][..], &[0], &[5], &[1, 1], &[4], &[4, 0xFF], &oversized] {
+            assert_eq!(read(bad), None, "{bad:02x?}");
+        }
+        assert_eq!(
+            ClientHello::from_body(&Fields::new().into_body())
+                .unwrap()
+                .screen_wish,
+            None
+        );
+    }
+
+    /// The role echo rides `ServerHello` tag 30 as a role byte and a reason byte. Any other
+    /// value is no echo, never a refused session.
+    #[test]
+    fn the_role_echo_rides_server_hello() {
+        let mut sh = ServerHello::from_body(&Fields::new().bytes(1, &[0; 16]).into_body()).unwrap();
+        assert_eq!(sh.role, None);
+        sh.profile = Some("p1".into());
+        sh.role = Some(RoleEcho {
+            role: Some(Role::Second),
+            reason: RoleReason::MonitorsHeld,
+        });
+        let body = sh.fields().into_body();
+        assert!(
+            body.ends_with(&[0x1b, 0x02, b'p', b'1', 0x1e, 0x02, 3, 2]),
+            "{body:02x?}"
+        );
+        assert_eq!(ServerHello::from_body(&body).unwrap(), sh);
+
+        for v in 0..=u8::MAX {
+            assert_eq!(
+                Role::from_u8(v).map(Role::to_u8),
+                (1..=3).contains(&v).then_some(v)
+            );
+            let reason = RoleReason::from_u8(v).map(RoleReason::to_u8);
+            assert_eq!(reason, (v <= 4).then_some(v));
+        }
+        let read = |v: &[u8]| {
+            let body = Fields::new().bytes(1, &[0; 16]).bytes(30, v).into_body();
+            ServerHello::from_body(&body).unwrap().role
+        };
+        let no_monitors = RoleEcho {
+            role: None,
+            reason: RoleReason::NoMonitors,
+        };
+        assert_eq!(read(&[0, 4]), Some(no_monitors));
+        for bad in [&[][..], &[1], &[1, 0, 0], &[4, 0], &[1, 5]] {
+            assert_eq!(read(bad), None, "{bad:02x?}");
+        }
+    }
+
+    /// A tag this build does not know is skipped, so an older host reads past tag 32 and an
+    /// older client past tag 30, as this one reads past 33.
+    #[test]
+    fn an_unknown_tag_is_skipped() {
+        let ch = Fields::new().u8(10, 6).bytes(33, &[9, 9]).into_body();
+        assert_eq!(ClientHello::from_body(&ch).unwrap().hello.audio_channels, 6);
+        let sh = Fields::new().bytes(1, &[0; 16]).bytes(31, &[9]).into_body();
+        assert_eq!(ServerHello::from_body(&sh).unwrap().session_id, [0; 16]);
     }
 
     /// The unlock promise rides the feature bits; a hello without it reads `false`.
@@ -904,6 +1172,7 @@ mod tests {
             access_only: false,
             screens: vec![],
             view: None,
+            screen_wish: None,
         };
         // The bytes on the wire are pinned: a change here is a wire change.
         let frame: String = ch.encode_v2().iter().map(|b| format!("{b:02x}")).collect();
@@ -972,6 +1241,20 @@ mod tests {
         let torn = two.fields().bytes(31, &body[records.len() + 2..][..11]);
         assert_eq!(ClientHello::from_body(&torn.into_body()).unwrap(), two);
 
+        // A screen wish rides last, as tag 32: everything before it is the hello without it.
+        let wished = ClientHello {
+            screen_wish: Some(ScreenWish::Monitor("DP-1".into())),
+            ..viewed.clone()
+        };
+        let body = wished.fields().into_body();
+        let plain = viewed.fields().into_body();
+        assert_eq!(body[..plain.len()], plain[..]);
+        assert_eq!(
+            body[plain.len()..],
+            [0x20, 0x05, 0x04, b'D', b'P', b'-', b'1']
+        );
+        assert_eq!(ClientHello::from_body(&body).unwrap(), wished);
+
         let sh = ServerHello {
             welcome: ServerHello::from_body(&Fields::new().bytes(1, &[0; 16]).into_body())
                 .unwrap()
@@ -983,6 +1266,7 @@ mod tests {
             profile: None,
             screen: None,
             picture: Some((1920, 1080)),
+            role: None,
         };
         assert_eq!(
             ServerHello::from_body(&sh.fields().into_body()).unwrap(),

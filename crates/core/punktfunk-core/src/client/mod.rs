@@ -287,6 +287,8 @@ pub struct NativeClient {
     profile: Option<String>,
     /// The screen the host says this session streams; `None` from a host that does not say.
     screen: Option<crate::quic::v2::hello::ScreenEcho>,
+    /// The role the host says this session got; `None` from a host that does not say.
+    role: Option<crate::quic::v2::hello::RoleEcho>,
     /// `displayed + clock_offset − pts` (ns). `0` = nothing presented yet. Presenter writes;
     /// audio reads to land with the picture ([`crate::audio::AvSync`]). Lives next to
     /// `clock_offset` because neither plane owns the other.
@@ -636,6 +638,9 @@ pub struct ConnectParams {
     /// The profile to play as: a host profile id. `None` lets the host choose
     /// ([`NativeClient::profile`] says which it did).
     pub profile: Option<String>,
+    /// The screen this dial's preset asks for. `None` leaves it to the host card's pick;
+    /// [`NativeClient::role`] says what the session got.
+    pub screen_wish: Option<crate::quic::v2::hello::ScreenWish>,
     /// Every screen this embedder shows, screen 0 first with `mode`'s size; empty for one.
     /// Screens past the first arrive on [`NativeClient::next_screen_frame`], each at its `view`
     /// when it names one. Screen 0's view is [`Self::view`].
@@ -707,6 +712,7 @@ impl ConnectParams {
             preset: None,
             probe_only: false,
             profile: None,
+            screen_wish: None,
             screens: Vec::new(),
             shows_screens: false,
             studio_range: false,
@@ -856,6 +862,7 @@ impl NativeClient {
             mgmt_port: welcome.mgmt_port,
             profile: negotiated.profile,
             screen: negotiated.screen,
+            role: negotiated.role,
             worker: Some(worker),
             video_e2e_ns: Arc::new(AtomicU64::new(0)),
             audio_av_offset_ms: Arc::new(AtomicI64::new(0)),
@@ -1326,9 +1333,9 @@ impl NativeClient {
     }
 
     /// Close the overlay window with everything the connector knows filled in: mode, codec,
-    /// colour, chroma asked and granted, the monitor a mirror streams, audio format, counters and,
-    /// with `l10n`, the link line
-    /// and the weak-network warning. The caller adds the decoder, display HDR and its own extras.
+    /// colour, chroma asked and granted, the monitor a mirror streams, the screen role and why,
+    /// audio format, counters and, with `l10n`, the link line and the weak-network warning. The
+    /// caller adds the decoder, display HDR and its own extras.
     pub fn hud_snapshot(&self) -> crate::hud::StatsSnapshot {
         // Whole AUs the all-intra drain dropped before the decoder: it fell behind.
         let behind = self.shared.frames.take_skipped();
@@ -1350,6 +1357,8 @@ impl NativeClient {
         if let Some(crate::quic::v2::hello::ScreenEcho::Monitor(c)) = &self.screen {
             s.screen = Some(c.clone());
         }
+        s.role = self.role.and_then(|r| r.role);
+        s.role_reason = self.role.map(|r| r.reason);
         s.auto_rate = self.wants_decode;
         let a = self.audio_format();
         s.audio_lossless = a.is_pcm();
@@ -1923,6 +1932,12 @@ impl NativeClient {
     /// applies at the next connect, and a shared screen may be this device's alone later.
     pub fn screen(&self) -> Option<&crate::quic::v2::hello::ScreenEcho> {
         self.screen.as_ref()
+    }
+
+    /// The role this session got among the host's screens, and why it is not the one asked.
+    /// `None` from a host that does not say. As the session started.
+    pub fn role(&self) -> Option<crate::quic::v2::hello::RoleEcho> {
+        self.role
     }
 
     /// Live grants ([`crate::quic::GRANT_GAMEPAD`] family). Welcome seed, latest

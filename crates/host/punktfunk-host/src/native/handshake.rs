@@ -983,6 +983,7 @@ fn server_hello(n: &Negotiation<'_>, t: &Terms, welcome: Welcome) -> ServerHello
             Some(_) => Some(ScreenEcho::Shared),
             None => t.screen.clone(),
         },
+        role: None,
     }
 }
 

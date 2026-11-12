@@ -448,6 +448,7 @@ mod tests {
             access_only: false,
             screens: Vec::new(),
             view: None,
+            screen_wish: None,
         }
     }
 

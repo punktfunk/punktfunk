@@ -31,12 +31,12 @@ static PunktfunkConfig make_config(uint32_t role, uint32_t drop_period) {
 int main(void) {
     printf("punktfunk C ABI harness (abi_version=%u)\n", punktfunk_abi_version());
 
-    /* PunktfunkConnectOpts: the C compiler agrees with Rust's const-asserted layout, 208 bytes on
-     * 64-bit and 148 on 32-bit with no tail padding, so an appended field never lands in bytes an
+    /* PunktfunkConnectOpts: the C compiler agrees with Rust's const-asserted layout, 216 bytes on
+     * 64-bit and 152 on 32-bit with no tail padding, so an appended field never lands in bytes an
      * older caller's sizeof covered. The size-prefix guard rejects an undersized struct as a
      * status, not a read. The staticlib this links always carries quic. */
 #ifdef PUNKTFUNK_FEATURE_QUIC
-    if (sizeof(PunktfunkConnectOpts) != (sizeof(void *) == 8 ? 208u : 148u)
+    if (sizeof(PunktfunkConnectOpts) != (sizeof(void *) == 8 ? 216u : 152u)
         || offsetof(PunktfunkConnectOpts, video_fit) != (sizeof(void *) == 8 ? 100u : 72u)
         || offsetof(PunktfunkConnectOpts, delivery_flags) != (sizeof(void *) == 8 ? 121u : 85u)
         || offsetof(PunktfunkConnectOpts, profile_id) != (sizeof(void *) == 8 ? 128u : 92u)
@@ -47,9 +47,10 @@ int main(void) {
         || offsetof(PunktfunkConnectOpts, prompts_unlock) != (sizeof(void *) == 8 ? 184u : 128u)
         || offsetof(PunktfunkConnectOpts, view_width) != (sizeof(void *) == 8 ? 192u : 136u)
         || offsetof(PunktfunkConnectOpts, screen_views) != (sizeof(void *) == 8 ? 200u : 144u)
+        || offsetof(PunktfunkConnectOpts, host_screen) != (sizeof(void *) == 8 ? 208u : 148u)
         || sizeof(PunktfunkProfileUnlock) != (sizeof(void *) == 8 ? 40u : 24u)
         || sizeof(PunktfunkScreen) != 24u || sizeof(PunktfunkScreenView) != 8u) {
-        fprintf(stderr, "FAIL: PunktfunkConnectOpts is %zu bytes, video_fit at %zu, delivery_flags at %zu, profile_id at %zu, pyrowave_bpp_x100 at %zu, on_pending at %zu, screens at %zu, unlock at %zu, view_width at %zu, screen_views at %zu; PunktfunkScreen is %zu, PunktfunkProfileUnlock %zu\n",
+        fprintf(stderr, "FAIL: PunktfunkConnectOpts is %zu bytes, video_fit at %zu, delivery_flags at %zu, profile_id at %zu, pyrowave_bpp_x100 at %zu, on_pending at %zu, screens at %zu, unlock at %zu, view_width at %zu, screen_views at %zu, host_screen at %zu; PunktfunkScreen is %zu, PunktfunkProfileUnlock %zu\n",
                 sizeof(PunktfunkConnectOpts), offsetof(PunktfunkConnectOpts, video_fit),
                 offsetof(PunktfunkConnectOpts, delivery_flags),
                 offsetof(PunktfunkConnectOpts, profile_id),
@@ -58,6 +59,7 @@ int main(void) {
                 offsetof(PunktfunkConnectOpts, screens), offsetof(PunktfunkConnectOpts, unlock),
                 offsetof(PunktfunkConnectOpts, view_width),
                 offsetof(PunktfunkConnectOpts, screen_views),
+                offsetof(PunktfunkConnectOpts, host_screen),
                 sizeof(PunktfunkScreen), sizeof(PunktfunkProfileUnlock));
         return 1;
     }
@@ -71,6 +73,17 @@ int main(void) {
         != PUNKTFUNK_STATUS_NULL_POINTER) {
         fprintf(stderr, "FAIL: punktfunk_connection_request_screens_view on a null connection\n");
         return 1;
+    }
+    {
+        /* The role echo reads from C as two plain bytes with named values. */
+        uint8_t role = 0, reason = 0;
+        if (punktfunk_connection_screen_role(NULL, &role) != PUNKTFUNK_STATUS_NULL_POINTER
+            || punktfunk_connection_screen_role_reason(NULL, &reason)
+                   != PUNKTFUNK_STATUS_NULL_POINTER
+            || PUNKTFUNK_SCREEN_ROLE_SECOND != 3 || PUNKTFUNK_SCREEN_ROLE_REASON_NO_MONITORS != 4) {
+            fprintf(stderr, "FAIL: the screen role accessors or their values\n");
+            return 1;
+        }
     }
     {
         /* The unlock message builds from C and refuses an uppercase seat id. */

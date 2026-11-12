@@ -426,6 +426,10 @@ pub struct StatsSnapshot {
     pub preset: Option<String>,
     /// The monitor this session mirrors, by connector. `None` on a screen of its own.
     pub screen: Option<String>,
+    /// The role this session got among the host's screens; `None` without one.
+    pub role: Option<crate::quic::v2::hello::Role>,
+    /// Why the role is not the one asked; `None` from a host that does not say.
+    pub role_reason: Option<crate::quic::v2::hello::RoleReason>,
     /// AUs received, and their payload bytes (goodput: no FEC, no headers).
     pub received: u32,
     pub bytes: u64,
@@ -2420,9 +2424,15 @@ mod tests {
         s.screen = Some("HDMI-A-1".into());
         let json = serde_json::to_string(&s).unwrap();
         assert_eq!(serde_json::from_str::<StatsSnapshot>(&json).unwrap(), s);
+        s.role = Some(crate::quic::v2::hello::Role::Second);
+        s.role_reason = Some(crate::quic::v2::hello::RoleReason::MonitorsHeld);
+        let json = serde_json::to_string(&s).unwrap();
+        assert!(json.contains(r#""role":"second","role_reason":"monitors_held""#));
+        assert_eq!(serde_json::from_str::<StatsSnapshot>(&json).unwrap(), s);
         // A reader older than a field still parses a newer writer's line.
         let partial: StatsSnapshot = serde_json::from_str(r#"{"received":5,"future":1}"#).unwrap();
         assert_eq!((partial.received, partial.screen), (5, None));
+        assert_eq!((partial.role, partial.role_reason), (None, None));
     }
 
     /// A mirrored session names its monitor on the first line of every full tier; a session on
