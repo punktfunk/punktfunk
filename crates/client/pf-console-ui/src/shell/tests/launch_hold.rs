@@ -2,7 +2,7 @@
 
 use super::*;
 use crate::library::LibraryGame;
-use crate::shell::connect::{launch_gave_up, LAUNCH_HOLD_MAX, LAUNCH_NO_LEASE};
+use crate::shell::connect::{launch_gave_up, LAUNCH_HOLD_MAX, LAUNCH_NO_LEASE, LAUNCH_POLL_STALL};
 use pf_client_core::library::RunningGame;
 
 fn game(id: &str, title: &str, launcher: bool) -> LibraryGame {
@@ -213,6 +213,33 @@ fn the_hold_ignores_state_read_before_the_launch_and_says_so_without_a_lease() {
     );
     s.handle_menu(MenuEvent::Confirm);
     assert!(s.in_stream, "and a press is \"show the desktop anyway\"");
+}
+
+/// The host's own sentence for a launch it did not start ends the hold at once; one that lands
+/// with no hold up is dropped, never said on the next launch.
+#[test]
+fn the_hosts_refusal_is_the_holds_sentence_at_once() {
+    let (mut s, _library, bus) = on_shelf();
+    s.console.set_launch_refused("stale".into());
+    s.sync();
+    s.start_connect(intent("steam:570"));
+    s.session_streaming();
+    s.sync();
+    assert!(s.connect.launching().is_some_and(|l| l.failed.is_none()));
+    bus.drain();
+    let hidden = "Couldn't start that game \u{2014} it isn't in this host's library anymore.";
+    s.console.set_launch_refused(hidden.into());
+    at(&mut s, 100.0 + LAUNCH_POLL_STALL);
+    s.sync();
+    assert_eq!(
+        s.connect.launching().and_then(|l| l.failed.as_deref()),
+        Some(hidden)
+    );
+    assert!(bus.drain().is_empty(), "and it asks the host nothing more");
+    assert!(
+        !s.in_stream && s.holds_stream(),
+        "the hold keeps the screen"
+    );
 }
 
 /// The three sentences, against the host's own `games[]` words. The touch shell's
