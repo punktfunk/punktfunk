@@ -404,8 +404,7 @@ pub(super) unsafe fn probe_efc_pairs(
     ten_bit: bool,
 ) -> Option<EfcPairs> {
     let mut ps = ProfileStack::new(codec_op, ten_bit, true);
-    let profile = *ps.wire(av1);
-    let caps = efc_caps(instance, vq_inst, pd, &profile, av1).ok()?;
+    let caps = efc_caps(instance, vq_inst, pd, ps.wire(av1), av1).ok()?;
     Some(efc_pairs_of(
         instance,
         pd,
