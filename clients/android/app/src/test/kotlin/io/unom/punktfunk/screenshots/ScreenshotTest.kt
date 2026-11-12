@@ -261,6 +261,13 @@ class ScreenshotTest {
     @Config(sdk = [36], qualifiers = "w1280dp-h800dp-xhdpi")
     fun tablet10Controllers() = shootRoot("controllers", device = "tablet10") { ControllersScene() }
 
+    // The picture alone at a 16:10 tablet's size, for a store frame on a rendered tablet.
+    @Test
+    @Config(sdk = [36], qualifiers = "w1280dp-h800dp-xhdpi")
+    fun tablet10StreamClean() = shootRoot("stream-clean", statusBar = false, device = "tablet10") {
+        StreamScene(io.unom.punktfunk.StatsVerbosity.OFF, loss = false)
+    }
+
     @Test
     @Config(sdk = [36], qualifiers = "w1280dp-h800dp-xhdpi")
     fun tablet10Stream() = shootRoot("stream", statusBar = false, device = "tablet10") {

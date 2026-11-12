@@ -834,7 +834,7 @@ fn store_shots_in_language() {
 /// on an iPad; macOS is max(short side px / 800, backing × 0.75). webOS passes none, so a
 /// panel takes the couch k = height / 800: 1.35 at 1080p, 2.7 at 4K. The Deck is twice its
 /// 1280×800 panel: k = 2 draws its 1× layout sharp enough for a close render. An Android phone
-/// passes none either, at a 20:9 panel's 2400×1080. No safe-area
+/// or tablet passes none either, at 2400×1080 and 2560×1600. No safe-area
 /// insets: the backdrop runs edge to edge.
 #[test]
 #[ignore]
@@ -855,6 +855,7 @@ fn website_shots_in_language() {
         ("tv-4k", 3840, 2160, None, WebOS),
         ("deck", 2560, 1600, None, Desktop),
         ("phone", 2400, 1080, None, Android),
+        ("tablet", 2560, 1600, None, Android),
     ] {
         if only.as_deref().is_some_and(|o| o != device) {
             continue;
