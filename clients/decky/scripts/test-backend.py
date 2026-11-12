@@ -34,7 +34,7 @@ _PLUGIN = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_PLUGIN / "py_modules"))
 sys.path.insert(0, str(_PLUGIN))
 import main  # noqa: E402  (the plugin backend)
-from pf_decky import client, steam_input, update  # noqa: E402
+from pf_decky import art, client, steam_input, update  # noqa: E402
 
 # The argv fixtures below monkey-patch `_client_argv` to pin one install shape; the
 # _flatpak_ref block wants the REAL resolver back, so keep a handle on it.
@@ -284,7 +284,7 @@ check("pair: a host that never answered is unreachable, not refused", got["error
 #
 # `appid` and `icon_hash` come from Steam's overview through the frontend; a bad one must fail
 # closed rather than fetch an arbitrary path or write an arbitrary file name.
-main._read_art = lambda appid, name: None  # no cache, no network in a unit check
+art._read_art = lambda appid, name: None  # no cache, no network in a unit check
 shutil.rmtree("/tmp/pf-test-plugin", ignore_errors=True)  # no leftover fallback icon from a past run
 check("art: a non-numeric appid is refused", asyncio.run(main.Plugin().game_art("x")) == {
     "ok": False, "error": "bad-appid",
@@ -293,10 +293,10 @@ check("art: zero is refused", asyncio.run(main.Plugin().game_art(0))["ok"] is Fa
 got = asyncio.run(main.Plugin().game_art(570, "../../etc/passwd"))
 check("art: a hash that is not 40 hex chars fetches no icon", got == {"ok": True, "icon_path": ""})
 check("art: local cache is asked per-app dir first, flat file second", [
-    p.name for p in main._librarycache_candidates(570, "library_hero.jpg")
+    p.name for p in art._librarycache_candidates(570, "library_hero.jpg")
 ] == ["library_hero.jpg", "570_library_hero.jpg"])
 check("art: the per-app dir is keyed by appid",
-      main._librarycache_candidates(570, "logo.png")[0].parent.name == "570")
+      art._librarycache_candidates(570, "logo.png")[0].parent.name == "570")
 # The icon: without a hash nothing is fetched, but the Punktfunk icon stands in so the overlay
 # never shows a gray box — and with no plugin assets at all, icon_path is honestly empty.
 got = asyncio.run(main.Plugin().game_art(570, ""))
@@ -313,7 +313,7 @@ check("icon: non-png bytes are refused", asyncio.run(main.Plugin().save_icon(570
 check("icon: junk base64 is refused", asyncio.run(main.Plugin().save_icon(570, "***"))["ok"] is False)
 got = asyncio.run(main.Plugin().save_icon(570, _b64.b64encode(b"\x89PNG\r\n\x1a\n....").decode()))
 check("icon: a png lands as <appid>.png in the settings dir", got["ok"] and got["path"] == "/tmp/pf-test-settings/icons/570.png" and Path(got["path"]).is_file())
-check("art: Steam's current icon CDN is asked first", "shared.steamstatic.com" in main._ICON_CDNS[0])
+check("art: Steam's current icon CDN is asked first", "shared.steamstatic.com" in art._ICON_CDNS[0])
 
 
 # ---- _fetch_bytes: a body over the cap is refused rather than truncated -------------------
@@ -335,12 +335,12 @@ class _FakeResp:
 
 
 _body = b""
-main.urllib.request.urlopen = lambda req, timeout=None, context=None: _FakeResp(_body)
+art.urllib.request.urlopen = lambda req, timeout=None, context=None: _FakeResp(_body)
 _body = b"\xff\xd8small"
-check("fetch: a body under the cap comes back whole", main._fetch_bytes("https://x/a.jpg") == b"\xff\xd8small")
-_body = b"x" * (main._MAX_ART_BYTES + 1)
+check("fetch: a body under the cap comes back whole", art._fetch_bytes("https://x/a.jpg") == b"\xff\xd8small")
+_body = b"x" * (art._MAX_ART_BYTES + 1)
 try:
-    main._fetch_bytes("https://x/a.jpg")
+    art._fetch_bytes("https://x/a.jpg")
     check("fetch: a body over the cap raises", False)
 except ValueError:
     check("fetch: a body over the cap raises", True)
