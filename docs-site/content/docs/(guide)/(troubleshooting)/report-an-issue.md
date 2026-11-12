@@ -39,12 +39,12 @@ names.
 
 ## 4. File the report
 
-Report it on [unom improve](https://improve.unom.io/p/punktfunk/new?kind=bug), where you can also
+Report it on [improve unom](https://improve.unom.io/p/punktfunk/new?kind=bug), where you can also
 vote for bugs that hit you too and follow what happens to yours. You need a free unom account. It
 takes text only, so paste the parts of the export that matter. Or post in the `bug-reports` forum on
 [Discord](https://discord.gg/wzEGg9y45z) and attach the export there.
 
-Either way the title and text of your report are public, on unom improve and on our
+Either way the title and text of your report are public, on improve unom and on our
 [tracker](https://git.unom.io/unom/punktfunk/issues), so keep host names and addresses out of them.
 Include:
 
