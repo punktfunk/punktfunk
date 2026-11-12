@@ -33,6 +33,10 @@ enum ShotScenes {
             ShotScene(name: "03-pair", orientation: .natural, colorScheme: .dark) {
                 AnyView(ShotPair())
             },
+            // A locked profile's PIN prompt, with the line a wrong shape leaves.
+            ShotScene(name: "03b-unlock-pin", orientation: .natural, colorScheme: .dark) {
+                AnyView(ShotUnlockPin())
+            },
             ShotScene(name: "04-trust", orientation: .landscape, colorScheme: .dark) {
                 AnyView(ShotTrust())
             },
@@ -833,6 +837,30 @@ private struct ShotPair: View {
         // driver's capture of the window's rect takes in.
         ShotHome().sheet(isPresented: .constant(true)) { sheet }
         #endif
+    }
+}
+
+// MARK: - Unlock (a locked profile's PIN)
+
+private struct ShotUnlockPin: View {
+    /// The TV holds no key, so its switch stays signed in.
+    private var switchTitle: String {
+        #if os(tvOS)
+        String(localized: L10n.unlockStaySignedIn)
+        #else
+        L10n.unlockWithBiometry(method: Biometry.faceID.name)
+        #endif
+    }
+
+    private var sheet: some View {
+        UnlockPromptView(ask: UnlockAsk(
+            hostName: ShotMock.host.displayName, profileName: "Mia", pin: true,
+            error: ProfileUnlock.PinProblem.shape.line, switchTitle: switchTitle) { _ in })
+    }
+
+    /// Presented as the app presents it: a sheet over the hosts.
+    var body: some View {
+        ShotHome().sheet(isPresented: .constant(true)) { sheet }
     }
 }
 
