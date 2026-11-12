@@ -42,7 +42,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "box"
       }
     },
     "/api/v1/actions/{id}": {
@@ -138,7 +139,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "box"
       }
     },
     "/api/v1/auth/device/challenge": {
@@ -162,7 +164,8 @@
         },
         "security": [
           {}
-        ]
+        ],
+        "x-scope": "box"
       }
     },
     "/api/v1/auth/device/token": {
@@ -206,7 +209,8 @@
         },
         "security": [
           {}
-        ]
+        ],
+        "x-scope": "box"
       }
     },
     "/api/v1/client-logs": {
@@ -240,7 +244,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "box"
       },
       "post": {
         "tags": [
@@ -321,7 +326,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "box"
       }
     },
     "/api/v1/client-logs/{id}": {
@@ -383,7 +389,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "box"
       },
       "delete": {
         "tags": [
@@ -437,7 +444,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "box"
       }
     },
     "/api/v1/clients": {
@@ -471,7 +479,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "box"
       },
       "delete": {
         "tags": [
@@ -501,7 +510,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "box"
       }
     },
     "/api/v1/clients/{fingerprint}": {
@@ -557,7 +567,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "box"
       },
       "patch": {
         "tags": [
@@ -628,7 +639,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "box"
       }
     },
     "/api/v1/compositors": {
@@ -663,7 +675,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "host"
       }
     },
     "/api/v1/diagnostics": {
@@ -695,7 +708,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "host"
       }
     },
     "/api/v1/diagnostics/refresh": {
@@ -727,7 +741,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "host"
       }
     },
     "/api/v1/display/clients/{fingerprint}": {
@@ -770,7 +785,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "profile-data"
       },
       "put": {
         "tags": [
@@ -864,7 +880,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "profile-data"
       },
       "delete": {
         "tags": [
@@ -914,7 +931,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "profile-data"
       }
     },
     "/api/v1/display/layout": {
@@ -966,7 +984,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "box"
       }
     },
     "/api/v1/display/monitors": {
@@ -998,7 +1017,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "box"
       }
     },
     "/api/v1/display/presets": {
@@ -1033,7 +1053,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "box"
       },
       "post": {
         "tags": [
@@ -1093,7 +1114,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "box"
       }
     },
     "/api/v1/display/presets/{id}": {
@@ -1175,7 +1197,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "box"
       },
       "delete": {
         "tags": [
@@ -1229,7 +1252,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "box"
       }
     },
     "/api/v1/display/release": {
@@ -1271,7 +1295,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "box"
       }
     },
     "/api/v1/display/settings": {
@@ -1303,7 +1328,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "box"
       },
       "put": {
         "tags": [
@@ -1363,7 +1389,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "box"
       }
     },
     "/api/v1/display/state": {
@@ -1395,7 +1422,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "host"
       }
     },
     "/api/v1/display/targets": {
@@ -1427,7 +1455,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "profile-data"
       }
     },
     "/api/v1/downloads": {
@@ -1462,7 +1491,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "profile-data"
       }
     },
     "/api/v1/emulators": {
@@ -1507,7 +1537,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "profile-data"
       }
     },
     "/api/v1/emulators/catalog": {
@@ -1549,7 +1580,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "profile-data"
       }
     },
     "/api/v1/emulators/{id}/adopt": {
@@ -1649,7 +1681,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "profile-exec"
       }
     },
     "/api/v1/emulators/{id}/content": {
@@ -1735,7 +1768,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "profile-exec"
       }
     },
     "/api/v1/emulators/{id}/firmware": {
@@ -1833,7 +1867,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "profile-data"
       }
     },
     "/api/v1/emulators/{id}/install": {
@@ -1926,7 +1961,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "profile-exec"
       }
     },
     "/api/v1/emulators/{id}/prepare": {
@@ -2022,7 +2058,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "profile-exec"
       }
     },
     "/api/v1/emulators/{id}/remove": {
@@ -2098,7 +2135,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "profile-exec"
       }
     },
     "/api/v1/emulators/{id}/saves": {
@@ -2211,7 +2249,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "profile-data"
       }
     },
     "/api/v1/emulators/{id}/saves/export": {
@@ -2316,7 +2355,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "profile-exec"
       }
     },
     "/api/v1/emulators/{id}/saves/import": {
@@ -2421,7 +2461,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "profile-exec"
       }
     },
     "/api/v1/events": {
@@ -2499,7 +2540,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "host"
       }
     },
     "/api/v1/events/relay": {
@@ -2544,7 +2586,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "host"
       }
     },
     "/api/v1/game/end": {
@@ -2606,7 +2649,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "profile-data"
       }
     },
     "/api/v1/game/holds/{token}/release": {
@@ -2652,7 +2696,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "profile-exec"
       }
     },
     "/api/v1/gpus": {
@@ -2684,7 +2729,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "host"
       }
     },
     "/api/v1/gpus/preference": {
@@ -2746,7 +2792,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "box"
       }
     },
     "/api/v1/health": {
@@ -2771,7 +2818,8 @@
         },
         "security": [
           {}
-        ]
+        ],
+        "x-scope": "host"
       }
     },
     "/api/v1/hooks": {
@@ -2803,7 +2851,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "profile-exec"
       },
       "put": {
         "tags": [
@@ -2873,7 +2922,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "profile-exec"
       }
     },
     "/api/v1/host": {
@@ -2904,7 +2954,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "host"
       }
     },
     "/api/v1/host/audio/apps": {
@@ -2936,7 +2987,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "host"
       }
     },
     "/api/v1/host/settings": {
@@ -2968,7 +3020,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "host"
       },
       "patch": {
         "tags": [
@@ -3028,7 +3081,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "host"
       }
     },
     "/api/v1/host/theme": {
@@ -3060,7 +3114,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "host"
       }
     },
     "/api/v1/library": {
@@ -3134,7 +3189,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "profile-data"
       }
     },
     "/api/v1/library/art/{id}/{kind}": {
@@ -3216,7 +3272,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "profile-data"
       }
     },
     "/api/v1/library/custom": {
@@ -3278,7 +3335,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "profile-data"
       }
     },
     "/api/v1/library/custom/{id}": {
@@ -3331,7 +3389,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "profile-data"
       },
       "put": {
         "tags": [
@@ -3420,7 +3479,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "profile-data"
       },
       "delete": {
         "tags": [
@@ -3482,7 +3542,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "profile-data"
       }
     },
     "/api/v1/library/hidden/{id}": {
@@ -3574,7 +3635,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "profile-data"
       }
     },
     "/api/v1/library/install/{id}": {
@@ -3657,7 +3719,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "profile-data"
       },
       "delete": {
         "tags": [
@@ -3731,7 +3794,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "profile-data"
       }
     },
     "/api/v1/library/install/{id}/cancel": {
@@ -3797,7 +3861,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "profile-data"
       }
     },
     "/api/v1/library/install/{id}/pause": {
@@ -3873,7 +3938,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "profile-data"
       }
     },
     "/api/v1/library/metadata": {
@@ -3908,7 +3974,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "profile-data"
       },
       "put": {
         "tags": [
@@ -3964,7 +4031,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "profile-data"
       }
     },
     "/api/v1/library/metadata/{source}": {
@@ -4047,7 +4115,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "profile-data"
       },
       "delete": {
         "tags": [
@@ -4118,7 +4187,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "profile-data"
       }
     },
     "/api/v1/library/overrides": {
@@ -4171,7 +4241,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "profile-data"
       }
     },
     "/api/v1/library/overrides/games/{id}": {
@@ -4263,7 +4334,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "profile-data"
       }
     },
     "/api/v1/library/overrides/sets": {
@@ -4356,7 +4428,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "profile-data"
       }
     },
     "/api/v1/library/overrides/sets/{id}": {
@@ -4458,7 +4531,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "profile-data"
       },
       "delete": {
         "tags": [
@@ -4528,7 +4602,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "profile-data"
       }
     },
     "/api/v1/library/overrides/sources/{source}": {
@@ -4620,7 +4695,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "profile-data"
       }
     },
     "/api/v1/library/page": {
@@ -4757,7 +4833,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "profile-data"
       }
     },
     "/api/v1/library/picks/{id}": {
@@ -4849,7 +4926,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "profile-data"
       }
     },
     "/api/v1/library/provider/{provider}": {
@@ -4947,7 +5025,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "profile-exec"
       },
       "delete": {
         "tags": [
@@ -5008,7 +5087,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "profile-exec"
       }
     },
     "/api/v1/library/provider/{provider}/downloads": {
@@ -5081,7 +5161,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "profile-exec"
       }
     },
     "/api/v1/library/provider/{provider}/running": {
@@ -5154,7 +5235,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "profile-exec"
       }
     },
     "/api/v1/library/scanners": {
@@ -5210,7 +5292,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "profile-data"
       }
     },
     "/api/v1/library/scanners/{id}": {
@@ -5305,7 +5388,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "profile-data"
       }
     },
     "/api/v1/local/summary": {
@@ -5350,7 +5434,8 @@
         },
         "security": [
           {}
-        ]
+        ],
+        "x-scope": "host"
       }
     },
     "/api/v1/logs": {
@@ -5406,7 +5491,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "host"
       }
     },
     "/api/v1/native/clients": {
@@ -5440,7 +5526,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "box"
       },
       "delete": {
         "tags": [
@@ -5490,7 +5577,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "box"
       }
     },
     "/api/v1/native/clients/{fingerprint}": {
@@ -5545,7 +5633,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "box"
       },
       "patch": {
         "tags": [
@@ -5636,7 +5725,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "box"
       }
     },
     "/api/v1/native/pair": {
@@ -5668,7 +5758,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "box"
       },
       "delete": {
         "tags": [
@@ -5700,7 +5791,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "box"
       }
     },
     "/api/v1/native/pair/arm": {
@@ -5772,7 +5864,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "box"
       }
     },
     "/api/v1/native/pending": {
@@ -5807,7 +5900,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "box"
       }
     },
     "/api/v1/native/pending/{id}/approve": {
@@ -5912,7 +6006,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "box"
       }
     },
     "/api/v1/native/pending/{id}/deny": {
@@ -5970,7 +6065,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "box"
       }
     },
     "/api/v1/pair": {
@@ -6002,7 +6098,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "box"
       }
     },
     "/api/v1/pair/pin": {
@@ -6077,7 +6174,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "box"
       }
     },
     "/api/v1/plugin-access": {
@@ -6122,7 +6220,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "profile-exec"
       }
     },
     "/api/v1/plugin-access/requests": {
@@ -6164,7 +6263,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "profile-exec"
       },
       "post": {
         "tags": [
@@ -6227,7 +6327,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "profile-exec"
       }
     },
     "/api/v1/plugin-access/{plugin}/decide": {
@@ -6330,7 +6431,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "profile-exec"
       }
     },
     "/api/v1/plugin-access/{plugin}/release": {
@@ -6423,7 +6525,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "profile-exec"
       }
     },
     "/api/v1/plugins": {
@@ -6458,7 +6561,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "profile-exec"
       }
     },
     "/api/v1/plugins/logs": {
@@ -6503,7 +6607,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "profile-exec"
       }
     },
     "/api/v1/plugins/{id}": {
@@ -6559,7 +6664,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "profile-exec"
       },
       "delete": {
         "tags": [
@@ -6593,7 +6699,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "profile-exec"
       }
     },
     "/api/v1/plugins/{id}/ui-credential": {
@@ -6646,7 +6753,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "profile-exec"
       }
     },
     "/api/v1/plugins/{id}/ui/attach": {
@@ -6702,7 +6810,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "profile-exec"
       }
     },
     "/api/v1/profiles": {
@@ -6747,7 +6856,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "box"
       },
       "post": {
         "tags": [
@@ -6837,7 +6947,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "box"
       }
     },
     "/api/v1/profiles/default": {
@@ -6881,7 +6992,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "box"
       }
     },
     "/api/v1/profiles/doctor": {
@@ -6933,7 +7045,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "box"
       }
     },
     "/api/v1/profiles/door": {
@@ -7011,7 +7124,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "box"
       }
     },
     "/api/v1/profiles/enumerate": {
@@ -7056,7 +7170,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "box"
       }
     },
     "/api/v1/profiles/seating": {
@@ -7098,7 +7213,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "box"
       },
       "put": {
         "tags": [
@@ -7158,7 +7274,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "box"
       }
     },
     "/api/v1/profiles/windows-accounts": {
@@ -7193,7 +7310,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "box"
       }
     },
     "/api/v1/profiles/{id}": {
@@ -7286,7 +7404,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "box"
       },
       "delete": {
         "tags": [
@@ -7359,7 +7478,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "box"
       }
     },
     "/api/v1/profiles/{id}/avatar": {
@@ -7423,7 +7543,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "box"
       },
       "put": {
         "tags": [
@@ -7492,7 +7613,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "box"
       },
       "delete": {
         "tags": [
@@ -7535,7 +7657,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "box"
       }
     },
     "/api/v1/profiles/{id}/devices": {
@@ -7611,7 +7734,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "box"
       },
       "delete": {
         "tags": [
@@ -7675,7 +7799,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "box"
       }
     },
     "/api/v1/profiles/{id}/devices/{fingerprint}": {
@@ -7760,7 +7885,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "box"
       }
     },
     "/api/v1/profiles/{id}/end": {
@@ -7833,7 +7959,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "box"
       }
     },
     "/api/v1/profiles/{id}/start": {
@@ -7896,7 +8023,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "box"
       }
     },
     "/api/v1/profiles/{id}/stop": {
@@ -7969,7 +8097,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "box"
       }
     },
     "/api/v1/profiles/{id}/unlock-challenge": {
@@ -8062,7 +8191,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "box"
       }
     },
     "/api/v1/profiles/{id}/wake": {
@@ -8135,7 +8265,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "box"
       }
     },
     "/api/v1/session": {
@@ -8174,7 +8305,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "host"
       }
     },
     "/api/v1/session/idr": {
@@ -8207,7 +8339,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "host"
       }
     },
     "/api/v1/session/last": {
@@ -8239,7 +8372,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "profile-data"
       }
     },
     "/api/v1/session/settings": {
@@ -8300,7 +8434,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "profile-data"
       },
       "put": {
         "tags": [
@@ -8391,7 +8526,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "profile-data"
       }
     },
     "/api/v1/session/{id}": {
@@ -8439,7 +8575,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "host"
       }
     },
     "/api/v1/session/{id}/access": {
@@ -8514,7 +8651,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "host"
       }
     },
     "/api/v1/session/{id}/audio": {
@@ -8572,7 +8710,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "host"
       }
     },
     "/api/v1/session/{id}/idr": {
@@ -8619,7 +8758,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "host"
       }
     },
     "/api/v1/session/{id}/pads": {
@@ -8684,7 +8824,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "host"
       }
     },
     "/api/v1/session/{id}/player": {
@@ -8759,7 +8900,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "host"
       }
     },
     "/api/v1/stats/capture/live": {
@@ -8799,7 +8941,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "host"
       }
     },
     "/api/v1/stats/capture/start": {
@@ -8831,7 +8974,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "host"
       }
     },
     "/api/v1/stats/capture/status": {
@@ -8861,7 +9005,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "host"
       }
     },
     "/api/v1/stats/capture/stop": {
@@ -8905,7 +9050,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "host"
       }
     },
     "/api/v1/stats/recordings": {
@@ -8940,7 +9086,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "host"
       }
     },
     "/api/v1/stats/recordings/{id}": {
@@ -9001,7 +9148,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "host"
       },
       "delete": {
         "tags": [
@@ -9053,7 +9201,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "host"
       }
     },
     "/api/v1/status": {
@@ -9084,7 +9233,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "host"
       }
     },
     "/api/v1/store/catalog": {
@@ -9126,7 +9276,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "profile-exec"
       }
     },
     "/api/v1/store/install": {
@@ -9135,7 +9286,7 @@
           "store"
         ],
         "summary": "Install a plugin",
-        "description": "`{source, id}` installs the catalog pin after re-checking integrity, or `{spec,\naccept_unverified: true}` installs unreviewed code the operator owns. `202` + job id; watch at\n`GET /store/jobs/{id}`. A seat host on a person's own account installs from the built-in\nsource alone: anything else would run code the box chose as that person.\n\nOne package operation at a time (`409` otherwise): `bun` shares a lockfile and `node_modules`.",
+        "description": "`{source, id}` installs the catalog pin after re-checking integrity, or `{spec,\naccept_unverified: true}` installs unreviewed code the operator owns. `202` + job id; watch at\n`GET /store/jobs/{id}`. A Windows seat host installs none: the box's runner, which it shares,\nnever reads them. A seat host on a person's own account installs from the built-in source\nalone: anything else would run code the box chose as that person.\n\nOne package operation at a time (`409` otherwise): `bun` shares a lockfile and `node_modules`.",
         "operationId": "installPlugin",
         "requestBody": {
           "content": {
@@ -9189,7 +9340,7 @@
             }
           },
           "409": {
-            "description": "Another package operation is in flight",
+            "description": "Another package operation is in flight, or a Windows seat host",
             "content": {
               "application/json": {
                 "schema": {
@@ -9198,7 +9349,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "profile-exec"
       }
     },
     "/api/v1/store/installed": {
@@ -9243,7 +9395,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "profile-exec"
       }
     },
     "/api/v1/store/jobs": {
@@ -9287,7 +9440,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "profile-exec"
       }
     },
     "/api/v1/store/jobs/{id}": {
@@ -9350,7 +9504,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "profile-exec"
       }
     },
     "/api/v1/store/refresh": {
@@ -9392,7 +9547,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "profile-exec"
       }
     },
     "/api/v1/store/runtime": {
@@ -9434,7 +9590,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "profile-exec"
       },
       "post": {
         "tags": [
@@ -9493,7 +9650,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "profile-exec"
       }
     },
     "/api/v1/store/sources": {
@@ -9537,7 +9695,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "profile-exec"
       }
     },
     "/api/v1/store/sources/{name}": {
@@ -9603,7 +9762,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "profile-exec"
       },
       "delete": {
         "tags": [
@@ -9646,7 +9806,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "profile-exec"
       }
     },
     "/api/v1/store/uninstall": {
@@ -9718,7 +9879,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "profile-exec"
       }
     },
     "/api/v1/update/apply": {
@@ -9770,7 +9932,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "box"
       }
     },
     "/api/v1/update/check": {
@@ -9822,7 +9985,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "box"
       }
     },
     "/api/v1/update/status": {
@@ -9854,7 +10018,8 @@
               }
             }
           }
-        }
+        },
+        "x-scope": "box"
       }
     },
     "/api/v1/webtransport": {
@@ -9888,7 +10053,8 @@
         },
         "security": [
           {}
-        ]
+        ],
+        "x-scope": "box"
       }
     }
   },
