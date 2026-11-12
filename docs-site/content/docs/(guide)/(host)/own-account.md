@@ -74,8 +74,9 @@ The profile's card under **Profiles** lists each device signed in to it, as **Si
   profile's own session. The account and its files stay.
 - **The console manages nothing inside.** No plugin runs there, and the console adds no plugin,
   folder access or emulator: **Plugins** and **Library** → **Sources** say so for that profile. It
-  runs no [hooks](/docs/automation#hooks). A game from the box's library starts what the library
-  says.
+  runs no [hooks](/docs/automation#hooks). A game from the box's library starts without the
+  commands the owner set to run before it, and a tile that is itself a command isn't offered:
+  both would run the owner's command as that person.
 - **No password to update.** Nothing stores it, so the card has no **Update password…**. If the
   account's password expires, sign in as that person once.
 
