@@ -14,6 +14,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.DialogProperties
@@ -187,7 +188,7 @@ fun LinkConnectPrompt(
  * a decision to abandon it.
  */
 @Composable
-fun AwaitingApprovalPrompt(hostLabel: String, onCancel: () -> Unit) {
+fun AwaitingApprovalPrompt(hostLabel: String, deviceCode: String?, onCancel: () -> Unit) {
     PunktfunkDialog(
         title = stringResource(R.string.pair_waiting_for_approval),
         onDismiss = onCancel,
@@ -205,6 +206,15 @@ fun AwaitingApprovalPrompt(hostLabel: String, onCancel: () -> Unit) {
             )
             Text(
                 stringResource(R.string.dial_approve_no_pin, hostLabel),
+                color = MaterialTheme.colorScheme.onSurface,
+            )
+        }
+        // The host's web console shows the same code beside this request.
+        if (deviceCode != null) {
+            Text(
+                stringResource(R.string.pair_device_code, deviceCode),
+                fontFamily = FontFamily.Monospace,
+                fontWeight = FontWeight.Medium,
                 color = MaterialTheme.colorScheme.onSurface,
             )
         }

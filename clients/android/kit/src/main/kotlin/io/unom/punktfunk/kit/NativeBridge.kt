@@ -1108,6 +1108,9 @@ object NativeBridge {
     /** A one-shot toast from a service worker. */
     external fun nativeConsoleNotice(handle: Long, text: String)
 
+    /** This device's code, once its identity has loaded: shown while a request waits for approval. */
+    external fun nativeConsoleSetDeviceCode(handle: Long, code: String)
+
     /** `[{"heading", "text"}]`: what this app bundles, for the console's Licences screen. */
     external fun nativeConsoleSetLicenses(handle: Long, json: String)
 

@@ -1,8 +1,10 @@
 package io.unom.punktfunk
 
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import io.unom.punktfunk.kit.security.ClientIdentity
 import io.unom.punktfunk.kit.security.KnownHost
+import io.unom.punktfunk.kit.security.deviceCode
 import io.unom.punktfunk.models.PendingLinkConnect
 import io.unom.punktfunk.models.PendingTrust
 
@@ -105,7 +107,8 @@ internal fun ConnectPrompts(
     }
 
     awaitingHostName?.let { hostLabel ->
-        AwaitingApprovalPrompt(hostLabel = hostLabel, onCancel = onCancelApproval)
+        val deviceCode = remember(identity) { identity?.deviceCode() }
+        AwaitingApprovalPrompt(hostLabel = hostLabel, deviceCode = deviceCode, onCancel = onCancelApproval)
     }
 
     if (speedTest != null && speedTestTarget != null) {
