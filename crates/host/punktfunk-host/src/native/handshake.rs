@@ -481,6 +481,9 @@ pub(super) struct Negotiated {
     pub(super) screen: Option<crate::vdisplay::policy::DisplayTarget>,
     /// The topology its own screen opens under ([`session_screen`]); rebuilds reuse it.
     pub(super) topology: Option<crate::vdisplay::policy::Topology>,
+    /// The session's display is lit in HDR. The Welcome's colour is the stream's, which is SDR
+    /// while the content on that display is.
+    pub(super) display_hdr: bool,
     /// The client asked for a game, and joining a shared screen dropped it.
     pub(super) launch_dropped: bool,
 }
@@ -591,6 +594,8 @@ struct Terms {
     audio_channels: u8,
     bit_depth: u8,
     hdr: bool,
+    /// [`Verdict::display_hdr`].
+    display_hdr: bool,
     chroma: crate::encode::ChromaFormat,
     /// The colours the client asked to get at studio range.
     studio_asked: crate::session_plan::StudioAsk,
@@ -676,10 +681,15 @@ pub(super) async fn negotiate(
         gamescope_route.as_ref(),
         &n.knobs,
         joined.as_ref().map(|(d, _)| d),
+        follows_source(&n.first.features, mirrored),
     );
     let (studio_asked, owner_hdr) = (facts.studio_asked, facts.owner_hdr);
-    let (bit_depth, session_hdr, chroma) =
-        negotiate_video_format(facts.clone(), codec, encoder.clone(), hello.mode).await?;
+    let Verdict {
+        bit_depth,
+        hdr: session_hdr,
+        chroma,
+        display_hdr,
+    } = negotiate_video_format(facts.clone(), codec, encoder.clone(), hello.mode).await?;
     if owner_hdr.is_some_and(|o| crate::vdisplay::admission::joined_hdr(o, session_hdr).is_none()) {
         // Out of the table first, as `admit_mode`'s refusal.
         drop(reservation);
@@ -740,6 +750,7 @@ pub(super) async fn negotiate(
         audio_channels,
         bit_depth,
         hdr: session_hdr,
+        display_hdr,
         chroma,
         studio_asked,
         pyrowave_bpp,
@@ -792,6 +803,7 @@ pub(super) async fn negotiate(
         mirrored: t.mirrored,
         screen: t.wanted,
         topology: t.topology,
+        display_hdr: t.display_hdr,
         launch_dropped,
     })
 }
@@ -1596,10 +1608,28 @@ pub(super) struct FormatFacts {
     pub(super) owner_hdr: Option<bool>,
     /// A joiner's: the format of the capture it shares, the ceiling of its own.
     pub(super) owner_format: Option<crate::vdisplay::admission::SampleFormat>,
+    /// The rule runs again when the source moves: the session reaches another compositor, or
+    /// its content turns HDR or SDR. Only for a client that rebuilds its decoder at an epoch,
+    /// on a capture the session does not share.
+    pub(super) follows: bool,
+    /// Whether the source shows HDR content now, where it says ([`Self::follows_content`]).
+    /// `Some(false)` streams SDR off a display lit in HDR. `None` streams what it is lit in.
+    pub(super) content_hdr: Option<bool>,
+}
+
+/// What [`FormatFacts::resolve`] settles: the stream's depth, HDR verdict and chroma, and
+/// whether its display is lit in HDR, which holds while the content on it is SDR.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) struct Verdict {
+    pub(super) bit_depth: u8,
+    pub(super) hdr: bool,
+    pub(super) chroma: crate::encode::ChromaFormat,
+    pub(super) display_hdr: bool,
 }
 
 impl FormatFacts {
-    /// `owner` is the display a joiner was admitted onto.
+    /// `owner` is the display a joiner was admitted onto. `follows` is the client's promise
+    /// to rebuild its decoder, for a session that mirrors no monitor.
     pub(super) fn of(
         hello: &Hello,
         studio_asked: crate::session_plan::StudioAsk,
@@ -1607,6 +1637,7 @@ impl FormatFacts {
         gamescope_route: Option<&crate::vdisplay::GamescopeRoute>,
         knobs: &SessionKnobs,
         owner: Option<&crate::vdisplay::admission::LiveDisplay>,
+        follows: bool,
     ) -> FormatFacts {
         let owner_format = owner.and_then(|d| d.format);
         FormatFacts {
@@ -1617,7 +1648,34 @@ impl FormatFacts {
             studio_asked: asked_under(owner_format, studio_asked),
             owner_hdr: owner.map(|d| d.hdr),
             owner_format,
+            follows: follows && owner.is_none(),
+            content_hdr: None,
         }
+    }
+
+    /// gamescope names the HDR state of what it shows; every other source streams what its
+    /// display is lit in. So does a host that shares screens: a shared capture has one format
+    /// for every session on it.
+    pub(super) fn follows_content(&self) -> bool {
+        self.follows
+            && self.compositor == Some(crate::vdisplay::Compositor::Gamescope)
+            && !crate::vdisplay::policy::prefs().get().any_join()
+    }
+
+    /// The facts of a session that moved to `compositor` on `route`. `content_hdr` is what the
+    /// new source shows; a gamescope that just started shows SDR.
+    pub(super) fn moved_to(
+        &self,
+        compositor: crate::vdisplay::Compositor,
+        route: Option<&crate::vdisplay::GamescopeRoute>,
+    ) -> FormatFacts {
+        let mut moved = FormatFacts {
+            compositor: Some(compositor),
+            gamescope_route: route.cloned(),
+            ..self.clone()
+        };
+        moved.content_hdr = moved.follows_content().then_some(false);
+        moved
     }
 
     /// What this session streams a shared capture at, or what it misses of it. `resolved` is
@@ -1645,14 +1703,15 @@ impl FormatFacts {
 
     /// Bit depth, HDR verdict, and chroma for `codec` at `mode`, each gated by host, client,
     /// codec, source, and `encoder`, the session's resolution. A joiner asks HDR only of an HDR
-    /// display. `mode` is the one the pipeline opens at: the Hello's at the handshake, the live
-    /// one on a codec change. Blocks on its probes.
+    /// display. A source showing SDR content streams SDR and keeps its display lit in HDR.
+    /// `mode` is the one the pipeline opens at: the Hello's at the handshake, the live one
+    /// later. Blocks on its probes.
     pub(super) fn resolve(
         &self,
         codec: crate::encode::Codec,
         encoder: &crate::encode::Resolved,
         mode: punktfunk_core::Mode,
-    ) -> (u8, bool, crate::encode::ChromaFormat) {
+    ) -> Verdict {
         let (compositor, gamescope_route) = (self.compositor, self.gamescope_route.as_ref());
         // 10-bit only when host, client, codec, capture, and GPU all allow it. Resolved before
         // Welcome so `color` matches the stream (a can't-10-bit GPU yields 8-bit SDR). A shared
@@ -1681,24 +1740,23 @@ impl FormatFacts {
         let sdr10_chain_ok = (sdr10_widen || sdr10_source)
             && codec_carries_sdr10(codec, sdr10_source)
             && encoder.carries_sdr10(codec);
-        let depth_reachable = (client_wants_hdr && capture_supports_hdr) || sdr10_chain_ok;
+        // The display can be lit in HDR; the stream is HDR while its content is.
+        let lit_hdr = client_wants_hdr && capture_supports_hdr;
+        let source_hdr = lit_hdr && self.content_hdr != Some(false);
+        let depth_reachable = source_hdr || sdr10_chain_ok;
         // Probe may open a tiny encoder: short-circuited behind the cheap gates.
-        let gpu_can_10bit = if host_wants_10bit
-            && client_supports_10bit
-            && codec.supports_10bit()
-            && depth_reachable
-        {
-            encoder.can_encode_10bit(codec)
-        } else {
-            false
-        };
+        let ten_bit_asked = host_wants_10bit && client_supports_10bit && codec.supports_10bit();
+        let gpu_can_10bit = ten_bit_asked && depth_reachable && encoder.can_encode_10bit(codec);
         let bit_depth: u8 = if gpu_can_10bit { 10 } else { 8 };
-        // Colour label, capturer mandate, and vdisplay HDR all read this, never `bit_depth >= 10`
-        // (10-bit without it is SDR: BT.709 VUI, display untouched).
-        let session_hdr = gpu_can_10bit && client_wants_hdr && capture_supports_hdr;
+        // The colour label and the capturer mandate read this, never `bit_depth >= 10` (10-bit
+        // without it is SDR: BT.709 VUI).
+        let session_hdr = gpu_can_10bit && source_hdr;
+        let display_hdr = ten_bit_asked && lit_hdr && encoder.can_encode_10bit(codec);
         tracing::info!(
             bit_depth,
             session_hdr,
+            display_hdr,
+            content_hdr = ?self.content_hdr,
             host_wants_10bit,
             client_supports_10bit,
             client_wants_hdr,
@@ -1790,7 +1848,12 @@ impl FormatFacts {
         // Follows the depth clamp: an 8-bit stream is never labelled HDR.
         let session_hdr = session_hdr && bit_depth == 10;
 
-        (bit_depth, session_hdr, chroma)
+        Verdict {
+            bit_depth,
+            hdr: session_hdr,
+            chroma,
+            display_hdr,
+        }
     }
 }
 
@@ -1809,21 +1872,36 @@ fn asked_under(
     }
 }
 
+/// Whether a session's format may move with its source ([`FormatFacts::follows`]): the client
+/// rebuilds its decoder at an epoch, and the session mirrors no monitor, whose capture it shares.
+pub(super) fn follows_source(
+    features: &punktfunk_core::quic::v2::features::FeatureSet,
+    mirrored: bool,
+) -> bool {
+    features.has(punktfunk_core::quic::v2::registry::FEATURE_FORMAT_EPOCH) && !mirrored
+}
+
 /// HDR the client asks for: `VIDEO_CAP_HDR`, except a joiner of an SDR display (`owner_hdr`).
 fn hdr_asked(video_caps: u8, owner_hdr: Option<bool>) -> bool {
     video_caps & punktfunk_core::quic::VIDEO_CAP_HDR != 0 && owner_hdr != Some(false)
 }
 
-/// [`FormatFacts::resolve`] off the runtime: its probes may open a tiny encoder.
+/// [`FormatFacts::resolve`] off the runtime: its probes may open a tiny encoder. A source that
+/// names its content is read first; a gamescope not up yet shows SDR.
 async fn negotiate_video_format(
-    facts: FormatFacts,
+    mut facts: FormatFacts,
     codec: crate::encode::Codec,
     encoder: Arc<crate::encode::Resolved>,
     mode: punktfunk_core::Mode,
-) -> Result<(u8, bool, crate::encode::ChromaFormat)> {
-    tokio::task::spawn_blocking(move || facts.resolve(codec, &encoder, mode))
-        .await
-        .context("video format probe task")
+) -> Result<Verdict> {
+    tokio::task::spawn_blocking(move || {
+        if facts.follows_content() {
+            facts.content_hdr = Some(crate::vdisplay::hdr_content_now(None));
+        }
+        facts.resolve(codec, &encoder, mode)
+    })
+    .await
+    .context("video format probe task")
 }
 
 /// Linux depth under 4:4:4. An 8-bit capture reaches NVENC 4:4:4 as planar 8-bit YUV444, so a

@@ -1,6 +1,7 @@
 //! Everything that swaps the pipeline under a running stream: a Gaming↔Desktop session switch,
-//! a client mode switch, a codec ask, the Windows topology re-assert, capture loss, a source
-//! that changed size with no client Reconfigure, and a rate the encoder cannot take in place.
+//! a client mode switch, a codec ask, content that turned HDR or SDR, the Windows topology
+//! re-assert, capture loss, a source that changed size with no client Reconfigure, and a rate
+//! the encoder cannot take in place.
 //! Each site drains its ask into [`StreamState::rebuild`], the one performer: it plans the
 //! rebuild ([`rebuild_plan::plan`]), prepares, builds, then commits through
 //! [`StreamState::swap_pipeline`] and the plan's epilogue, or rolls back.
@@ -280,6 +281,7 @@ pub(super) enum Rebuilt {
 struct Before {
     plan: crate::session_plan::SessionPlan,
     bit_depth: u8,
+    format_facts: super::super::handshake::FormatFacts,
     composite: (bool, bool),
     params: crate::vdisplay::SessionParams,
     compositor: crate::vdisplay::Compositor,
@@ -366,13 +368,15 @@ impl StreamState {
 
     /// Snapshot what the plan changes, take the ask's payload — a mode ask's view, or the size it
     /// asked on a display that stays, goes into the session plan — and apply its display change:
-    /// a joiner that stops joining, a switch's env, route and cursor plan, or a codec's.
+    /// a joiner that stops joining, a switch's env, route, format and cursor plan, a codec's,
+    /// or the format of content that turned HDR or SDR.
     fn prepare(&mut self, plan: &RebuildPlan, ask: RebuildAsk) -> Prepared {
         let d = &self.display;
         let mut prep = Prepared {
             before: Before {
                 plan: self.plan,
                 bit_depth: self.bit_depth,
+                format_facts: self.facts.format_facts.clone(),
                 composite: (d.gamescope_composite, d.metadata_composite),
                 params: d.vd_params.clone(),
                 compositor: d.compositor,
@@ -406,6 +410,11 @@ impl StreamState {
                  the capture attachment in place at the current mode"
             ),
             RebuildAsk::CaptureLost(keepalive) => prep.keepalive = keepalive,
+            // Taking the keepalive stops the running capture: the next one attaches alone.
+            RebuildAsk::Content(_) => {
+                let feed = self.live.capturer.feed();
+                prep.keepalive = feed.and_then(|f| f.take_keepalive());
+            }
             RebuildAsk::Format(_) | RebuildAsk::SourceMode(_) | RebuildAsk::Bitrate(_) => {}
         }
 
@@ -425,49 +434,84 @@ impl StreamState {
                 ) {
                     crate::vdisplay::settle_desktop_portal(to);
                 }
+                let hdr = self.follow_to(to, route.as_ref(), plan.mode);
                 let hw_cursor = self.retarget_cursor_plan(to, route.as_ref());
                 prep.params = Some(crate::vdisplay::SessionParams {
+                    hdr,
                     hw_cursor,
                     route,
                     ..self.display.vd_params.clone()
                 });
             }
-            Some(DisplayChange::Format(codec)) => self.reformat(codec, plan.mode, &mut prep),
+            Some(DisplayChange::Format(codec)) => {
+                let v = self.resolve_live(codec, plan.mode);
+                self.show(v.display_hdr, &mut prep);
+                tracing::info!(from = ?prep.before.plan.codec, to = ?codec,
+                    bit_depth = v.bit_depth, hdr = v.hdr, chroma = ?v.chroma,
+                    "rebuilding the pipeline for a codec change");
+            }
+            Some(DisplayChange::Content(hdr)) => {
+                self.facts.format_facts.content_hdr = Some(hdr);
+                let v = self.resolve_live(self.plan.codec, plan.mode);
+                self.show(self.display.vd_params.hdr, &mut prep);
+                tracing::info!(
+                    content_hdr = hdr,
+                    bit_depth = v.bit_depth,
+                    hdr = v.hdr,
+                    "the content's HDR state moved — rebuilding the capture in its range"
+                );
+            }
             None => {}
         }
         prep
     }
 
-    /// Re-run the handshake's depth, HDR and chroma rule for `codec` at `mode` (S2-5), resolve
-    /// the plan for it, and hand the live display its HDR verdict and cursor plan (S5-4).
-    fn reformat(
+    /// Run the handshake's depth, HDR and chroma rule on the session's facts for `codec` at
+    /// `mode` (S2-5), and resolve the plan for it on `compositor` and `route`.
+    fn resolve_format(
         &mut self,
         codec: crate::encode::Codec,
         mode: punktfunk_core::Mode,
-        prep: &mut Prepared,
-    ) {
-        let (bit_depth, hdr, chroma) =
-            self.facts
-                .format_facts
-                .resolve(codec, &self.facts.encoder, mode);
+        compositor: crate::vdisplay::Compositor,
+        route: Option<&crate::vdisplay::GamescopeRoute>,
+    ) -> super::super::handshake::Verdict {
+        let v = self
+            .facts
+            .format_facts
+            .resolve(codec, &self.facts.encoder, mode);
         self.plan = super::pipeline::resolve_plan(
             &self.facts.encoder,
-            bit_depth,
-            hdr,
-            chroma,
+            v.bit_depth,
+            v.hdr,
+            v.chroma,
             codec,
             self.plan.studio_asked,
             self.plan.cursor_forward,
             self.plan.slices,
-            self.display.compositor,
-            self.display.vd_params.route.as_ref(),
+            compositor,
+            route,
             self.plan.pyrowave_bpp,
             usize::from(self.facts.shard_payload),
             self.plan.reframe_to,
             self.display.vd_params.join_live,
             self.plan.mirrored,
         );
-        self.bit_depth = bit_depth;
+        self.bit_depth = v.bit_depth;
+        v
+    }
+
+    /// [`Self::resolve_format`] on the display the session runs.
+    fn resolve_live(
+        &mut self,
+        codec: crate::encode::Codec,
+        mode: punktfunk_core::Mode,
+    ) -> super::super::handshake::Verdict {
+        let route = self.display.vd_params.route.clone();
+        self.resolve_format(codec, mode, self.display.compositor, route.as_ref())
+    }
+
+    /// Hand the live display `hdr` and the plan's cursor (S5-4), and make them its request.
+    fn show(&mut self, hdr: bool, prep: &mut Prepared) {
         let route = self.display.vd_params.route.clone();
         let hw_cursor = self.retarget_cursor_plan(self.display.compositor, route.as_ref());
         self.display.vd.set_hdr(hdr);
@@ -478,8 +522,23 @@ impl StreamState {
             hw_cursor,
             ..self.display.vd_params.clone()
         });
-        tracing::info!(from = ?prep.before.plan.codec, to = ?codec, bit_depth, hdr, ?chroma,
-            "rebuilding the pipeline for a codec change");
+    }
+
+    /// Whether the display of a session on its way to `to` is lit in HDR. A session that
+    /// follows its source runs the format rule for the new one; a session on a display
+    /// another holds keeps the format they share.
+    fn follow_to(
+        &mut self,
+        to: crate::vdisplay::Compositor,
+        route: Option<&crate::vdisplay::GamescopeRoute>,
+        mode: punktfunk_core::Mode,
+    ) -> bool {
+        if !self.facts.format_facts.follows || self.rebuild_facts().shared {
+            return self.display.vd_params.hdr;
+        }
+        self.facts.format_facts = self.facts.format_facts.moved_to(to, route);
+        self.resolve_format(self.plan.codec, mode, to, route)
+            .display_hdr
     }
 
     /// The plan's build: in place first where it says, else its pipeline or encoder.
@@ -650,7 +709,7 @@ impl StreamState {
             let format = crate::vdisplay::admission::SampleFormat {
                 bit_depth: self.bit_depth,
                 chroma_444: self.plan.chroma.is_444(),
-                full_range: self.plan.full_range(params.hdr, self.bit_depth),
+                full_range: self.plan.full_range(self.plan.hdr, self.bit_depth),
             };
             crate::vdisplay::admission::publish_format(stop, format);
             self.display.vd_params = params;
@@ -733,11 +792,13 @@ impl StreamState {
         let Before {
             plan: old_plan,
             bit_depth,
+            format_facts,
             composite,
             params,
             ..
         } = prep.before;
         (self.plan, self.bit_depth) = (old_plan, bit_depth);
+        self.facts.format_facts = format_facts;
         let d = &mut self.display;
         (d.gamescope_composite, d.metadata_composite) = composite;
         if prep.shown {
@@ -762,7 +823,7 @@ impl StreamState {
     }
 }
 
-/// The seven rebuild sites: each drains its ask and hands it to [`StreamState::rebuild`].
+/// The eight rebuild sites: each drains its ask and hands it to [`StreamState::rebuild`].
 impl StreamState {
     /// Follow the latest session switch, the watcher's or the seat's: rebuild the backend in
     /// place, with the session's display request, the switch's launch and the cursor plan of the
@@ -823,6 +884,31 @@ impl StreamState {
             tracing::warn!(error = %format!("{e:#}"), ?codec,
                 "codec-change rebuild failed — staying on the current codec");
         }
+    }
+
+    /// The content on the session's gamescope turned HDR or SDR: stop the capture and attach
+    /// it again in that range, the display lit as it is. `Err` when no capture comes back up.
+    /// A display that is not lit in HDR streams SDR whatever it shows, and is left alone.
+    #[cfg(target_os = "linux")]
+    pub(super) fn on_content(&mut self) -> Result<()> {
+        let streamed = (self.facts.format_facts.content_hdr).filter(|_| self.display.vd_params.hdr);
+        let generation = self.live.cur_display_gen;
+        let Some(follow) = self.content.as_mut() else {
+            return Ok(());
+        };
+        follow.point(streamed.is_some(), generation);
+        let Some(hdr) = streamed.and_then(|s| follow.wants(s)) else {
+            return Ok(());
+        };
+        self.rebuild(RebuildAsk::Content(hdr))
+            .context("re-attach capture in the content's range")?;
+        Ok(())
+    }
+
+    /// Only gamescope names the HDR state of its content.
+    #[cfg(not(target_os = "linux"))]
+    pub(super) fn on_content(&mut self) -> Result<()> {
+        Ok(())
     }
 
     /// An exclusive-topology eviction bounced the Windows IDD-push display's modes: re-attach
@@ -949,8 +1035,9 @@ impl StreamState {
     }
 
     /// One capture-loss attempt's re-detection: follow the live session's compositor, opening a
-    /// new backend with the session's request when it changed, and re-derive the cursor plan.
-    /// Input follows on commit, onto the compositor the build landed on.
+    /// new backend with the session's request when it changed, at the format the rule gives
+    /// that source, and re-derive the cursor plan. Input follows on commit, onto the compositor
+    /// the build landed on.
     fn retarget_to_live_session(&mut self) {
         let active = crate::vdisplay::detect_active_session();
         crate::vdisplay::observe_session_instance(&active);
@@ -982,6 +1069,10 @@ impl StreamState {
                 Err(e2) => tracing::warn!(error = %format!("{e2:#}"),
                     "capture loss: opening the newly-detected compositor failed — retrying"),
             }
+        }
+        if reopened {
+            self.display.vd_params.hdr =
+                self.follow_to(c, rebuilt_route.as_ref(), self.live.cur_mode);
         }
         // Also when only the gamescope route changed: Attach and Spawn differ in who draws.
         let hw_cursor = self.retarget_cursor_plan(self.display.compositor, rebuilt_route.as_ref());
@@ -1620,6 +1711,29 @@ mod tests {
         let view = Some((VideoFit::Fit, (8, 8)));
         assert_eq!(opened_for, [view, view, None]);
         assert_eq!(f.st.plan.codec, crate::encode::Codec::H264);
+    }
+
+    /// Content that turned HDR leaves the display lit as it is. The fact stays once its
+    /// capture is built; a build that never comes up puts the old one back and ends the session.
+    #[test]
+    fn a_content_rebuild_keeps_the_display_lit_and_the_fact_it_built() {
+        let mut f = super::super::swap::tests::fake();
+        let keyframes = Arc::new(AtomicU32::new(0));
+        f.st.facts.format_facts.content_hdr = Some(false);
+        f.st.display.vd_params.hdr = true;
+        for (build, fact) in [
+            (Script::Fails, Some(false)),
+            (Script::Pipeline(WIDE, 20_000), Some(true)),
+        ] {
+            let ask = RebuildAsk::Content(true);
+            let plan = rebuild_plan::plan(&ask, &f.st.rebuild_facts()).expect("a rebuild");
+            let out = f.st.perform(plan, ask, |_, plan, _, _| {
+                script(build, plan.rate_kbps, &keyframes)
+            });
+            assert_eq!(matches!(out, Ok(Rebuilt::Built)), fact == Some(true));
+            assert_eq!(f.st.facts.format_facts.content_hdr, fact);
+            assert!(f.st.display.vd_params.hdr, "the display stays lit");
+        }
     }
 
     /// Another session holds the display: a smaller size asked reopens the encoder framed for

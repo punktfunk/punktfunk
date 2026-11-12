@@ -165,6 +165,79 @@ fn baselayer_has(display: &str, appid: u32) -> bool {
     root_cardinals(display, b"GAMESCOPECTRL_BASELAYER_APPID").is_some_and(|v| v.contains(&appid))
 }
 
+/// Whether the focused app presents an HDR surface on `display`, from gamescope's
+/// `GAMESCOPE_COLOR_APP_WANTS_HDR_FEEDBACK`. Unset reads `false`: gamescope writes the atom
+/// at the first HDR surface. `None` once the display is gone.
+fn app_wants_hdr(display: &str) -> Option<bool> {
+    use x11rb::protocol::xproto::{AtomEnum, ConnectionExt};
+    let (conn, root) = root_atoms(display)?;
+    let name = b"GAMESCOPE_COLOR_APP_WANTS_HDR_FEEDBACK";
+    let atom = conn.intern_atom(false, name).ok()?.reply().ok()?.atom;
+    let prop = conn
+        .get_property(false, root, atom, AtomEnum::CARDINAL, 0, 1)
+        .ok()?
+        .reply()
+        .ok()?;
+    Some(prop.value32().and_then(|mut v| v.next()) == Some(1))
+}
+
+/// Focus leaves an HDR game for the Steam UI and comes back, and a swapchain rebuilt mid-game
+/// shows no HDR surface for a moment. A stream that followed either would switch twice.
+const HDR_HOLD: Duration = Duration::from_secs(3);
+
+/// Whether a seat's gamescope shows HDR content, steadied: HDR at the first HDR surface, SDR
+/// once the app that presented it is gone or left HDR itself, and [`HDR_HOLD`] has passed.
+#[derive(Default)]
+pub struct HdrContent {
+    /// The Steam app last seen presenting HDR; `None` for one Steam does not name.
+    app: Option<u32>,
+    last_hdr: Option<Instant>,
+}
+
+impl HdrContent {
+    /// One look at `seat`'s gamescope. `None` while it has no display up.
+    pub fn poll(&mut self, seat: Option<&str>) -> Option<bool> {
+        let displays: Vec<String> = xwayland_cursor_targets(seat)
+            .into_iter()
+            .map(|(d, _)| d)
+            .collect();
+        // gamescope writes its feedback on the first Xwayland's root only.
+        let wants: Vec<bool> = displays.iter().filter_map(|d| app_wants_hdr(d)).collect();
+        if wants.is_empty() {
+            return None;
+        }
+        let focused = displays.iter().find_map(|d| focused_app(d));
+        // An app with a window gamescope could focus. The baselayer list keeps ids of games
+        // that are gone.
+        let running = |app| {
+            let apps = |d: &String| root_cardinals(d, b"GAMESCOPE_FOCUSABLE_APPS");
+            displays.iter().filter_map(apps).any(|v| v.contains(&app))
+        };
+        Some(self.step(wants.contains(&true), focused, running, Instant::now()))
+    }
+
+    fn step(
+        &mut self,
+        wants: bool,
+        focused: Option<u32>,
+        running: impl Fn(u32) -> bool,
+        now: Instant,
+    ) -> bool {
+        if wants {
+            self.app = focused;
+            self.last_hdr = Some(now);
+            return true;
+        }
+        if self.app.is_some_and(|a| focused == Some(a) || !running(a)) {
+            self.app = None;
+        }
+        self.app.is_some()
+            || self
+                .last_hdr
+                .is_some_and(|t| now.duration_since(t) < HDR_HOLD)
+    }
+}
+
 /// A managed unit's gamescope node, and when the gamescope that owns it started.
 pub(super) struct ManagedNode {
     pub(super) id: u32,
@@ -984,6 +1057,52 @@ pub(super) fn discover_session_display_env(
 }
 
 #[cfg(test)]
+mod hdr_content {
+    use super::*;
+
+    const GAME: u32 = 1091500;
+    const STEAM: u32 = 769;
+
+    /// HDR at once; the Steam UI over a running HDR game keeps it; the game ending, or leaving
+    /// HDR itself, drops it after the hold.
+    #[test]
+    fn hdr_holds_while_the_app_that_showed_it_runs() {
+        let t0 = Instant::now();
+        let at = |s: u64| t0 + Duration::from_secs(s);
+        let mut c = HdrContent::default();
+        assert!(!c.step(false, Some(STEAM), |_| true, at(0)), "nothing HDR");
+        assert!(c.step(true, Some(GAME), |_| true, at(1)));
+        assert!(
+            c.step(false, Some(STEAM), |_| true, at(60)),
+            "Steam UI over it"
+        );
+        assert!(!c.step(false, Some(STEAM), |_| false, at(61)), "it ended");
+
+        assert!(c.step(true, Some(GAME), |_| true, at(80)));
+        assert!(
+            c.step(false, Some(GAME), |_| true, at(81)),
+            "swapchain rebuilt"
+        );
+        assert!(c.step(true, Some(GAME), |_| true, at(82)));
+        assert!(c.step(false, Some(GAME), |_| true, at(83)));
+        assert!(
+            !c.step(false, Some(GAME), |_| true, at(86)),
+            "the game left HDR"
+        );
+    }
+
+    /// An app Steam does not name has only the hold.
+    #[test]
+    fn an_unnamed_app_has_only_the_hold() {
+        let t0 = Instant::now();
+        let mut c = HdrContent::default();
+        assert!(c.step(true, None, |_| false, t0));
+        assert!(c.step(false, None, |_| false, t0 + Duration::from_secs(2)));
+        assert!(!c.step(false, None, |_| false, t0 + HDR_HOLD));
+    }
+}
+
+#[cfg(test)]
 mod live_probe {
     /// Reads the atoms off a real `--steam` gamescope. Ignored: needs one running.
     #[test]
@@ -995,6 +1114,14 @@ mod live_probe {
             targets.iter().any(|(d, _)| super::focused_app(d).is_some()),
             "no display answered GAMESCOPE_FOCUSED_APP — the empty-token connect failed"
         );
+    }
+
+    /// Reads the HDR feedback off a real gamescope. Ignored: needs one running.
+    #[test]
+    #[ignore]
+    fn hdr_content_is_readable() {
+        let content = super::HdrContent::default().poll(None);
+        assert!(content.is_some(), "no gamescope answered");
     }
 
     /// With two gamescopes up, the seat key must select exactly one. Ignored: needs both.

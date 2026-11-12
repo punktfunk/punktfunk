@@ -95,6 +95,20 @@ pub(crate) fn role_of(topology: policy::Topology, primary: bool) -> Role {
     }
 }
 
+/// Whether `seat`'s gamescope shows HDR content now. One that is not up shows none.
+/// Blocking: X round trips.
+pub(crate) fn hdr_content_now(seat: Option<&str>) -> bool {
+    #[cfg(target_os = "linux")]
+    {
+        GamescopeHdrContent::default().poll(seat).unwrap_or(false)
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = seat;
+        false
+    }
+}
+
 /// The heads of `compositor`, else of the live session's. Blocking: one compositor IPC.
 pub(crate) fn heads(compositor: Option<Compositor>) -> anyhow::Result<Vec<PhysicalMonitor>> {
     #[cfg(windows)]

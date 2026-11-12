@@ -578,8 +578,10 @@ pub(super) struct SessionContext {
     pub(super) compositor: crate::vdisplay::Compositor,
     /// Per-instance, not via `PUNKTFUNK_GAMESCOPE_NODE` — two sessions must not overwrite each other.
     pub(super) gamescope_route: Option<crate::vdisplay::GamescopeRoute>,
-    /// What the handshake's format rule read, re-run for a codec change.
+    /// What the handshake's format rule read, re-run when the codec or the source moves.
     pub(super) format_facts: super::handshake::FormatFacts,
+    /// The display is lit in HDR ([`Verdict::display_hdr`](super::handshake::Verdict)).
+    pub(super) display_hdr: bool,
     /// The handshake's encode resolution, which the session keeps for every open.
     pub(super) encoder: Arc<crate::encode::Resolved>,
     pub(super) host_knobs: &'static super::HostKnobs,

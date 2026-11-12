@@ -30,7 +30,8 @@ pub(super) enum SwapReason {
     SourceMode,
     /// A rate the encoder cannot take in place.
     Bitrate,
-    /// The client's codec ask: another codec, and with it often another depth or colour.
+    /// Another codec the client asked for, or content that turned HDR or SDR: with either,
+    /// often another depth or colour.
     Format,
 }
 
@@ -459,6 +460,8 @@ pub(super) mod tests {
                     studio_asked: crate::session_plan::StudioAsk::default(),
                     owner_hdr: None,
                     owner_format: None,
+                    follows: false,
+                    content_hdr: None,
                 },
             },
             next: now,
@@ -539,6 +542,8 @@ pub(super) mod tests {
             seat_join: None,
             #[cfg(target_os = "linux")]
             following: None,
+            #[cfg(target_os = "linux")]
+            content: None,
             live_session: crate::session_status::register(
                 crate::session_status::Registration::fake("swap-test"),
             ),

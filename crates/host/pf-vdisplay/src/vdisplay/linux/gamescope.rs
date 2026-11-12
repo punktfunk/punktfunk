@@ -38,6 +38,7 @@ mod takeover;
 #[path = "gamescope/wsi.rs"]
 mod wsi;
 // One namespace across the split: the submodules `use super::*` and see each other through here.
+pub use discovery::HdrContent;
 pub(crate) use discovery::{
     display_presenting, foreign_gamescope_running, game_session_exited,
     gamescope_can_composite_cursor, gamescope_captures_sdr10, gamescope_hdr_capable,
