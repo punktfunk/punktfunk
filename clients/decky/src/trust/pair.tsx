@@ -91,12 +91,15 @@ export const PairModal: FC<{
         </div>
       )}
 
+      {/* X erases a digit from anywhere on the keypad, as ⌫ does. */}
       <Focusable
         style={{
           display: "grid",
           gridTemplateColumns: "repeat(3, 1fr)",
           gap: "0.5em",
         }}
+        onSecondaryButton={() => !busy && back()}
+        onSecondaryActionDescription={t("common_delete")}
       >
         {["1", "2", "3", "4", "5", "6", "7", "8", "9"].map((d) => (
           <DialogButton key={d} disabled={busy} onClick={() => press(d)}>
