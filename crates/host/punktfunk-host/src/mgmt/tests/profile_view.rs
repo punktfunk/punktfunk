@@ -270,14 +270,15 @@ async fn a_profile_s_layer_adds_and_narrows_never_widens() {
         })
         .collect();
     let want = |id: &str, on: bool, by: Option<&str>| (id.into(), on.into(), by.map(Into::into));
-    assert_eq!(
-        states,
-        [
-            want("lutris", false, Some("box")),
-            want("romm", false, Some("profile")),
-            want("steam", true, None),
-        ]
-    );
+    // A Linux seat lists no source it can play nothing of: Lutris starts from the owner's home.
+    let mut wanted = vec![
+        want("romm", false, Some("profile")),
+        want("steam", true, None),
+    ];
+    if !cfg!(target_os = "linux") {
+        wanted.insert(0, want("lutris", false, Some("box")));
+    }
+    assert_eq!(states, wanted);
 
     let path = format!("/api/v1/library/overrides?as={SEAT_P}");
     let (_, doc) = send(&app, get_req(&path)).await;
