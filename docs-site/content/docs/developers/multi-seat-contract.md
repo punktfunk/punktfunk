@@ -384,6 +384,19 @@ entry and opens with the owner's lock, list and PIN. A take-turns profile keeps 
   profile's lock with no PIN; a locked profile's seat gets only the pairing records its lock
   admits, as a person's row does, and the owner's row follows the owner's lock. A lock file
   there that doesn't read gives an empty pairing list.
+- **The person.** A device a locked profile's list admits now, with nothing asked, is that
+  profile's person, unless the profile is the owner or on a person's own account. With
+  `?as=<id>` it may call `mgmt_routes::PERSON`: `PUT library/hidden/{id}`,
+  `PUT library/overrides/games/{id}`, `PUT library/scanners/{id}`, and `PUT` and
+  `DELETE session/settings`, which write that profile's own layer alone. A hide or a game's
+  entry it adds must name a title the profile's library lists; taking one away needs none. With
+  no `as` a device isn't let in. A device that isn't the person, an open profile, one that needs
+  its PIN and the owner's id answer 403 `profile_change_not_allowed`; an unknown id 404
+  `profile_unknown`. Art picks stay off: the host fetches a pick's URL itself. Asked on every
+  call. The box's own host decides, the door on a door: it passes the call to the owner's host,
+  which writes the library, carrying `X-Punktfunk-Person` beside `X-Punktfunk-Device`. That host
+  honours it only with its admin token, on these routes, for the profile `as` names and never
+  the owner, and needs no pairing record for the device. Any other seat host decides nothing.
 
 ## Checking a seat can actually stream
 
@@ -615,6 +628,7 @@ seat (`game/holds/{token}/release`, below). A device's `game/end`, `GET display/
 `library/install/*` to the owner's host, whose plugins download into the shared game files, each
 as that device: the door's call carries `X-Punktfunk-Device`, which a seat host honours only with
 its admin token and only for a device paired there, and then answers on the device's grants. A
+[person's](#a-profiles-lock) calls go to the owner's host too, once the door found the person. A
 call starts a stopped seat and answers 503, except `host`, `status` and `diagnostics`, which
 wake nobody; a host that doesn't answer is 502, and so is every call while the seat supervisor
 doesn't answer. With no owner row the owner's calls answer 503, and so does a `host/settings`

@@ -225,6 +225,8 @@ password.
   still open it.
 - Signing a device out ends its session, and so does locking a profile it plays unless you keep
   that device when you lock.
+- The devices on its list can also change this profile's own games and game-exit choice, once
+  the Punktfunk apps offer it.
 - Locking the owner profile also keeps Moonlight to the Moonlight devices on its list.
 - A profile that shares your desktop opens with your lock, your devices and your PIN: one
   desktop, one lock. A profile on its own Windows account (take turns) has a lock of its own.

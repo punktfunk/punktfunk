@@ -20,7 +20,9 @@ facts and live sessions. Every host has its own; the operator reaches a seat's t
 **Operator**: whoever holds the console password, and through it the box's admin key. Changes
 box scope and manages every profile.
 
-**Person**: the human a profile stands for. The console password never runs code as them.
+**Person**: the human a profile stands for. The console password never runs code as them. On a
+device, a locked profile's person is a device its list lets in now: it changes that profile's own
+library view and game-exit choice, and nothing else. An open profile has no person.
 
 **Device**: a paired client, proven by its certificate or a device token. It reaches the short
 list of routes in `punktfunk_core::mgmt_routes` and nothing else.
