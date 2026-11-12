@@ -416,8 +416,31 @@ client._run_cli = _cli_answers(2, "Sleep host failed — the host refused it (40
 got = asyncio.run(main.Plugin().run_action("2f1c-desk", "power.sleep"))
 check("run action: a refusal keeps its sentence", got["ok"] is False and "409" in got["notice"])
 
+client._run_cli = _cli_answers(0, '{"rows": [{"id": "only", "checked": true}], "note": null}')
+got = asyncio.run(main.Plugin().screens("2f1c-desk"))
+check("screens: argv is `screen <ref> --json`", seen[-1][0] == ["screen", "2f1c-desk", "--json"])
+check("screens: rows merged under ok", got["ok"] is True and got["rows"][0]["id"] == "only")
+
+client._run_cli = _cli_answers(0, '{"rows": [{"id": "second", "checked": true}], "note": null}')
+got = asyncio.run(main.Plugin().pick_screen("2f1c-desk", "second"))
+check("pick screen: argv is `screen <ref> --pick <id> --json`",
+      seen[-1][0] == ["screen", "2f1c-desk", "--pick", "second", "--json"])
+check("pick screen: the rows read back", got["ok"] is True and got["rows"][0]["id"] == "second")
+client._run_cli = _cli_answers(2, "This host decides the screen for this device.\n")
+got = asyncio.run(main.Plugin().pick_screen("2f1c-desk", "HDMI-A-1"))
+check("pick screen: a refusal keeps its sentence",
+      got == {"ok": False, "error": "unreachable",
+              "notice": "This host decides the screen for this device."})
+client._run_cli = _cli_answers(0, "not json")
+check("pick screen: unreadable rows are a failure",
+      asyncio.run(main.Plugin().pick_screen("2f1c-desk", "only"))["ok"] is False)
+
 seen.clear()
 for name, call in [
+    ("screens", lambda: main.Plugin().screens("--exec")),
+    ("pick screen ref", lambda: main.Plugin().pick_screen("-x", "only")),
+    ("pick screen id", lambda: main.Plugin().pick_screen("desk", "--json")),
+    ("pick screen empty", lambda: main.Plugin().pick_screen("desk", " ")),
     ("wake", lambda: main.Plugin().wake("--exec")),
     ("actions", lambda: main.Plugin().actions("-x")),
     ("run action ref", lambda: main.Plugin().run_action("--exec", "power.sleep")),

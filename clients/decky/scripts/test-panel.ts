@@ -2,9 +2,9 @@
 // row says about itself, when it shows its address and its ▾, which update row shows, what "Check
 // for updates" reports, and when the Streaming section is up. Run by `pnpm test`.
 import assert from "node:assert/strict";
-import type { UpdateInfo } from "../src/backend.ts";
+import type { ScreenRow, UpdateInfo } from "../src/backend.ts";
 import { type HostView, needsPair, splitByAccess } from "../src/hosts/model.ts";
-import { rowMenu, rowStatus, sharedNames, streamIsUp } from "../src/panel/model.ts";
+import { rowMenu, rowStatus, screenPress, sharedNames, streamIsUp } from "../src/panel/model.ts";
 import { checkOutcome, updateBanner } from "../src/update/model.ts";
 
 const host = (o: Partial<HostView>): HostView => ({
@@ -53,14 +53,34 @@ assert.deepEqual([...sharedNames(twins)], ["desk"]);
 assert.equal(sharedNames([host({ name: "desk" }), host({ name: "Desk" })]).size, 0, "names compare exactly");
 assert.equal(sharedNames([]).size, 0);
 
-// The ▾: pinned presets, two profiles and up, or a power row.
-assert.equal(rowMenu(0, 0, 0), null);
-assert.equal(rowMenu(0, 1, 0), null, "a single profile is no choice");
-assert.deepEqual(rowMenu(0, 2, 0), { profiles: true, presets: false, power: false });
-assert.deepEqual(rowMenu(1, 1, 0), { profiles: false, presets: true, power: false });
-assert.deepEqual(rowMenu(2, 3, 0), { profiles: true, presets: true, power: false });
-assert.deepEqual(rowMenu(0, 1, 1), { profiles: false, presets: false, power: true }, "Wake alone opens the ▾");
-assert.deepEqual(rowMenu(1, 2, 3), { profiles: true, presets: true, power: true });
+// The ▾: pinned presets, two profiles and up, a power row, or a Screen row or note.
+const none = { profiles: false, presets: false, power: false, screen: false };
+assert.equal(rowMenu(0, 0, 0, 0), null);
+assert.equal(rowMenu(0, 1, 0, 0), null, "a single profile is no choice");
+assert.deepEqual(rowMenu(0, 2, 0, 0), { ...none, profiles: true });
+assert.deepEqual(rowMenu(1, 1, 0, 0), { ...none, presets: true });
+assert.deepEqual(rowMenu(2, 3, 0, 0), { ...none, profiles: true, presets: true });
+assert.deepEqual(rowMenu(0, 1, 1, 0), { ...none, power: true }, "Wake alone opens the ▾");
+assert.deepEqual(rowMenu(0, 1, 0, 1), { ...none, screen: true }, "a Screen row or note alone opens the ▾");
+assert.deepEqual(rowMenu(1, 2, 3, 4), { profiles: true, presets: true, power: true, screen: true });
+
+// A Screen row: the current one does nothing, a greyed one says why, even when it is current.
+const screenRow = (o: Partial<ScreenRow>): ScreenRow => ({
+  kind: "role",
+  id: "only",
+  label: null,
+  detail: "",
+  header: false,
+  checked: false,
+  pickable: true,
+  in_use_by: null,
+  off: false,
+  ...o,
+});
+assert.equal(screenPress(screenRow({})), "pick");
+assert.equal(screenPress(screenRow({ checked: true })), "current");
+assert.equal(screenPress(screenRow({ kind: "monitor", pickable: false, in_use_by: "Deck" })), "greyed");
+assert.equal(screenPress(screenRow({ checked: true, pickable: false })), "greyed", "the host decides");
 
 // Streaming is up on either arm: the socket, or our shortcut still waking its host.
 assert.equal(streamIsUp(false, false), false);

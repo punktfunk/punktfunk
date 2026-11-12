@@ -5,10 +5,10 @@ installs a native ``punktfunk-client`` instead. Every call goes through the one 
 which owns its identity, known hosts and settings, so no other module cares which one answered.
 
 The CLI verbs (``discover``, ``hosts``, ``pair``, ``request_access``, ``device_code``,
-``trust_host``, ``library``, ``profiles``, ``wake``, ``actions``, ``run_action``) build argv, run
-``punktfunk``, and map its exit code to a stable error string. Nothing here parses the client's
-data files or re-implements a trust rule; the backend exists because Decky's frontend cannot
-spawn processes.
+``trust_host``, ``library``, ``profiles``, ``wake``, ``actions``, ``run_action``, ``screens``,
+``pick_screen``) build argv, run ``punktfunk``, and map its exit code to a stable error string.
+Nothing here parses the client's data files or re-implements a trust rule; the backend exists
+because Decky's frontend cannot spawn processes.
 """
 
 import asyncio
@@ -507,6 +507,32 @@ async def run_action(ref: str, action_id: str) -> dict:
     if rc == 0:
         return {"ok": True, "notice": notice}
     return {"ok": False, "error": _cli_error(rc), "notice": notice}
+
+
+async def screens(ref: str) -> dict:
+    """The host's Screen section for this Deck (``punktfunk screen <host-ref> --json``): ``{ok,
+    rows, note, preset, may_choose}``. A host that is off lists no rows. A flag-shaped ref is
+    refused, as in :func:`library`."""
+    ref = str(ref).strip()
+    if not ref or ref.startswith("-"):
+        return {"ok": False, "error": "unresolved", "detail": "bad host reference"}
+    return await _cli_json(["screen", ref, "--json"], timeout=20.0)
+
+
+async def pick_screen(ref: str, row_id: str) -> dict:
+    """Make one row this Deck's screen (``punktfunk screen <host-ref> --pick ID --json``): the
+    rows read back, as :func:`screens`, else ``{ok: False, error, notice}`` with the CLI's
+    sentence. A flag-shaped ref or id is ``unresolved`` with no notice, never handed to the CLI."""
+    ref, row_id = str(ref).strip(), str(row_id).strip()
+    if not ref or ref.startswith("-") or not row_id or row_id.startswith("-"):
+        return {"ok": False, "error": "unresolved"}
+    rc, out, err = await _run_cli(["screen", ref, "--pick", row_id, "--json"], timeout=20.0)
+    if rc == 0:
+        data = _stdout_json(out)
+        # `ok` last, as in _cli_json.
+        return {**data, "ok": True} if data else {"ok": False, "error": "client-error"}
+    lines = (out.strip() or err.strip()).splitlines()
+    return {"ok": False, "error": _cli_error(rc), "notice": lines[-1] if lines else ""}
 
 
 async def runner_info() -> dict:
