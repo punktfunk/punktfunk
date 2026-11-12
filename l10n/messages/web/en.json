@@ -1779,6 +1779,7 @@
 	"profiles_device_for_now": "Signed in for now",
 	"profiles_device_stay": "Stays signed in",
 	"profiles_device_key": "Unlocks with a fingerprint or face",
+	"profiles_device_added": "Added by you",
 	"profiles_device_last_used": "Last used {when}",
 	"profiles_device_sign_out": "Sign out",
 	"profiles_device_sign_out_title": "Sign {device} out?",

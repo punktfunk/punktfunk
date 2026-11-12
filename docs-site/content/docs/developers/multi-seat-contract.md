@@ -325,10 +325,11 @@ session by design, and display activation fails while its session is inactive.
 the door, is its one writer, `0600` on Linux and SYSTEM and Administrators on Windows; it is never
 in `profiles.json`. Its `profiles` map each profile id to `locked`, an optional `pin`
 (`iterations`, `salt`, `hash`: PBKDF2-HMAC-SHA256, 600,000 iterations, a 16-byte salt) and the
-`devices` list of a person's row's `devices.json`. Removing a profile removes its entry;
-unlocking keeps the list and the PIN. One desktop has one lock: the owner is the first profile
-whose `os_account` is `operator`, and any later one shares its desktop, has no entry and opens
-with the owner's lock, list and PIN. A take-turns profile keeps its own.
+`devices` list of a person's row's `devices.json`, where a device the operator added is `stay` and
+`added`. Removing a profile removes its entry; unlocking keeps the list and the PIN, and locking
+replaces the list with the devices the lock names. One desktop has one lock: the owner is the
+first profile whose `os_account` is `operator`, and any later one shares its desktop, has no
+entry and opens with the owner's lock, list and PIN. A take-turns profile keeps its own.
 
 - **The check.** A device opens a profile when the profile is unlocked, or its list admits the
   device: `stay`, or present. Any other device is refused, or asked for the PIN when the profile

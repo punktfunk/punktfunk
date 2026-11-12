@@ -24,6 +24,7 @@ import { deviceName } from "@/sections/Devices/pairedRows";
 export const KIND_WORD: Record<SignedInKind, () => string> = {
 	for_now: () => m.profiles_device_for_now(),
 	stay: () => m.profiles_device_stay(),
+	added: () => m.profiles_device_added(),
 	key: () => m.profiles_device_key(),
 };
 

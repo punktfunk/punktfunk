@@ -26,6 +26,7 @@ import decidePost, {
 	when as allows,
 } from "../routes/api/v1/plugin-access/[plugin]/decide.post";
 import pluginPut from "../routes/api/v1/plugins/[id].put";
+import { when as setsPin } from "../routes/api/v1/profiles/[id]/lock.post";
 import installPost from "../routes/api/v1/store/install.post";
 import sourcesPut from "../routes/api/v1/store/sources/[name].put";
 import type { When } from "./confirm";
@@ -174,7 +175,7 @@ export const GATES: readonly Route[] = [
 	open("DELETE", "profiles/{id}/devices", SIGNS_OUT),
 	open("DELETE", "profiles/{id}/devices/{fingerprint}", SIGNS_OUT),
 	open("POST", "profiles/{id}/end", STEERS),
-	open("POST", "profiles/{id}/lock", NARROWS),
+	onlyWhen(setsPin, gated("POST", "profiles/{id}/lock")),
 	gated("DELETE", "profiles/{id}/lock"),
 	gated("PUT", "profiles/{id}/lock/pin"),
 	open("DELETE", "profiles/{id}/lock/pin", NARROWS),

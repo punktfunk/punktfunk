@@ -153,6 +153,18 @@ impl Lock {
         self.list.grant(device, now, stay, None)
     }
 
+    /// [`Self::admit`] with `stay`, marked as the operator's add: its kind stays `added` through
+    /// a later PIN.
+    pub fn add(&mut self, device: &Device, now: i64) -> bool {
+        if !self.admit(device, now, true) {
+            return false;
+        }
+        let fp = &device.fingerprint;
+        let entry = self.list.devices.iter_mut().find(|e| &e.fingerprint == fp);
+        entry.into_iter().for_each(|e| e.added = true);
+        true
+    }
+
     /// Wrong PINs, and tries in flight, counted at `now`.
     pub fn wrong_pins(&mut self, now: i64) -> usize {
         self.wrong_pins
@@ -390,6 +402,41 @@ mod tests {
         );
         assert_eq!(lock.charge_pin(NOW + PIN_WINDOW), Ok(()), "the oldest left");
         assert_eq!(lock.wrong_pins(NOW + 2 * PIN_WINDOW), 0);
+    }
+
+    /// The operator's add reads as `added` through a later PIN, and as `key` once a key is
+    /// enrolled. An entry written before the marker keeps the kind it had.
+    #[test]
+    fn a_device_the_operator_added_says_so() {
+        use crate::ipc::DeviceKind;
+        let mut lock = Lock::default();
+        assert!(lock.add(&device(1), NOW));
+        assert!(lock.admit(&device(1), NOW + 1, false), "then types the PIN");
+        assert!(lock.admit(&device(2), NOW, true));
+        let kinds = |lock: &Lock| {
+            lock.list
+                .entries()
+                .into_iter()
+                .map(|e| e.kind)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(kinds(&lock), [DeviceKind::Added, DeviceKind::Stay]);
+        let later = lock.admitted(NOW + 2 * crate::unlock::CAP_SECS);
+        assert_eq!(later.len(), 2, "both stay");
+        let key = crate::ipc::UnlockKey {
+            alg: crate::ipc::KeyAlg::P256,
+            public: hex::encode([4_u8; 65]),
+        };
+        lock.list.devices[0].key = Some(key);
+        assert_eq!(kinds(&lock), [DeviceKind::Key, DeviceKind::Stay]);
+
+        let old = r#"{"devices":[{"fingerprint":"0101010101010101010101010101010101010101010101010101010101010101","name":"TV","stay":true,"added_unix":1,"last_unix":1}]}"#;
+        let old: Lock = serde_json::from_str(old).unwrap();
+        assert_eq!(kinds(&old), [DeviceKind::Stay]);
+        let mut added = Lock::default();
+        assert!(added.add(&device(1), NOW));
+        let text = serde_json::to_string(&added).unwrap();
+        assert_eq!(serde_json::from_str::<Lock>(&text).unwrap(), added);
     }
 
     /// A file is read only as one this crate wrote: a bad entry or PIN spoils all of it.

@@ -11,36 +11,57 @@ use super::shared::*;
 use crate::profiles::Profiles;
 use pf_seats::locks::{Lock, PinHash};
 
-/// A profile's lock, as the console shows it.
+/// A profile's lock, as the profile list shows it.
 #[derive(Serialize, ToSchema)]
-pub(crate) struct ProfileLock {
-    /// Only the devices on its list, and a device that brings its PIN, open it.
+pub(crate) struct LockSummary {
+    /// Only the devices on its list, and a device that brings its PIN, open it. Also `true` for
+    /// every profile while the lock file doesn't read.
     locked: bool,
     /// It has a PIN.
     pin: bool,
     /// Wrong PINs in the last 15 minutes over all devices. At 10, PIN entry waits.
     failed_pins: u32,
-    /// The paired devices playing as it now, on its desktop's other profiles too: the ones a
-    /// lock would cut off unless they are kept.
+    /// The owner profile whose lock opens it, for a profile that shares the owner's desktop:
+    /// the other fields are that lock's.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(required = false)]
+    shared_with: Option<String>,
+}
+
+/// A profile's lock, as the console shows it.
+#[derive(Serialize, ToSchema)]
+pub(crate) struct ProfileLock {
+    #[serde(flatten)]
+    summary: LockSummary,
+    /// The devices playing as it now, on its desktop's other profiles too: the ones a lock would
+    /// cut off unless they are kept.
     playing: Vec<PlayingDevice>,
 }
 
-/// A paired device playing as a profile now.
-#[derive(Serialize, ToSchema, Debug, PartialEq, Eq)]
+/// A device playing as a profile now.
+#[derive(Serialize, ToSchema, Debug)]
 pub(crate) struct PlayingDevice {
-    /// SHA-256 of the device's certificate, lowercase hex.
-    fingerprint: String,
-    /// The name it paired with.
+    /// SHA-256 of the device's certificate, lowercase hex. Absent when its session matches no
+    /// single paired device: it can't be kept, only warned about.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(required = false)]
+    fingerprint: Option<String>,
+    /// The name it paired with, else the name its session gave.
     name: String,
 }
 
 /// `POST /profiles/{id}/lock`, optional.
 #[derive(Deserialize, ToSchema, Default)]
 pub(crate) struct LockProfile {
-    /// Paired devices, by certificate SHA-256 hex, that keep opening it: they join its list,
-    /// until signed out, as it locks. A profile already locked takes only devices it lets in.
+    /// Paired devices, by certificate SHA-256 hex: the list it locks with, in place of any an
+    /// earlier lock left. A profile already locked takes only devices it lets in.
     #[serde(default)]
     devices: Vec<String>,
+    /// 4 to 8 digits: its PIN from now. Absent keeps the PIN it has. A profile already locked
+    /// takes none.
+    #[serde(default)]
+    #[schema(example = "2468")]
+    pin: Option<String>,
 }
 
 /// `PUT /profiles/{id}/lock/pin`.
@@ -109,13 +130,23 @@ async fn readable(st: &MgmtState, id: &str) -> Result<Arc<Profiles>, Response> {
     Ok(profiles)
 }
 
+/// The lock that opens profile `id`: the owner's for one that shares the owner's desktop.
+pub(super) fn summary(profiles: &Profiles, id: &str) -> LockSummary {
+    let holder = profiles.lock_holder(id);
+    let locks = profiles.locks();
+    let lock = locks.get(&holder);
+    LockSummary {
+        locked: lock.locked || locks.unreadable(),
+        pin: lock.pin.is_some(),
+        failed_pins: u32::try_from(locks.failures(&holder)).unwrap_or(u32::MAX),
+        shared_with: (holder != id).then_some(holder),
+    }
+}
+
 /// Profile `id`'s lock as it is now.
 async fn state(st: &MgmtState, profiles: &Profiles, id: &str) -> Response {
-    let lock = profiles.locks().get(id);
     Json(ProfileLock {
-        locked: lock.locked,
-        pin: lock.pin.is_some(),
-        failed_pins: u32::try_from(profiles.locks().failures(id)).unwrap_or(u32::MAX),
+        summary: summary(profiles, id),
         playing: playing(st, profiles, id).await,
     })
     .into_response()
@@ -133,9 +164,9 @@ async fn change(st: &MgmtState, id: &str, change: impl FnOnce(&mut Lock)) -> Res
     }
 }
 
-/// The paired devices whose live sessions play as a profile under `id`'s lock: this host's
-/// sessions and, on a door, every seat's. A session's client is a fingerprint prefix, so a
-/// device is named only when exactly one paired device carries it.
+/// The devices whose live sessions play as a profile under `id`'s lock: this host's sessions
+/// and, on a door, every seat's. A session's client is a fingerprint prefix, so its fingerprint
+/// is given only when exactly one paired device carries it. One row per device or client.
 async fn playing(st: &MgmtState, profiles: &Profiles, id: &str) -> Vec<PlayingDevice> {
     let owner = profiles.owner_id();
     // A GameStream session plays as the owner.
@@ -174,23 +205,29 @@ async fn playing(st: &MgmtState, profiles: &Profiles, id: &str) -> Vec<PlayingDe
     if st.door.is_some() && unknown(&paired) {
         paired.extend(owner_moonlight(st).await.unwrap_or_default());
     }
-    let mut out: Vec<PlayingDevice> = Vec::new();
+    let mut out = Vec::new();
+    let mut seen = std::collections::BTreeSet::new();
     for (client, session_name, _) in &live {
         let mut carrying = paired
             .iter()
             .filter(|(fp, _)| crate::session_status::is_client(client, fp));
-        let (Some((fp, label)), None) = (carrying.next(), carrying.next()) else {
-            continue;
+        let row = match (carrying.next(), carrying.next()) {
+            (Some((fp, label)), None) => {
+                let name = label.as_deref().or(session_name.as_deref());
+                let device = crate::native::unlock::device(fp, name);
+                PlayingDevice {
+                    fingerprint: Some(device.fingerprint),
+                    name: device.name,
+                }
+            }
+            _ => PlayingDevice {
+                fingerprint: None,
+                name: crate::native::unlock::device(client, session_name.as_deref()).name,
+            },
         };
-        if out.iter().any(|d| &d.fingerprint == fp) {
-            continue;
+        if seen.insert(row.fingerprint.clone().unwrap_or_else(|| client.clone())) {
+            out.push(row);
         }
-        let name = label.as_deref().or(session_name.as_deref());
-        let device = crate::native::unlock::device(fp, name);
-        out.push(PlayingDevice {
-            fingerprint: device.fingerprint,
-            name: device.name,
-        });
     }
     out
 }
@@ -224,24 +261,24 @@ pub(crate) async fn get_profile_lock(
 
 /// Lock a profile
 ///
-/// From now only the devices on its list open it, and a device that brings its PIN when it has
-/// one. `devices`, paired devices, join the list in the same step, so a lock keeps the ones
-/// someone plays on; a session from any other device ends. On a profile already locked it
-/// takes only devices the profile lets in, so it never widens who opens it. Admin lane only.
+/// From now its list is exactly `devices`, paired devices, so a lock keeps the ones someone
+/// plays on, and with `pin` that is its PIN; a session from any other device ends. One step: on
+/// any refusal nothing changed. On a profile already locked it changes nothing and takes only
+/// devices the profile lets in and no PIN, so it never widens who opens it: the device and PIN
+/// routes change a locked profile. Admin lane only.
 #[utoipa::path(
     post,
     path = "/profiles/{id}/lock",
     tag = "profiles",
     operation_id = "lockProfile",
     params(("id" = String, Path, description = "The profile id")),
-    request_body(content = Option<LockProfile>, description = "The devices that keep opening it; none when absent"),
+    request_body(content = Option<LockProfile>, description = "Its devices and PIN; an empty list and the PIN it has when absent"),
     responses(
         (status = OK, description = "Locked", body = ProfileLock),
-        (status = BAD_REQUEST, description = "Not a device fingerprint", body = ApiError),
+        (status = BAD_REQUEST, description = "Not a device fingerprint, or a PIN that isn't 4 to 8 digits", body = ApiError),
         (status = UNAUTHORIZED, description = "Missing or invalid bearer token", body = ApiError),
         (status = NOT_FOUND, description = "No such profile, or no paired device with a fingerprint", body = ApiError),
-        (status = CONFLICT, description = "A person's own account, a profile on the owner's lock, a lock file that doesn't read, or a locked profile asked to let in another device", body = ApiError),
-        (status = UNPROCESSABLE_ENTITY, description = "The list is full", body = ApiError),
+        (status = CONFLICT, description = "A person's own account, a profile on the owner's lock, a lock file that doesn't read, or a locked profile asked for another device or a PIN", body = ApiError),
     )
 )]
 pub(crate) async fn lock_profile(
@@ -249,11 +286,20 @@ pub(crate) async fn lock_profile(
     Path(id): Path<String>,
     body: Option<Json<LockProfile>>,
 ) -> Response {
-    let asked = body.map(|Json(b)| b.devices).unwrap_or_default();
+    let LockProfile {
+        devices: asked,
+        pin,
+    } = body.map(|Json(b)| b).unwrap_or_default();
     let fps: Vec<String> = asked.iter().map(|f| f.to_ascii_lowercase()).collect();
     let too_many = fps.len() > pf_seats::unlock::MAX_DEVICES;
     if too_many || !fps.iter().all(|f| pf_seats::unlock::valid_fingerprint(f)) {
         return api_error(StatusCode::BAD_REQUEST, "That isn't a device fingerprint.");
+    }
+    if pin
+        .as_deref()
+        .is_some_and(|p| !pf_seats::locks::valid_pin(p))
+    {
+        return pin_invalid();
     }
     let profiles = match lockable(&st, &id).await {
         Ok(profiles) => profiles,
@@ -263,19 +309,33 @@ pub(crate) async fn lock_profile(
         Ok(devices) => devices,
         Err(resp) => return resp,
     };
+    let hash = match pin {
+        Some(pin) => match hashed(pin).await {
+            Ok(hash) => Some(hash),
+            Err(resp) => return resp,
+        },
+        None => None,
+    };
     let locked = profiles.locks().edit(&id, |lock, now| {
         if lock.locked {
             let admitted = lock.admitted(now);
             let kept = devices.iter().all(|d| admitted.contains(&d.fingerprint));
-            return kept.then_some(()).ok_or(StatusCode::CONFLICT);
+            return (kept && hash.is_none())
+                .then_some(())
+                .ok_or(StatusCode::CONFLICT);
         }
-        let before = lock.clone();
-        lock.locked = true;
-        if devices.iter().all(|d| lock.admit(d, now, true)) {
-            return Ok(());
+        let mut next = Lock {
+            locked: true,
+            list: pf_seats::unlock::DeviceList::default(),
+            ..lock.clone()
+        };
+        // `devices` fits an empty list; a refusal leaves `lock` as it was.
+        if !devices.iter().all(|d| next.add(d, now)) {
+            return Err(StatusCode::UNPROCESSABLE_ENTITY);
         }
-        *lock = before;
-        Err(StatusCode::UNPROCESSABLE_ENTITY)
+        next.pin = hash.or(next.pin);
+        *lock = next;
+        Ok(())
     });
     match locked {
         Ok(Ok(())) => state(&st, &profiles, &id).await,
@@ -346,18 +406,31 @@ pub(crate) async fn set_profile_pin(
     Json(body): Json<ProfilePin>,
 ) -> Response {
     if !pf_seats::locks::valid_pin(&body.pin) {
-        return api_error_coded(
-            StatusCode::BAD_REQUEST,
-            "profile_pin_invalid",
-            "A PIN is 4 to 8 digits.",
-        );
+        return pin_invalid();
     }
-    let hash = match blocking("profile_store", move || PinHash::new(&body.pin)).await {
-        Ok(Some(hash)) => hash,
-        Ok(None) => return host_error("profile PIN not hashed", &"no randomness for its salt"),
-        Err(resp) => return resp,
-    };
-    change(&st, &id, |lock| lock.pin = Some(hash)).await
+    match hashed(body.pin).await {
+        Ok(hash) => change(&st, &id, |lock| lock.pin = Some(hash)).await,
+        Err(resp) => resp,
+    }
+}
+
+fn pin_invalid() -> Response {
+    api_error_coded(
+        StatusCode::BAD_REQUEST,
+        "profile_pin_invalid",
+        "A PIN is 4 to 8 digits.",
+    )
+}
+
+/// `pin`, a valid one, under a fresh salt. Off the async workers: the hash is slow.
+async fn hashed(pin: String) -> Result<PinHash, Response> {
+    match blocking("profile_store", move || PinHash::new(&pin)).await? {
+        Some(hash) => Ok(hash),
+        None => Err(host_error(
+            "profile PIN not hashed",
+            &"no randomness for its salt",
+        )),
+    }
 }
 
 /// Clear a profile's PIN
@@ -422,7 +495,7 @@ pub(crate) async fn add_profile_device(
     };
     match profiles
         .locks()
-        .edit(&id, |lock, now| lock.admit(&device, now, true))
+        .edit(&id, |lock, now| lock.add(&device, now))
     {
         Ok(true) => devices(&st, &id).await,
         Ok(false) => full(),
@@ -489,37 +562,57 @@ fn paired_label(st: &MgmtState, fp: &str) -> Option<Option<String>> {
 /// The devices paired with this host, lowercase, under the names they paired with: native ones
 /// first, then Moonlight ones and their labels.
 fn local_paired(st: &MgmtState) -> Vec<(String, Option<String>)> {
+    let mut paired = local_native(st);
+    paired.extend(local_moonlight(st));
+    paired
+}
+
+fn local_native(st: &MgmtState) -> Vec<(String, Option<String>)> {
     let native = st.native.as_ref().map(|np| np.list()).unwrap_or_default();
-    let mut paired: Vec<_> = native
+    native
         .into_iter()
         .map(|c| (c.fingerprint.to_ascii_lowercase(), Some(c.name)))
-        .collect();
+        .collect()
+}
+
+/// The Moonlight devices paired with this host, with their labels.
+fn local_moonlight(st: &MgmtState) -> Vec<(String, Option<String>)> {
     let ders = st
         .app
         .paired
         .lock()
         .unwrap_or_else(|e| e.into_inner())
         .clone();
-    if !ders.is_empty() {
-        let mut labels = crate::gamestream::load_client_labels();
-        let moonlight = ders.iter().map(|der| {
-            let fp = hex::encode(crate::https::sha256(der));
-            let label = labels.remove(&fp);
-            (fp, label)
-        });
-        paired.extend(moonlight);
+    if ders.is_empty() {
+        return Vec::new();
     }
-    paired
+    let mut labels = crate::gamestream::load_client_labels();
+    let fp = |der: &Vec<u8>| hex::encode(crate::https::sha256(der));
+    ders.iter()
+        .map(fp)
+        .map(|fp| (fp.clone(), labels.remove(&fp)))
+        .collect()
 }
 
-/// `GET /profiles/{id}/devices` for a profile that takes a lock: its list.
+/// `GET /profiles/{id}/devices` for a profile that takes a lock: its list, each tagged when it
+/// is a Moonlight pairing here or, on a door, on the owner's host.
 pub(super) async fn devices(st: &MgmtState, id: &str) -> Response {
     let profiles = match readable(st, id).await {
         Ok(profiles) => profiles,
         Err(resp) => return resp,
     };
     let entries = profiles.locks().get(id).list.entries();
-    let rows: Vec<SignedInDevice> = entries.into_iter().map(SignedInDevice::from).collect();
+    let mut rows: Vec<SignedInDevice> = entries.into_iter().map(SignedInDevice::from).collect();
+    let fps = |list: Vec<(String, Option<String>)>| list.into_iter().map(|(fp, _)| fp);
+    let native: std::collections::BTreeSet<_> = fps(local_native(st)).collect();
+    let mut moonlight: std::collections::BTreeSet<_> = fps(local_moonlight(st)).collect();
+    let known = |fp: &str| native.contains(fp) || moonlight.contains(fp);
+    if st.door.is_some() && rows.iter().any(|r| !known(r.fingerprint())) {
+        moonlight.extend(owner_moonlight(st).await.unwrap_or_default().into_keys());
+    }
+    for row in &mut rows {
+        row.moonlight = moonlight.contains(row.fingerprint());
+    }
     Json(rows).into_response()
 }
 
