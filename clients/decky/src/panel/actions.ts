@@ -1,0 +1,82 @@
+// The QAM panel's one-tap actions. Each ends in a toast, or in closing the menus, so the tap has
+// feedback even when the panel is gone.
+import { Navigation } from "@decky/ui";
+import { endGame, hostAction, killStream } from "../backend";
+import { t } from "../i18n";
+import { toast } from "../lib/toast";
+import { removeGameShortcuts } from "../steam/game-shortcuts";
+import { lastGameStream, stopStream } from "../steam/launch";
+import { recreateShortcuts } from "../steam/shortcuts";
+
+// Recovery action for "the Punktfunk library entry vanished" — recreates the visible shortcut
+// and sweeps duplicate entries. Self-heal waits for the next mount; this works in-session.
+// Always ends in a toast so the tap has feedback.
+export async function recreatePunktfunkShortcut(): Promise<void> {
+  const { appId, removedDuplicates } = await recreateShortcuts();
+  toast(
+    appId == null
+      ? t("decky_shortcut_create_failed")
+      : removedDuplicates > 0
+        ? t("decky_shortcut_restored_dupes", { count: removedDuplicates })
+        : t("decky_shortcut_restored"),
+  );
+}
+
+/** Delete the hidden per-game entries that game-page streams minted. Each comes back, with its
+ *  art, on the next Stream tap for that game — so this is tidying, never a loss. */
+export function removeGamePageShortcuts(): void {
+  const removed = removeGameShortcuts();
+  toast(
+    removed === 0
+      ? t("decky_game_shortcuts_none")
+      : t("decky_game_shortcuts_removed", { count: removed }),
+  );
+}
+
+/** Force-stop a wedged stream: end Steam's "game", then make sure the client itself is gone. */
+export async function forceStop(): Promise<void> {
+  stopStream();
+  try {
+    await killStream();
+  } catch {
+    /* best-effort — the TerminateApp above is usually enough */
+  }
+  toast(t("decky_force_stopped"));
+}
+
+// Press a host system button (guide/QAM) on the running stream, then hand the screen back
+// to it — closing the local menus is what lets the HOST's overlay show through. The raw
+// Steam/··· presses stay on the Deck by default (both overlays would open at once), so this
+// is the panel route to the host's menus; holding Select is the controller route.
+export async function pressHost(action: "guide" | "qam"): Promise<void> {
+  const r = await hostAction(action).catch(() => ({ ok: false as const, error: "backend" }));
+  if (r.ok) {
+    Navigation.CloseSideMenus();
+  } else {
+    toast(r.error === "no-stream" ? t("decky_no_stream") : t("decky_stream_unreachable"));
+  }
+}
+
+/** End the title the last game-page stream launched, then the stream — only once the host says
+ *  the game is gone. A refusal keeps the stream and shows the host's sentence. */
+export async function endStreamedGame(): Promise<void> {
+  const last = lastGameStream();
+  if (!last) {
+    return;
+  }
+  const r = await endGame(last.ref, last.gameId).catch(() => null);
+  if (r?.ok) {
+    stopStream();
+  }
+  // The CLI's own sentence leads when it sent one; its words are English.
+  const body =
+    r === null
+      ? t("decky_client_unreachable_end")
+      : r.notice ||
+        (r.ok
+          ? t("decky_game_ended", { title: last.title })
+          : r.error === "unresolved"
+            ? t("decky_end_game_unresolved")
+            : t("decky_end_game_failed"));
+  toast(body);
+}
