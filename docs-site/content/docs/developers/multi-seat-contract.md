@@ -602,9 +602,11 @@ seat's sessions, games and downloads, each row with `seat`, the profile whose ho
 the operator) and `diagnostics` with `diagnostics/refresh`. Every other admin call goes to the
 owner's host the way covers do, a dot segment never, and the table is checked against the API
 document (`every_route_has_a_side_on_the_door`). The door releases a seat's launch hold on that
-seat (`game/holds/{token}/release`, below). A device's `game/end` and `library/install/*`
-go to the seat it plays on, as that device: the door's call carries `X-Punktfunk-Device`,
-which a seat host honours only with its admin token and only for a device paired there. A
+seat (`game/holds/{token}/release`, below). A device's `game/end`, `display/targets`,
+`display/clients/*` and `compositors` go to the seat it plays on, and its `library/install/*`
+to the owner's host, whose plugins download into the shared game files, each as that device:
+the door's call carries `X-Punktfunk-Device`, which a seat host honours only with its admin
+token and only for a device paired there, and then answers on the device's grants. A
 call starts a stopped seat and answers 503, except `host`, `status` and `diagnostics`, which
 wake nobody; a host that doesn't answer is 502, and so is every call while the seat supervisor
 doesn't answer. With no owner row the owner's calls answer 503, and so does a `host/settings`

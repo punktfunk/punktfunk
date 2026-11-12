@@ -825,12 +825,12 @@ fn every_route_has_a_side_on_the_door() {
     }
 }
 
-/// Every route a paired device may call has a side on a door: the seat it plays on, as
-/// `owner::DEVICE` says, or the door's own, as this list says. A new device route fails here
-/// until someone decides.
+/// Every route a paired device may call has a side on a door: the door's own, the owner's host
+/// or the seat it plays on, as these lists and `owner::DEVICE` say. A new device route fails
+/// here until someone decides.
 #[test]
 fn every_device_route_has_a_side_on_the_door() {
-    use crate::mgmt::owner::{device_route, template_matches, DEVICE};
+    use crate::mgmt::owner::{device_route, template_matches, Side, DEVICE};
     use axum::http::Method;
 
     // What the door answers a device itself: what it merges, power, its logs, the profiles and
@@ -849,6 +849,12 @@ fn every_device_route_has_a_side_on_the_door() {
         ("GET", "/api/v1/library/page"),
         ("GET", "/api/v1/library/art/{id}/{kind}"),
     ];
+    // What the owner's host answers as the device: installs land in the box's shared game files.
+    const OWNER: &[(&str, &str)] = &[
+        ("POST", "/api/v1/library/install/{id}"),
+        ("DELETE", "/api/v1/library/install/{id}"),
+        ("POST", "/api/v1/library/install/{id}/pause"),
+    ];
 
     let doc: serde_json::Value = serde_json::from_str(&openapi_json()).unwrap();
     let mut device: Vec<(Method, &str)> = Vec::new();
@@ -859,22 +865,30 @@ fn every_device_route_has_a_side_on_the_door() {
                 continue;
             }
             let rest = path.strip_prefix("/api/v1/").unwrap();
-            let door = DOOR_OWN.contains(&(method.as_str(), path.as_str()));
-            assert!(
-                device_route(&method, rest) != door,
-                "{method} {path}: a paired device calls it; its seat's (`DEVICE`) or the door's?"
+            let row = (method.as_str(), path.as_str());
+            let want = if DOOR_OWN.contains(&row) {
+                None
+            } else if OWNER.contains(&row) {
+                Some(Side::Owner)
+            } else {
+                Some(Side::Seat)
+            };
+            assert_eq!(
+                device_route(&method, rest),
+                want,
+                "{method} {path}: a paired device calls it; the door's, the owner's or its seat's?"
             );
             device.push((method, rest));
         }
     }
-    for (method, path) in DOOR_OWN {
+    for (method, path) in DOOR_OWN.iter().chain(OWNER) {
         let rest = path.strip_prefix("/api/v1/").unwrap();
         assert!(
             device.iter().any(|(m, p)| m == method && *p == rest),
             "{method} {path} is in the list and no device route"
         );
     }
-    for (method, template) in DEVICE {
+    for (method, template, _) in DEVICE {
         assert!(
             device
                 .iter()
