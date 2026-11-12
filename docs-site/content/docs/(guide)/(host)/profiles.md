@@ -215,8 +215,9 @@ password.
   within 15 minutes, from any devices, stop PIN entry for it for a while; the devices on its list
   still open it.
 - Signing a device out, or locking a profile it plays, ends its session.
-- Locking the owner profile also keeps Moonlight to the Moonlight devices on its list. A profile
-  that shares your desktop plays that desktop too, so lock it as well.
+- Locking the owner profile also keeps Moonlight to the Moonlight devices on its list.
+- A profile that shares your desktop opens with your lock, your devices and your PIN: one
+  desktop, one lock. A profile on its own Windows account (take turns) has a lock of its own.
 - **Unlock** keeps the list and the PIN for the next lock.
 
 The locks live in `profile-locks.json` beside the host's pairings, readable by the host alone. A

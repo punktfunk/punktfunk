@@ -119,7 +119,8 @@ pub(super) async fn admit(
     bail!("profile {id}'s PIN didn't open it: {answer:?}")
 }
 
-/// `unlock`'s secret as `profiles`' PIN for `id`; the wire's copy wipes as `unlock` drops.
+/// `unlock`'s secret as the PIN of `id`'s lock
+/// ([`crate::profiles::Profiles::lock_holder`]); the wire's copy wipes as `unlock` drops.
 /// Blocking.
 fn try_pin(
     profiles: &crate::profiles::Profiles,
@@ -128,9 +129,10 @@ fn try_pin(
     unlock: ProfileUnlock,
 ) -> PinAnswer {
     let pin = std::str::from_utf8(&unlock.secret[..]).unwrap_or("");
+    let holder = profiles.lock_holder(id);
     profiles
         .locks()
-        .try_pin(id, device, pin, unlock.stay_signed_in)
+        .try_pin(&holder, device, pin, unlock.stay_signed_in)
 }
 
 /// The refusal for wrong PINs that lasts `wait`: seconds under a minute, else minutes, rounded

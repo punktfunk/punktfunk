@@ -326,7 +326,9 @@ the door, is its one writer, `0600` on Linux and SYSTEM and Administrators on Wi
 in `profiles.json`. Its `profiles` map each profile id to `locked`, an optional `pin`
 (`iterations`, `salt`, `hash`: PBKDF2-HMAC-SHA256, 600,000 iterations, a 16-byte salt) and the
 `devices` list of a person's row's `devices.json`. Removing a profile removes its entry;
-unlocking keeps the list and the PIN.
+unlocking keeps the list and the PIN. One desktop has one lock: the owner is the first profile
+whose `os_account` is `operator`, and any later one shares its desktop, has no entry and opens
+with the owner's lock, list and PIN. A take-turns profile keeps its own.
 
 - **The check.** A device opens a profile when the profile is unlocked, or its list admits the
   device: `stay`, or present. Any other device is refused, or asked for the PIN when the profile
@@ -344,9 +346,9 @@ unlocking keeps the list and the PIN.
   one line under `punktfunk::audit`, never the PIN.
 - **A seat host** reads the box's file, read only, and never takes a PIN. A Windows seat reads it
   from `PUNKTFUNK_TRUST_DIR`. A Linux seat reads the [trust copy](#linux-seats), which holds its
-  own profiles' locks with no PIN; a seat whose every profile is locked gets only the pairing
-  records its locks admit, as a person's row does, and the owner's row counts every profile that
-  shares the owner's desktop. A lock file there that doesn't read gives an empty pairing list.
+  profile's lock with no PIN; a locked profile's seat gets only the pairing records its lock
+  admits, as a person's row does, and the owner's row follows the owner's lock. A lock file
+  there that doesn't read gives an empty pairing list.
 
 ## Checking a seat can actually stream
 

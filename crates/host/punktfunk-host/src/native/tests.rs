@@ -2784,6 +2784,8 @@ fn a_wrong_password_never_reaches_a_log_or_an_error() {
 
 const OWNER_PROFILE: &str = "4f1c3a9b0e27";
 const KID_PROFILE: &str = "c1d000000001";
+/// A profile that shares the owner's desktop.
+const SHARER_PROFILE: &str = "5a1e00000001";
 
 /// A device's dial: the profile it names, the features it offers, what it sends after its hello.
 type Dial<'a> = (
@@ -2830,6 +2832,7 @@ fn dial_host(
     let file = serde_json::json!({"version": 1, "profiles": [
         {"id": OWNER_PROFILE, "display_name": "Enrico", "os_account": {"kind": "operator"}},
         {"id": KID_PROFILE, "display_name": "Kid", "os_account": {"kind": "seat", "seat": seat_id}},
+        {"id": SHARER_PROFILE, "display_name": "Guest", "os_account": {"kind": "operator"}},
     ]});
     std::fs::write(dir.join("profiles.json"), file.to_string()).unwrap();
     let np = NativePairing::load_with(Some(dir.join("punktfunk1-paired.json")), None, false);
@@ -2929,6 +2932,45 @@ fn a_locked_profile_opens_only_for_its_devices() {
     };
     let (heard, _) = dial_box(19803, mine, dials());
     assert_eq!(heard, [Heard::Played, kid_seat(19803)]);
+}
+
+/// A profile that shares the owner's desktop opens with the owner's lock: a device off the
+/// owner's list is refused, one on it goes on, and the owner's PIN puts a device on the owner's
+/// list. A seat host's view is `profiles::locks`' test.
+#[test]
+fn a_profile_sharing_the_owner_s_desktop_opens_with_the_owner_s_lock() {
+    let _registry = crate::session_status::tests::registry_lock();
+    let _serial = SESSION_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    let sharer = || vec![(SHARER_PROFILE, offers(true), Sends::Nothing)];
+    let other = |_: &str| {
+        let lock = serde_json::json!({"locked": true, "devices": [listed(&"ab".repeat(32))]});
+        serde_json::json!({"version": 1, "profiles": {OWNER_PROFILE: lock}})
+    };
+    assert_eq!(dial_box(19809, other, sharer()).0, [not_allowed()]);
+    let mine = |fp: &str| {
+        let lock = serde_json::json!({"locked": true, "devices": [listed(fp)]});
+        serde_json::json!({"version": 1, "profiles": {OWNER_PROFILE: lock}})
+    };
+    assert_eq!(dial_box(19811, mine, sharer()).0, [Heard::Played]);
+
+    let pin = serde_json::to_value(pf_seats::locks::PinHash::new("2468").unwrap()).unwrap();
+    let with_pin = |_: &str| {
+        let lock = serde_json::json!({"locked": true, "pin": pin});
+        serde_json::json!({"version": 1, "profiles": {OWNER_PROFILE: lock}})
+    };
+    let dials = vec![
+        (
+            SHARER_PROFILE,
+            offers(true),
+            Sends::Unlock(password("2468", true, None)),
+        ),
+        (OWNER_PROFILE, offers(true), Sends::Nothing),
+    ];
+    let (heard, lock_file) = dial_box(19812, with_pin, dials);
+    assert_eq!(heard, [Heard::Played, Heard::Played]);
+    let file = pf_seats::locks::Locks::parse(&std::fs::read(lock_file).unwrap()).unwrap();
+    assert_eq!(file.profiles.keys().collect::<Vec<_>>(), [OWNER_PROFILE]);
+    assert_eq!(file.profiles[OWNER_PROFILE].list.entries().len(), 1);
 }
 
 /// A seat host reads the box's own lock file, as a Windows seat host reads the box's config dir:

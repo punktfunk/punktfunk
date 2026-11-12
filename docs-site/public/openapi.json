@@ -7715,7 +7715,7 @@
             }
           },
           "409": {
-            "description": "The host's profile lock file doesn't read",
+            "description": "A profile on the owner's lock, or a lock file that doesn't read",
             "content": {
               "application/json": {
                 "schema": {
@@ -7810,7 +7810,7 @@
             }
           },
           "409": {
-            "description": "A person's own account, or the lock file doesn't read",
+            "description": "A person's own account, a profile on the owner's lock, or a lock file that doesn't read",
             "content": {
               "application/json": {
                 "schema": {
@@ -7875,7 +7875,7 @@
             }
           },
           "409": {
-            "description": "The host's profile lock file doesn't read",
+            "description": "A profile on the owner's lock, or a lock file that doesn't read",
             "content": {
               "application/json": {
                 "schema": {
@@ -7961,7 +7961,7 @@
             }
           },
           "409": {
-            "description": "The host's profile lock file doesn't read",
+            "description": "A profile on the owner's lock, or a lock file that doesn't read",
             "content": {
               "application/json": {
                 "schema": {
@@ -8109,7 +8109,7 @@
             }
           },
           "409": {
-            "description": "A person's own account, or the lock file doesn't read",
+            "description": "A person's own account, a profile on the owner's lock, or a lock file that doesn't read",
             "content": {
               "application/json": {
                 "schema": {
@@ -8171,7 +8171,7 @@
             }
           },
           "409": {
-            "description": "A person's own account, or the lock file doesn't read",
+            "description": "A person's own account, a profile on the owner's lock, or a lock file that doesn't read",
             "content": {
               "application/json": {
                 "schema": {
@@ -8233,7 +8233,7 @@
             }
           },
           "409": {
-            "description": "A person's own account, or the lock file doesn't read",
+            "description": "A person's own account, a profile on the owner's lock, or a lock file that doesn't read",
             "content": {
               "application/json": {
                 "schema": {
@@ -8317,7 +8317,7 @@
             }
           },
           "409": {
-            "description": "A person's own account, or the lock file doesn't read",
+            "description": "A person's own account, a profile on the owner's lock, or a lock file that doesn't read",
             "content": {
               "application/json": {
                 "schema": {
@@ -8379,7 +8379,7 @@
             }
           },
           "409": {
-            "description": "A person's own account, or the lock file doesn't read",
+            "description": "A person's own account, a profile on the owner's lock, or a lock file that doesn't read",
             "content": {
               "application/json": {
                 "schema": {

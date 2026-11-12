@@ -1919,7 +1919,7 @@ pub(crate) async fn unlock_challenge(
         (status = OK, description = "The signed-in devices", body = Vec<SignedInDevice>),
         (status = UNAUTHORIZED, description = "Missing or invalid bearer token", body = ApiError),
         (status = NOT_FOUND, description = "No profile with that id", body = ApiError),
-        (status = CONFLICT, description = "The host's profile lock file doesn't read", body = ApiError),
+        (status = CONFLICT, description = "A profile on the owner's lock, or a lock file that doesn't read", body = ApiError),
         (status = SERVICE_UNAVAILABLE, description = "The seat supervisor didn't answer", body = ApiError),
     )
 )]
@@ -1960,7 +1960,7 @@ pub(crate) async fn list_profile_devices(
         (status = BAD_REQUEST, description = "Not a device fingerprint", body = ApiError),
         (status = UNAUTHORIZED, description = "Missing or invalid bearer token", body = ApiError),
         (status = NOT_FOUND, description = "No profile with that id", body = ApiError),
-        (status = CONFLICT, description = "The host's profile lock file doesn't read", body = ApiError),
+        (status = CONFLICT, description = "A profile on the owner's lock, or a lock file that doesn't read", body = ApiError),
         (status = SERVICE_UNAVAILABLE, description = "The seat supervisor didn't answer", body = ApiError),
     )
 )]
@@ -1989,7 +1989,7 @@ pub(crate) async fn sign_out_profile_device(
         (status = NO_CONTENT, description = "Signed out"),
         (status = UNAUTHORIZED, description = "Missing or invalid bearer token", body = ApiError),
         (status = NOT_FOUND, description = "No profile with that id", body = ApiError),
-        (status = CONFLICT, description = "The host's profile lock file doesn't read", body = ApiError),
+        (status = CONFLICT, description = "A profile on the owner's lock, or a lock file that doesn't read", body = ApiError),
         (status = SERVICE_UNAVAILABLE, description = "The seat supervisor didn't answer", body = ApiError),
     )
 )]

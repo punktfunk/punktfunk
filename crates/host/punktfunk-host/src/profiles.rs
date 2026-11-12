@@ -727,13 +727,25 @@ impl Profiles {
     }
 
     /// What device `fp` needs to open profile `id`: the one check every way into a profile asks
-    /// ([`locks`]). The owner's stand-in, while `profiles.json` doesn't read, opens nothing once
-    /// any profile is locked: its lock is the owner's, under an id this host can't read.
+    /// ([`locks`]), under [`Self::lock_holder`]'s lock. The owner's stand-in, while
+    /// `profiles.json` doesn't read, opens nothing once any profile is locked: its lock is the
+    /// owner's, under an id this host can't read.
     pub fn opens(&self, id: &str, fp: Option<&str>) -> Opens {
         if id == OPERATOR_PROFILE_ID && self.locks.any_locked() {
             return Opens::No;
         }
-        self.locks.opens(id, fp)
+        self.locks.opens(&self.lock_holder(id), fp)
+    }
+
+    /// The profile whose lock opens `id`: the owner's for one that shares the owner's desktop,
+    /// since one desktop has one lock, else its own.
+    pub(crate) fn lock_holder(&self, id: &str) -> String {
+        let state = self.lock();
+        let mut desktop = state.file.profiles.iter().filter(|p| is_owner(p));
+        match desktop.next() {
+            Some(owner) if owner.id != id && desktop.any(|p| p.id == id) => owner.id.clone(),
+            _ => id.to_string(),
+        }
     }
 
     pub(crate) fn locks(&self) -> &locks::LockStore {

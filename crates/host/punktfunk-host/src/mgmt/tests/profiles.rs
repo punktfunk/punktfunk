@@ -634,8 +634,35 @@ async fn an_unreadable_lock_file_refuses_every_change() {
     }
 }
 
+/// The owner, Kid and Teen on seats of their own, and Guest sharing the owner's desktop, in a
+/// store of its own.
+fn locked_family(state: &AppState) -> Arc<crate::profiles::Profiles> {
+    let dir = crate::test_support::scratch();
+    let seat = |id: &str, name: &str, row: &str| {
+        serde_json::json!({"id": id, "display_name": name,
+            "os_account": {"kind": "seat", "seat": row.repeat(16)}})
+    };
+    let file = serde_json::json!({"version": 1, "profiles": [
+        {"id": FAMILY_OWNER, "display_name": "Enrico", "os_account": {"kind": "operator"}},
+        seat(FAMILY_KID, "Kid", "a1"),
+        seat(FAMILY_TEEN, "Teen", "b2"),
+        {"id": FAMILY_GUEST, "display_name": "Guest", "os_account": {"kind": "operator"}},
+    ]});
+    std::fs::write(dir.join("profiles.json"), file.to_string()).unwrap();
+    let profiles = crate::profiles::Profiles::load_with(Some(dir.join("profiles.json")), None);
+    let profiles = Arc::new(profiles);
+    let _ = state.profiles.set(profiles.clone());
+    profiles
+}
+
+const FAMILY_OWNER: &str = "4f1c3a9b0e27";
+const FAMILY_KID: &str = "a1a1a1a1a1a1";
+const FAMILY_TEEN: &str = "b2b2b2b2b2b2";
+const FAMILY_GUEST: &str = "5a1e00000001";
+
 /// A device's picker lists the profiles it may open, and a locked one with a PIN marked `pin`; a
-/// locked one with no PIN is absent unless the device is on its list. The console lists all.
+/// locked one with no PIN is absent unless the device is on its list. A profile sharing the
+/// owner's desktop shows exactly as the owner does. The console lists all.
 #[tokio::test]
 async fn the_picker_lists_what_the_device_may_open() {
     let np = Arc::new(
@@ -649,36 +676,24 @@ async fn the_picker_lists_what_the_device_may_open() {
     let (listed, other) = ("ab".repeat(32), "cd".repeat(32));
     np.add("listed", &listed).unwrap();
     np.add("other", &other).unwrap();
-    let state = state_with_profiles("picker-lock");
-    let profiles = state.profiles.get().unwrap().clone();
-    let owner = profiles.owner_id().unwrap();
+    let state = test_state();
+    let profiles = locked_family(&state);
     let app = test_app_native(state, np);
-    let mut ids = Vec::new();
-    for name in ["Kid", "Teen"] {
-        let body = serde_json::json!({ "display_name": name, "seat": false });
-        let (status, made) = send(&app, json_req(Method::POST, "/api/v1/profiles", body)).await;
-        assert_eq!(status, StatusCode::CREATED, "{made}");
-        ids.push(made["id"].as_str().unwrap().to_string());
-    }
-    let (kid, teen) = (ids[0].clone(), ids[1].clone());
+    let (owner, kid, teen, guest) = (FAMILY_OWNER, FAMILY_KID, FAMILY_TEEN, FAMILY_GUEST);
     let device = pf_seats::ipc::Device {
         fingerprint: listed.clone(),
         name: "listed".into(),
     };
-    profiles
-        .locks()
-        .edit(&kid, |lock, now| {
+    for (id, pin) in [(owner, true), (kid, false), (teen, true)] {
+        let edited = profiles.locks().edit(id, |lock, now| {
             lock.locked = true;
-            lock.admit(&device, now, true)
-        })
-        .unwrap();
-    profiles
-        .locks()
-        .edit(&teen, |lock, _| {
-            lock.locked = true;
-            lock.pin = pf_seats::locks::PinHash::new("2468");
-        })
-        .unwrap();
+            lock.pin = pin.then(|| pf_seats::locks::PinHash::new("2468")).flatten();
+            if id != teen {
+                assert!(lock.admit(&device, now, true));
+            }
+        });
+        edited.unwrap();
+    }
     let rows = |body: serde_json::Value| {
         let rows = body.as_array().unwrap().iter();
         rows.map(|r| (r["id"].as_str().unwrap().to_string(), r["unlock"].clone()))
@@ -696,25 +711,62 @@ async fn the_picker_lists_what_the_device_may_open() {
             rows(serde_json::from_slice(&body).unwrap())
         }
     };
-    let none = serde_json::json!("none");
-    let pin = serde_json::json!("pin");
+    let row = |id: &str, word: &str| (id.to_string(), serde_json::json!(word));
     assert_eq!(
         picker(listed).await,
         [
-            (owner.clone(), none.clone()),
-            (kid.clone(), none.clone()),
-            (teen.clone(), pin.clone()),
+            row(owner, "none"),
+            row(kid, "none"),
+            row(teen, "pin"),
+            row(guest, "none")
         ]
     );
     assert_eq!(
         picker(other).await,
-        [(owner.clone(), none.clone()), (teen.clone(), pin)]
+        [row(owner, "pin"), row(teen, "pin"), row(guest, "pin")]
     );
+    profiles
+        .locks()
+        .edit(owner, |lock, _| lock.pin = None)
+        .unwrap();
+    let rows_now = picker("cd".repeat(32)).await;
+    assert_eq!(rows_now, [row(teen, "pin")], "no owner, no guest");
     let (status, all) = send(&app, get_req("/api/v1/profiles/enumerate")).await;
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(rows(all).len(), 3, "the console sees every profile");
+    assert_eq!(rows(all).len(), 4, "the console sees every profile");
     let (_, console) = send(&app, get_req("/api/v1/profiles")).await;
-    assert_eq!(console.as_array().unwrap().len(), 3);
+    assert_eq!(console.as_array().unwrap().len(), 4);
+}
+
+/// A profile sharing the owner's desktop has no lock of its own: each lock route on it names
+/// whose lock it opens with.
+#[tokio::test]
+async fn a_profile_sharing_the_owner_s_desktop_takes_no_lock() {
+    let state = test_state();
+    let profiles = locked_family(&state);
+    let app = test_app(state, None);
+    let at = |tail: &str| format!("/api/v1/profiles/{FAMILY_GUEST}{tail}");
+    let null = serde_json::Value::Null;
+    for (method, tail, body) in [
+        (Method::GET, "/lock", null.clone()),
+        (Method::POST, "/lock", null.clone()),
+        (Method::DELETE, "/lock", null.clone()),
+        (Method::PUT, "/lock/pin", serde_json::json!({"pin": "2468"})),
+        (Method::DELETE, "/lock/pin", null.clone()),
+        (Method::GET, "/devices", null.clone()),
+        (
+            Method::POST,
+            "/devices",
+            serde_json::json!({"fingerprint": "ab".repeat(32)}),
+        ),
+        (Method::DELETE, "/devices", null.clone()),
+    ] {
+        let (status, body) = send(&app, json_req(method.clone(), &at(tail), body)).await;
+        assert_eq!(status, StatusCode::CONFLICT, "{method} {tail}");
+        assert_eq!(body["code"], "profile_lock_shared", "{method} {tail}");
+        assert_eq!(body["params"]["owner"], "Enrico");
+    }
+    assert!(profiles.locks().get(FAMILY_GUEST) == pf_seats::locks::Lock::default());
 }
 
 /// Enumerate marks the profile the asking device's old seat became, and only for that device.

@@ -322,11 +322,11 @@ pub(crate) struct Presence {
 }
 
 impl Presence {
-    /// `fp`'s hold on profile `id`, when the profile is locked and lists it: its presence lasts
-    /// while this is held.
+    /// `fp`'s hold on profile `id`'s lock ([`Profiles::lock_holder`]), when it is locked and
+    /// lists the device: its presence lasts while this is held.
     pub(crate) fn join(profiles: &Arc<Profiles>, id: &str, fp: &str) -> Option<Presence> {
         let fp = fp.to_ascii_lowercase();
-        let key = (id.to_string(), fp);
+        let key = (profiles.lock_holder(id), fp);
         let mut held = held();
         if !profiles.locks.rejoin(&key.0, &key.1) {
             return None;
@@ -546,29 +546,74 @@ mod tests {
         drop(back);
     }
 
+    /// A profile sharing the owner's desktop opens with the owner's lock, on the box and on a
+    /// seat host reading the box's file, and a session on it holds the owner's list. A
+    /// take-turns profile keeps its own.
+    #[test]
+    fn a_profile_sharing_the_owner_s_desktop_has_the_owner_s_lock() {
+        const OWNER: &str = "4f1c3a9b0e27";
+        const GUEST: &str = "5a1e00000001";
+        const TURNS: &str = "c1d000000002";
+        let dir = crate::test_support::scratch();
+        let file = serde_json::json!({"version": 1, "profiles": [
+            {"id": OWNER, "display_name": "Enrico", "os_account": {"kind": "operator"}},
+            {"id": GUEST, "display_name": "Guest", "os_account": {"kind": "operator"}},
+            {"id": TURNS, "display_name": "Sam", "os_account": {"kind": "windows",
+                "account_name": "Sam", "credential": {"source": "none"}}},
+        ]});
+        let path = dir.join("profiles.json");
+        std::fs::write(&path, file.to_string()).unwrap();
+        let profiles = Arc::new(Profiles::load_with(Some(path.clone()), None));
+        let (tv, phone) = (device(1), device(2));
+        assert_eq!(profiles.lock_holder(GUEST), OWNER);
+        assert_eq!(profiles.lock_holder(TURNS), TURNS);
+        assert_eq!(profiles.lock_holder(OWNER), OWNER);
+        profiles
+            .locks()
+            .edit(OWNER, |lock, now| {
+                lock.locked = true;
+                lock.admit(&tv, now, false)
+            })
+            .unwrap();
+        let seat = Profiles::load_box(path, None);
+        for host in [&*profiles, &seat] {
+            assert_eq!(host.opens(GUEST, Some(&tv.fingerprint)), Opens::Yes);
+            assert_eq!(host.opens(GUEST, Some(&phone.fingerprint)), Opens::No);
+            assert_eq!(host.opens(TURNS, Some(&phone.fingerprint)), Opens::Yes);
+        }
+        let held = Presence::join(&profiles, GUEST, &tv.fingerprint).expect("the owner's list");
+        drop(held);
+        let present = profiles.locks().get(OWNER).list.devices[0].present.unwrap();
+        assert!(
+            present.expires_unix.is_some(),
+            "its grace runs on the owner's list"
+        );
+    }
+
     /// A removed profile's lock goes with it, a seat's once its seat is gone; and while
     /// `profiles.json` doesn't read, the owner's stand-in opens nothing once a profile is locked.
     #[test]
     fn a_lock_goes_with_its_profile() {
-        const SHARED: &str = "c1d000000002";
+        const TURNS: &str = "c1d000000002";
         let dir = crate::test_support::scratch();
         let file = serde_json::json!({"version": 1, "profiles": [
             {"id": "4f1c3a9b0e27", "display_name": "Enrico", "os_account": {"kind": "operator"}},
             {"id": KID, "display_name": "Kid", "os_account": {"kind": "seat", "seat": "ab".repeat(16)}},
-            {"id": SHARED, "display_name": "Sam", "os_account": {"kind": "operator"}},
+            {"id": TURNS, "display_name": "Sam", "os_account": {"kind": "windows",
+                "account_name": "Sam", "credential": {"source": "none"}}},
         ]});
         std::fs::write(dir.join("profiles.json"), file.to_string()).unwrap();
         let profiles = Profiles::load_with(Some(dir.join("profiles.json")), None);
         let tv = device(1).fingerprint;
-        for id in [KID, SHARED] {
+        for id in [KID, TURNS] {
             profiles
                 .locks()
                 .edit(id, |lock, _| lock.locked = true)
                 .unwrap();
             assert_eq!(profiles.opens(id, Some(&tv)), Opens::No);
         }
-        profiles.delete(SHARED, false).unwrap();
-        assert_eq!(profiles.opens(SHARED, Some(&tv)), Opens::Yes);
+        profiles.delete(TURNS, false).unwrap();
+        assert_eq!(profiles.opens(TURNS, Some(&tv)), Opens::Yes);
         let seat = profiles.delete(KID, false).unwrap();
         assert_eq!(
             profiles.opens(KID, Some(&tv)),

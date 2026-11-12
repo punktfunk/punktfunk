@@ -53,17 +53,35 @@ fn unreadable() -> Response {
     )
 }
 
+/// A profile that shares `owner`'s desktop opens with the owner's lock.
+fn shared(owner: &str) -> Response {
+    ApiError::coded(
+        "profile_lock_shared",
+        format!(
+            "This profile shares {owner}'s desktop, so it opens with that profile's lock. Change the lock there."
+        ),
+    )
+    .param("owner", owner)
+    .respond(StatusCode::CONFLICT)
+}
+
 /// The profiles, when `id` is one that takes a lock and the lock file reads.
 async fn lockable(st: &MgmtState, id: &str) -> Result<Arc<Profiles>, Response> {
     if person_seat(st, id).await?.is_some() {
         return Err(own_account());
     }
-    readable(st).await
+    readable(st, id).await
 }
 
-/// The profiles, when the lock file reads. Its caller found the profile.
-async fn readable(st: &MgmtState) -> Result<Arc<Profiles>, Response> {
+/// The profiles, when `id` has a lock of its own and the lock file reads. Its caller found the
+/// profile.
+async fn readable(st: &MgmtState, id: &str) -> Result<Arc<Profiles>, Response> {
     let profiles = st.app.profiles.get().cloned().ok_or_else(no_profiles)?;
+    let holder = profiles.lock_holder(id);
+    if holder != id {
+        let owner = profiles.get(&holder).map(|p| p.display_name);
+        return Err(shared(&owner.unwrap_or(holder)));
+    }
     if profiles.locks().unreadable() {
         return Err(unreadable());
     }
@@ -105,7 +123,7 @@ async fn change(st: &MgmtState, id: &str, change: impl FnOnce(&mut Lock)) -> Res
         (status = OK, description = "The lock", body = ProfileLock),
         (status = UNAUTHORIZED, description = "Missing or invalid bearer token", body = ApiError),
         (status = NOT_FOUND, description = "No profile with that id", body = ApiError),
-        (status = CONFLICT, description = "A person's own account, or the lock file doesn't read", body = ApiError),
+        (status = CONFLICT, description = "A person's own account, a profile on the owner's lock, or a lock file that doesn't read", body = ApiError),
     )
 )]
 pub(crate) async fn get_profile_lock(
@@ -132,7 +150,7 @@ pub(crate) async fn get_profile_lock(
         (status = OK, description = "Locked", body = ProfileLock),
         (status = UNAUTHORIZED, description = "Missing or invalid bearer token", body = ApiError),
         (status = NOT_FOUND, description = "No profile with that id", body = ApiError),
-        (status = CONFLICT, description = "A person's own account, or the lock file doesn't read", body = ApiError),
+        (status = CONFLICT, description = "A person's own account, a profile on the owner's lock, or a lock file that doesn't read", body = ApiError),
     )
 )]
 pub(crate) async fn lock_profile(
@@ -156,7 +174,7 @@ pub(crate) async fn lock_profile(
         (status = OK, description = "Open", body = ProfileLock),
         (status = UNAUTHORIZED, description = "Missing or invalid bearer token", body = ApiError),
         (status = NOT_FOUND, description = "No profile with that id", body = ApiError),
-        (status = CONFLICT, description = "A person's own account, or the lock file doesn't read", body = ApiError),
+        (status = CONFLICT, description = "A person's own account, a profile on the owner's lock, or a lock file that doesn't read", body = ApiError),
     )
 )]
 pub(crate) async fn unlock_profile(
@@ -182,7 +200,7 @@ pub(crate) async fn unlock_profile(
         (status = BAD_REQUEST, description = "Not 4 to 8 digits", body = ApiError),
         (status = UNAUTHORIZED, description = "Missing or invalid bearer token", body = ApiError),
         (status = NOT_FOUND, description = "No profile with that id", body = ApiError),
-        (status = CONFLICT, description = "A person's own account, or the lock file doesn't read", body = ApiError),
+        (status = CONFLICT, description = "A person's own account, a profile on the owner's lock, or a lock file that doesn't read", body = ApiError),
     )
 )]
 pub(crate) async fn set_profile_pin(
@@ -218,7 +236,7 @@ pub(crate) async fn set_profile_pin(
         (status = OK, description = "Cleared", body = ProfileLock),
         (status = UNAUTHORIZED, description = "Missing or invalid bearer token", body = ApiError),
         (status = NOT_FOUND, description = "No profile with that id", body = ApiError),
-        (status = CONFLICT, description = "A person's own account, or the lock file doesn't read", body = ApiError),
+        (status = CONFLICT, description = "A person's own account, a profile on the owner's lock, or a lock file that doesn't read", body = ApiError),
     )
 )]
 pub(crate) async fn clear_profile_pin(
@@ -244,7 +262,7 @@ pub(crate) async fn clear_profile_pin(
         (status = BAD_REQUEST, description = "Not a device fingerprint", body = ApiError),
         (status = UNAUTHORIZED, description = "Missing or invalid bearer token", body = ApiError),
         (status = NOT_FOUND, description = "No such profile, or no paired device with that fingerprint", body = ApiError),
-        (status = CONFLICT, description = "A person's own account, or the lock file doesn't read", body = ApiError),
+        (status = CONFLICT, description = "A person's own account, a profile on the owner's lock, or a lock file that doesn't read", body = ApiError),
         (status = UNPROCESSABLE_ENTITY, description = "The list is full", body = ApiError),
     )
 )]
@@ -304,7 +322,7 @@ fn paired_label(st: &MgmtState, fp: &str) -> Option<Option<String>> {
 
 /// `GET /profiles/{id}/devices` for a profile that takes a lock: its list.
 pub(super) async fn devices(st: &MgmtState, id: &str) -> Response {
-    let profiles = match readable(st).await {
+    let profiles = match readable(st, id).await {
         Ok(profiles) => profiles,
         Err(resp) => return resp,
     };
@@ -315,7 +333,7 @@ pub(super) async fn devices(st: &MgmtState, id: &str) -> Response {
 
 /// Signs `fp`, or every device, off profile `id`'s list: a session it plays there ends.
 pub(super) async fn sign_out(st: &MgmtState, id: &str, fp: Option<&str>) -> Response {
-    let profiles = match readable(st).await {
+    let profiles = match readable(st, id).await {
         Ok(profiles) => profiles,
         Err(resp) => return resp,
     };

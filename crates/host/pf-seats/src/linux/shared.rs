@@ -741,7 +741,8 @@ pub(super) fn refresh_trust(
     sync_trust(box_dir, state, id, reader, Who::Seat { owner: false })
 }
 
-/// [`refresh_trust`] for the owner's row, which plays every profile on the box's own session.
+/// [`refresh_trust`] for the owner's row, which follows the owner's lock: every profile that
+/// shares the owner's desktop opens with it.
 pub(super) fn refresh_owner_trust(
     box_dir: &Path,
     state: &Path,
@@ -764,7 +765,7 @@ pub(super) fn refresh_person_trust(
 }
 
 /// Whose trust copy [`sync_trust`] keeps: a person's own account's, admitting these devices, or
-/// another seat's, the owner's row included, which its profiles' locks decide.
+/// another seat's, the owner's row included, which its profile's lock decides.
 #[derive(Clone, Copy)]
 enum Who<'a> {
     Person(&'a BTreeSet<String>),
@@ -956,31 +957,32 @@ pub(super) fn refresh_seat_library(
 /// [`MAX_TRUST_BYTES`] or not `{"profiles": [...]}`, and an id that is not 12 lowercase hex,
 /// name none.
 fn seat_profile(box_dir: &Path, id: &SeatId) -> Option<String> {
-    served(box_dir, id, false)?.into_iter().next()
+    lock_holder(box_dir, id, false).flatten()
 }
 
-/// The profiles seat `id` plays, from the door's `profiles.json` as [`seat_profile`] reads it:
-/// its own, or with `owner` every profile on the box's own session. `None` when the file doesn't
-/// read.
-fn served(box_dir: &Path, id: &SeatId, owner: bool) -> Option<Vec<String>> {
+/// The profile whose lock seat `id` follows, from the door's `profiles.json` as
+/// [`seat_profile`] reads it: its own, or with `owner` the owner's, the first on the box's own
+/// session, whose lock every profile sharing that desktop opens with. `None` when the file
+/// doesn't read; `Some(None)` when no profile with a valid id plays there.
+fn lock_holder(box_dir: &Path, id: &SeatId, owner: bool) -> Option<Option<String>> {
     #[derive(serde::Deserialize)]
     struct File {
         profiles: Vec<serde_json::Value>,
     }
     let (bytes, _) = safe_open::read(&box_dir.join("profiles.json"), MAX_TRUST_BYTES).ok()??;
     let file: File = serde_json::from_slice(&bytes).ok()?;
-    let plays = |p: &serde_json::Value| {
+    let plays = |p: &&serde_json::Value| {
         let account = &p["os_account"];
         match owner {
             true => account["kind"] == "operator",
             false => account["kind"] == "seat" && account["seat"] == id.as_str(),
         }
     };
-    let ids = file.profiles.iter().filter(|p| plays(p)).filter_map(|p| {
-        let id = p["id"].as_str()?;
-        profile_id(id).then(|| id.to_owned())
-    });
-    Some(ids.collect())
+    let first = file.profiles.iter().find(plays);
+    let id = first
+        .and_then(|p| p["id"].as_str())
+        .filter(|p| profile_id(p));
+    Some(id.map(str::to_owned))
 }
 
 /// What the door's lock file ([`locks::FILE`]) gives seat `id` at `now`: the devices its pairing
@@ -1005,11 +1007,14 @@ fn lock_filter(
     let Some(read) = read else {
         return (Some(BTreeSet::new()), Some(closed));
     };
-    match served(box_dir, id, owner) {
-        Some(served) => (
-            read.admitted_for(&served, now),
-            Some(read.seat_copy(&served)),
-        ),
+    match lock_holder(box_dir, id, owner) {
+        Some(holder) => {
+            let served: Vec<String> = holder.into_iter().collect();
+            (
+                read.admitted_for(&served, now),
+                Some(read.seat_copy(&served)),
+            )
+        }
         None if read.unreadable || read.profiles.values().any(|l| l.locked) => {
             (Some(BTreeSet::new()), Some(closed))
         }
@@ -2052,8 +2057,8 @@ mod tests {
 
     /// A locked profile's seat admits only the devices its lock does and finds the lock beside
     /// its pairing list, without the PIN; an open profile's keeps the box's whole list. The
-    /// owner's row narrows only while every profile on the box's own session is locked. A lock
-    /// file that doesn't read admits nobody.
+    /// owner's row follows the owner's lock, which every profile sharing that desktop opens
+    /// with. A lock file that doesn't read admits nobody.
     #[test]
     fn a_locked_profile_s_seat_admits_only_its_devices() {
         use crate::locks::{Lock, Locks, PinHash};
@@ -2115,6 +2120,22 @@ mod tests {
         refresh_owner_trust(box_dir, state, &owner, reader).unwrap();
         let own = admitted(&owner);
         assert_eq!(own, std::slice::from_ref(&phone), "the owner's own list");
+
+        // A profile sharing the owner's desktop has no lock of its own: the owner's decides.
+        let mut shared: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(box_dir.join("profiles.json")).unwrap()).unwrap();
+        let sharer = serde_json::json!({"id": "d4d4d4d4d4d4", "display_name": "Guest",
+            "os_account": {"kind": "operator"}});
+        shared["profiles"].as_array_mut().unwrap().push(sharer);
+        std::fs::write(box_dir.join("profiles.json"), shared.to_string()).unwrap();
+        refresh_owner_trust(box_dir, state, &owner, reader).unwrap();
+        assert_eq!(admitted(&owner), std::slice::from_ref(&phone));
+        let keys = copy(&owner)
+            .unwrap()
+            .profiles
+            .into_keys()
+            .collect::<Vec<_>>();
+        assert_eq!(keys, ["c3c3c3c3c3c3"], "the owner's lock alone");
 
         file.profiles.get_mut(ANNA).unwrap().locked = false;
         write(&file);
