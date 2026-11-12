@@ -126,13 +126,20 @@ pub(crate) fn sdr10(r: &Resolved, codec: Codec) -> bool {
 
 /// [`Resolved::rgb_full_range`] on Windows: AMF's conversion, measured on the render adapter
 /// unless `PUNKTFUNK_AMF_FULL_RANGE` says.
-pub(crate) fn rgb_full_range(r: &Resolved) -> bool {
+pub(crate) fn rgb_full_range(r: &Resolved, _codec: Codec) -> RgbFullRange {
     if r.backend() != WindowsBackend::Amf {
-        return true;
+        return RgbFullRange::BOTH;
     }
-    Knobs::from_env().amf_full_range.unwrap_or_else(|| {
+    // AMF converts the 8-bit desktop only: an HDR session's P010 comes converted.
+    let sdr = Knobs::from_env().amf_full_range.unwrap_or_else(|| {
         pf_encode_win::amf_range::rgb_writes_full_range(pf_gpu::resolve_render_adapter_luid())
-    })
+    });
+    RgbFullRange { sdr, hdr: true }
+}
+
+/// [`Resolved::vcn_firmware`] on Windows: AMF keeps its firmware to itself.
+pub(crate) fn vcn_firmware(_: &Resolved) -> Option<VcnFirmware> {
+    None
 }
 
 impl Resolved {

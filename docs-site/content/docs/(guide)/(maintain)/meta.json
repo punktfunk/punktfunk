@@ -3,6 +3,7 @@
   "pages": [
     "running-as-a-service",
     "updating",
+    "gpu-firmware",
     "channels",
     "uninstall",
     "uninstall-steamos",

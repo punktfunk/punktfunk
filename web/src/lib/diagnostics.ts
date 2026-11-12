@@ -22,6 +22,7 @@ const TITLES: Record<string, () => string> = {
 	pad_audio: () => m.diag_pad_audio_title(),
 	pad_driver: () => m.diag_pad_driver_title(),
 	encoder_sharing: () => m.diag_encoder_sharing_title(),
+	gpu_firmware: () => m.diag_gpu_firmware_title(),
 	niri_virtual_outputs: () => m.diag_niri_virtual_outputs_title(),
 	restart_pending: () => m.diag_restart_pending_title(),
 };

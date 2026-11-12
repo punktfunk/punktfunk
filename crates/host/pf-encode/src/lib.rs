@@ -151,6 +151,14 @@ mod vk_ring;
 #[cfg(all(target_os = "linux", feature = "vulkan-encode"))]
 #[path = "enc/linux/vk_av1_encode.rs"]
 mod vk_av1_encode;
+// The VCN firmware's version and the pairs its EFC converts. Pure but for the kernel query.
+#[cfg_attr(
+    not(all(target_os = "linux", feature = "vulkan-encode")),
+    allow(dead_code)
+)]
+#[path = "enc/linux/vcn_firmware.rs"]
+mod vcn_firmware;
+pub use vcn_firmware::VcnFirmware;
 // Vendored `VK_VALVE_video_encode_rgb_conversion`. Same ash-pin as `vk_av1_encode`.
 // See `design/vulkan-rgb-direct-encode.md`.
 #[cfg(all(target_os = "linux", feature = "vulkan-encode"))]

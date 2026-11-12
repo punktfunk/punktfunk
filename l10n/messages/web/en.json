@@ -851,6 +851,7 @@
 	"diag_pad_audio_title": "Controller speaker",
 	"diag_pad_driver_title": "Virtual controller driver",
 	"diag_encoder_sharing_title": "Video encoder sharing",
+	"diag_gpu_firmware_title": "Graphics card firmware",
 	"diag_niri_virtual_outputs_title": "Virtual displays on niri",
 	"logs_title": "Logs",
 	"logs_sources_label": "Sources",

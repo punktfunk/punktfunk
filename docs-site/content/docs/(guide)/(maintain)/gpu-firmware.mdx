@@ -1,0 +1,45 @@
+---
+title: Graphics Card Firmware
+description: Update the video firmware of an AMD Radeon RX 9000 card on Linux, so SDR streams go back to full range.
+---
+
+Update the firmware your AMD graphics card loads, so the **Graphics card firmware** health check
+turns green and SDR streams go back to full range.
+
+The check warns on a Radeon RX 9000 card whose video firmware is older than 9.13.38. That
+firmware converts SDR correctly at limited range only, so Punktfunk streams SDR at limited range
+on the card. The picture is right and HDR is untouched.
+
+<Callout type="warn">
+The fixed firmware is not in a `linux-firmware` release yet. Until it is, an update changes
+nothing here and the check keeps warning.
+</Callout>
+
+## Check the version
+
+**Health checks** on the [web console](/docs/web-console)'s **Troubleshooting** page shows the
+version in the **Graphics card firmware** row. In a terminal:
+
+```sh
+sudo dmesg | grep "VCN firmware"
+```
+
+`ENC: 1.13 DEC: 9 … Revision: 33` is firmware 9.13.33: the `DEC` number, the second `ENC` number,
+then `Revision`.
+
+## Update
+
+The firmware ships with your system, in its firmware package. Update the system, then restart the
+computer: the card loads its firmware at boot.
+
+| System | Update |
+|---|---|
+| Arch, CachyOS | `sudo pacman -Syu` |
+| Ubuntu | `sudo apt update && sudo apt full-upgrade` |
+| Fedora | `sudo dnf upgrade --refresh` |
+| Bazzite, Fedora Atomic | `ujust update`, or `rpm-ostree upgrade` |
+| SteamOS | **Settings** → **System** → **Check For Updates** |
+| NixOS | `nix flake update nixpkgs` in your flake directory, then rebuild |
+
+After the restart the check reads the new version. From 9.13.38 on it turns green and the next
+SDR stream is full range again.

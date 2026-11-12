@@ -583,7 +583,7 @@ pub(super) mod tests {
                 slices: 1,
                 reframe_to: None,
                 mirrored: false,
-                rgb_full_range: true,
+                rgb_full_range: crate::encode::RgbFullRange::BOTH,
                 studio_asked: crate::session_plan::StudioAsk::default(),
             },
             bit_depth: 8,
