@@ -1,7 +1,7 @@
 // What the game page knows about its title, and the brand pieces drawn for it.
 import { FC } from "react";
-import { startGameStream } from "./hooks";
-import type { HostView } from "./hosts";
+import { startGameStream } from "./stream";
+import type { HostView } from "./hosts/model";
 import { t } from "./i18n";
 import { toast } from "./lib/toast";
 

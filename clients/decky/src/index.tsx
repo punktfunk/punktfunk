@@ -38,18 +38,8 @@ import {
   streamRunning,
 } from "./backend";
 import { PluginErrorBoundary } from "./boundary";
-import {
-  applyUpdate,
-  checkForUpdatesNow,
-  clientUpdateIsManualOnly,
-  clientUpdateIsOneTap,
-  hasUpdate,
-  refreshHosts,
-  startStream,
-  useHosts,
-  useUpdate,
-} from "./hooks";
-import { type HostView, needsPair, trustState } from "./hosts";
+import { type HostView, needsPair, trustState } from "./hosts/model";
+import { refreshHosts, useHosts } from "./hosts/store";
 import { t } from "./i18n";
 import { toast } from "./lib/toast";
 import {
@@ -62,7 +52,10 @@ import { removeGameShortcuts } from "./steam/game-shortcuts";
 import { lastGameStream, launchGamepadUi, stopStream } from "./steam/launch";
 import { watchRunningStreams } from "./steam/running";
 import { ensureGamepadUiShortcut, recreateShortcuts } from "./steam/shortcuts";
+import { startStream } from "./stream";
 import { TrustSheet } from "./trust";
+import { applyUpdate, checkForUpdatesNow, useUpdate } from "./update/actions";
+import { clientUpdateIsManualOnly, clientUpdateIsOneTap, hasUpdate } from "./update/model";
 
 // Recovery action for "the Punktfunk library entry vanished" — recreates the visible shortcut
 // and sweeps duplicate entries. Self-heal waits for the next mount; this works in-session.

@@ -14,10 +14,10 @@
 import { findClassModule, Menu, MenuItem, MenuSeparator, showContextMenu } from "@decky/ui";
 import { cloneElement, createElement } from "react";
 import { FaCheck } from "react-icons/fa";
-import { hostsForApp, subscribeCatalog } from "./catalog";
+import { hostsForApp, subscribeCatalog } from "./hosts/catalog";
 import { Game, PunktfunkMark, streamFrom } from "./game";
-import { getHostStore, subscribeHosts } from "./hooks";
-import type { HostView } from "./hosts";
+import { getHostStore, subscribeHosts } from "./hosts/store";
+import type { HostView } from "./hosts/model";
 import { t } from "./i18n";
 import { diag } from "./lib/diag";
 import { read, write } from "./lib/storage";

@@ -15,9 +15,9 @@ import {
   Navigation,
 } from "@decky/ui";
 import { ReactElement } from "react";
-import { hostsForApp } from "./catalog";
+import { hostsForApp } from "./hosts/catalog";
 import { Game } from "./game";
-import { getHostStore, refreshHostsIfStale } from "./hooks";
+import { getHostStore, refreshHostsIfStale } from "./hosts/store";
 import { diag, verbose } from "./lib/diag";
 import { read, write } from "./lib/storage";
 import { collectElements, createRenderPatcher, describe } from "./patch";

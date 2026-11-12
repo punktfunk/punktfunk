@@ -5,12 +5,12 @@
 // other stores have no Steam page to appear on) and cached per host record in
 // storage, so a host that is asleep right now still offers the titles it had — the launch
 // wakes it. A host the Deck can no longer see, or that no longer trusts it, loses its entry.
-import { library } from "./backend";
-import type { HostView } from "./hosts";
-import { t } from "./i18n";
-import { signal } from "./lib/signal";
-import { keys, readJson, write } from "./lib/storage";
-import { toast } from "./lib/toast";
+import { library } from "../backend";
+import { t } from "../i18n";
+import { signal } from "../lib/signal";
+import { keys, readJson, write } from "../lib/storage";
+import { toast } from "../lib/toast";
+import type { HostView } from "./model";
 
 export interface LibrarySnapshot {
   /** When it was fetched (ms since epoch). */

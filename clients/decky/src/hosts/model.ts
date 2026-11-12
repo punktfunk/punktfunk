@@ -1,7 +1,7 @@
 // The host rows the QAM panel and the game page's "Play from" menu draw: the saved store and the
 // live mDNS browse joined by pf-client-core's `same_host` rule. Pure, so scripts/test-merge.ts
 // replays clients/shared/host-row-vectors.json through it under plain node.
-import type { DiscoveredHost, Preset, SavedHost } from "./backend";
+import type { DiscoveredHost, Preset, SavedHost } from "../backend";
 
 /**
  * How far this device has got with a host. The three states are what the row says under the
@@ -83,9 +83,8 @@ export function trustState(v: HostView): TrustState {
  *
  * A pinned fingerprint is the ONLY rule. The session binary refuses a pinless connect, so a row
  * without one can offer nothing but a button that fails; with one, the connect is verified and
- * the host either admits it or parks it for an operator. The old rule also consulted the
- * advertised policy for unsaved hosts, which made the answer depend on which of two lists a row
- * came from — the same box could read differently before and after being saved.
+ * the host either admits it or parks it for an operator. The advertised policy is not consulted:
+ * it would make the same box read differently before and after being saved.
  */
 export function needsPair(v: HostView): boolean {
   return v.fp === "";

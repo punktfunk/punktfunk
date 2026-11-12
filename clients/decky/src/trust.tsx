@@ -16,7 +16,7 @@ import { toaster } from "@decky/api";
 import { FC, useRef, useState } from "react";
 import { type PairResult, requestAccess, trustHost } from "./backend";
 import { diag } from "./lib/diag";
-import type { HostView } from "./hosts";
+import type { HostView } from "./hosts/model";
 import { rejectText, t } from "./i18n";
 import { PairModal } from "./pair";
 

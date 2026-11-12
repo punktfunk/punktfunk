@@ -5,7 +5,7 @@ import { toaster } from "@decky/api";
 import { FC, useState } from "react";
 import { pair } from "./backend";
 import { diag } from "./lib/diag";
-import type { HostView } from "./hosts";
+import type { HostView } from "./hosts/model";
 import { rejectText, t } from "./i18n";
 
 /**
