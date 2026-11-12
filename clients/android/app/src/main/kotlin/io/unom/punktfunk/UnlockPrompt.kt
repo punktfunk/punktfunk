@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.text.input.TextFieldState
+import androidx.compose.foundation.text.input.TextObfuscationMode
 import androidx.compose.foundation.text.input.clearText
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
@@ -34,6 +35,7 @@ import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalInputModeManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.LocalView
@@ -50,9 +52,11 @@ import io.unom.punktfunk.kit.R
  * The prompt for a profile on a person's own account or a locked one: its name, a masked field
  * for the account password (the password manager can fill it) or the profile's PIN (the number
  * pad), one switch (off), and the host's sentence after a refusal, spoken when it shows. The
- * field is plain `remember` state, never saved instance state. Sign In hands its characters over
- * as a CharArray and clears the field; leaving the composition counts as Cancel. Driven by a
- * remote or a pad, focus starts in the field with the system keyboard up, and B cancels.
+ * keyboard gets a password type for both. A PIN, and anything typed on a TV, never shows a
+ * character, the last one typed included. The field is plain `remember` state, never saved
+ * instance state. Sign In hands its characters over as a CharArray and clears the field; leaving
+ * the composition counts as Cancel. Driven by a remote or a pad, focus starts in the field with
+ * the system keyboard up, and B cancels.
  */
 @Composable
 internal fun UnlockPromptDialog(ask: PasswordAsk) {
@@ -75,6 +79,8 @@ internal fun UnlockPromptDialog(ask: PasswordAsk) {
         }
     }
     val refusal = ask.error?.asString()
+    val context = LocalContext.current
+    val tv = remember { isTvDevice(context) }
     AlertDialog(
         onDismissRequest = { finish(submit = false) },
         title = { Text(stringResource(R.string.unlock_title, ask.profileName)) },
@@ -101,12 +107,12 @@ internal fun UnlockPromptDialog(ask: PasswordAsk) {
                     label = { Text(stringResource(if (ask.pin) R.string.unlock_pin else R.string.unlock_password)) },
                     placeholder = if (ask.pin) ({ Text(stringResource(R.string.unlock_pin_placeholder)) }) else null,
                     isError = refusal != null,
+                    textObfuscationMode = if (ask.pin || tv) TextObfuscationMode.Hidden else TextObfuscationMode.RevealLastTyped,
                     supportingText = refusal?.let { { Text(it) } },
-                    keyboardOptions = if (ask.pin) {
-                        KeyboardOptions(keyboardType = KeyboardType.NumberPassword, imeAction = ImeAction.Done)
-                    } else {
-                        KeyboardOptions(imeAction = ImeAction.Done)
-                    },
+                    keyboardOptions = KeyboardOptions(
+                        keyboardType = if (ask.pin) KeyboardType.NumberPassword else KeyboardType.Password,
+                        imeAction = ImeAction.Done,
+                    ),
                     onKeyboardAction = { if (field.text.isNotEmpty()) finish(submit = true) },
                     modifier = Modifier
                         .fillMaxWidth()
