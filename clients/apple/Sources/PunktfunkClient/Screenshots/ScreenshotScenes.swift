@@ -438,17 +438,17 @@ struct ShotTouchTabs<Hosts: View, Library: View>: View {
     var body: some View {
         if #available(iOS 18, *) {
             TabView(selection: .constant(selection)) {
-                Tab("Hosts", systemImage: "desktopcomputer", value: TouchTab.hosts) { hosts }
-                Tab("Library", systemImage: "square.grid.2x2", value: TouchTab.library) { library }
+                Tab(String(localized: L10n.hostsTab), systemImage: "desktopcomputer", value: TouchTab.hosts) { hosts }
+                Tab(String(localized: L10n.hostsTabLibrary), systemImage: "square.grid.2x2", value: TouchTab.library) { library }
             }
             .tabViewStyle(.sidebarAdaptable)
         } else {
             TabView(selection: .constant(selection)) {
                 hosts
-                    .tabItem { Label("Hosts", systemImage: "desktopcomputer") }
+                    .tabItem { Label(L10n.hostsTab, systemImage: "desktopcomputer") }
                     .tag(TouchTab.hosts)
                 library
-                    .tabItem { Label("Library", systemImage: "square.grid.2x2") }
+                    .tabItem { Label(L10n.hostsTabLibrary, systemImage: "square.grid.2x2") }
                     .tag(TouchTab.library)
             }
         }
@@ -471,7 +471,7 @@ private struct ShotTVTabs: View {
                 .tabItem { TouchTab.hostsLabel }
                 .tag(TouchTab.hosts)
             ShotLibraryFilter()
-                .tabItem { Label("Library", systemImage: "square.grid.2x2") }
+                .tabItem { Label(L10n.hostsTabLibrary, systemImage: "square.grid.2x2") }
                 .tag(TouchTab.library)
             NavigationStack { settings }
                 .tabItem { Label("Settings", systemImage: "gearshape") }

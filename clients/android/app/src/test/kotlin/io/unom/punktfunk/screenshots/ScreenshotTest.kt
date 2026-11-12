@@ -24,7 +24,11 @@ import org.robolectric.annotation.GraphicsMode
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
 @Config(sdk = [36], qualifiers = "w360dp-h800dp-xxhdpi")
 class ScreenshotTest {
-    @get:Rule
+    // Before the activity starts, so it comes up in the language.
+    @get:Rule(order = 0)
+    val language = ShotLanguageRule()
+
+    @get:Rule(order = 1)
     val compose = createAndroidComposeRule<ComponentActivity>()
 
     private val out = "build/outputs/roborazzi"

@@ -739,12 +739,22 @@ impl Rig {
     }
 }
 
+/// Runs a capture set in `PF_CONSOLE_LANG` (a language tag such as `de`), English without it.
+fn in_shot_language(shots: impl FnOnce()) {
+    let lang = std::env::var("PF_CONSOLE_LANG").unwrap_or_else(|_| "en".into());
+    pf_l10n::with_language(&lang, shots);
+}
+
 /// Play Store TV captures. `PF_CONSOLE_STORE=<dir> cargo test -p pf-console-ui -- --ignored store_shots`.
 /// Android TV passes scale 0 (`SkiaConsoleShell.kt`), so a 1080p panel takes the couch
 /// formula: k = 1080 / 800 = 1.35, the same `render` derives for a plain 1920×1080 viewport.
 #[test]
 #[ignore]
 fn store_shots() {
+    in_shot_language(store_shots_in_language);
+}
+
+fn store_shots_in_language() {
     let rig = Rig::new(
         crate::console::Viewport::plain(1920, 1080),
         crate::platform::Platform::Android,
@@ -828,6 +838,10 @@ fn store_shots() {
 #[test]
 #[ignore]
 fn website_shots() {
+    in_shot_language(website_shots_in_language);
+}
+
+fn website_shots_in_language() {
     use crate::platform::Platform::{Apple, Desktop, WebOS};
     let mut rig = Rig::new(crate::console::Viewport::plain(1920, 1080), WebOS);
     for (device, width, height, scale, platform) in [
