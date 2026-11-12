@@ -692,16 +692,18 @@ fn teardown(
         reformat,
         ..
     } = state;
-    // Every held output buffer and reader image goes back before the codec stops.
-    sink.release_all(&ctx.codec);
-    drop(aux.vsync); // stop + join the choreographer thread; its channel sends are harmless after
     let lower = ctx.lower_rung;
-    let _ = ctx.codec.stop();
-    // AMediaCodec_delete — after this no render callback can fire. The ASC reader + layer outlive
-    // the codec, which rendered into the reader's window. `into_stale_layer` then drops the reader;
-    // the layer lives on only while a rebuild needs its last frame, and its control is freed once
-    // every in-flight completion callback has also dropped its share.
-    drop(ctx);
+    let stats = ctx.stats.clone();
+    stats.codec_call(|| {
+        // Every held output buffer and reader image goes back before the codec stops.
+        sink.release_all(&ctx.codec);
+        drop(aux.vsync); // stop + join the choreographer thread; its sends are harmless after
+        let _ = ctx.codec.stop();
+        // AMediaCodec_delete — after this no render callback can fire. The ASC reader + layer
+        // outlive the codec, which rendered into the reader's window. `into_stale_layer` then
+        // drops the reader; the layer lives on only while a rebuild needs its last frame.
+        drop(ctx);
+    });
     let layer = sink.into_stale_layer();
     if let Some(ud) = render_cb {
         // SAFETY: `ud` is `install_render_callback`'s pointer for `ctx.codec`, which was dropped
@@ -807,7 +809,8 @@ fn bring_up(
                 keys_label(keys)
             );
         }
-        let Some(mut codec) = create_codec(mime, opts.decoder_for(mime)) else {
+        let Some(mut codec) = stats.codec_call(|| create_codec(mime, opts.decoder_for(mime)))
+        else {
             log::error!("decode: no {mime} decoder on this device");
             return None;
         };

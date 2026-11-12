@@ -2165,6 +2165,12 @@ impl NativeClient {
         self.shared.quit.store(true, Ordering::SeqCst);
         self.shared.shutdown.store(true, Ordering::SeqCst);
     }
+
+    /// Close as a drop does (code 0, the host waits for a reconnect), while other threads may
+    /// still hold the client.
+    pub fn close(&self) {
+        self.shared.shutdown.store(true, Ordering::SeqCst);
+    }
 }
 
 impl Drop for NativeClient {

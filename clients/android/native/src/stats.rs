@@ -7,6 +7,7 @@
 use punktfunk_core::hud::Stats;
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 pub struct VideoStats {
     hud: Arc<Stats>,
@@ -19,6 +20,8 @@ pub struct VideoStats {
     /// The last window as numbers (`nativeVideoStatsSample`), kept beside the lines each
     /// `nativeVideoStatsLines` call formats, so the two views read one window. Empty until then.
     sample: Mutex<Vec<f32>>,
+    /// When the decode thread entered a codec call that has not returned; `None` between calls.
+    codec_call: Mutex<Option<Instant>>,
 }
 
 /// A realtime stamp as the core takes it. A stamp that never happened reads 0.
@@ -60,7 +63,23 @@ impl VideoStats {
             judder_permille: AtomicU32::new(0),
             coalesced: AtomicU64::new(0),
             sample: Mutex::new(Vec::new()),
+            codec_call: Mutex::new(None),
         }
+    }
+
+    /// Runs `f`, a call into the device's codec service, stamped for [`VideoStats::codec_stuck`].
+    #[cfg_attr(not(target_os = "android"), allow(dead_code))]
+    pub fn codec_call<T>(&self, f: impl FnOnce() -> T) -> T {
+        *crate::session::lock_recover(&self.codec_call) = Some(Instant::now());
+        let out = f();
+        *crate::session::lock_recover(&self.codec_call) = None;
+        out
+    }
+
+    /// Whether a codec call has run for at least `after`. A vendor codec service that hangs
+    /// never returns the call, and the decoder is gone until the device restarts.
+    pub fn codec_stuck(&self, after: Duration) -> bool {
+        crate::session::lock_recover(&self.codec_call).is_some_and(|t| t.elapsed() >= after)
     }
 
     pub fn keep_sample(&self, sample: Vec<f32>) {
@@ -169,5 +188,14 @@ mod tests {
         assert_eq!(publish_e2e(&e2e, 1_000, 0, 2_000), None);
         assert_eq!(publish_e2e(&e2e, SANE_NS, 0, 0), None);
         assert_eq!(e2e.load(Ordering::Relaxed), 4_000_000);
+    }
+
+    #[test]
+    fn codec_stuck_only_inside_a_call() {
+        let stats = VideoStats::new(Arc::new(Stats::new(Arc::default())));
+        assert!(!stats.codec_stuck(Duration::ZERO));
+        assert!(stats.codec_call(|| stats.codec_stuck(Duration::ZERO)));
+        assert!(!stats.codec_call(|| stats.codec_stuck(Duration::from_secs(60))));
+        assert!(!stats.codec_stuck(Duration::ZERO));
     }
 }
