@@ -162,8 +162,8 @@ pub fn revoke(account: &str) {
 }
 
 /// Relays again every pad systemd kept across a supervisor restart, and watches again every
-/// served USB socket. The other kept fds are the caller's. First thing at start: until then
-/// the kept fds would leak into a child.
+/// served USB socket, each holding its seat's slot again so the caps hold. The other kept fds
+/// are the caller's. First thing at start: until then the kept fds would leak into a child.
 pub fn resume() -> Vec<(String, OwnedFd)> {
     let _ = std::fs::remove_dir_all(RELAYED);
     let pad_broker::Kept {
@@ -201,9 +201,13 @@ pub fn resume() -> Vec<(String, OwnedFd)> {
     }
     for (port, recorded, sock) in sockets {
         tracing::info!(port, "seat USB device kept across a restart");
+        // A socket no row names is shut down by `watch_usb` and holds no slot.
+        let slot = vhci::account_at(port)
+            .and_then(|account| Slot::take(&SERVED, &account, vhci::MAX_PER_SEAT));
         let spawned = std::thread::Builder::new()
             .name("seat-usb".into())
             .spawn(move || {
+                let _slot = slot;
                 watch_usb(port, recorded, sock);
                 tracing::info!(port, "seat USB device gone");
             });
