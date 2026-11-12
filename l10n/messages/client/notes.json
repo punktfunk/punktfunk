@@ -89,6 +89,7 @@
 	"unlock_password": "Label of the account password field.",
 	"unlock_password_placeholder": "Placeholder in the empty password field.",
 	"unlock_pin": "Label of a locked profile's PIN field.",
+	"unlock_pin_digits_a11y": "Read by the screen reader for the PIN's dots, after the field's label; never the digits themselves. count: how many digits are typed, 0 to 8.",
 	"unlock_pin_error_empty": "Under the PIN field: Sign in with nothing typed.",
 	"unlock_pin_error_shape": "Under the PIN field: what was typed is not 4 to 8 digits.",
 	"unlock_pin_intro": "Under the PIN prompt's title. host: the host's name.",

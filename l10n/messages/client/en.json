@@ -134,6 +134,21 @@
 	"unlock_password": "Password",
 	"unlock_password_placeholder": "Account password",
 	"unlock_pin": "PIN",
+	"unlock_pin_digits_a11y": [
+		{
+			"declarations": [
+				"input count",
+				"local n = count: plural"
+			],
+			"selectors": [
+				"n"
+			],
+			"match": {
+				"n=one": "{count} digit entered",
+				"n=other": "{count} digits entered"
+			}
+		}
+	],
 	"unlock_pin_error_empty": "Enter the PIN.",
 	"unlock_pin_error_shape": "A PIN is 4 to 8 digits.",
 	"unlock_pin_intro": "Enter the PIN for this profile on {host}.",

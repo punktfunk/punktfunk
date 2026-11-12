@@ -33,6 +33,10 @@ enum ShotScenes {
             ShotScene(name: "03-pair", orientation: .natural, colorScheme: .dark) {
                 AnyView(ShotPair())
             },
+            // A locked profile's PIN prompt, with the line a wrong shape leaves.
+            ShotScene(name: "03b-unlock-pin", orientation: .natural, colorScheme: .dark) {
+                AnyView(ShotUnlockPin())
+            },
             ShotScene(name: "04-trust", orientation: .landscape, colorScheme: .dark) {
                 AnyView(ShotTrust())
             },
@@ -152,6 +156,10 @@ enum ShotScenes {
         })
         #endif
         #if os(tvOS)
+        // The PIN pad with three digits in, as dots.
+        scenes.append(ShotScene(name: "03c-unlock-pin-typed", orientation: .natural, colorScheme: .dark) {
+            AnyView(ShotUnlockPin(typed: 3))
+        })
         // The TV's tab bar: the hosts, and the Library tab on the mock catalog.
         scenes.append(ShotScene(name: "20-tv-hosts-tab", orientation: .natural, colorScheme: .dark) {
             AnyView(ShotTVTabs(tab: .hosts))
@@ -833,6 +841,39 @@ private struct ShotPair: View {
         // driver's capture of the window's rect takes in.
         ShotHome().sheet(isPresented: .constant(true)) { sheet }
         #endif
+    }
+}
+
+// MARK: - Unlock (a locked profile's PIN)
+
+private struct ShotUnlockPin: View {
+    /// Digits on the TV's pad; with none, the line a wrong shape leaves.
+    var typed = 0
+
+    /// The TV holds no key, so its switch stays signed in.
+    private var switchTitle: String {
+        #if os(tvOS)
+        String(localized: L10n.unlockStaySignedIn)
+        #else
+        L10n.unlockWithBiometry(method: Biometry.faceID.name)
+        #endif
+    }
+
+    private var sheet: some View {
+        let ask = UnlockAsk(
+            hostName: ShotMock.host.displayName, profileName: "Mia", pin: true,
+            error: typed == 0 ? ProfileUnlock.PinProblem.shape.line : nil,
+            switchTitle: switchTitle) { _ in }
+        #if os(tvOS)
+        return UnlockPromptView(ask: ask, shotTyped: typed)
+        #else
+        return UnlockPromptView(ask: ask)
+        #endif
+    }
+
+    /// Presented as the app presents it: a sheet over the hosts.
+    var body: some View {
+        ShotHome().sheet(isPresented: .constant(true)) { sheet }
     }
 }
 
