@@ -17,7 +17,7 @@ import {
   staticClasses,
   ToggleField,
 } from "@decky/ui";
-import { definePlugin, toaster } from "@decky/api";
+import { definePlugin } from "@decky/api";
 import { FC, useEffect, useState } from "react";
 import {
   FaDownload,
@@ -51,6 +51,7 @@ import {
 } from "./hooks";
 import { type HostView, needsPair, trustState } from "./hosts";
 import { t } from "./i18n";
+import { toast } from "./lib/toast";
 import {
   gamePageStreamEnabled,
   installGamePageStream,
@@ -69,34 +70,28 @@ import {
 import { TrustSheet } from "./trust";
 
 // Recovery action for "the Punktfunk library entry vanished" — recreates the visible shortcut
-// and sweeps duplicate entries (the piles a boot race used to mint, one per Steam start).
-// Deleting the shortcut (optionally + reinstalling the plugin) leaves a stale appId in Steam's
-// CEF localStorage that self-heal fixes on the next mount, but this gives an in-session button
-// that works even without a reload. Always ends in a toast so the tap has feedback.
+// and sweeps duplicate entries. Self-heal waits for the next mount; this works in-session.
+// Always ends in a toast so the tap has feedback.
 async function recreatePunktfunkShortcut(): Promise<void> {
   const { appId, removedDuplicates } = await recreateShortcuts();
-  toaster.toast({
-    title: "Punktfunk",
-    body:
-      appId == null
-        ? t("decky_shortcut_create_failed")
-        : removedDuplicates > 0
-          ? t("decky_shortcut_restored_dupes", { count: removedDuplicates })
-          : t("decky_shortcut_restored"),
-  });
+  toast(
+    appId == null
+      ? t("decky_shortcut_create_failed")
+      : removedDuplicates > 0
+        ? t("decky_shortcut_restored_dupes", { count: removedDuplicates })
+        : t("decky_shortcut_restored"),
+  );
 }
 
 /** Delete the hidden per-game entries that game-page streams minted. Each comes back, with its
  *  art, on the next Stream tap for that game — so this is tidying, never a loss. */
 function removeGamePageShortcuts(): void {
   const removed = removeGameShortcuts();
-  toaster.toast({
-    title: "Punktfunk",
-    body:
-      removed === 0
-        ? t("decky_game_shortcuts_none")
-        : t("decky_game_shortcuts_removed", { count: removed }),
-  });
+  toast(
+    removed === 0
+      ? t("decky_game_shortcuts_none")
+      : t("decky_game_shortcuts_removed", { count: removed }),
+  );
 }
 
 /** Force-stop a wedged stream: end Steam's "game", then make sure the client itself is gone. */
@@ -107,7 +102,7 @@ async function forceStop(): Promise<void> {
   } catch {
     /* best-effort — the TerminateApp above is usually enough */
   }
-  toaster.toast({ title: "Punktfunk", body: t("decky_force_stopped") });
+  toast(t("decky_force_stopped"));
 }
 
 // Press a host system button (guide/QAM) on the running stream, then hand the screen back
@@ -119,10 +114,7 @@ async function pressHost(action: "guide" | "qam"): Promise<void> {
   if (r.ok) {
     Navigation.CloseSideMenus();
   } else {
-    toaster.toast({
-      title: "Punktfunk",
-      body: r.error === "no-stream" ? t("decky_no_stream") : t("decky_stream_unreachable"),
-    });
+    toast(r.error === "no-stream" ? t("decky_no_stream") : t("decky_stream_unreachable"));
   }
 }
 
@@ -147,7 +139,7 @@ async function endStreamedGame(): Promise<void> {
           : r.error === "unresolved"
             ? t("decky_end_game_unresolved")
             : t("decky_end_game_failed"));
-  toaster.toast({ title: "Punktfunk", body });
+  toast(body);
 }
 
 /** The line under a host's name: where it is, whether it's up, and how far trust has got. */

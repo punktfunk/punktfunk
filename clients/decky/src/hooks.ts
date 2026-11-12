@@ -1,5 +1,4 @@
 // Shared state hooks + user actions for the QAM panel.
-import { toaster } from "@decky/api";
 import { Navigation } from "@decky/ui";
 import { useCallback, useEffect, useState } from "react";
 import {
@@ -10,9 +9,11 @@ import {
   UpdateInfo,
 } from "./backend";
 import { refreshLibraries } from "./catalog";
-import { diag } from "./diag";
 import { type HostView, mergeHosts } from "./hosts";
 import { t } from "./i18n";
+import { diag } from "./lib/diag";
+import { signal, useSignal } from "./lib/signal";
+import { toast } from "./lib/toast";
 import { LaunchOpts, launchGameStream, launchStream } from "./steam";
 
 export const DOCS_URL = "https://docs.punktfunk.unom.io/docs/steam-deck";
@@ -54,26 +55,14 @@ export interface HostStore {
   scannedAt: number;
 }
 
-let hostStore: HostStore = { views: [], scanning: false, problem: null, scannedAt: 0 };
-const hostListeners = new Set<() => void>();
+const hostStore = signal<HostStore>({ views: [], scanning: false, problem: null, scannedAt: 0 });
 
 function setHostStore(patch: Partial<HostStore>): void {
-  hostStore = { ...hostStore, ...patch };
-  for (const listener of hostListeners) {
-    listener();
-  }
+  hostStore.set({ ...hostStore.get(), ...patch });
 }
 
-export function getHostStore(): HostStore {
-  return hostStore;
-}
-
-export function subscribeHosts(listener: () => void): () => void {
-  hostListeners.add(listener);
-  return () => {
-    hostListeners.delete(listener);
-  };
-}
+export const getHostStore = hostStore.get;
+export const subscribeHosts = hostStore.subscribe;
 
 async function doRefreshHosts(): Promise<void> {
   setHostStore({ scanning: true });
@@ -118,7 +107,7 @@ export function refreshHosts(): Promise<void> {
 
 /** Rescan only when the last scan is older than `maxAgeMs`; a fresh one stands as is. */
 export function refreshHostsIfStale(maxAgeMs: number): Promise<void> {
-  if (Date.now() - hostStore.scannedAt < maxAgeMs) {
+  if (Date.now() - hostStore.get().scannedAt < maxAgeMs) {
     return Promise.resolve();
   }
   return refreshHosts();
@@ -126,13 +115,7 @@ export function refreshHostsIfStale(maxAgeMs: number): Promise<void> {
 
 /** The store as React state — re-renders on every scan. */
 export function useHostStore(): HostStore {
-  const [state, setState] = useState(hostStore);
-  useEffect(() => {
-    const unsubscribe = subscribeHosts(() => setState(hostStore));
-    setState(hostStore); // a scan that landed between render and subscribe
-    return unsubscribe;
-  }, []);
-  return state;
+  return useSignal(hostStore);
 }
 
 /** The QAM panel's view: the rows, plus a scan on every mount (the panel remounts per open). */
@@ -240,7 +223,7 @@ export async function checkForUpdatesNow(
   } else {
     body = t("decky_up_to_date", { version: res.current });
   }
-  toaster.toast({ title: "Punktfunk", body });
+  toast(body);
 }
 
 /** One line of user-facing copy for whatever `updateClient()` came back with. */
@@ -279,32 +262,29 @@ export async function applyUpdate(
   check?: (force: boolean) => Promise<UpdateInfo | null>,
 ): Promise<void> {
   if (info.client_update_available && clientUpdateIsOneTap(info)) {
-    toaster.toast({
-      title: "Punktfunk",
-      // A package-manager run is not instant; say so before the wait, not after.
-      body:
-        info.client_applier === "helper"
-          ? t("decky_client_updating_slow")
-          : t("decky_client_updating"),
-    });
+    // A package-manager run is not instant; say so before the wait, not after.
+    toast(
+      info.client_applier === "helper"
+        ? t("decky_client_updating_slow")
+        : t("decky_client_updating"),
+    );
     try {
       const r = await updateClient();
-      toaster.toast({ title: "Punktfunk", body: clientUpdateResultBody(r) });
+      toast(clientUpdateResultBody(r));
     } catch {
-      toaster.toast({ title: "Punktfunk", body: t("decky_client_update_failed") });
+      toast(t("decky_client_update_failed"));
     }
   } else if (info.client_update_available) {
     // Nothing here can install it — hand over the one line that does, rather than a button
     // that would fail. `client_opt_in` wins when joining the group is what's missing, since
     // that is the step that turns this into a one-tap update from then on.
     const line = info.client_opt_in || info.client_command;
-    toaster.toast({
-      title: "Punktfunk",
-      body: line
+    toast(
+      line
         ? t("decky_client_update_run", { version: info.client_latest, command: line })
         : t("decky_client_update_manual", { version: info.client_latest }),
-      duration: 12_000,
-    });
+      { duration: 12_000 },
+    );
   }
 
   if (info.update_available) {
@@ -327,21 +307,15 @@ export async function applyUpdate(
           plugin.hash,
           INSTALL_TYPE_UPDATE,
         );
-        toaster.toast({
-          title: "Punktfunk",
-          // Decky's installer also phones the plugin store first, which can hang on some
-          // networks before the actual install proceeds — set expectations.
-          body: t("decky_plugin_updating", { version: plugin.latest }),
-        });
+        // Decky's installer also phones the plugin store first, which can hang on some
+        // networks before the actual install proceeds — set expectations.
+        toast(t("decky_plugin_updating", { version: plugin.latest }));
         return;
       }
     } catch {
       // fall through to the manual path
     }
-    toaster.toast({
-      title: "Punktfunk",
-      body: t("decky_plugin_update_manual"),
-    });
+    toast(t("decky_plugin_update_manual"));
     return;
   }
 
@@ -379,7 +353,7 @@ export async function startStream(
       : "preset" in failedAs
         ? t("decky_launch_failed_preset", { preset: failedAs.preset })
         : t("decky_launch_failed_named", { name: failedAs.profile });
-    toaster.toast({ title: "Punktfunk", body });
+    toast(body);
   }
 }
 
@@ -399,6 +373,6 @@ export async function startGameStream(
     Navigation.CloseSideMenus();
   } catch (e) {
     diag(`launch failed: ${e}`);
-    toaster.toast({ title: "Punktfunk", body: t("decky_launch_failed_named", { name: title }) });
+    toast(t("decky_launch_failed_named", { name: title }));
   }
 }

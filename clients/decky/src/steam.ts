@@ -24,8 +24,10 @@
 
 import { applyControllerConfig, gameArt, runnerInfo, saveIcon, shortcutArt } from "./backend";
 import { type CompatApps, compatToolOf } from "./compat";
-import { diag } from "./diag";
 import { isSafeClientBin, isSafeLaunchId } from "./launch-id";
+import { diag } from "./lib/diag";
+import { signal } from "./lib/signal";
+import { keys, read, readJson, write } from "./lib/storage";
 
 // SteamClient is a Steam-internal global injected into the CEF context; it is not fully typed
 // by @decky/ui, so declare the surface we use. Signatures verified against MoonDeck + the
@@ -72,7 +74,7 @@ declare const collectionStore:
 
 // SteamUI's appStore indexes every registered app/shortcut by appId; a remembered appId whose
 // overview is gone was deleted out from under us (the user removed the library entry). We must
-// verify this because the remembered appId lives in Steam's CEF localStorage — which survives a
+// verify this because the remembered appId lives in Steam's CEF storage — which survives a
 // plugin UNINSTALL/REINSTALL — so a manually-deleted shortcut otherwise leaves a dangling appId
 // that the reuse path below silently repoints (SetShortcut* on a dead id is a no-op), and the
 // entry never comes back.
@@ -228,11 +230,11 @@ async function artOnce(
   isRetry = false,
 ): Promise<void> {
   try {
-    if (localStorage.getItem(marker) === `${version}`) {
+    if (read(marker) === `${version}`) {
       return;
     }
     if (await apply()) {
-      localStorage.setItem(marker, `${version}`);
+      write(marker, `${version}`);
     }
   } catch (e) {
     if (!isRetry) {
@@ -328,11 +330,7 @@ function removeDuplicateShortcuts(): number {
     );
     for (const app of surplus) {
       SteamClient.Apps.RemoveShortcut(app.appid as number);
-      try {
-        localStorage.removeItem(artKey(app.appid as number));
-      } catch {
-        /* ignore */
-      }
+      write(artKey(app.appid as number), null);
       removed++;
     }
   } catch (e) {
@@ -370,49 +368,28 @@ export type GameStreamRef = { ref: string; gameId: string; title: string };
 
 /** The host and title the last game-page stream launched; `null` after a plain stream. */
 export function lastGameStream(): GameStreamRef | null {
-  try {
-    const v = localStorage.getItem(STORAGE_KEY_LAST_GAME);
-    return v ? (JSON.parse(v) as GameStreamRef) : null;
-  } catch {
-    return null;
-  }
+  return readJson<GameStreamRef>(STORAGE_KEY_LAST_GAME);
 }
 
 function setLastGameStream(v: GameStreamRef | null): void {
-  try {
-    if (v) {
-      localStorage.setItem(STORAGE_KEY_LAST_GAME, JSON.stringify(v));
-    } else {
-      localStorage.removeItem(STORAGE_KEY_LAST_GAME);
-    }
-  } catch {
-    /* ignore */
-  }
+  write(STORAGE_KEY_LAST_GAME, v ? JSON.stringify(v) : null);
 }
 // `punktfunk:gameShortcut:<steam appid>` → the per-game shortcut's appId.
 const GAME_KEY_PREFIX = "punktfunk:gameShortcut:";
 
 function remember(key: string, appId: number) {
-  try {
-    localStorage.setItem(key, String(appId));
-  } catch {
-    /* ignore */
-  }
+  write(key, String(appId));
   if (key.startsWith(GAME_KEY_PREFIX)) {
     pairCache = null; // rebuilt from storage on the next read
   }
 }
 function recall(key: string): number | null {
-  try {
-    const v = localStorage.getItem(key);
-    return v ? Number(v) : null;
-  } catch {
-    return null;
-  }
+  const v = read(key);
+  return v ? Number(v) : null;
 }
 
 // The native-touch controller config, installed by the root backend and keyed by shortcut NAME:
-// one entry covers both fixed roles, and each per-game name needs its own. Gated in localStorage
+// one entry covers both fixed roles, and each per-game name needs its own. Gated in storage
 // so Steam's config dir is not rewritten on every launch; bump CONFIG_VERSION after the shipped
 // .vdf changes.
 const CONFIG_KEY = "punktfunk:controllerConfig";
@@ -422,14 +399,14 @@ const CONFIG_VERSION = 1;
 /** Point shortcut `name` at the touch layout unless `marker` already records CONFIG_VERSION. */
 async function configOnce(marker: string, name: string): Promise<void> {
   try {
-    if (localStorage.getItem(marker) === `${CONFIG_VERSION}`) {
+    if (read(marker) === `${CONFIG_VERSION}`) {
       return;
     }
     const r = await applyControllerConfig(name);
     // `ok` alone isn't done: with zero account configset dirs (fresh Steam) the backend
     // succeeds without pointing any account at the template — keep retrying until one lands.
     if (r?.ok && (r.applied ?? []).some((a) => a.startsWith("configset:"))) {
-      localStorage.setItem(marker, `${CONFIG_VERSION}`);
+      write(marker, `${CONFIG_VERSION}`);
     } else {
       console.warn("punktfunk: controller config not fully applied", r);
     }
@@ -446,7 +423,7 @@ interface Ensured {
 
 /** What one shortcut role varies; `ensureShortcut` runs the rest. */
 interface ShortcutRole {
-  /** localStorage key of the role's appId. Also the single-flight key. */
+  /** Storage key of the role's appId. Also the single-flight key. */
   key: string;
   /** Library name. Steam files the controller layout under it too. */
   name: string;
@@ -485,11 +462,7 @@ async function ensureShortcutOnce(role: ShortcutRole): Promise<Ensured> {
   }
   const mint = async (): Promise<number> => {
     const id = await SteamClient.Apps.AddShortcut(role.name, SHELL, startDir, "");
-    try {
-      localStorage.removeItem(role.artKey(id)); // a recycled appId must not skip its art
-    } catch {
-      /* ignore */
-    }
+    write(role.artKey(id), null); // a recycled appId must not skip its art
     remember(role.key, id);
     return id;
   };
@@ -595,12 +568,8 @@ export async function recreateShortcuts(): Promise<{
   for (const key of [STORAGE_KEY_STREAM, STORAGE_KEY_UI]) {
     const id = recall(key);
     if (id != null && !(await shortcutStillExists(id))) {
-      try {
-        localStorage.removeItem(artKey(id)); // stale art marker for the dead appId
-        localStorage.removeItem(key);
-      } catch {
-        /* ignore */
-      }
+      write(artKey(id), null); // stale art marker for the dead appId
+      write(key, null);
     }
   }
   // Recreate the visible entry now; the hidden stream shortcut re-registers lazily on next
@@ -636,40 +605,24 @@ function gameShortcutPairs(): Array<[number, number]> {
     return pairCache;
   }
   const pairs: Array<[number, number]> = [];
-  try {
-    for (let i = 0; i < localStorage.length; i++) {
-      const key = localStorage.key(i);
-      if (!key?.startsWith(GAME_KEY_PREFIX)) {
-        continue;
-      }
-      const steamAppId = Number(key.slice(GAME_KEY_PREFIX.length));
-      const shortcut = Number(localStorage.getItem(key));
-      if (Number.isFinite(steamAppId) && Number.isFinite(shortcut) && shortcut > 0) {
-        pairs.push([steamAppId, shortcut]);
-      }
+  const found = keys(GAME_KEY_PREFIX);
+  for (const key of found ?? []) {
+    const steamAppId = Number(key.slice(GAME_KEY_PREFIX.length));
+    const shortcut = Number(read(key));
+    if (Number.isFinite(steamAppId) && Number.isFinite(shortcut) && shortcut > 0) {
+      pairs.push([steamAppId, shortcut]);
     }
+  }
+  if (found) {
     pairCache = pairs; // only a scan that finished; a failed one must be retried, not cached
-  } catch {
-    /* storage unavailable */
   }
   return pairs;
 }
 
-/** Every key under `prefix`, gone. Collected before removing — removing shifts the indices. */
+/** Every key under `prefix`, gone. */
 function removeByPrefix(prefix: string): void {
-  try {
-    const keys: string[] = [];
-    for (let i = 0; i < localStorage.length; i++) {
-      const key = localStorage.key(i);
-      if (key?.startsWith(prefix)) {
-        keys.push(key);
-      }
-    }
-    for (const key of keys) {
-      localStorage.removeItem(key);
-    }
-  } catch {
-    /* storage unavailable */
+  for (const key of keys(prefix) ?? []) {
+    write(key, null);
   }
 }
 
@@ -788,8 +741,8 @@ export function removeGameShortcuts(): number {
         SteamClient.Apps.RemoveShortcut(shortcut);
         removed++;
       }
-      localStorage.removeItem(gameKey(steamAppId));
-      localStorage.removeItem(gameArtKey(shortcut));
+      write(gameKey(steamAppId), null);
+      write(gameArtKey(shortcut), null);
       running.delete(shortcut); // ours only — a generic stream that is up keeps its state
     } catch (e) {
       console.warn("punktfunk: game shortcut not removed", e);
@@ -807,20 +760,9 @@ export function removeGameShortcuts(): number {
 // ----------------------------------------------------------------------------------------
 
 const running = new Set<number>(); // shortcut appIds
-const runningListeners = new Set<() => void>();
-
-function notifyRunning(): void {
-  for (const listener of runningListeners) {
-    listener();
-  }
-}
-
-export function subscribeRunning(listener: () => void): () => void {
-  runningListeners.add(listener);
-  return () => {
-    runningListeners.delete(listener);
-  };
-}
+const runningChanged = signal<void>(undefined);
+const notifyRunning = runningChanged.notify;
+export const subscribeRunning = runningChanged.subscribe;
 
 function isOurShortcut(appId: number): boolean {
   return appId === recall(STORAGE_KEY_STREAM) || steamAppIdForShortcut(appId) != null;

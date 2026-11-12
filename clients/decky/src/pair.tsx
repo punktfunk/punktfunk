@@ -4,7 +4,7 @@ import { DialogButton, Focusable, ModalRoot, Spinner } from "@decky/ui";
 import { toaster } from "@decky/api";
 import { FC, useState } from "react";
 import { pair } from "./backend";
-import { diag } from "./diag";
+import { diag } from "./lib/diag";
 import type { HostView } from "./hosts";
 import { rejectText, t } from "./i18n";
 

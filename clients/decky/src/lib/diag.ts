@@ -1,5 +1,7 @@
 // Where each patch attempt got to, readable from the CEF debugger as `window.__punktfunkDiag`
 // and echoed to the console. Steam's tree is not an API; when it moves, this says which step.
+import { read } from "./storage";
+
 declare global {
   interface Window {
     __punktfunkDiag?: string[];
@@ -8,13 +10,9 @@ declare global {
 
 let lastDiag = "";
 
-/** `localStorage["punktfunk:diagVerbose"] = "1"` traces every render step instead of changes. */
+/** Storage key `punktfunk:diagVerbose` set to "1" traces every render step instead of changes. */
 export function verbose(): boolean {
-  try {
-    return localStorage.getItem("punktfunk:diagVerbose") === "1";
-  } catch {
-    return false;
-  }
+  return read("punktfunk:diagVerbose") === "1";
 }
 
 export function diag(msg: string): void {

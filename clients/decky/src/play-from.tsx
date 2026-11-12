@@ -15,11 +15,12 @@ import { findClassModule, Menu, MenuItem, MenuSeparator, showContextMenu } from 
 import { cloneElement, createElement } from "react";
 import { FaCheck } from "react-icons/fa";
 import { hostsForApp, subscribeCatalog } from "./catalog";
-import { diag } from "./diag";
 import { Game, PunktfunkMark, streamFrom } from "./game";
 import { getHostStore, subscribeHosts } from "./hooks";
 import type { HostView } from "./hosts";
 import { t } from "./i18n";
+import { diag } from "./lib/diag";
+import { read, write } from "./lib/storage";
 import { collectElements, createRenderPatcher, describe } from "./patch";
 import { isGameStreaming, stopGameStream, subscribeRunning } from "./steam";
 
@@ -56,23 +57,11 @@ function gameOf(overview: Overview): Game {
 const SEL_PREFIX = "punktfunk:playFrom:";
 
 export function playFromSelection(appId: number): string | null {
-  try {
-    return localStorage.getItem(SEL_PREFIX + appId);
-  } catch {
-    return null;
-  }
+  return read(SEL_PREFIX + appId);
 }
 
 export function setPlayFromSelection(appId: number, ref: string | null): void {
-  try {
-    if (ref) {
-      localStorage.setItem(SEL_PREFIX + appId, ref);
-    } else {
-      localStorage.removeItem(SEL_PREFIX + appId);
-    }
-  } catch {
-    /* ignore */
-  }
+  write(SEL_PREFIX + appId, ref || null);
   rerenderPlayButtons();
 }
 
