@@ -53,12 +53,14 @@ assert.deepEqual([...sharedNames(twins)], ["desk"]);
 assert.equal(sharedNames([host({ name: "desk" }), host({ name: "Desk" })]).size, 0, "names compare exactly");
 assert.equal(sharedNames([]).size, 0);
 
-// The ▾: pinned presets, or two profiles and up.
-assert.equal(rowMenu(0, 0), null);
-assert.equal(rowMenu(0, 1), null, "a single profile is no choice");
-assert.deepEqual(rowMenu(0, 2), { profiles: true, presets: false });
-assert.deepEqual(rowMenu(1, 1), { profiles: false, presets: true });
-assert.deepEqual(rowMenu(2, 3), { profiles: true, presets: true });
+// The ▾: pinned presets, two profiles and up, or a power row.
+assert.equal(rowMenu(0, 0, 0), null);
+assert.equal(rowMenu(0, 1, 0), null, "a single profile is no choice");
+assert.deepEqual(rowMenu(0, 2, 0), { profiles: true, presets: false, power: false });
+assert.deepEqual(rowMenu(1, 1, 0), { profiles: false, presets: true, power: false });
+assert.deepEqual(rowMenu(2, 3, 0), { profiles: true, presets: true, power: false });
+assert.deepEqual(rowMenu(0, 1, 1), { profiles: false, presets: false, power: true }, "Wake alone opens the ▾");
+assert.deepEqual(rowMenu(1, 2, 3), { profiles: true, presets: true, power: true });
 
 // Streaming is up on either arm: the socket, or our shortcut still waking its host.
 assert.equal(streamIsUp(false, false), false);

@@ -116,16 +116,39 @@ test("the library offers the owner and then every profile, each seen as itself",
 		{ id: null, name: "Enrico", seat: null },
 		{ id: sharer.id, name: "Anna", seat: null, as: sharer.id },
 		{ id: turns.id, name: "Tom", seat: null, as: turns.id },
-		{ id: KID, name: "Kid", seat: null, as: KID },
+		// Only a desktop the box made runs games of its own.
+		{ id: KID, name: "Kid", seat: null, as: KID, ownGames: true },
 		{ id: own.id, name: "Oma", seat: null, as: own.id },
 	]);
 	// A door has no library of its own: every view is read from the owner's host.
-	const door = scopeChoices("library", [owner, sharer], "linux", true);
+	const shared = profile({
+		id: "5a7c9e1b3d5f",
+		display_name: "Mia",
+		seat: { ...seat, kind: "shared" } as typeof seat,
+	});
+	const linuxOwn = profile({
+		id: own.id,
+		display_name: "Oma",
+		seat: { ...seat, account: "oma" } as typeof seat,
+	});
+	const door = scopeChoices(
+		"library",
+		[owner, sharer, shared, made, linuxOwn],
+		"linux",
+		true,
+	);
 	const ownerSeat = { id: OWNER, name: "Enrico" };
 	expect(door).toEqual([
 		{ id: null, name: "Enrico", seat: ownerSeat },
 		{ id: sharer.id, name: "Anna", seat: ownerSeat, as: sharer.id },
+		{ id: shared.id, name: "Mia", seat: ownerSeat, as: shared.id },
+		{ id: KID, name: "Kid", seat: ownerSeat, as: KID, ownGames: true },
+		{ id: own.id, name: "Oma", seat: ownerSeat, as: own.id },
 	]);
+	// A Linux box with no door has no desktop of a profile's own.
+	expect(
+		scopeChoices("library", [owner, made], "linux")[1]?.ownGames,
+	).toBeUndefined();
 	// One person: one choice, so the title stays plain.
 	expect(scopeChoices("library", [owner], "linux")).toHaveLength(1);
 	expect(scopeChoices("library", undefined, undefined)).toHaveLength(1);

@@ -3282,7 +3282,7 @@
           "library"
         ],
         "summary": "Create a custom title",
-        "description": "A user-curated entry. The host assigns a stable id, returned in the body.",
+        "description": "A user-curated entry. The host assigns a stable id, returned in the body. On a seat host it is\nthat host's own title, under an `own:` id, kept in its own config folder and run as its\naccount; the box lists its name and picture for the seat's profile. A profile that uses an\nexisting account takes none.",
         "operationId": "createCustomGame",
         "requestBody": {
           "content": {
@@ -3325,6 +3325,16 @@
               }
             }
           },
+          "403": {
+            "description": "A field this lane may not set, or a seat on a person's own account",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
           "500": {
             "description": "Couldn't save the catalog",
             "content": {
@@ -3351,7 +3361,7 @@
           {
             "name": "id",
             "in": "path",
-            "description": "The custom entry id (without the `custom:` prefix)",
+            "description": "The custom entry id (without the `custom:` prefix), or a seat host's own `own:` id",
             "required": true,
             "schema": {
               "type": "string"
@@ -3401,7 +3411,7 @@
           {
             "name": "id",
             "in": "path",
-            "description": "The custom entry id (without the `custom:` prefix)",
+            "description": "The custom entry id (without the `custom:` prefix), or a seat host's own `own:` id",
             "required": true,
             "schema": {
               "type": "string"
@@ -3469,6 +3479,16 @@
               }
             }
           },
+          "409": {
+            "description": "A seat host named a row of the box's",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
           "500": {
             "description": "Couldn't save the catalog",
             "content": {
@@ -3491,7 +3511,7 @@
           {
             "name": "id",
             "in": "path",
-            "description": "The custom entry id (without the `custom:` prefix)",
+            "description": "The custom entry id (without the `custom:` prefix), or a seat host's own `own:` id",
             "required": true,
             "schema": {
               "type": "string"
@@ -3524,6 +3544,16 @@
           },
           "404": {
             "description": "No custom entry with that id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "A seat host named a row of the box's",
             "content": {
               "application/json": {
                 "schema": {
@@ -4699,6 +4729,140 @@
         "x-scope": "profile-data"
       }
     },
+    "/api/v1/library/own": {
+      "get": {
+        "tags": [
+          "library"
+        ],
+        "summary": "A seat host's own titles, as the box may see them",
+        "description": "The custom entries this seat host keeps in its own config folder, each by its `own:` id,\ntitle, platform and `http(s)` art: never how it starts, and never a cover on its disk. The box\nasks when the seat's library changes and when the seat comes up, and lists them for the seat's\nprofile. A host that keeps none answers an empty list.",
+        "operationId": "listOwnTitles",
+        "responses": {
+          "200": {
+            "description": "This seat host's own titles",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/OwnTitle"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "x-scope": "profile-data"
+      },
+      "put": {
+        "tags": [
+          "library"
+        ],
+        "summary": "Store a seat's own titles for its profile",
+        "description": "What a seat host's `GET /library/own` answered, for the profile `as` names, on the host that\nwrites the library: the door hands it here, and a Windows box stores its seats' itself. Rows\nare checked as an Art & Metadata source's are: a row with a bad id or title, a cover that isn't\n`http(s)` and a bad platform are dropped. An answer that isn't a list, lists more than 500 or\nnames an id twice is refused, and the stored titles stay. Emits `library.changed` on a change.",
+        "operationId": "storeOwnTitles",
+        "parameters": [
+          {
+            "name": "as",
+            "in": "query",
+            "description": "Profile id: the profile whose seat answered",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/OwnTitle"
+                }
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Stored"
+          },
+          "400": {
+            "description": "Not an answer the box keeps",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not the admin lane",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`as` names no profile on this host",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`as` names no profile with a seat of its own",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Couldn't save the titles",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "x-scope": "box"
+      }
+    },
     "/api/v1/library/page": {
       "get": {
         "tags": [
@@ -4951,7 +5115,7 @@
           {
             "name": "store",
             "in": "query",
-            "description": "Claim this store for the provider ([a-z0-9_-], `custom`/`manual` reserved)",
+            "description": "Claim this store for the provider ([a-z0-9_-], `custom`/`own`/`manual` reserved)",
             "required": false,
             "schema": {
               "type": "string"
@@ -13694,6 +13858,10 @@
                   }
                 ]
               },
+              "own": {
+                "type": "boolean",
+                "description": "One of the profile in view's own titles (`own:` id). Its seat host keeps how it starts;\nanywhere else it is a name and a picture, and starts nothing."
+              },
               "provider": {
                 "type": [
                   "string",
@@ -15992,6 +16160,35 @@
             "format": "int32",
             "example": 1,
             "minimum": 0
+          }
+        }
+      },
+      "OwnTitle": {
+        "type": "object",
+        "description": "One of a profile's own titles as its seat host publishes it to the box: what a shelf shows,\nnever what starts it. Built field by field, so a field added to [`CustomEntry`] stays on the\nseat until it is added here.",
+        "required": [
+          "id",
+          "title"
+        ],
+        "properties": {
+          "art": {
+            "$ref": "#/components/schemas/Artwork",
+            "description": "`http(s)` URLs alone: a cover on the seat's disk stays there."
+          },
+          "id": {
+            "type": "string",
+            "description": "`own:` and 12 lowercase hex, minted by the seat host.",
+            "example": "own:3f9a0c1b2d4e"
+          },
+          "platform": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "example": "PC"
+          },
+          "title": {
+            "type": "string"
           }
         }
       },

@@ -126,10 +126,16 @@ pub(crate) const SCOPES: &[(&str, &str, Scope)] = &[
     ("GET", "/api/v1/host/theme", Scope::Host),
     ("GET", "/api/v1/library", Scope::ProfileData),
     ("GET", "/api/v1/library/art/{id}/{kind}", Scope::ProfileData),
+    // On a seat these write its account's own titles, which may carry a command: they keep a
+    // refusal of their own on a person's own account (`library_own_account`), on every system.
     ("POST", "/api/v1/library/custom", Scope::ProfileData),
     ("GET", "/api/v1/library/custom/{id}", Scope::ProfileData),
     ("PUT", "/api/v1/library/custom/{id}", Scope::ProfileData),
     ("DELETE", "/api/v1/library/custom/{id}", Scope::ProfileData),
+    // A seat's own titles as the box may see them, and the box's copy of them, which the door
+    // alone hands in.
+    ("GET", "/api/v1/library/own", Scope::ProfileData),
+    ("PUT", "/api/v1/library/own", Scope::Box),
     ("PUT", "/api/v1/library/hidden/{id}", Scope::ProfileData),
     ("POST", "/api/v1/library/install/{id}", Scope::ProfileData),
     ("DELETE", "/api/v1/library/install/{id}", Scope::ProfileData),

@@ -16,7 +16,7 @@ import { streamSummary } from "./overrides";
 
 export interface GameCardProps {
 	game: OperatorGameEntry;
-	/** Absent in a profile's view: the titles are the owner's library's. */
+	/** Absent in a profile's view, but on a game only that profile has. */
 	onDelete?: () => void;
 	deleting: boolean;
 	/** Hide this title from every play surface, or bring it back; in a profile's view, for it. */
@@ -99,7 +99,8 @@ export const SelectCover: FC<{
  * console's platform, Hidden, the host's stream settings, and the install mark; the source is
  * the entry page's. Hide and delete appear on hover, on a pointer that can hover; a phone
  * manages a title on its page. In selection mode the card is one checkbox. In a profile's view
- * its hide and its own stream settings carry its mark.
+ * its hide and its own stream settings carry its mark, and a game only it has is marked so and
+ * deletes rather than hides.
  */
 export const GameCard: FC<GameCardProps> = ({
 	game,
@@ -125,6 +126,7 @@ export const GameCard: FC<GameCardProps> = ({
 	const emulated = game.platform && game.platform.toUpperCase() !== "PC";
 	const stream = streamSummary(game.overrides);
 	const ownStream = who !== undefined && game.profile?.overrides === true;
+	const own = who !== undefined && game.own === true;
 	const small = "px-1.5 text-[10px] [&>svg]:size-2.5";
 	return (
 		<Card className="group relative overflow-hidden">
@@ -167,6 +169,12 @@ export const GameCard: FC<GameCardProps> = ({
 					)}
 					{/* Inset on both sides, so a long badge ends in its ellipsis inside the card. */}
 					<div className="absolute top-1.5 right-1.5 left-1.5 flex flex-wrap gap-1">
+						{own && (
+							<OwnBadge
+								label={m.profile_view_own({ name: who ?? "" })}
+								className={small}
+							/>
+						)}
 						{emulated && (
 							<Badge
 								variant="outline"
@@ -239,22 +247,24 @@ export const GameCard: FC<GameCardProps> = ({
 					selecting && "sm:hidden",
 				)}
 			>
-				<Button
-					variant="secondary"
-					size="icon"
-					className="size-7 bg-background/80 backdrop-blur"
-					aria-label={hideLabel(hidden, who)}
-					title={hideLabel(hidden, who)}
-					aria-pressed={hidden}
-					disabled={hiding}
-					onClick={onToggleHidden}
-				>
-					{hidden ? (
-						<Eye className="size-3.5" />
-					) : (
-						<EyeOff className="size-3.5" />
-					)}
-				</Button>
+				{!own && (
+					<Button
+						variant="secondary"
+						size="icon"
+						className="size-7 bg-background/80 backdrop-blur"
+						aria-label={hideLabel(hidden, who)}
+						title={hideLabel(hidden, who)}
+						aria-pressed={hidden}
+						disabled={hiding}
+						onClick={onToggleHidden}
+					>
+						{hidden ? (
+							<Eye className="size-3.5" />
+						) : (
+							<EyeOff className="size-3.5" />
+						)}
+					</Button>
+				)}
 				{isCustom && onDelete && (
 					<Button
 						variant="secondary"

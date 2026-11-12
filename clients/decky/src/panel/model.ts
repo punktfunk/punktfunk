@@ -24,11 +24,15 @@ export function sharedNames(views: HostView[]): Set<string> {
 
 /**
  * What a host row's ▾ menu lists, or null for a row without one. Profiles count from two: a host
- * with a single profile always streams as it.
+ * with a single profile always streams as it. `power` counts Wake and the host's own actions.
  */
-export function rowMenu(presets: number, profiles: number): { profiles: boolean; presets: boolean } | null {
-  const menu = { profiles: profiles >= 2, presets: presets > 0 };
-  return menu.profiles || menu.presets ? menu : null;
+export function rowMenu(
+  presets: number,
+  profiles: number,
+  power: number,
+): { profiles: boolean; presets: boolean; power: boolean } | null {
+  const menu = { profiles: profiles >= 2, presets: presets > 0, power: power > 0 };
+  return menu.profiles || menu.presets || menu.power ? menu : null;
 }
 
 /**
