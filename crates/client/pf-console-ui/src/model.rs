@@ -312,6 +312,8 @@ struct ConsoleState {
     /// One-shot toast. The shell `take`s it on the next sync — unlike [`PairPhase`]
     /// there is no modal state, so a take-once string is the whole protocol.
     notice: Option<String>,
+    /// The host's sentence for the held launch it did not start, taken on the next sync.
+    launch_refused: Option<String>,
     /// This device's code, from a host whose identity loads after the console is built.
     device_code: Option<String>,
     /// What the host bundles, for the Licences screen. Kept once sent.
@@ -517,6 +519,16 @@ impl ConsoleShared {
 
     pub(crate) fn take_notice(&self) -> Option<String> {
         self.0.lock().unwrap().notice.take()
+    }
+
+    /// The host did not start the held launch and said why: the hold says this and stops
+    /// waiting. With no hold up it is dropped.
+    pub fn set_launch_refused(&self, text: String) {
+        self.0.lock().unwrap().launch_refused = Some(text);
+    }
+
+    pub(crate) fn take_launch_refused(&self) -> Option<String> {
+        self.0.lock().unwrap().launch_refused.take()
     }
 
     /// This device's code ([`crate::shell::ConsoleOptions::device_code`]), for a host that
