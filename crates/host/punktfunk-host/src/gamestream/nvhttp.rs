@@ -82,20 +82,25 @@ fn peer_grants(peer: &Option<Extension<PeerCertFingerprint>>, st: &AppState) -> 
     }
 }
 
-/// Whether this peer may play the owner's profile, which a GameStream session plays as. Moonlight
-/// has no profiles and no prompt: a locked owner opens only for a Moonlight device on its list.
-/// No profile store, as in a test that skips `serve`, locks nothing.
+/// [`owner_opens`] for this peer.
 fn opens_owner(peer: &Option<Extension<PeerCertFingerprint>>, st: &AppState) -> bool {
+    let fp = match peer {
+        Some(Extension(PeerCertFingerprint(Some(fp)))) => Some(fp.as_str()),
+        _ => None,
+    };
+    owner_opens(st, fp)
+}
+
+/// Whether device `fp` may play the owner's profile, which a GameStream session plays as.
+/// Moonlight has no profiles and no prompt: a locked owner opens only for a Moonlight device on
+/// its list. No profile store, as in a test that skips `serve`, locks nothing.
+pub(super) fn owner_opens(st: &AppState, fp: Option<&str>) -> bool {
     let Some(profiles) = st.profiles.get() else {
         return true;
     };
     let owner = profiles
         .owner_id()
         .unwrap_or_else(|| crate::profiles::OPERATOR_PROFILE_ID.to_string());
-    let fp = match peer {
-        Some(Extension(PeerCertFingerprint(Some(fp)))) => Some(fp.as_str()),
-        _ => None,
-    };
     profiles.opens(&owner, fp) == crate::profiles::Opens::Yes
 }
 
