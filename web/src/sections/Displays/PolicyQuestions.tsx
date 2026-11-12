@@ -193,7 +193,10 @@ export const PolicyQuestions: FC<{
 				</Question>
 			)}
 			{axes.includes("topology") && (
-				<Question label={m.display_q_monitors()}>
+				<Question
+					label={m.display_q_monitors()}
+					help={inherited ? undefined : m.display_q_monitors_help()}
+				>
 					{ask(
 						"topology",
 						["extend", "primary", "exclusive", "auto"],

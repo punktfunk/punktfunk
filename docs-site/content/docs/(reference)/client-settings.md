@@ -30,17 +30,31 @@ compositor**, **Video decoder**, **GPU**, **Low-latency mode**, **Keep screen aw
 
 ## Screen
 
-A host card's menu has a **Screen** section on every app. It picks what this device streams from
-that host: **Own screen**, a screen the host makes for this device at its resolution, or one of the
-host's monitors, listed by name and current mode. The pick applies from the next session. A greyed
-monitor is streamed by another device or switched off. When the host's settings file fixes the
-screen for every device, the section says so and offers no choice. Only Linux and Windows hosts
-list monitors.
+A host card's menu has a **Screen** section on every app. It picks how this device uses the host's
+screens, from the next session:
+
+| Pick | The host's monitors | Where apps open |
+|---|---|---|
+| **Only screen** | Turn off while you stream | On this device, the only screen |
+| **Main screen** | Stay on | On this device |
+| **Second screen** | Stay on | On the monitors, as before: this device is one more screen beside them |
+| A monitor, under **Show a monitor** | Stay as they are | As before: you see and drive what that monitor shows |
+
+The three roles are a screen the host makes for this device at its resolution. Monitors are listed
+by name and current mode; a greyed one is streamed by another device or switched off. The host
+offers no **Main screen** on Sway, Hyprland, niri and Umbriel, which have no main screen. With
+another device already streaming, the first one decides what the monitors do
+([Two devices at once](/docs/virtual-displays#two-devices-at-once)). When the host's settings file
+fixes the screen for every device, the section says so and offers no choice. Only Linux and Windows
+hosts list monitors. A [seat](/docs/profiles#what-a-seat-can-do), or a host with no monitors, shows
+no rows: the device gets a screen of its own. An older host offers **Own screen** in place of the
+three roles.
 
 The host keeps the pick for this device, so a preset can't change it. The web console shows it,
 and can change it, in the device's [display settings](/docs/virtual-displays#per-device-settings).
 Picking needs **Choose its screen** in this device's
-[access](/docs/access-levels#individual-grants); without it the host decides the screen.
+[access](/docs/access-levels#individual-grants). Without it the section shows what the host chose
+and says **This host decides the screen for this device.**
 
 ## Reset all settings
 
