@@ -20,7 +20,8 @@ type Tab = "games" | "sources";
 
 /**
  * The title, which is whose library it is, **Shared overrides** and **Add**. A profile's view
- * offers neither: the titles and the shared overrides are the owner's library's.
+ * offers neither: the titles and the shared overrides are the owner's library's. A profile with
+ * games of its own adds one here.
  */
 export const LibraryHeader: FC<{ onShared?: () => void }> = ({ onShared }) => {
 	const view = useProfileView();
@@ -28,6 +29,14 @@ export const LibraryHeader: FC<{ onShared?: () => void }> = ({ onShared }) => {
 		<div className="flex flex-col gap-2">
 			<div className="flex flex-wrap items-center justify-between gap-4">
 				<SeatTitle title={m.library_title()} />
+				{view?.ownGames && (
+					<Button asChild>
+						<Link to="/library/$gameId" params={{ gameId: "new" }}>
+							<Plus className="size-4" />
+							{m.profile_view_add_game({ name: view.name })}
+						</Link>
+					</Button>
+				)}
 				{!view && (
 					<div className="flex items-center gap-3">
 						{onShared && (
