@@ -105,6 +105,46 @@ fn split_rate(bps: u64) -> (u16, u16) {
     ((kbps / mult as u64) as u16, mult)
 }
 
+/// Rate-control fields the runtime reports, in real units: `BRCParamMultiplier` is applied.
+struct RateReadback {
+    buffer_kb: u32,
+    initial_delay_kb: u32,
+    target_kbps: u32,
+    max_kbps: u32,
+}
+
+impl RateReadback {
+    fn of(mfx: &mut vpl::mfxInfoMFX) -> Self {
+        let mult = mfx.BRCParamMultiplier.max(1) as u32;
+        let e = enc_of(mfx);
+        // SAFETY: every member of these three unions is an `mfxU16`, so any of them reads as
+        // a valid value; CBR uses InitialDelayInKB, TargetKbps and MaxKbps.
+        let (delay, target, max) = unsafe {
+            (
+                e.__bindgen_anon_1.InitialDelayInKB,
+                e.__bindgen_anon_2.TargetKbps,
+                e.__bindgen_anon_3.MaxKbps,
+            )
+        };
+        RateReadback {
+            buffer_kb: e.BufferSizeInKB as u32 * mult,
+            initial_delay_kb: delay as u32 * mult,
+            target_kbps: target as u32 * mult,
+            max_kbps: max as u32 * mult,
+        }
+    }
+
+    /// Bytes for one pooled bitstream buffer: the runtime's worst-case AU, 256 KiB at least.
+    fn pool_bytes(&self) -> usize {
+        (self.buffer_kb as usize * 1000).max(256 * 1024)
+    }
+
+    /// One frame at the target rate, in the unit of the buffer fields (1 KB = 1000 bytes).
+    fn frame_kb(&self, fps: u32) -> f64 {
+        self.target_kbps as f64 / 8.0 / fps.max(1) as f64
+    }
+}
+
 const fn align16(v: u32) -> u16 {
     (v.div_ceil(16) * 16) as u16
 }
@@ -1046,9 +1086,10 @@ impl QsvEncoder {
         }
     }
 
-    /// Query-gate LTR/IR, Init, then size the bitstream pool from `BufferSizeInKB`. Also
-    /// returns the `FrameInfo` the encoder took, which surfaces of ours must carry. A runtime
-    /// that refuses VDEnc for this codec (HEVC on Gen9) gets the whole sequence again without it.
+    /// Query-gate LTR/IR, Init, then size the bitstream pool from `BufferSizeInKB`, which it
+    /// logs with the rest of the rate control. Also returns the `FrameInfo` the encoder took,
+    /// which surfaces of ours must carry. A runtime that refuses VDEnc for this codec (HEVC on
+    /// Gen9) gets the whole sequence again without it.
     fn init_encode(
         &mut self,
         session: vpl::mfxSession,
@@ -1106,17 +1147,26 @@ impl QsvEncoder {
         // Asked-for, not installed — confirmed by GetVideoParam below.
         let ir_requested = cfg.intra_refresh && set.co2.is_some();
         // SAFETY: `session` is live; `got` and its (empty) ext chain outlive the call.
-        let (bs_bytes, info) = unsafe {
+        let (rate, info) = unsafe {
             let mut got = vpl::mfxVideoParam::default();
             vpl_ok(
                 vpl::MFXVideoENCODE_GetVideoParam(session, &mut got),
                 "MFXVideoENCODE_GetVideoParam",
             )?;
             let m = &mut got.__bindgen_anon_1.mfx;
-            let mult = m.BRCParamMultiplier.max(1) as usize;
-            let kb = enc_of(m).BufferSizeInKB as usize;
-            ((kb * mult * 1000).max(256 * 1024), m.FrameInfo)
+            (RateReadback::of(m), m.FrameInfo)
         };
+        let bs_bytes = rate.pool_bytes();
+        // The runtime's own buffer bound next to one frame at the target rate.
+        tracing::info!(
+            codec = ?cfg.codec,
+            buffer_kb = rate.buffer_kb,
+            initial_delay_kb = rate.initial_delay_kb,
+            target_kbps = rate.target_kbps,
+            max_kbps = rate.max_kbps,
+            frame_kb = %format_args!("{:.1}", rate.frame_kb(cfg.fps)),
+            "QSV rate-control buffer read back"
+        );
         // Query/Init can warn INCOMPATIBLE_VIDEO_PARAM and still drop the wave
         // (`IntRefType=0`). `ir_active` feeds `EncoderCaps::intra_refresh`; a false
         // true stops the client asking for IDRs. Separate GetVideoParam so a dislike
@@ -1964,14 +2014,19 @@ impl Encoder for QsvEncoder {
         let refreshed = unsafe {
             let mut got = vpl::mfxVideoParam::default();
             let sts = vpl::MFXVideoENCODE_GetVideoParam(session, &mut got);
-            (sts >= vpl::MFX_ERR_NONE).then(|| {
-                let m = &mut got.__bindgen_anon_1.mfx;
-                let mult = m.BRCParamMultiplier.max(1) as usize;
-                let kb = enc_of(m).BufferSizeInKB as usize;
-                (kb * mult * 1000).max(256 * 1024)
-            })
+            (sts >= vpl::MFX_ERR_NONE).then(|| RateReadback::of(&mut got.__bindgen_anon_1.mfx))
         };
-        match (refreshed, self.inner.as_mut()) {
+        if let Some(rate) = &refreshed {
+            tracing::debug!(
+                buffer_kb = rate.buffer_kb,
+                initial_delay_kb = rate.initial_delay_kb,
+                target_kbps = rate.target_kbps,
+                max_kbps = rate.max_kbps,
+                frame_kb = %format_args!("{:.1}", rate.frame_kb(cfg.fps)),
+                "QSV rate-control buffer after retarget"
+            );
+        }
+        match (refreshed.map(|r| r.pool_bytes()), self.inner.as_mut()) {
             (Some(bytes), Some(inner)) if bytes > inner.bs_bytes => {
                 tracing::debug!(
                     old_bytes = inner.bs_bytes,
