@@ -1579,9 +1579,9 @@ impl State {
 
     /// Pair each ready output's decode stage: the ABR decode signal + the HUD histogram consume
     /// the receipt map; the P3 split's codec-pure half needs only the queued stamp, so it records
-    /// even with both off (that keeps the 1 Hz pf.present mirror HUD-off readable). `meter` is
-    /// the SurfaceView path's always-on e2e sink; the ASC backend keeps its own 1 Hz line.
-    fn note_decode_stage(&mut self, ctx: &Ctx, meter: Option<&PresentMeter>) {
+    /// even with both off (that keeps the 1 Hz pf.present line HUD-off readable). Every sink's
+    /// line drains the split from `ctx.meter`.
+    fn note_decode_stage(&mut self, ctx: &Ctx) {
         let want_stage = ctx.stats.enabled() || ctx.measure_decode;
         let clock_offset = ctx.offset();
         let mut g = ctx
@@ -1607,11 +1607,10 @@ impl State {
                 (Some(q), Some(r)) => Some(((q - r).max(0) / 1000) as u64),
                 _ => None,
             };
-            if let Some(m) = meter {
-                // Same formula + clamp as the HUD's capture→decoded headline in `note_decoded_pts`.
-                let e2e_ns = o.decoded_ns + clock_offset as i128 - o.pts_us as i128 * 1000;
-                m.note_decode(feed_us, codec_us, crate::stats::sane_us(e2e_ns));
-            }
+            // Same formula + clamp as the HUD's capture→decoded headline in `note_decoded_pts`.
+            let e2e_ns = o.decoded_ns + clock_offset as i128 - o.pts_us as i128 * 1000;
+            ctx.meter
+                .note_decode(feed_us, codec_us, crate::stats::sane_us(e2e_ns));
         }
     }
 
@@ -1623,9 +1622,7 @@ impl State {
         if self.ready.is_empty() {
             return;
         }
-        // The ASC sink keeps its own 1 Hz line, so only the SurfaceView path feeds the meter.
-        let meter = (!self.sink.is_asc()).then_some(&*ctx.meter);
-        self.note_decode_stage(ctx, meter);
+        self.note_decode_stage(ctx);
         let ready = std::mem::take(&mut self.ready);
         let flags = &mut self.recovery_flags;
         let routed = self.sink.on_outputs(ctx, ready, &mut |pts_us| {

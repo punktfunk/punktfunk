@@ -31,7 +31,7 @@ use super::super::surface_control::{
 };
 use super::super::vsync::VsyncShared;
 use super::{Downrate, Routed, Sink};
-use crate::codec_format::{p50_max_ms, take_by_pts};
+use crate::codec_format::{p50_max_ms, p50_p95_max_ms, take_by_pts};
 use crate::present::budget::{AscBudget, PRESENTED_CAP};
 use crate::present::retire::Retire;
 use crate::present::slots::Slots;
@@ -782,9 +782,11 @@ impl Sink for AscSink {
     }
 
     /// Publish the store's drops to the HUD every pass and emit the 1 Hz `pf.present` line,
-    /// its counters per second. The second feeds the [`Verdicts`]: completions are live on
-    /// every device, and a `Skipping` verdict turns slot pacing off for the session.
-    fn flush(&mut self, ctx: &Ctx, _clock: Option<&VsyncShared>, lost: bool) -> Option<Verdict> {
+    /// its counters per second, with the decode loop's feed and codec split from `ctx.meter`
+    /// and SurfaceFlinger's stated lead; `sfAim` is the `asc_sf_lead` arm, `off` or the periods
+    /// it adds. The second feeds the [`Verdicts`]: completions are live on every device, and a
+    /// `Skipping` verdict turns slot pacing off for the session.
+    fn flush(&mut self, ctx: &Ctx, clock: Option<&VsyncShared>, lost: bool) -> Option<Verdict> {
         let stats = &ctx.stats;
         self.lost |= lost;
         if self.counters.skipped > 0 {
@@ -796,6 +798,8 @@ impl Sink for AscSink {
             return None;
         }
         self.last_flush = Instant::now();
+        // Only the decode split: this sink measures latch and e2e off its own completions.
+        let (_, _, feed_us, codec_us, _) = ctx.meter.drain();
         let skipped = std::mem::take(&mut self.skipped);
         let second = Second {
             released: self.counters.released,
@@ -824,15 +828,23 @@ impl Sink for AscSink {
         let (err_p50, err_max) = p50_max_ms(std::mem::take(&mut self.phase_err_us));
         let (tail_p50, tail_max) = p50_max_ms(std::mem::take(&mut self.fence_tail_us));
         let (jit_p50, jit_max) = p50_max_ms(std::mem::take(&mut self.sf_jitter_us));
+        let (feed_p50, feed_p95, feed_max) = p50_p95_max_ms(feed_us);
+        let (codec_p50, codec_p95, codec_max) = p50_p95_max_ms(codec_us);
+        let sf_aim = if self.sf_lead {
+            self.slots.sf_periods().to_string()
+        } else {
+            "off".to_string()
+        };
         let intervals = std::mem::take(&mut c.intervals);
         let cadence = cadence_suffix(self.store.cadence_health());
         stats.note_cadence(intervals.judder_permille(), c.coalesced);
         log::info!(
             target: "pf.present",
-            "asc released={} displays={} skipped={} inflight={} qDepth={} paceMs p50={:.2} \
+            "asc released={} displays={} skipped={} inflight={} qDepth={} feedMs p50={:.2} \
+             p95={:.2} max={:.2} codecMs p50={:.2} p95={:.2} max={:.2} paceMs p50={:.2} \
              max={:.2} latchMs p50={:.2} max={:.2} e2eMs p50={:.2} max={:.2} panelMs={:.2} \
-             glassMs={:.3} leadMs={:.2} marginUs={} held={} slotMiss={} coalesced={} n0={} n1={} \
-             n2={} n3+={} \
+             glassMs={:.3} leadMs={:.2} sfLeadMs={:.2} sfAim={} marginUs={} held={} slotMiss={} \
+             coalesced={} n0={} n1={} n2={} n3+={} \
              judder={}‰ mode={} phaseErrMs p50={:.2} max={:.2} sfJitMs p50={:.2} max={:.2} \
              forced={} unlatched={} fence={} fenced={} fenceErr={} fenceTailMs p50={:.2} \
              max={:.2}{}",
@@ -841,6 +853,12 @@ impl Sink for AscSink {
             skipped,
             self.budget.inflight(),
             self.store.fifo_len(),
+            feed_p50,
+            feed_p95,
+            feed_max,
+            codec_p50,
+            codec_p95,
+            codec_max,
             pace_p50,
             pace_max,
             latch_p50,
@@ -850,6 +868,8 @@ impl Sink for AscSink {
             self.slots.clock_period_ns() as f64 / 1e6,
             self.slots.glass_period_ns().unwrap_or(0) as f64 / 1e6,
             self.slots.lead_ns() as f64 / 1e6,
+            clock.map_or(0, VsyncShared::sf_lead_ns) as f64 / 1e6,
+            sf_aim,
             self.slots.margin_ns() / 1000,
             c.held,
             c.slot_miss,
