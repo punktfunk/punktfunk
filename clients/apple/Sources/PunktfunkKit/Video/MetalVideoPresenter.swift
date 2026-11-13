@@ -850,13 +850,14 @@ public final class MetalVideoPresenter {
     }
 
     /// Deadline pacing, LINK THREAD, once per update: apply the queued writes. The update's
-    /// drawable is already vended, so they reach the next vend and never race one.
+    /// drawable is already vended, so they reach the next vend and never race one. Applied
+    /// under the lock: a retired link thread that outlives its join still runs this, and its
+    /// batch must not land after a newer one.
     func applyLayerWrites() {
         layerWriteLock.lock()
-        let writes = layerWrites
+        defer { layerWriteLock.unlock() }
+        for write in layerWrites { write(layer) }
         layerWrites.removeAll()
-        layerWriteLock.unlock()
-        for write in writes { write(layer) }
     }
 
     /// Size the next drawable. Compared against the last requested size, not the layer's: a
