@@ -157,13 +157,15 @@ public final class GamepadCapture {
     public var onRingNav: ((RingNav) -> Void)?
     /// The ring is up: everything held is released on the host NOW (a held sprint must not
     /// survive a menu), and until it closes the hardware state is adopted silently while its
-    /// edges drive the ring. On close nothing is replayed: what is still held is already the
+    /// edges drive the ring. Touchpad fingers and motion stay off the wire as well, the phone's
+    /// mirrored gyro included. On close nothing is replayed: what is still held is already the
     /// slot's state, so the next diff sends only real changes.
     public var ringOpen = false {
         didSet {
             guard ringOpen != oldValue else { return }
             stickSector = nil
             if ringOpen { for slot in slots { flush(slot) } }
+            updateDeviceGyro()
         }
     }
     /// The ring sector the left stick last resolved to — see `ringSector`.
@@ -786,9 +788,11 @@ public final class GamepadCapture {
 
     /// One touchpad finger moved on a slot's pad. GC reports ±1 positions and snaps to exactly
     /// (0, 0) on lift — treated as the lift signal (a real finger landing on the precise center
-    /// momentarily reads as a lift; harmless for a 1-in-65k coincidence).
+    /// momentarily reads as a lift; harmless for a 1-in-65k coincidence). Nothing is sent while
+    /// the ring owns the pad: its flush lifted the fingers, and a finger still down when it
+    /// closes lands again with its next move.
     private func touch(_ slot: Slot, finger: Int, x: Float, y: Float) {
-        guard live else { return }
+        guard live, !ringOpen else { return }
         let lifted = x == 0 && y == 0
         if lifted {
             if slot.fingerActive[finger] {
@@ -802,8 +806,10 @@ public final class GamepadCapture {
         wire?.sendTouchpad(pad: UInt8(slot.pad), finger: UInt8(finger), active: true, x: w.x, y: w.y)
     }
 
+    /// One motion sample of a slot's pad, to the wire. Silent while the ring owns the pad: its
+    /// flush parked the host pad's rotation at zero, and a menu must not turn the camera.
     private func forwardMotion(_ slot: Slot, _ m: GCMotion) {
-        guard live else { return }
+        guard live, !ringOpen else { return }
         #if os(iOS)
         // While the phone-gyro mirror speaks for pad 0, the controller's own motion —
         // necessarily rotation-less, that's the engage condition — stays off the wire:
@@ -885,13 +891,15 @@ public final class GamepadCapture {
     /// Engage or stand down the phone-gyro mirror: it speaks for pad 0 exactly while a
     /// forwarded controller holds that index but can't rotate for itself — no `GCMotion`,
     /// or a motion object without a rotation rate (gravity-only pads, e.g. an Xbox pad on
-    /// iOS). Re-evaluated on every reconcile and on suspend/resume; `DeviceGyro.stop`
-    /// parks the host pad's rotation at zero, so standing down never strands a spin.
+    /// iOS). It stands down while the ring owns the pad. Re-evaluated on every reconcile, on
+    /// suspend/resume and as the ring opens or closes; `DeviceGyro.stop` parks the host pad's
+    /// rotation at zero, so standing down never strands a spin.
     private func updateDeviceGyro() {
         #if os(iOS)
         guard let gyro = deviceGyro else { return }
         let pad0 = slots.first { $0.pad == 0 }
-        let wants = live && pad0 != nil && pad0!.controller.motion?.hasRotationRate != true
+        let wants = live && !ringOpen && pad0 != nil
+            && pad0!.controller.motion?.hasRotationRate != true
         if wants { gyro.start() } else { gyro.stop() }
         #endif
     }
