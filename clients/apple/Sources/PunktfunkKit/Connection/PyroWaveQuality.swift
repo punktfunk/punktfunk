@@ -9,7 +9,9 @@ import PunktfunkShared
 public enum PyroWaveQuality {
     /// Core's `BPP_FLOOR` to `BPP_MAX`, by tenths.
     public static let range = 0.5...2.0
-    public static let rungs = stride(from: 5, through: 20, by: 1).map { Double($0) / 10 }
+    public static let rungs = stride(
+        from: Int(range.lowerBound * 10), through: Int(range.upperBound * 10), by: 1
+    ).map { Double($0) / 10 }
 
     /// `bpp` on the nearest rung.
     public static func snapped(_ bpp: Double) -> Double {
