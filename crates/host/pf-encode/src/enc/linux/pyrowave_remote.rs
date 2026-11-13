@@ -23,11 +23,11 @@ use crate::{AuChunk, ChromaFormat, EncodedFrame, Encoder, EncoderCaps};
 use anyhow::{bail, Context, Result};
 use pf_frame::{CapturedFrame, FramePayload};
 use pf_zerocopy::ipc::{self, resolve_worker_path, WorkerPath, ENCODE_WORKER_BIN as WORKER_BIN};
+use rustix::buffer::spare_capacity;
 use std::collections::{HashSet, VecDeque};
 use std::fs::File;
 use std::io;
 use std::os::fd::{AsFd, BorrowedFd, OwnedFd};
-use std::os::unix::fs::FileExt;
 use std::path::{Path, PathBuf};
 use std::process::Child;
 use std::time::Duration;
@@ -219,8 +219,7 @@ impl Link {
                         "AU length {len} outside the return buffer ({cap} bytes)"
                     )));
                 }
-                let mut data = vec![0u8; len];
-                au_buf.read_exact_at(&mut data, 0).map_err(|e| {
+                let data = read_au(au_buf, len).map_err(|e| {
                     Fail::Dead(anyhow::Error::from(e).context("read the AU return buffer"))
                 })?;
                 tracing::trace!(len, encode_us, "pyrowave: AU from the encode worker");
@@ -259,6 +258,23 @@ fn au_len_in_buffer(len: usize, buffer: u64) -> bool {
 
 fn dmabuf_key(fd: BorrowedFd) -> io::Result<u64> {
     Ok(pf_zerocopy::fd_identity(fd)?.1)
+}
+
+/// The first `len` bytes of `file`, with no zero pass over the `Vec`. The read is positioned:
+/// the worker holds the same open file, so a cursor read would move its offset too. A file
+/// shorter than `len` is an `UnexpectedEof`.
+fn read_au(file: &File, len: usize) -> io::Result<Vec<u8>> {
+    let mut data = Vec::with_capacity(len);
+    while data.len() < len {
+        let at = data.len() as u64;
+        match rustix::io::pread(file, spare_capacity(&mut data), at) {
+            Ok(0) => return Err(io::ErrorKind::UnexpectedEof.into()),
+            Ok(_) | Err(rustix::io::Errno::INTR) => {}
+            Err(e) => return Err(e.into()),
+        }
+    }
+    data.truncate(len);
+    Ok(data)
 }
 
 #[derive(Debug)]
@@ -890,8 +906,26 @@ mod tests {
         assert!(!au_len_in_buffer(0, 1 << 20));
         assert!(!au_len_in_buffer((1 << 20) + 1, 1 << 20));
     }
+    use std::io::Seek;
     use std::os::fd::AsFd;
+    use std::os::unix::fs::FileExt;
     use std::sync::Arc;
+
+    /// The AU is the file's first `len` bytes, read without moving the shared cursor: a longer
+    /// file (the last AU was bigger) loses its tail, and a shorter one is an error, never a
+    /// zero-padded AU.
+    #[test]
+    fn read_au_returns_the_prefix_and_refuses_a_short_file() {
+        let mut f = File::from(memfd());
+        let au: Vec<u8> = (0..1_500_000u32).map(|i| (i * 7 + i / 251) as u8).collect();
+        f.write_all_at(&au, 0).unwrap();
+        assert_eq!(read_au(&f, au.len()).unwrap(), au);
+        assert_eq!(read_au(&f, 1000).unwrap(), au[..1000]);
+        assert_eq!(read_au(&f, 1).unwrap(), au[..1]);
+        let err = read_au(&f, au.len() + 1).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::UnexpectedEof);
+        assert_eq!(f.stream_position().unwrap(), 0);
+    }
 
     fn params() -> Params {
         Params {
