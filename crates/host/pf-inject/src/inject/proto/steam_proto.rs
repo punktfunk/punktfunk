@@ -554,7 +554,8 @@ pub struct ScState {
     pub typed: SteamState,
     /// The pad's last state report; `None` until the first.
     raw: Option<[u8; STEAM_REPORT_LEN]>,
-    /// When the client last sent anything for this pad: a report or a typed frame.
+    /// When the client last sent anything for this pad: a report, a typed frame or an
+    /// unchanged refresh ([`Self::hear`]).
     heard: Option<std::time::Instant>,
 }
 
@@ -575,6 +576,11 @@ impl ScState {
     /// A typed frame arrived: the fallback state, and proof the client is alive.
     pub fn typed_frame(&mut self, typed: SteamState, now: std::time::Instant) {
         self.typed = typed;
+        self.heard = Some(now);
+    }
+
+    /// The client refreshed this pad and the state did not change: proof of life, nothing else.
+    pub fn hear(&mut self, now: std::time::Instant) {
         self.heard = Some(now);
     }
 
@@ -1184,6 +1190,27 @@ mod tests {
 
         st.clear_rich();
         assert!(!st.mirrors());
+    }
+
+    /// An unchanged refresh carries no frame, only [`ScState::hear`]: a mirrored pad holds its
+    /// button past [`RAW_STALE`] while they keep coming, and reads neutral once they stop.
+    #[test]
+    fn a_heard_client_holds_a_mirrored_sc_past_the_stale_window() {
+        let t0 = std::time::Instant::now();
+        let mut st = ScState::neutral();
+        let mut seq = 0;
+        let frame = [0x01, 0x00, 0x01, 0x3C, 0x2A, 0, 0, 0, 0x80];
+        st.apply_rich(raw_report(&frame), t0);
+
+        let mut at = t0;
+        for _ in 0..30 {
+            at += std::time::Duration::from_millis(100);
+            st.hear(at);
+            let r = st.report(&mut seq, at + std::time::Duration::from_millis(8));
+            assert_eq!((&r[..9], seq), (&frame[..], 0), "released at {at:?}");
+        }
+        let stalled = st.report(&mut seq, at + RAW_STALE);
+        assert_eq!(stalled[8..11], [0, 0, 0]);
     }
 
     /// Settings and haptics reach the physical pad; lizard mode, calibration and firmware

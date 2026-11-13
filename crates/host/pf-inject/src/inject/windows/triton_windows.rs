@@ -174,6 +174,10 @@ impl PadProto for TritonWinProto {
         st.apply_rich(rich, std::time::Instant::now());
     }
 
+    fn heard(&self, st: &mut TritonState, now: std::time::Instant) {
+        st.hear(now);
+    }
+
     fn write_state(&self, pad: &mut TritonWinPad, st: &TritonState) {
         pad.write_state(st);
     }

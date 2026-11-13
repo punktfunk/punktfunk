@@ -249,6 +249,10 @@ impl PadProto for TritonProto {
         st.apply_rich(rich, std::time::Instant::now());
     }
 
+    fn heard(&self, st: &mut TritonState, now: std::time::Instant) {
+        st.hear(now);
+    }
+
     fn write_state(&self, pad: &mut TritonTransport, st: &TritonState) {
         pad.write_state(st);
     }

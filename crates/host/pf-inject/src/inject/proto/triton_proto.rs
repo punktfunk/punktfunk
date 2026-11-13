@@ -81,8 +81,9 @@ pub mod tbtn {
 pub struct TritonState {
     pub raw: [u8; TRITON_REPORT_LEN],
     pub raw_len: u8,
-    /// When the client last sent anything for this pad: a raw report or a typed frame. A host
-    /// heartbeat re-presents the state and never touches it.
+    /// When the client last sent anything for this pad: a raw report, a typed frame or an
+    /// unchanged refresh ([`Self::hear`]). A host heartbeat re-presents the state and never
+    /// touches it.
     heard: Option<Instant>,
     pub buttons: u32,
     pub lt: u16,
@@ -210,6 +211,11 @@ impl TritonState {
         serialize_triton_state(&mut state, &typed, *seq);
         r[..TRITON_STATE_LEN].copy_from_slice(&state);
         (r, TRITON_STATE_LEN)
+    }
+
+    /// The client refreshed this pad and the state did not change: proof of life, nothing else.
+    pub fn hear(&mut self, now: Instant) {
+        self.heard = Some(now);
     }
 
     /// A raw report from the client's physical pad becomes the state. Touchpad and motion have
@@ -446,6 +452,29 @@ mod tests {
         st.apply_rich(hid_report(&held), later);
         let (r, len) = st.report(&mut seq, later);
         assert_eq!((len, &r[..12]), (12, &held[..]));
+    }
+
+    /// An unchanged refresh carries no frame, only [`TritonState::hear`]: a mirrored pad holds
+    /// its button past [`RAW_STALE`] while they keep coming, and reads neutral once they stop.
+    #[test]
+    fn a_heard_client_holds_a_mirrored_pad_past_the_stale_window() {
+        let t0 = t0();
+        let mut seq = 0;
+        let mut st = TritonState::neutral();
+        let mut held = [0u8; 12];
+        held[0] = ID_TRITON_CONTROLLER_STATE;
+        held[2] = 0x01;
+        st.apply_rich(hid_report(&held), t0);
+
+        let mut at = t0;
+        for _ in 0..30 {
+            at += std::time::Duration::from_millis(100);
+            st.hear(at);
+            let (r, len) = st.report(&mut seq, at + std::time::Duration::from_millis(8));
+            assert_eq!((len, &r[..12]), (12, &held[..]), "released at {at:?}");
+        }
+        let (r, len) = st.report(&mut seq, at + RAW_STALE);
+        assert_eq!((len, r[2]), (TRITON_STATE_LEN, 0));
     }
 
     #[test]
