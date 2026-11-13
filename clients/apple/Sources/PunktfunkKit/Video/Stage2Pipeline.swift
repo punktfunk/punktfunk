@@ -82,7 +82,8 @@ public final class FrameStore<Frame>: @unchecked Sendable {
     private let keepsTwo: Bool
     private var frames: [Frame] = []
     private var prerolled = false
-    /// Submissions since the last `drainSubmitted` — the decode rate for the pf-present line.
+    /// Submissions since the last `drainSubmitted`. The pf-present line drains it unread; its
+    /// `decoded=` counts decoder output.
     private var submitted = 0
     /// Every submission this session, for the render thread's own rate measure.
     private var total = 0
