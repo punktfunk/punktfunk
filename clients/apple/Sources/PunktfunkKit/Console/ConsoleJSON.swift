@@ -316,54 +316,48 @@ public enum ConsoleJSON {
     /// reads: an override it cannot parse leaves that preset unmarked, not the catalog empty.
     private static func overrides(_ o: SettingsOverlay) -> [String: Any] {
         var j: [String: Any] = [:]
-        j["width"] = o.width
-        j["height"] = o.height
-        j["match_window"] = o.matchWindow
-        j["compositor"] = o.compositor.map(ConsoleSettings.compositorName)
-        j["gamepad"] = o.gamepadType.map(ConsoleSettings.padTypeName)
-        j["refresh_hz"] = o.refreshHz
-        j["bitrate_kbps"] = o.bitrateKbps
-        j["pyrowave_bpp"] = o.pyrowaveBpp
-        j["render_scale"] = o.renderScale
-        j["video_fit"] = o.videoFit
-        j["screens"] = o.screens
-        j["host_screen"] = o.hostScreen
-        j["codec"] = o.codec
-        j["hdr_enabled"] = o.hdrEnabled
-        j["enable_444"] = o.enable444
-        j["ten_bit_sdr"] = o.tenBitSdr
-        j["audio_channels"] = o.audioChannels
-        j["audio_format"] = o.audioFormat
-        j["mic_enabled"] = o.micEnabled
-        j["echo_cancel"] = o.echoCancel
-        j["keep_host_audio"] = o.keepHostAudio
-        j["touch_mode"] = o.touchMode
-        j["mouse_mode"] = o.mouseMode
-        j["invert_scroll"] = o.invertScroll
-        j["overlay_actions"] = o.overlayActions
-        j["shortcuts"] = o.shortcuts
-        j["inhibit_shortcuts"] = o.inhibitShortcuts
-        j["gamepad_forwarding"] = o.gamepadForwarding
-        j["system_buttons"] = o.systemButtons
-        j["guide_gesture"] = o.guideGesture
-        j["stats_verbosity"] = o.statsVerbosity
-        j["fullscreen_on_stream"] = o.fullscreenWhileStreaming
-        j["present_priority"] = o.presentPriority
-        j["smooth_buffer"] = o.smoothBuffer
-        j["vsync"] = o.vsync
-        j["allow_vrr"] = o.allowVRR
-        return j.compactMapValues { $0 }
+        for (key, value) in consoleFields { j[key] = value(o) }
+        return j
     }
 
-    /// The keys `overrides(_:)` sends: exactly the ones a console save sets or clears.
-    private static let consoleKeys: Set<String> = [
-        "width", "height", "match_window", "compositor", "gamepad", "refresh_hz", "bitrate_kbps",
-        "pyrowave_bpp", "render_scale", "video_fit", "screens", "host_screen", "codec", "hdr_enabled",
-        "enable_444", "ten_bit_sdr",
-        "audio_channels", "audio_format", "mic_enabled", "echo_cancel", "keep_host_audio",
-        "touch_mode", "mouse_mode", "invert_scroll", "overlay_actions", "shortcuts",
-        "inhibit_shortcuts", "gamepad_forwarding", "system_buttons", "guide_gesture", "stats_verbosity",
-        "fullscreen_on_stream", "present_priority", "smooth_buffer", "vsync", "allow_vrr",
+    /// Every key a console save sets or clears, with how `overrides(_:)` spells a preset's value.
+    private static let consoleFields: [(key: String, value: @Sendable (SettingsOverlay) -> Any?)] = [
+        ("width", { $0.width }),
+        ("height", { $0.height }),
+        ("match_window", { $0.matchWindow }),
+        ("compositor", { $0.compositor.map(ConsoleSettings.compositorName) }),
+        ("gamepad", { $0.gamepadType.map(ConsoleSettings.padTypeName) }),
+        ("refresh_hz", { $0.refreshHz }),
+        ("bitrate_kbps", { $0.bitrateKbps }),
+        ("pyrowave_bpp", { $0.pyrowaveBpp }),
+        ("render_scale", { $0.renderScale }),
+        ("video_fit", { $0.videoFit }),
+        ("screens", { $0.screens }),
+        ("host_screen", { $0.hostScreen }),
+        ("codec", { $0.codec }),
+        ("hdr_enabled", { $0.hdrEnabled }),
+        ("enable_444", { $0.enable444 }),
+        ("ten_bit_sdr", { $0.tenBitSdr }),
+        ("audio_channels", { $0.audioChannels }),
+        ("audio_format", { $0.audioFormat }),
+        ("mic_enabled", { $0.micEnabled }),
+        ("echo_cancel", { $0.echoCancel }),
+        ("keep_host_audio", { $0.keepHostAudio }),
+        ("touch_mode", { $0.touchMode }),
+        ("mouse_mode", { $0.mouseMode }),
+        ("invert_scroll", { $0.invertScroll }),
+        ("overlay_actions", { $0.overlayActions }),
+        ("shortcuts", { $0.shortcuts }),
+        ("inhibit_shortcuts", { $0.inhibitShortcuts }),
+        ("gamepad_forwarding", { $0.gamepadForwarding }),
+        ("system_buttons", { $0.systemButtons }),
+        ("guide_gesture", { $0.guideGesture }),
+        ("stats_verbosity", { $0.statsVerbosity }),
+        ("fullscreen_on_stream", { $0.fullscreenWhileStreaming }),
+        ("present_priority", { $0.presentPriority }),
+        ("smooth_buffer", { $0.smoothBuffer }),
+        ("vsync", { $0.vsync }),
+        ("allow_vrr", { $0.allowVRR }),
     ]
 
     /// The console's saved overlay over `base`: every key the console edits comes from it,
@@ -372,8 +366,7 @@ public enum ConsoleJSON {
         guard let data = try? JSONEncoder().encode(base),
             var j = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
         else { return base }
-        for key in consoleKeys { j[key] = nil }
-        for (key, value) in console where consoleKeys.contains(key) { j[key] = value }
+        for (key, _) in consoleFields { j[key] = console[key] }
         // The console names these two; this app's overlay stores the wire number.
         j["compositor"] = (console["compositor"] as? String).flatMap(ConsoleSettings.compositorTag)
         j["gamepad"] = (console["gamepad"] as? String).flatMap(ConsoleSettings.padTypeTag)
