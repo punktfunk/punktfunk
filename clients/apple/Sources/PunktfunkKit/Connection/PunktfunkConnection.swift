@@ -1783,7 +1783,13 @@ public final class PunktfunkConnection: @unchecked Sendable {
     /// `advanced`. Empty after close.
     public func hudLines(tier: StatsVerbosity, advanced: Bool, facts: HudFacts) -> [HudLine] {
         return withLiveHandle(or: []) { h in
-            let index = UInt32(StatsVerbosity.allCases.firstIndex(of: tier) ?? 2)
+            // The C ABI's tier numbers, 0 off to 3 detailed.
+            let index: UInt32 = switch tier {
+            case .off: 0
+            case .compact: 1
+            case .normal: 2
+            case .detailed: 3
+            }
             let extras = facts.extras.map { "\($0.role.rawValue)\t\($0.text)\n" }.joined()
             return (facts.preset ?? "").withCString { preset in
                 extras.withCString { extrasPtr in
