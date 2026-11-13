@@ -345,14 +345,8 @@ public final class VideoDecoder: @unchecked Sendable {
         let ptsNs = p.value > 0 ? UInt64(p.value) : 0
         // HDR is the transfer function, never the depth: 10-bit SDR decodes to P010 too, and
         // calling that HDR paints the layer PQ and blows the picture out. A buffer carrying no
-        // transfer attachment falls back to depth, as this did before.
-        let fmt = CVPixelBufferGetPixelFormatType(imageBuffer)
-        let tenBitBuffer =
-            fmt == kCVPixelFormatType_420YpCbCr10BiPlanarVideoRange
-            || fmt == kCVPixelFormatType_420YpCbCr10BiPlanarFullRange
-            || fmt == kCVPixelFormatType_444YpCbCr10BiPlanarVideoRange
-            || fmt == kCVPixelFormatType_444YpCbCr10BiPlanarFullRange
-        let isHDR = Self.transferIsHDR(imageBuffer) ?? tenBitBuffer
+        // transfer attachment falls back to its depth.
+        let isHDR = Self.transferIsHDR(imageBuffer) ?? MetalVideoPresenter.tenBitBuffer(imageBuffer)
         onDecoded(
             ReadyFrame(
                 ptsNs: ptsNs, receivedNs: pulledNs, decodedNs: decodedNs,
