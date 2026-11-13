@@ -225,7 +225,7 @@ public final class FrameStore<Frame>: @unchecked Sendable {
 
 /// The display's vsync grid as last reported by the display link (target timestamp + period,
 /// `CACurrentMediaTime` basis), written on main by `renderTick`, read by the render thread to
-/// schedule V-Sync-mode presents. A shared box (like `ReadyRing`) so neither thread captures the
+/// schedule V-Sync-mode presents. A shared box (like `FrameStore`) so neither thread captures the
 /// pipeline itself. Sendable; lock-guarded.
 private final class VsyncClock: @unchecked Sendable {
     private let lock = NSLock()
@@ -550,9 +550,9 @@ final class FrameHDRReporter: @unchecked Sendable {
     }
 }
 
-/// Newest-wins 1-slot hand-off box (the generic sibling of `ReadyRing`): deadline pacing's
-/// drawable stash — the link thread `put`s each update's vended drawable (replacing an
-/// unpresented older one, which just returns to the layer's pool), the render thread `take`s.
+/// Newest-wins 1-slot hand-off box: deadline pacing's drawable stash — the link thread `put`s
+/// each update's vended drawable (replacing an unpresented older one, which just returns to the
+/// layer's pool), the render thread `take`s.
 /// `putBack` returns a taken value only while the slot is still empty, so a fresher `put` from
 /// the other thread is never clobbered by a stale return; `take(where:)` checks the value it
 /// takes under the same lock. Internal (not private) for unit tests. Sendable; lock-guarded.

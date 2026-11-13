@@ -107,7 +107,7 @@ final class PresentPacingTests: XCTestCase {
     // MARK: - FrameStore (the decoded-frame hand-off, both intents)
 
     /// Newest-wins (latency): submit replaces the undisplayed frame, take clears, putBack
-    /// restores only into an empty slot — the exact pre-rebuild ReadyRing semantics.
+    /// restores only into an empty slot.
     func testFrameStoreNewestWins() {
         let store = FrameStore<Int>(policy: .newestWins)
         XCTAssertNil(store.take())
