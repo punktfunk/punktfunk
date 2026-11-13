@@ -51,10 +51,9 @@ struct CurvePinch {
 }
 #endif
 
-/// Same diagnostic switch as InputCapture (PUNKTFUNK_INPUT_DEBUG=1): on iOS we log the
-/// resolved pointer-lock state each time capture engages, so the user can see whether the
-/// scene actually locked (GCMouse only delivers deltas while it did) or whether we're on
-/// the touch fallback.
+/// Same diagnostic switch as InputCapture (PUNKTFUNK_INPUT_DEBUG=1): logs the resolved
+/// pointer-lock state on every capture or lock change, so a log shows whether the scene locked
+/// (GCMouse delivers deltas only then) or the absolute pointer path carries the mouse.
 private let iosInputLog = ClientLog(category: "input")
 private let sceneLog = ClientLog(category: "present")
 private let iosInputDebug = ProcessInfo.processInfo.environment["PUNKTFUNK_INPUT_DEBUG"] == "1"
@@ -230,9 +229,9 @@ public final class StreamViewController: StreamViewControllerBase {
     private weak var fittedScene: UIWindowScene?
     #endif
 
-    /// Reads whether the scene's pointer is actually locked right now; nil = state
-    /// unavailable (no scene yet, or pre-availability). Only while this is true does GCMouse
-    /// deliver relative deltas — otherwise the touch path carries input.
+    /// Whether the scene's pointer is locked right now; nil with no scene yet, and always on
+    /// tvOS. Only while this is true does GCMouse deliver relative deltas; otherwise the
+    /// absolute pointer path carries the mouse.
     private func pointerLockEngaged() -> Bool? {
         #if os(iOS) || os(visionOS)
         return view.window?.windowScene?.pointerLockState?.isLocked
@@ -249,8 +248,8 @@ public final class StreamViewController: StreamViewControllerBase {
     /// The two-finger twist turning the quick-action ring (forwarded from the stream view).
     var onDial: ((DialEvent) -> Void)?
     /// Resize-overlay START: forwarded to the Match-window follower so a scene resize drives the
-    /// blur+spinner the instant the window differs from the live mode (iOS only — tvOS has no
-    /// follower). See `MatchWindowFollower.onResizeTarget`.
+    /// blur+spinner the instant the window differs from the live mode (iOS and visionOS; tvOS has
+    /// no follower). See `MatchWindowFollower.onResizeTarget`.
     var onResizeTarget: ResizeTarget?
     /// Resize-overlay END: the presenter reports the coded dims of each new-mode IDR here, so the
     /// overlay clears when a frame at the requested mode or its view actually decodes.
@@ -294,10 +293,9 @@ public final class StreamViewController: StreamViewControllerBase {
             vc.layoutMetalLayer()
         }
         #if os(iOS) || os(visionOS)
-        // Hide the iPadOS cursor while it hovers the video: the host renders its own
-        // cursor from our deltas, so the local one only diverges from it. This hides the
-        // pointer; true pointer LOCK (below) is what makes GCMouse deliver relative deltas
-        // — and the system only grants it on a full-screen, frontmost iPad scene.
+        // Hides the local cursor while the scene is pointer-locked and the host draws its own
+        // from GCMouse deltas (the delegate below). Unlocked, the cursor stays visible. The
+        // system grants the lock only to a full-screen, frontmost iPad scene.
         let interaction = UIPointerInteraction(delegate: self)
         view.addInteraction(interaction)
         pointerInteraction = interaction
