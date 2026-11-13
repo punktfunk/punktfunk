@@ -1138,6 +1138,15 @@ object NativeBridge {
      */
     external fun nativeConsoleSetProfiles(handle: Long, fpHex: String, json: String)
 
+    /**
+     * The answer to `FetchHidden` for [profile] on the host pinned to [fpHex]:
+     * `{"Listed": [LibraryGame]}` or `{"Failed": "why"}`. Posters follow as a shelf's do.
+     */
+    external fun nativeConsoleSetHiddenList(handle: Long, fpHex: String, profile: String, json: String)
+
+    /** What a `SetHidden` came to: `{fp_hex, profile, app_id, hidden, done, notice}`. */
+    external fun nativeConsoleSetHideAnswer(handle: Long, json: String)
+
     /** A one-shot toast from a service worker. */
     external fun nativeConsoleNotice(handle: Long, text: String)
 

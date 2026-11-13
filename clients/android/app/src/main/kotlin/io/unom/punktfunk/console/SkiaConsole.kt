@@ -231,6 +231,8 @@ object SkiaConsole {
             // Takes each launch's password out of the console (`nativeConsoleTakeUnlock`) and
             // reports a `profile-locked` close as phase 7, so the console asks for it.
             .put("prompts_unlock", true)
+            // Answers `SetHidden` and `FetchHidden`, so a locked profile's game menu offers Hide.
+            .put("hides", true)
             .put("settings", ConsoleJson.settings(initial, base))
             .put("presets", JSONArray(ConsoleJson.presets(presets)))
             .put("known_hosts", JSONObject(ConsoleJson.knownHosts(services.store.all())))
@@ -977,6 +979,8 @@ object SkiaConsole {
         "SetScreen" to ::setScreen,
         "EndGame" to this::endGame,
         "Install" to this::changeInstall,
+        "SetHidden" to this::setHidden,
+        "FetchHidden" to this::fetchHidden,
         "SaveHost" to ::saveHost,
         "UpdateHost" to ::updateHost,
         "ForgetHost" to ::forgetHost,
@@ -995,11 +999,8 @@ object SkiaConsole {
         "PadAction" to { c -> state.now { onPadAction }?.invoke(c.optString("action"), c.optString("pad_key")) },
     )
 
-    /**
-     * `ConsoleCmd`s this shell drops: it raises no prompt, so no `PromptAnswer` comes back, and it
-     * creates the console with `hides` off, so no hide command comes either.
-     */
-    internal val ignoredCommands = setOf("PromptAnswer", "SetHidden", "FetchHidden")
+    /** `ConsoleCmd`s this shell drops: it raises no prompt, so no `PromptAnswer` comes back. */
+    internal val ignoredCommands = setOf("PromptAnswer")
 
     /**
      * The stream port of the saved host [fp] pins, where its management API answers without TCP.
