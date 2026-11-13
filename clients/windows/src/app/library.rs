@@ -16,7 +16,7 @@
 use super::connect::{initiate_launch, initiate_waking};
 use super::lucide;
 use super::style::*;
-use super::{AppCtx, AsyncSetState, Msg, Screen, Shell, Svc, Target};
+use super::{AppCtx, AsyncSetState, Dest, Msg, Screen, Shell, Svc, Target};
 use pf_client_core::collate::{self, Collatable, SortKey};
 use pf_client_core::hide;
 use pf_client_core::library::{self, initials, store_label, GameEntry, DESKTOP_ID};
@@ -159,6 +159,16 @@ impl PartialEq for Hidden {
 pub(crate) type HideEdit = Box<dyn FnOnce(&mut HideUi) + Send>;
 
 impl HideUi {
+    /// The hidden titles show in the shelf's place.
+    pub(crate) fn viewing(&self) -> bool {
+        self.view.is_some()
+    }
+
+    /// Back to the shelf.
+    pub(crate) fn close_view(&mut self) {
+        self.view = None;
+    }
+
     /// The host hid (`hidden`) or showed `game`.
     fn took(&mut self, game: Game, hidden: bool) {
         if hidden {
@@ -195,12 +205,33 @@ pub(crate) struct EndGameUi {
     pub(crate) said: Option<String>,
 }
 
-/// Show `target`'s library. The target becomes `Shared::target`, which the grid launches
-/// through, so a pinned card's preset rides along; then the fetch starts and the screen shows.
+/// Show `target`'s library. The target becomes `Shared::shelf`, which the grid launches
+/// through, so a pinned card's preset rides along; then the fetch starts and Home points at
+/// the Library.
 pub(crate) fn open_library(svc: &Svc, target: Target) {
-    *svc.ctx.shared.target.lock().unwrap() = target;
+    *svc.ctx.shared.shelf.lock().unwrap() = target;
     start_fetch(&svc.ctx, &svc.set_library);
-    svc.set_screen.call(Screen::Library);
+    svc.set_dest.call(Dest::Library);
+    svc.set_screen.call(Screen::Home);
+}
+
+/// Whether a shelf was opened this run.
+pub(crate) fn opened(ctx: &AppCtx) -> bool {
+    ctx.shared.library_gen.load(Ordering::SeqCst) > 0
+}
+
+/// Open the default host's shelf: the Library picked from the pane before any host's library
+/// was asked for. Nothing when no host is paired.
+pub(crate) fn open_default(svc: &Svc) {
+    let known = crate::trust::KnownHosts::load();
+    let settings = svc.ctx.settings.lock().unwrap().clone();
+    if let Some(i) = pf_client_core::start::default_host(&settings, &known) {
+        let target = Target {
+            host: pf_client_core::orchestrate::HostTarget::from(&known.hosts[i]),
+            ..Target::default()
+        };
+        open_library(svc, target);
+    }
 }
 
 /// Fetch the library for `Shared::target` off the UI thread, publishing into root state:
@@ -208,7 +239,7 @@ pub(crate) fn open_library(svc: &Svc, target: Target) {
 /// Retry, another host) bumps `Shared::library_gen`, and a superseded worker stops
 /// publishing — the speed test's generation pattern.
 pub(crate) fn start_fetch(ctx: &Arc<AppCtx>, set_library: &AsyncSetState<LibraryState>) {
-    let target = ctx.shared.target.lock().unwrap().clone();
+    let target = ctx.shared.shelf.lock().unwrap().clone();
     let generation = ctx.shared.library_gen.fetch_add(1, Ordering::SeqCst) + 1;
     set_library.call(LibraryState::default()); // Loading, no art
     let (shared, identity, set) = (
@@ -354,7 +385,7 @@ fn game_of(g: &GameEntry) -> Game {
 /// The open shelf's host as this device reaches its management lane, its pin, and the
 /// shelf's generation: a worker's answer for an older shelf changes nothing.
 fn shelf_api(ctx: &AppCtx) -> (library::HostApi, Option<String>, u64) {
-    let target = ctx.shared.target.lock().unwrap().clone();
+    let target = ctx.shared.shelf.lock().unwrap().clone();
     let pin = (target.host.fp_hex.as_deref()).and_then(crate::trust::parse_hex32);
     let mgmt = target.host.mgmt_port.unwrap_or(library::DEFAULT_MGMT_PORT);
     let (addr, port) = (&target.host.addr, target.host.port);
@@ -401,7 +432,7 @@ fn open_hidden(svc: &Svc, set_hide: &AsyncSetState<HideEdit>, hides: &Hides) {
     }));
     let (api, _, generation) = shelf_api(&svc.ctx);
     let base = {
-        let target = svc.ctx.shared.target.lock().unwrap();
+        let target = svc.ctx.shared.shelf.lock().unwrap();
         let mgmt = target.host.mgmt_port.unwrap_or(library::DEFAULT_MGMT_PORT);
         library::base_url(&target.host.addr, mgmt)
     };
@@ -665,7 +696,7 @@ pub(crate) fn library_page(shell: &Shell) -> View {
     let svc = shell.svc();
     let (ctx, pal) = (&svc.ctx, &svc.pal);
     let state = &shell.library;
-    let target = ctx.shared.target.lock().unwrap().clone();
+    let target = ctx.shared.shelf.lock().unwrap().clone();
     let (ss, st) = (svc.set_screen.clone(), svc.set_status.clone());
     let set_end_game = shell.set(Msg::EndGame);
     let set_hide = shell.set(Msg::Hide);
@@ -673,24 +704,12 @@ pub(crate) fn library_page(shell: &Shell) -> View {
     let hidden = state.hides.as_ref().zip(shell.hide.view.as_ref());
 
     // Responsive poster columns from the window width (the hosts page's pattern).
-    let content_w = (shell.width - 64.0).clamp(POSTER_MIN_WIDTH, 1120.0);
+    let content_w = (shell.content_width() - 2.0 * GUTTER).max(POSTER_MIN_WIDTH);
     let cols =
-        (((content_w + POSTER_GAP) / (POSTER_MIN_WIDTH + POSTER_GAP)).floor() as usize).clamp(2, 6);
+        (((content_w + POSTER_GAP) / (POSTER_MIN_WIDTH + POSTER_GAP)).floor() as usize).max(2);
     let tile_w = (content_w - POSTER_GAP * (cols as f64 - 1.0)) / cols as f64;
     let poster_h = tile_w * POSTER_RATIO;
 
-    // Back from the hidden titles is the shelf; back from the shelf, the hosts.
-    let back_btn = icon_button("arrow-left", common::common_back()).on_click({
-        let (ss, se, sh) = (ss.clone(), set_end_game.clone(), set_hide.clone());
-        let viewing = hidden.is_some();
-        move || {
-            if viewing {
-                return sh.call(Box::new(|h: &mut HideUi| h.view = None));
-            }
-            se.call(EndGameUi::default());
-            ss.call(Screen::Hosts)
-        }
-    });
     let title = match hidden {
         Some((hides, _)) => client::lib_hidden_for(&hides.name),
         None if target.host.name.is_empty() => client::lib_title().to_string(),
@@ -704,7 +723,22 @@ pub(crate) fn library_page(shell: &Shell) -> View {
             .on_click(move || open_hidden(&svc, &sh, &hides))
             .into()
     };
-    let mut body: Vec<View> = vec![page_header(&title, back_btn)];
+    if !opened(ctx) {
+        let hosts = button(client::lib_no_host_show_hosts()).on_click({
+            let sd = svc.set_dest.clone();
+            move || sd.call(Dest::Hosts)
+        });
+        return notice_page(
+            pal,
+            None,
+            client::lib_no_host_title(),
+            client::lib_no_host_body(),
+            vec![hosts
+                .horizontal_alignment(HorizontalAlignment::Center)
+                .into()],
+        );
+    }
+    let mut body: Vec<View> = vec![page_header(&title, Vec::new())];
     if let Some(said) = &shell.end_game.said {
         body.push(
             InfoBar::new()
@@ -828,7 +862,7 @@ pub(crate) fn library_page(shell: &Shell) -> View {
         }
     }
 
-    page_wide(body).content_dialog(end_game_dialog(&svc, &shell.end_game, set_end_game))
+    page_fill(body).content_dialog(end_game_dialog(&svc, &shell.end_game, set_end_game))
 }
 
 /// The hidden titles in the shelf's place: dimmed, and a click on one shows it again.
@@ -938,7 +972,7 @@ fn end_game_dialog(
             let _ = std::thread::Builder::new()
                 .name("punktfunk-endgame".into())
                 .spawn(move || {
-                    let target = ctx2.shared.target.lock().unwrap().clone();
+                    let target = ctx2.shared.shelf.lock().unwrap().clone();
                     let pin = target
                         .host
                         .fp_hex

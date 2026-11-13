@@ -56,7 +56,7 @@ impl UnlockAsk {
     pub(crate) fn abandon(&self) {
         *self.password.lock().unwrap() = Zeroizing::new(Vec::new());
         self.submit.lock().unwrap().take();
-        self.back.call(Screen::Hosts);
+        self.back.call(Screen::Home);
     }
 }
 
@@ -117,7 +117,7 @@ pub(crate) fn after_refusal(
                         punktfunk_core::reject::RejectReason::ProfileLocked,
                     )
                 }));
-                return ss.call(Screen::Hosts);
+                return ss.call(Screen::Home);
             };
             let hello = hello::supported();
             let keys = hello.then_some(Hello);
@@ -215,7 +215,7 @@ fn prompt(
     go: Go,
 ) {
     let Some(set) = ctx.shared.set_unlock.lock().unwrap().clone() else {
-        return set_screen.call(Screen::Hosts);
+        return set_screen.call(Screen::Home);
     };
     let (name, host) = (row.display_name.clone(), target.host.name.clone());
     let pin = row.unlock.pin();

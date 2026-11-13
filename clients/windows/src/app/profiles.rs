@@ -144,7 +144,7 @@ impl PickerAsk {
     /// Close without a pick: a connect waiting on it returns to the host list.
     pub(crate) fn abandon(&self) {
         if let Some(back) = &self.cancel_to {
-            back.call(Screen::Hosts);
+            back.call(Screen::Home);
         }
     }
 }
@@ -172,7 +172,7 @@ impl SeatWait {
     /// Give up the wait: the poll stops, nothing dials, and the shell returns to the host list.
     pub(crate) fn abandon(&self) {
         self.cancel.store(true, Ordering::SeqCst);
-        self.back.call(Screen::Hosts);
+        self.back.call(Screen::Home);
     }
 }
 
@@ -246,7 +246,7 @@ pub(crate) fn seat_then(
         SeatGate::Dial => return unlock::before_dial(ctx, target, pin, row, set_screen, go),
         SeatGate::Refuse(line) => {
             set_status.call(line);
-            set_screen.call(Screen::Hosts);
+            set_screen.call(Screen::Home);
             return;
         }
         SeatGate::Wake | SeatGate::Wait { .. } => {}
@@ -276,7 +276,7 @@ pub(crate) fn seat_then(
                 if !cancel.load(Ordering::SeqCst) {
                     set_seat.call(None);
                     set_status.call(line);
-                    set_screen.call(Screen::Hosts);
+                    set_screen.call(Screen::Home);
                 }
             };
             let mgmt = target

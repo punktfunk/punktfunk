@@ -111,7 +111,7 @@ fn speed_page(props: &SpeedProps) -> View {
     let back_btn = {
         let ss = set_screen.clone();
         icon_button("arrow-left", common::common_close())
-            .on_click(move || ss.call(Screen::Hosts))
+            .on_click(move || ss.call(Screen::Home))
             .horizontal_alignment(HorizontalAlignment::Center)
     };
     let headline = if target.host.name.is_empty() {
@@ -183,7 +183,7 @@ fn speed_page(props: &SpeedProps) -> View {
                         file.bitrate_kbps = kbps;
                         true
                     });
-                    ss.call(Screen::Hosts);
+                    ss.call(Screen::Home);
                 }
             };
             let write_preset = |id: String| {
@@ -194,7 +194,7 @@ fn speed_page(props: &SpeedProps) -> View {
                     });
                     // The host list it returns to redraws anyway; no revision to bump.
                     saved(r, &st, None);
-                    ss.call(Screen::Hosts);
+                    ss.call(Screen::Home);
                 }
             };
             // Which button(s): no binding → the global; a binding that already overrides
@@ -236,7 +236,7 @@ fn speed_page(props: &SpeedProps) -> View {
             buttons.push({
                 let ss = set_screen.clone();
                 icon_button("x", common::common_close())
-                    .on_click(move || ss.call(Screen::Hosts))
+                    .on_click(move || ss.call(Screen::Home))
                     .into()
             });
             let finding_lines: Vec<View> = findings

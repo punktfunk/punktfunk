@@ -45,7 +45,7 @@ punktfunk-core = { path = "../../crates/core/punktfunk-core", features = ["quic"
 # nothing enables it and the C++ is never compiled.
 pf-client-core = { path = "../../crates/client/pf-client-core", default-features = false, features = ["desktop"] }
 # The words, in the OS's language.
-pf-l10n = { path = "../../l10n", features = ["client", "desktop", "os"] }
+pf-l10n = { path = "../../l10n", features = ["client", "desktop", "host", "os"] }
 
 # WinUI 3 UI via windows-reactor (a declarative React-like framework backed by WinUI). The
 # windows-rs revs are the workspace entries' (root Cargo.toml). `wasapi` (via pf-client-core)
