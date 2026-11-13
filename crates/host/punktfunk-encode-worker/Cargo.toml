@@ -32,6 +32,8 @@ path = "src/main.rs"
 # punktfunk-host already has `default = ["pyrowave"]`, so a workspace build resolves it anyway.)
 pf-encode = { path = "../pf-encode", features = ["pyrowave"] }
 pf-zerocopy = { path = "../pf-zerocopy" }
+# The scheduling boost both arms take; already linked through pf-encode.
+pf-frame = { path = "../pf-frame" }
 tracing = "0.1"
 # The worker's stderr is inherited from the host that spawned it, so its lines land in the same
 # journal — but it is a fresh process with no subscriber of its own, and without one the
