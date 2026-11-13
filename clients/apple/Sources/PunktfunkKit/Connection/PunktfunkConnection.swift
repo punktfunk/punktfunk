@@ -1,11 +1,11 @@
 // Swift wrapper around the punktfunk-core C ABI's punktfunk/1 connection API.
 //
 // Threading contract (mirrors the C header): each plane has one puller thread. Video pulls
-// nextAU() and nextHdrMeta(); audio pulls nextAudioPcm()/audioPlc(); feedback pulls
-// nextRumbleCommand() and nextHidOutput() in turn; cursor
-// pulls nextCursorShape()/nextCursorState(); nextClipboard(), nextHostTiming() and nextHdrMeta()
-// each have their own. The core keeps per-plane borrow
-// slots, so the planes never alias. send() is enqueue-only and safe alongside all of them.
+// nextAU() and nextHdrMeta(); each further screen's pump pulls nextScreenAU(); audio pulls
+// nextAudioPcm()/audioPlc(); feedback pulls nextRumbleCommand() and nextHidOutput() in turn;
+// cursor pulls nextCursorShape()/nextCursorState(); nextClipboard() and nextHostTiming() each
+// have their own. The core keeps per-plane borrow slots, so the planes never alias. send() is
+// enqueue-only and safe alongside all of them.
 // A borrowed pointer is valid only until the next call of the same kind, so every puller
 // copies into an owned value.
 //
