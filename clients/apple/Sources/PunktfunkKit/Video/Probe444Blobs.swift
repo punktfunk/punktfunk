@@ -6,7 +6,7 @@
 //          -pix_fmt yuv444p[10le] -c:v libx265 \
 //          -x265-params keyint=1:min-keyint=1:no-info=1:repeat-headers=1:aud=0 -f hevc out.hevc
 // 256×256 clears the hardware decoder's minimum-dimension floor (a 16×16 clip is rejected for every
-// chroma format). Validated to hardware-decode to `444v`/`x444` on Apple Silicon (M3).
+// chroma format).
 enum Probe444Blobs {
     /// 256×256 HEVC Range-Extensions 4:4:4 keyframe (Annex-B): 134 bytes.
     static let au444_8bit: [UInt8] = [

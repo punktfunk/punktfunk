@@ -34,10 +34,9 @@ public struct ReadyFrame: @unchecked Sendable {
     public let ptsNs: UInt64
     /// Client `CLOCK_REALTIME` instant the AU left `nextAU` (`AccessUnit.pulledNs`, threaded
     /// through the decode via the frame refcon), in nanoseconds — the decode stage's start
-    /// point. (Named for its historical role; since the ABI v9 receipt split the true
-    /// reassembly receipt lives on `AccessUnit.receivedNs`, and receipt→pull is the HUD's own
-    /// client-queue term.) 0 when unknown (a caller that didn't stamp) — the decode-stage meter
-    /// then drops the sample via its sanity guard.
+    /// point. Not the reassembly receipt, which is `AccessUnit.receivedNs`. 0 when unknown (a
+    /// caller that didn't stamp) — the decode-stage meter then drops the sample via its sanity
+    /// guard.
     public let receivedNs: Int64
     /// Client `CLOCK_REALTIME` instant decode completed, in nanoseconds.
     public let decodedNs: Int64

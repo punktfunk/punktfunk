@@ -3,8 +3,7 @@
 // a CMSampleBuffer.
 //
 // AnnexB (length-prefixed NALs) and AV1 (header + leb128-sized OBUs) differ only in the write
-// loop; everything around it — the block, the destination-length check, the timing, the sample
-// create — was duplicated line for line, so a fix to either had to be made twice.
+// loop; the block, the destination-length check, the timing and the sample create live here.
 
 import CoreMedia
 import Foundation

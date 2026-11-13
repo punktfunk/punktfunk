@@ -7,9 +7,8 @@
 // `VTIsHardwareDecodeSupported(HEVC)` and the HEVC-decoder-capabilities dictionary report HEVC HW
 // decode but expose nothing about `chroma_format_idc`, so the only reliable signal is to actually
 // create a *hardware-required* `VTDecompressionSession` for a tiny synthetic 4:4:4 keyframe and
-// confirm it both creates and decodes to the expected biplanar 4:4:4 pixel format. Validated on an
-// Apple M3 (HW 4:4:4 8- and 10-bit decode to `444v`/`x444`); a software-only decoder fails the
-// hardware-required create and we fall back to 4:2:0.
+// confirm it both creates and decodes to the expected biplanar 4:4:4 pixel format. A software-only
+// decoder fails the hardware-required create, and the device keeps 4:2:0.
 //
 // The probe blobs are 256×256 (above the hardware decoder's minimum-dimension floor — a 16×16 clip
 // is rejected for ALL chroma formats, including 4:2:0) HEVC Range-Extensions keyframes generated
