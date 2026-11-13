@@ -1,10 +1,8 @@
 // What a user typed into an add-or-edit-host form, and the one set of rules for turning it into a
 // stored record.
 //
-// Three forms take this input — the pointer sheet, the gamepad screen, and the tvOS commit path —
-// and each validated it differently: the same typed port became 65535 in one, the default in
-// another, and a refusal in the third, so the same typo saved three different records. The rules
-// live here so every form answers the same way, and so they can be tested without a view.
+// The pointer sheet, the gamepad screen and the tvOS commit path all take their answers from here,
+// so the same typed text saves the same record on each, and the rules test without a view.
 
 import Foundation
 

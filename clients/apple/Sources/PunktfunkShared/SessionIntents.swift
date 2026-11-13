@@ -1,9 +1,9 @@
 // App Intents that must compile into BOTH the app and the widget extension live here in the shared
-// module. Today that's `EndStreamIntent` — the Live Activity's "End stream" button (a
-// LiveActivityIntent runs in the APP's process) which M4 also surfaces to Siri/Shortcuts.
+// module: `EndStreamIntent`, the Live Activity's "End stream" button (a LiveActivityIntent runs in
+// the APP's process), which Siri and Shortcuts also surface.
 //
-// Gated on os(iOS): LiveActivityIntent is part of ActivityKit's world (iPhone/iPad only). The M4
-// Connect/Wake intents that need the app's router live in the app target, not here.
+// Gated on os(iOS): LiveActivityIntent is part of ActivityKit's world (iPhone/iPad only). The
+// Connect and Wake intents, which need the app's router, live in the app target.
 
 #if os(iOS)
 import AppIntents
