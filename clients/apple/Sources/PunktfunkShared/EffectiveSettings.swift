@@ -8,7 +8,7 @@
 // Session readers read their own session's copy: `PunktfunkConnection.settings` in the kit,
 // `SessionModel.settings` in the app. Never the globals mid-session, and never another window's.
 //
-// Only SESSION-CONSUMED values live here. Pure app-level preferences — the library toggle, the
+// Only SESSION-CONSUMED values live here. Pure app-level preferences — the
 // gamepad-UI switch, HUD placement, auto-wake, background keep-alive — stay plain `@AppStorage`
 // where they are read: they are about the app, not about a stream.
 
@@ -92,8 +92,8 @@ public struct EffectiveSettings: Equatable, Sendable {
 
     public init() {}
 
-    /// The global defaults, as every `@AppStorage` in the settings surface sees them. `.standard`
-    /// by default — settings are per-device, unlike the App-Group-shared host store.
+    /// The global defaults, as every `@AppStorage` in the settings surface sees them. Callers
+    /// pass `.standard`: settings are per-device, unlike the App-Group-shared host store.
     public init(defaults: UserDefaults) {
         func int(_ key: String, _ fallback: Int) -> Int {
             defaults.object(forKey: key) as? Int ?? fallback
