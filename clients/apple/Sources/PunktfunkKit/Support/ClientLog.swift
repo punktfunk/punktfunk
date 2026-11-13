@@ -1,6 +1,6 @@
 // The client's own recent-log ring + the drop-in logger that feeds it — the source for the
 // "Send logs to host" action (`LibraryClient.sendLogs`), the Apple port of
-// `pf_client_core::logring` + `punktfunk-session`'s `ring_layer`.
+// `pf_client_core::logring` and its `RingLayer`.
 //
 // WHY A RING AND NOT `OSLogStore`. The unified log already holds everything these loggers write,
 // and `OSLogStore(scope: .currentProcessIdentifier)` can read it back — but only the levels the
