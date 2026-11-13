@@ -281,13 +281,17 @@ export async function console_() {
 	return toWebHandler(createApp().use(gate).use(router));
 }
 
-/** The env a door's console runs with, pointed at the fakes. */
+// A stored hash, not the clear-text line: a clear-text login migrates the password file once
+// per process, and auth.test.ts is the one test that may spend that. Cost 4 keeps logins fast.
+const PW_HASH = Bun.password.hashSync("pw", { algorithm: "bcrypt", cost: 4 });
+
+/** The env a door's console runs with, pointed at the fakes. Its password is `pw`. */
 export function asDoor(): void {
 	process.env.PUNKTFUNK_MGMT_URL = `http://127.0.0.1:${box.port}`;
 	process.env.PUNKTFUNK_MGMT_TOKEN = ADMIN;
-	process.env.PUNKTFUNK_UI_PASSWORD = "pw";
+	process.env.PUNKTFUNK_UI_PASSWORD_HASH = PW_HASH;
 	process.env.PUNKTFUNK_UI_SECRET = "s".repeat(40);
-	delete process.env.PUNKTFUNK_UI_PASSWORD_HASH;
+	delete process.env.PUNKTFUNK_UI_PASSWORD;
 }
 
 /** A fresh ticket for `profile` in the seat host's shape. */
