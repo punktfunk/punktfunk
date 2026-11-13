@@ -164,8 +164,10 @@ impl PresentMeter {
         }
     }
 
-    #[allow(clippy::type_complexity)] // one caller unpacks it in place; a struct would be noise
-    fn drain(&self) -> (Vec<u64>, u64, Vec<u64>, Vec<u64>, Vec<u64>) {
+    /// The window since the last drain: latches, displays, feed, codec and e2e samples. Each
+    /// sink's 1 Hz line drains it; the ASC sink reads only the decode split.
+    #[allow(clippy::type_complexity)] // each caller unpacks it in place; a struct would be noise
+    pub(super) fn drain(&self) -> (Vec<u64>, u64, Vec<u64>, Vec<u64>, Vec<u64>) {
         let mut g = self
             .inner
             .lock()

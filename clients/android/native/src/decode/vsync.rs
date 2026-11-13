@@ -61,6 +61,17 @@ impl VsyncShared {
         self.panel_period_ns.load(Ordering::Relaxed)
     }
 
+    /// SurfaceFlinger's own lead: the latest timeline's expected present minus its deadline,
+    /// which is when the compositor wakes to latch for that present. 0 before a timeline and on
+    /// the 31/32 fallback.
+    pub(super) fn sf_lead_ns(&self) -> i64 {
+        self.timelines
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .first()
+            .map_or(0, |t| t.expected_present_ns - t.deadline_ns)
+    }
+
     /// The release target for a frame that must not be presented before `not_before_ns`:
     /// [`pick_timeline`] over the stored set, then [`onto_panel_grid`]. `None` on the 31/32
     /// fallback; the caller releases ASAP.
