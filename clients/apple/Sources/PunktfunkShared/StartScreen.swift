@@ -39,7 +39,8 @@ public enum StartScreen: Equatable, Sendable {
     /// and nothing retries.
     case stream(StoredHost)
 
-    /// Where a resolved default came from, for the one log line a launch prints.
+    /// Where a resolved default came from. No Swift caller reads it: it is here so the shared
+    /// start-screen vectors can hold the three resolvers to the same answer.
     public enum Source: String, Sendable {
         case explicit
         case derived
