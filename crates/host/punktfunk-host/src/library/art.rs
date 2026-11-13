@@ -241,8 +241,8 @@ fn percent_decode(s: &str) -> String {
 ///
 /// The proxy runs in the host process (LocalSystem on Windows) and the plugin lane supplies the
 /// path, so a missing root would make "serve this cover" equal "read any file as SYSTEM". Default
-/// is the users base — `%PUBLIC%`'s parent, because SYSTEM's `%USERPROFILE%` is
-/// `…\config\systemprofile` and is not where launchers live — plus [`steam_art_roots`] and
+/// is the [`users_base`] — SYSTEM's `%USERPROFILE%` is `…\config\systemprofile` and is not where
+/// launchers live — plus [`steam_art_roots`] and
 /// [`super::launch::playnite_art_roots`] (a portable Playnite keeps covers beside the exe).
 /// `PUNKTFUNK_LIBRARY_ART_ROOTS` (`;`-separated) replaces the whole default. [`art_store_dir`]
 /// is a root on top of either: its files are named `sha256(url)`, so nothing a plugin publishes
@@ -255,21 +255,23 @@ fn art_roots() -> Vec<PathBuf> {
         roots.push(art_store_dir());
         return roots;
     }
-    let mut roots = Vec::new();
-    // `%PUBLIC%` is `C:\Users\Public` on every supported Windows; its parent is the users base.
-    if let Some(public) = std::env::var_os("PUBLIC") {
-        if let Some(base) = PathBuf::from(public).parent() {
-            roots.push(base.to_path_buf());
-        }
-    }
-    if roots.is_empty() {
-        if let Some(drive) = std::env::var_os("SystemDrive") {
-            roots.push(PathBuf::from(drive).join("Users"));
-        }
-    }
+    let mut roots: Vec<PathBuf> = users_base().into_iter().collect();
     roots.extend(plat::extra_roots());
     roots.push(art_store_dir());
     roots
+}
+
+/// The Windows users base: `%PUBLIC%`'s parent (`C:\Users\Public` on every supported Windows),
+/// else `%SystemDrive%\Users`, which a seat host's environment falls back to. `None` off Windows.
+pub(crate) fn users_base() -> Option<PathBuf> {
+    if let Some(base) =
+        std::env::var_os("PUBLIC").and_then(|p| Path::new(&p).parent().map(Path::to_path_buf))
+    {
+        return Some(base);
+    }
+    // Not `PathBuf::from("C:").join("Users")`: that is the drive-relative `C:Users`.
+    std::env::var_os("SystemDrive")
+        .map(|drive| PathBuf::from(format!(r"{}\Users", drive.to_string_lossy())))
 }
 
 /// Canonicalize first so a junction out of the root is resolved before the containment test.
@@ -1043,6 +1045,13 @@ mod tests {
 
     fn confine_art_to(dir: &Path) -> ArtRootsEnv {
         ArtRootsEnv::set(&[("PUNKTFUNK_LIBRARY_ART_ROOTS", Some(dir))])
+    }
+
+    /// A seat host's environment has `SystemDrive` and no `PUBLIC`: its base is still rooted.
+    #[test]
+    fn the_users_base_without_public_is_rooted() {
+        let _env = ArtRootsEnv::set(&[("PUBLIC", None), ("SystemDrive", Some(Path::new("C:")))]);
+        assert_eq!(users_base(), Some(PathBuf::from(r"C:\Users")));
     }
 
     /// A local cover is read through the seat's hand alone, so a Windows seat host serves what the
