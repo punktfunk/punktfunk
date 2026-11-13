@@ -31,7 +31,6 @@ private let statusOK: Int32 = PUNKTFUNK_STATUS_OK.rawValue
 private let statusNoFrame: Int32 = PUNKTFUNK_STATUS_NO_FRAME.rawValue
 private let statusClosed: Int32 = PUNKTFUNK_STATUS_CLOSED.rawValue
 
-/// One reassembled, FEC-recovered, decrypted access unit (Annex-B HEVC from the host).
 /// The screens a connect asks the host for, screen 0 first; none for one picture. `views` holds
 /// the size each is shown at when smaller than its mode, zero for none.
 public struct ScreenAsk: Sendable {
@@ -40,6 +39,8 @@ public struct ScreenAsk: Sendable {
     public static let none = ScreenAsk(records: [], views: [])
 }
 
+/// One reassembled, FEC-recovered, decrypted access unit in the session's codec
+/// (`PunktfunkConnection.videoCodec`).
 public struct AccessUnit: Sendable {
     /// The AU's bytes: a copy, or with `inPlace` a view of the lender's slot that holds until
     /// the next pull.
