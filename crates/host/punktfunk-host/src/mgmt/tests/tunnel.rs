@@ -87,8 +87,13 @@ async fn a_tunnelled_request_is_the_lan_peer_it_came_from() {
         "the position-authenticated lane is refused by the tunnel itself"
     );
     assert_eq!(
-        via(head("PUT", "/api/v1/clients", &admin)).await,
+        via(head("TRACE", "/api/v1/clients", &admin)).await,
         StatusCode::METHOD_NOT_ALLOWED
+    );
+    assert_eq!(
+        via(head("PUT", "/api/v1/library/hidden/steam:70", &admin)).await,
+        StatusCode::UNAUTHORIZED,
+        "PUT reaches the router, whose auth judges it as it judges HTTPS"
     );
     assert_eq!(
         via(head("DELETE", "/api/v1/clients", &admin)).await,
