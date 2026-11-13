@@ -1196,8 +1196,12 @@ impl NvSession {
         // P-only + infinite GOP: IDRs are forced, or the opening frame NVENC emits as one.
         // Chunked poll flags early chunks from this before the driver reports `pictureType`.
         let idr = forced || opening;
-        // The long-term step sits out an IDR, which empties the slots, and a wave.
-        let ltr = ltr.filter(|_| !idr && wave.is_none());
+        // An IDR empties the slots: it marks slot 0 and uses none, so a late loss on the next
+        // P still finds it. A wave sits the long-term step out.
+        let ltr = match ltr {
+            Some(_) if idr => Some((Some(0), None)),
+            ltr => ltr.filter(|_| wave.is_none()),
+        };
         let mut pic = nv::NV_ENC_PIC_PARAMS {
             version: nv::NV_ENC_PIC_PARAMS_VER,
             inputWidth: self.width,
@@ -2235,11 +2239,12 @@ mod recovery_tests {
             last: s.frame_idx - 1,
             mask: u16::MAX,
         });
+        let held = s.ltr_slots.clone();
+        assert_eq!(held[0], Some(s.frame_idx - 1), "the IDR holds slot 0");
         REFUSE.set(1);
         assert!(encode(&mut s).is_err());
         assert_eq!(
-            s.ltr_slots,
-            [None, None],
+            s.ltr_slots, held,
             "no slot holds a picture that was never queued"
         );
     }
@@ -2257,6 +2262,20 @@ mod recovery_tests {
             s.wave.is_none() && s.pending_anchor,
             "an RFI anchor, not a wave"
         );
+    }
+
+    /// The first P is lost and reported past the short-term window: the IDR holds long-term
+    /// slot 0, so it anchors the next frame instead of a wave.
+    #[test]
+    fn a_late_loss_after_the_idr_anchors_on_the_idr() {
+        let mut s = stub_session(Codec::H265, 128);
+        for _ in 0..7 {
+            encode(&mut s).expect("the stub driver accepts every picture");
+        }
+        assert!(s.invalidate_ref_frames(1, 1));
+        assert!(s.wave.is_none(), "the IDR answers, not a wave");
+        assert_eq!(s.live.ltr_force, Some(0));
+        assert!(encode(&mut s).expect("the anchor").anchor);
     }
 
     /// Confirmations trail by six frames, and a loss is reported past the short-term window:
