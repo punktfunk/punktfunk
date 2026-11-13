@@ -49,6 +49,8 @@ pub const CPU: &str = "M6 4h12a2 2 0 0 1 2 2v12a2 2 0 0 1 -2 2h-12a2 2 0 0 1 -2 
 pub const DOWNLOAD: &str = "M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10L12 15L17 10M12 15L12 3";
 /// Lucide `ellipsis`.
 pub const ELLIPSIS: &str = "M11 12a1 1 0 1 0 2 0a1 1 0 1 0 -2 0M18 12a1 1 0 1 0 2 0a1 1 0 1 0 -2 0M4 12a1 1 0 1 0 2 0a1 1 0 1 0 -2 0";
+/// Lucide `eye-off`.
+pub const EYE_OFF: &str = "M10.733 5.076a10.744 10.744 0 0 1 11.205 6.575 1 1 0 0 1 0 .696 10.747 10.747 0 0 1-1.444 2.49M14.084 14.158a3 3 0 0 1-4.242-4.242M17.479 17.499a10.75 10.75 0 0 1-15.417-5.151 1 1 0 0 1 0-.696 10.75 10.75 0 0 1 4.446-5.143M2 2l20 20";
 /// Lucide `eye`.
 pub const EYE: &str = "M2.062 12.348a1 1 0 0 1 0-.696 10.75 10.75 0 0 1 19.876 0 1 1 0 0 1 0 .696 10.75 10.75 0 0 1-19.876 0M9 12a3 3 0 1 0 6 0a3 3 0 1 0 -6 0";
 /// Lucide `film`.
@@ -168,6 +170,7 @@ pub const ALL: &[(&str, &str, char)] = &[
     ("cpu", CPU, '\u{e0ad}'),
     ("download", DOWNLOAD, '\u{e0b6}'),
     ("ellipsis", ELLIPSIS, '\u{e0ba}'),
+    ("eye-off", EYE_OFF, '\u{e0bf}'),
     ("eye", EYE, '\u{e0be}'),
     ("film", FILM, '\u{e0d4}'),
     ("gamepad-2", GAMEPAD_2, '\u{e0e2}'),
