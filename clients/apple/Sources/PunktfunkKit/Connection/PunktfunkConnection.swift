@@ -1286,14 +1286,9 @@ public final class PunktfunkConnection: @unchecked Sendable {
         // ("denied in the console", "approval timed out", "host busy") surface as
         // `.rejected` instead of the undifferentiated `.connectFailed`.
         var connectStatus: Int32 = 0
-        // `videoCaps` advertises decode/present capability (PUNKTFUNK_VIDEO_CAP_10BIT | _HDR): the
-        // host upgrades to a 10-bit / BT.2020 PQ stream only when set. 0 = 8-bit BT.709 SDR.
-        // `launchID` (a host library id like "steam:570") asks the host to launch that title in
-        // the session; the host resolves it against its own library — nil = the host's default.
-        // `label` is what an unpaired knock shows up as in the host's approval list (and the web
-        // console's outstanding-pairings view): this device's OS name unless the caller overrode
-        // it. Without it the core falls back to environment variables no Apple app has, and every
-        // device pending approval reads "This device".
+        // `videoCaps` gates a 10-bit or PQ stream (0: 8-bit BT.709 SDR); `launchID` (a host
+        // library id like "steam:570") asks the host to launch that title. `label` is the name an
+        // unpaired knock shows in the host's approval list: `DeviceName.current` unless overridden.
         let override = deviceName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let label = override.isEmpty ? DeviceName.current : override
         // LOAD-BEARING: the pair goes out as `0`/`0` unless a non-default format is asked for.
