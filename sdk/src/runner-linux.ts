@@ -128,7 +128,8 @@ export const runSandboxed = (
 		const grants = grantedRoots(config, id);
 		const refused = [
 			...[...(manifest.reads ?? []), ...(manifest.files ?? [])].map((p) => [p, false, false] as const),
-			...(manifest.writes ?? []).map((p) => [p, true, false] as const),
+			// A declared write the owner may still allow is waiting, not refused.
+			...(manifest.writes ?? []).map((p) => [p, true, true] as const),
 			...grants.map((g) => [g.path, g.write, true] as const),
 		]
 			.map(([p, write, operator]) => [expandHome(p, home), write, operator] as const)

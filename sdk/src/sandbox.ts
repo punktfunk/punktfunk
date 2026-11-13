@@ -102,8 +102,9 @@ export const homeLink = (p = "/home"): HomeLink | undefined => {
  * The `bwrap` argv for one plugin: everything before the program it runs.
  *
  * Read-only for the system, the plugin's own code, manifest `reads`, and granted roots; read-write
- * for exactly its state dir, manifest `writes`, grants marked `write: true`, and `/tmp` (VirtualHere's
- * client IPC is a FIFO pair there, which is why the unit keeps the real `/tmp`).
+ * for exactly its state dir, manifest `writes` under `/tmp`, grants marked `write: true`, and `/tmp`
+ * (VirtualHere's client IPC is a FIFO pair there, which is why the unit keeps the real `/tmp`).
+ * Any other manifest write binds through the grant the owner gives its request.
  *
  * The host's `/home` link is mirrored and every host path binds where it resolves, so a canonical
  * grant and a launcher's `$HOME` path both resolve, and `realpath` inside agrees with the host.
@@ -331,17 +332,14 @@ const SECRETS = [
 	".config/gh",
 ];
 
-/** Under the home: the host's own data and state. The host runs the emulators it installs there. */
-const HOST_DATA = [".local/share/punktfunk", ".local/state/punktfunk"];
-
 /**
  * A root no manifest or grant may bind: the host's processes, devices, the session bus and
  * runtime sockets, the home or anything above it, keys, credential stores (`SECRETS`) or a parent
  * of one, and the host's config dir (`configDir`, and `~/.config/punktfunk*` wherever the config
  * lives) or anything above it, which holds every plugin's token. A read-write bind (`write`) also
- * may not hold what the session runs (`STARTUP`) or a parent of one, and only the owner's grant
- * (`operator`) may write the host's data (`HOST_DATA`); reading either is allowed. Checked on the
- * path and on what it resolves to in the runner's view. The host's `bind_refusal` is the other
+ * may not hold what the session runs (`STARTUP`) or a parent of one, and one outside `/tmp` needs
+ * the owner's grant (`operator`): a manifest's `writes` there waits for the owner's yes. Checked on
+ * the path and on what it resolves to in the runner's view. The host's `bind_refusal` is the other
  * half; path-refusal-vectors.json pins the two.
  */
 export const refusedRoot = (
@@ -351,6 +349,15 @@ export const refusedRoot = (
 	write: boolean,
 	operator = false,
 ): boolean => {
+	const real = (p: string) => {
+		try {
+			return fs.realpathSync(p);
+		} catch {
+			return p;
+		}
+	};
+	// `/tmp` by either spelling: where it is a link, a path there resolves outside the name.
+	const tmps = ["/tmp", real("/tmp")];
 	const refused = (p: string, h: string, c: string) => {
 		const under = (base: string) => p === base || p.startsWith(`${base}/`);
 		const above = (base: string) => `${base}/`.startsWith(`${p}/`);
@@ -366,16 +373,9 @@ export const refusedRoot = (
 			[".ssh", ".gnupg"].some((d) => under(path.join(h, d))) ||
 			SECRETS.some(near) ||
 			(write && STARTUP.some(near)) ||
-			(write && !operator && HOST_DATA.some((d) => under(path.join(h, d)))) ||
+			(write && !operator && !tmps.some(under)) ||
 			p.startsWith(path.join(h, ".config", "punktfunk"))
 		);
-	};
-	const real = (p: string) => {
-		try {
-			return fs.realpathSync(p);
-		} catch {
-			return p;
-		}
 	};
 	// Every spelling of every side: on Fedora Atomic `/home` is a link to `/var/home`.
 	const p = path.resolve(abs);

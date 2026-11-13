@@ -45,7 +45,7 @@ nothing the plugin does at runtime widens it. Without it, a plugin does not star
 | `id` | The plugin id: `[a-z][a-z0-9-]*`, at most 64 characters. Use the same string as the plugin's `name`; it keys the plugin's token, state dir and library provider. |
 | `reads` | Paths the plugin reads. Absolute or `~/`-rooted. A missing path is skipped. |
 | `files` | Folders the plugin reads the files of, nothing below them. Use it for a folder that holds a game tree: on Windows a `reads` entry rewrites every file below it, and a `files` entry lands at once. One `*` component names each folder under it: `%ProgramFiles%/EA Games/*/__Installer` is every game's `__Installer`, new ones within a minute. Needs host 0.46; an older host drops the entry, so also ask for it from `wants`. |
-| `writes` | Paths it also writes. |
+| `writes` | Paths it also writes. On Linux each one waits for the owner's yes, except one under `/tmp`: the host asks when the plugin is installed, as a pending folder request, and the folder binds read-write once allowed. On Windows only the operator grants a write. |
 | `network` | `true` to reach the network. |
 | `registry` | Windows registry keys it reads, as `HKLM\Software\…` or `HKCU\Software\…`: a launcher's own key, never one that holds credentials or policy, nor a parent of one. A key under `HKCU`, like a path under `~/`, marks a source that belongs to one account; the host grants it in every signed-in account's hive. |
 | `exec` | Named argv templates the host may run for this plugin's titles. |
@@ -60,8 +60,8 @@ holds for a profile's `AppData\Local\Google\Chrome\User Data`, `AppData\Roaming\
 login, session start or a compositor reload, nor a parent of it: `~/.config/systemd`,
 `~/.config/autostart`, `~/.config/hypr`, `~/.local/bin`, `~/.local/share/applications`,
 `~/.local/share/gnome-shell`, and the shell and X start-up files such as `~/.bashrc`, `~/.profile`
-and `~/.xinitrc`. Reading those with `reads` is fine. A `writes` entry never binds the host's own
-`~/.local/share/punktfunk`: ask for a folder there, and the owner decides.
+and `~/.xinitrc`. Reading those with `reads` is fine. Any other `writes` entry outside `/tmp`
+binds once the owner allows the request the host files for it, and stays unbound after a no.
 
 An `exec` template names a program and its arguments with `{param}` placeholders. A title supplies
 the values, and the host builds the argv itself. `exe` is a program name looked up on `PATH`, or an absolute path inside the plugin's roots; it may

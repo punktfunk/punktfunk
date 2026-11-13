@@ -195,6 +195,8 @@ it:
 - **Declared programs only.** A package declares which programs the host may start for it and the
   shape of their arguments; a library entry only fills in values. Paths outside what the package
   declares or you allowed are refused, and folder grants are read-only unless you allow a write.
+  A write the package declares waits for that yes too and shows as a request; one under `/tmp`
+  doesn't.
 - **A sandbox per plugin.** On Linux each plugin runs in its own
   [bubblewrap](https://github.com/containers/bubblewrap) sandbox: an empty home, no network unless
   its manifest asks, read access to the paths it declared and you allowed, and its own PID namespace,

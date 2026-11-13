@@ -114,7 +114,12 @@ describe("refusedRoot", () => {
 			"/home/u/.config/autostart/../systemd/user",
 		]) {
 			for (const config of [paths.configDir, "/var/lib/punktfunk"]) {
-				expect([p, config, refusedRoot(p, "/home/u", config, true)]).toEqual([p, config, true]);
+				// Even through the owner's grant.
+				expect([p, config, refusedRoot(p, "/home/u", config, true, true)]).toEqual([
+					p,
+					config,
+					true,
+				]);
 				// A launcher reads them (the desktop-entry plugin scans `~/.local/share/applications`).
 				expect([p, config, refusedRoot(p, "/home/u", config, false)]).toEqual([
 					p,
@@ -149,15 +154,31 @@ describe("refusedRoot", () => {
 		}
 	});
 
-	test("writes the host's data folder only through the operator's grant", () => {
-		const app = "/home/u/.local/share/punktfunk/emulators/ryujinx/app";
-		expect(refusedRoot(app, "/home/u", paths.configDir, true)).toBe(true);
-		expect(refusedRoot(app, "/home/u", paths.configDir, true, true)).toBe(false);
-		expect(refusedRoot(app, "/home/u", paths.configDir, false)).toBe(false);
-		const argv = bwrapArgv(manifest({ writes: [app] }), paths);
-		expect(binds(argv, "--bind-try")).toEqual([]);
-		const granted = bwrapArgv(manifest({ writes: [app] }), paths, [{ path: app, write: true }]);
-		expect(binds(granted, "--bind-try")).toEqual([[app, app]]);
+	test("a write binds only through the owner's grant, except under /tmp", () => {
+		for (const p of [
+			"/home/u/Emu",
+			"/home/u/.local/share/punktfunk/emulators/ryujinx/app",
+			"/mnt/games",
+			"/run/media/u/SD",
+			"/tmpx/games",
+		]) {
+			expect([p, refusedRoot(p, "/home/u", paths.configDir, true)]).toEqual([p, true]);
+			expect([p, refusedRoot(p, "/home/u", paths.configDir, true, true)]).toEqual([p, false]);
+			expect([p, refusedRoot(p, "/home/u", paths.configDir, false)]).toEqual([p, false]);
+		}
+		expect(refusedRoot("/tmp/vhclient", "/home/u", paths.configDir, true)).toBe(false);
+		const declared = manifest({ writes: ["~/Emu", "/mnt/games", "/tmp/vhclient"] });
+		const vh: [string, string] = ["/tmp/vhclient", "/tmp/vhclient"];
+		expect(binds(bwrapArgv(declared, paths), "--bind-try")).toEqual([vh]);
+		const granted = bwrapArgv(declared, paths, [
+			{ path: "/home/u/Emu", write: true },
+			{ path: "/mnt/games", write: true },
+		]);
+		expect(binds(granted, "--bind-try")).toEqual([
+			vh,
+			["/home/u/Emu", "/home/u/Emu"],
+			["/mnt/games", "/mnt/games"],
+		]);
 	});
 
 	test("binds nothing spelled with `..`, which the kernel resolves past a planted link", () => {
@@ -205,7 +226,8 @@ describe("refusedRoot", () => {
 			"/usr/share/applications",
 		]) {
 			for (const write of [false, true]) {
-				expect([p, write, refusedRoot(p, "/home/u", paths.configDir, write)]).toEqual([
+				// A write under the home binds through the owner's grant.
+				expect([p, write, refusedRoot(p, "/home/u", paths.configDir, write, true)]).toEqual([
 					p,
 					write,
 					false,

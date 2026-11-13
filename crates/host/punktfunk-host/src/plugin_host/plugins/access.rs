@@ -189,6 +189,9 @@ struct PathPolicy {
     home: PathBuf,
     config_dir: PathBuf,
     runtime_dir: Option<PathBuf>,
+    /// `/tmp`, the one tree a manifest's write binds in without a grant. Spelled as the SDK
+    /// spells it; a test's own files sit under `/tmp` on Linux, so a test moves it.
+    tmp: PathBuf,
 }
 
 impl PathPolicy {
@@ -204,6 +207,7 @@ impl PathPolicy {
             },
             config_dir: real(config_dir),
             runtime_dir: runtime_dir.map(real),
+            tmp: PathBuf::from("/tmp"),
         }
     }
 }
@@ -606,10 +610,6 @@ const SECRET_PATHS: &[&str] = &[
     ".config/gh",
 ];
 
-/// Under the home: the host's own data and state on Linux, where it runs the emulators it
-/// installs. Only the operator's grant writes there. The SDK's `HOST_DATA` is the same list.
-const HOST_DATA_PATHS: &[&str] = &[".local/share/punktfunk", ".local/state/punktfunk"];
-
 /// Inside any Windows profile, folded: browser profiles and credential stores. No root holds one
 /// or a parent of one.
 #[cfg(windows)]
@@ -709,9 +709,9 @@ fn refusal_rule(
     None
 }
 
-/// What a runner may bind: [`refusal_rule`], and no write into the host's own data that the
-/// operator didn't grant. A plugin's request there still pends, since the operator's yes makes the
-/// grant; a manifest's `writes` never binds there. The SDK's `refusedRoot` is this rule's twin.
+/// What a runner may bind: [`refusal_rule`], and a write only through the operator's grant,
+/// except under `/tmp` (VirtualHere's client FIFOs). A manifest's other `writes` become requests
+/// ([`AccessStore::request_declared_writes`]). The SDK's `refusedRoot` is this rule's twin.
 fn bind_refusal(
     spelled: &Path,
     canonical: &Path,
@@ -721,12 +721,7 @@ fn bind_refusal(
     facts: PathFacts,
 ) -> Option<&'static str> {
     refusal_rule(spelled, canonical, write, operator, policy, facts).or_else(|| {
-        let home = &policy.home;
-        let host_data = !home.as_os_str().is_empty()
-            && HOST_DATA_PATHS
-                .iter()
-                .any(|d| within(canonical, &home.join(d)));
-        (write && !operator && host_data).then_some("protected_path")
+        (write && !operator && !within(canonical, &policy.tmp)).then_some("not_granted")
     })
 }
 
@@ -990,7 +985,7 @@ impl AccessStore {
                 let root = |p: &String, w, f| (home_path(p, &self.policy), w, f);
                 let reads = m.reads.iter().map(|p| root(p, false, false));
                 let files = m.files.iter().map(|p| root(p, false, true));
-                let writes = m.writes.iter().map(|p| root(p, true, false));
+                let writes = self.bound_writes(&m).map(|r| (r, true, false));
                 reads.chain(files).chain(writes).collect()
             })
             .unwrap_or_default();
@@ -1071,6 +1066,69 @@ impl AccessStore {
             })
             .collect();
         self.request_paths(id, &asked, reason)
+    }
+
+    /// Each declared write outside `/tmp` as the plugin's own write request: a pending row the
+    /// operator answers, unless the path is refused, granted, pending or denied, or a cap is
+    /// reached. Writes the pending file only when a row is new. `true` then.
+    #[cfg_attr(
+        not(target_os = "linux"),
+        allow(dead_code, reason = "Linux binds declared writes")
+    )]
+    pub fn request_declared_writes(
+        &self,
+        manifests: &BTreeMap<String, PluginManifest>,
+    ) -> io::Result<bool> {
+        let _guard = self.exclusive()?;
+        let access = self.load_access()?;
+        let mut pending_all = self.load_pending();
+        let mut changed = false;
+        for (id, m) in manifests {
+            let entry = access.get(id).cloned().unwrap_or_default();
+            let mut pending = pending_all.remove(id).unwrap_or_default();
+            for p in &m.writes {
+                let spelled = home_path(p, &self.policy);
+                if spelled
+                    .canonicalize()
+                    .is_ok_and(|c| within(&c, &self.policy.tmp))
+                {
+                    continue;
+                }
+                let raw = spelled.to_string_lossy();
+                self.request_one(
+                    id,
+                    &raw,
+                    true,
+                    false,
+                    &None,
+                    &[],
+                    &entry,
+                    &mut pending,
+                    &mut changed,
+                );
+            }
+            if !pending.is_empty() {
+                pending_all.insert(id.clone(), pending);
+            }
+        }
+        if changed {
+            self.write_pending(&pending_all)?;
+        }
+        Ok(changed)
+    }
+
+    /// The manifest's `writes` that bind with no grant: those under `/tmp`. Any other binds once
+    /// the operator allows the request it files.
+    fn bound_writes<'a>(&'a self, m: &'a PluginManifest) -> impl Iterator<Item = PathBuf> + 'a {
+        m.writes
+            .iter()
+            .map(|p| home_path(p, &self.policy))
+            .filter(|r| {
+                within(
+                    &r.canonicalize().unwrap_or_else(|_| r.clone()),
+                    &self.policy.tmp,
+                )
+            })
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1275,17 +1333,12 @@ impl AccessStore {
         })
     }
 
-    /// Whether plugin `id` may write `path`: under a writable root its manifest declares or a
-    /// write grant. A path that doesn't resolve is checked as given.
+    /// Whether plugin `id` may write `path`: under a write grant, or a declared write that binds
+    /// with none ([`Self::bound_writes`]). A path that doesn't resolve is checked as given.
     pub fn may_write(&self, id: &str, path: &Path) -> bool {
         let _guard = self.lock.lock().unwrap_or_else(|e| e.into_inner());
         let declared: Vec<Declared> = crate::plugins::manifest::for_provider(id)
-            .map(|m| {
-                m.writes
-                    .iter()
-                    .map(|p| (home_path(p, &self.policy), true, false))
-                    .collect()
-            })
+            .map(|m| self.bound_writes(&m).map(|r| (r, true, false)).collect())
             .unwrap_or_default();
         let grants = self
             .granted()
@@ -1513,7 +1566,8 @@ impl AccessStore {
     }
 
     /// Every real path some sandbox binds: manifest `reads`/`writes` plus all grants, each
-    /// judged on its real path so a link cannot bring in `~/.ssh`. A path spelled through a
+    /// judged on its real path by [`bind_refusal`], so a link cannot bring in `~/.ssh` and a
+    /// declared write outside `/tmp` waits for its grant. A path spelled through a
     /// link adds the real directory holding that link, which bwrap follows in the runner.
     /// A root inside a plugin-writable root is dropped: that plugin could swap it for a link.
     pub fn runner_roots(&self, manifests: &BTreeMap<String, PluginManifest>) -> Vec<RunnerRoot> {
@@ -1957,7 +2011,7 @@ mod tests {
         // Canonicalize once: on macOS tempdir is a `/var` symlink to `/private/var`, and the
         // policy compares canonical paths.
         let root = tmp.path().canonicalize().unwrap();
-        for d in ["home", "config", "runtime", "store", "home/.config"] {
+        for d in ["home", "config", "runtime", "store", "home/.config", "tmp"] {
             std::fs::create_dir_all(root.join(d)).unwrap();
         }
         Fixture {
@@ -1966,6 +2020,7 @@ mod tests {
                 home: root.join("home"),
                 config_dir: root.join("config"),
                 runtime_dir: Some(root.join("runtime")),
+                tmp: root.join("tmp"),
             },
             _tmp: tmp,
         }
@@ -2127,8 +2182,8 @@ mod tests {
         const HOME: &str = "/home/u";
         const USER_CONFIG: &str = "/home/u/.config/punktfunk";
         const SYSTEM_CONFIG: &str = "/var/lib/punktfunk";
-        // `(config dir, read-only roots, read-write roots, the operator's read-write roots)`;
-        // every start-up location and credential store joins the first two lists below.
+        // `(config dir, read-only roots, the operator's read-write roots, a manifest's read-write
+        // roots)`; every start-up location and credential store joins the first two lists below.
         type Row<'a> = (&'a str, &'a [&'a str], &'a [&'a str], &'a [&'a str]);
         let rows: &[Row] = &[
             (
@@ -2209,13 +2264,19 @@ mod tests {
                     "/home/u/.local/share/punktfunk/emulators/ryujinx/app",
                     "/home/u/.local/state/punktfunk",
                     "/home/u/.local/share/punktfunk-extra",
+                    "/mnt/games1",
+                    "/run/media/u/SD",
+                    "/tmp/vhclient",
                 ],
                 &[
-                    "/home/u/.local/share/punktfunk/emulators/ryujinx/app",
-                    "/home/u/.local/state/punktfunk",
-                    "/home/u/.config/hypr",
-                    "/home/u/.aws",
                     "/home/u/Games",
+                    "/home/u/.local/share/punktfunk/emulators/ryujinx/app",
+                    "/home/u/.config/hypr",
+                    "/tmp/vhclient",
+                    "/tmp/vhclient_response",
+                    "/tmpx/games",
+                    "/mnt/games1",
+                    "/run/media/u/SD",
                 ],
             ),
             (
@@ -2247,19 +2308,21 @@ mod tests {
                     "/home/u/Games",
                     "/home/u/.local/share/punktfunk/emulators/ryujinx/app",
                 ],
-                &[],
+                &["/home/u/Games", "/mnt/games1"],
             ),
         ];
+        // Every root is the operator's own: what ownership refuses, the SDK can't see.
         let facts = PathFacts {
             is_dir: true,
-            owner_uid: None,
+            owner_uid: Some(crate::geteuid()),
         };
         let mut lines = Vec::new();
-        for (config_dir, reads, writes, owned) in rows {
+        for (config_dir, reads, owned, declared) in rows {
             let policy = PathPolicy {
                 home: HOME.into(),
                 config_dir: (*config_dir).into(),
                 runtime_dir: Some("/run/user/1000".into()),
+                tmp: "/tmp".into(),
             };
             let listed = || {
                 STARTUP_PATHS
@@ -2272,14 +2335,17 @@ mod tests {
                 .iter()
                 .map(row(false, false))
                 .chain(listed().map(|p| (false, false, p)))
-                .chain(writes.iter().map(row(true, false)))
-                .chain(listed().map(|p| (true, false, p)))
-                .chain(owned.iter().map(row(true, true)));
+                .chain(owned.iter().map(row(true, true)))
+                .chain(listed().map(|p| (true, true, p)))
+                .chain(declared.iter().map(row(true, false)));
             for (write, operator, path) in rows {
                 let p = Path::new(&path);
                 let rule = bind_refusal(p, p, write, operator, &policy, facts);
                 assert!(
-                    matches!(rule, None | Some("broad_root" | "protected_path")),
+                    matches!(
+                        rule,
+                        None | Some("broad_root" | "protected_path" | "not_granted")
+                    ),
                     "{path}: {rule:?}"
                 );
                 lines.push(format!(
@@ -2415,6 +2481,7 @@ mod tests {
         let games = f.dir("data/games");
         f.store().grant("demo", &rom, false, "cli").unwrap();
         f.store().grant("demo", &games, false, "cli").unwrap();
+        // `~/rw` is a declared write under the home: it binds once the operator allows it.
         let roots = f
             .store()
             .runner_roots(&manifest(&["~/.config/retroarch", "relative"], &["~/rw"]));
@@ -2425,7 +2492,6 @@ mod tests {
                 (games.to_string_lossy().into_owned(), false),
                 (h(".config/retroarch"), false),
                 (h("Emu"), false),
-                (h("rw"), true),
             ]
         );
     }
@@ -2453,7 +2519,8 @@ mod tests {
         let local = f.dir("home/.local");
         f.dir("home/.local/bin");
         f.dir("home/.config/systemd/user");
-        f.dir("home/Games");
+        let games = f.dir("home/Games");
+        f.store().grant("demo", &games, true, "cli").unwrap();
         let h = |rel: &str| f.policy.home.join(rel).to_string_lossy().into_owned();
         let roots = f.store().runner_roots(&manifest(
             &["~/.local/share/applications", "~/.local/bin"],
@@ -2480,24 +2547,70 @@ mod tests {
         }
         assert_eq!(f.request(apps.to_str().unwrap()), "pending");
         f.store().grant("demo", &apps, false, "cli").unwrap();
-        assert_eq!(f.store().grants_for("demo").len(), 1);
+        assert_eq!(f.store().grants_for("demo").len(), 2);
     }
 
-    /// The host runs the emulators it installs from its data folder: a manifest's `writes` never
-    /// binds there, while a plugin's request pends and the operator's yes binds.
+    /// A declared write binds nothing by itself, in the home or on a second drive: it files one
+    /// pending write request, the operator's yes binds it read-write, and a no sticks. A second
+    /// pass files none. One under `/tmp` binds as declared and files nothing.
     #[cfg(unix)]
     #[test]
-    fn only_the_operators_grant_writes_into_the_hosts_data() {
+    fn a_declared_write_waits_for_the_operators_yes() {
         let f = fixture();
-        let app = f.dir("home/.local/share/punktfunk/emulators/ryujinx/app");
-        let declared = manifest(&[], &["~/.local/share/punktfunk/emulators/ryujinx/app"]);
-        assert_eq!(targets(&f.store().runner_roots(&declared)), vec![]);
-        assert_eq!(f.request_w(app.to_str().unwrap(), true), "pending");
-        f.store().grant("demo", &app, true, "console").unwrap();
-        assert_eq!(
-            targets(&f.store().runner_roots(&declared)),
-            vec![(app.to_string_lossy().into_owned(), true)]
+        let path = |d: &Path| d.to_string_lossy().into_owned();
+        let emu = f.dir("home/.local/share/punktfunk/emulators/ryujinx/app");
+        let saves = f.dir("home/Saves");
+        let drive = f.dir("data/games");
+        let fifo = f.dir("tmp/vhclient");
+        f.dir("home/.config/hypr");
+        let declared = manifest(
+            &[],
+            &[
+                "~/.local/share/punktfunk/emulators/ryujinx/app",
+                "~/Saves",
+                &path(&drive),
+                &path(&fifo),
+                "~/.config/hypr",
+            ],
         );
+        let s = f.store();
+        assert_eq!(
+            targets(&s.runner_roots(&declared)),
+            vec![(path(&fifo), true)]
+        );
+        assert!(s.request_declared_writes(&declared).unwrap());
+        assert!(
+            !s.request_declared_writes(&declared).unwrap(),
+            "a second pass files no row"
+        );
+        let rows = s.snapshot_for("demo").unwrap().pending;
+        let asked: Vec<(String, bool)> = rows.iter().map(|r| (r.path.clone(), r.write)).collect();
+        assert_eq!(
+            asked,
+            vec![
+                (path(&emu), true),
+                (path(&saves), true),
+                (path(&drive), true)
+            ]
+        );
+        s.decide("demo", &path(&emu), Decision::Allow, "console")
+            .unwrap();
+        s.decide("demo", &path(&drive), Decision::Allow, "console")
+            .unwrap();
+        s.decide("demo", &path(&saves), Decision::Deny, "console")
+            .unwrap();
+        assert!(
+            !s.request_declared_writes(&declared).unwrap(),
+            "a no sticks"
+        );
+        assert!(s.snapshot_for("demo").unwrap().pending.is_empty());
+        let mut bound = vec![
+            (path(&drive), true),
+            (path(&emu), true),
+            (path(&fifo), true),
+        ];
+        bound.sort();
+        assert_eq!(targets(&s.runner_roots(&declared)), bound);
     }
 
     /// Browser profiles, keyrings and cloud credentials never bind, nor does a parent of one; a
@@ -2534,10 +2647,12 @@ mod tests {
         let f = fixture();
         f.dir("home/rw/inner");
         f.dir("home/ro/rw");
-        let roots = f.store().runner_roots(&manifest(
-            &["~/rw/inner", "~/ro", "~/dup"],
-            &["~/rw", "~/ro/rw", "~/dup"],
-        ));
+        for rel in ["home/rw", "home/ro/rw", "home/dup"] {
+            f.store().grant("demo", &f.dir(rel), true, "cli").unwrap();
+        }
+        let roots = f
+            .store()
+            .runner_roots(&manifest(&["~/rw/inner", "~/ro", "~/dup"], &[]));
         let h = |rel: &str| f.policy.home.join(rel).to_string_lossy().into_owned();
         // `~/rw/inner` sits in a writable root; a write root inside a read-only one stays.
         assert_eq!(
@@ -3184,6 +3299,9 @@ mod tests {
         let one = [spelled.as_str()];
         assert_eq!(kinds(&declared(&one, &[], &[])), (false, true));
         assert_eq!(kinds(&declared(&one, &one, &[])), (false, false));
+        // A declared write binds through the operator's grant.
+        assert_eq!(kinds(&declared(&one, &[], &one)), (false, true));
+        s.grant("demo", &lib, true, "cli").unwrap();
         assert_eq!(kinds(&declared(&one, &[], &one)), (true, false));
     }
 

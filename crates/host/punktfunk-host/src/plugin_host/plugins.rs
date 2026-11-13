@@ -753,7 +753,8 @@ pub(crate) fn publish_sandbox_override() {
 /// Give the runner every root a plugin declared or was granted: on Linux the unit's drop-in,
 /// which bwrap binds from and whose empty home hides the rest, restarting the runner when the
 /// set changed; on Windows an ACE per root for the runner's account, stripped when its plugin
-/// goes. `true` when a root or ACE changed.
+/// goes. On Linux a declared write outside `/tmp` first files the request the operator answers.
+/// `true` when a root or ACE changed.
 pub(crate) fn converge_runner_roots() -> bool {
     // Tests never touch the operator's systemd config or a folder's ACL; macOS has no runner.
     if cfg!(test) || !(cfg!(target_os = "linux") || cfg!(windows)) || !runtime_status().installed {
@@ -766,7 +767,12 @@ pub(crate) fn converge_runner_roots() -> bool {
         return false;
     };
     let manifests = manifest::runner_plugins();
-    let roots = access::AccessStore::open(pf_paths::config_dir()).runner_roots(&manifests);
+    let store = access::AccessStore::open(pf_paths::config_dir());
+    #[cfg(target_os = "linux")]
+    if let Err(e) = store.request_declared_writes(&manifests) {
+        tracing::warn!(error = %e, "declared plugin writes not filed as requests");
+    }
+    let roots = store.runner_roots(&manifests);
     match plat::converge_runner_roots(&roots, &home, &manifests) {
         Ok(true) => {
             tracing::info!(roots = roots.len(), "plugin runner roots updated");
