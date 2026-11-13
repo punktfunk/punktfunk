@@ -26,16 +26,16 @@ pub(super) struct SealJob {
 
 /// A persistent worker behind a bound-1 rendezvous, not a per-frame spawn. Drop closes
 /// the channel and the worker exits.
-pub(super) struct Lane<J> {
+pub(super) struct JobLane<J> {
     pub(super) to_worker: std::sync::mpsc::SyncSender<J>,
     pub(super) from_worker: std::sync::mpsc::Receiver<J>,
 }
 
 /// Seals a chunk, or the back half of a frame.
-pub(super) type SealLane = Lane<SealJob>;
+pub(super) type SealLane = JobLane<SealJob>;
 
 /// Computes a pipelined frame's parity ([`parity_beside`]).
-pub(super) type ParityLane = Lane<ParityJob>;
+pub(super) type ParityLane = JobLane<ParityJob>;
 
 static LANE_BOOST: std::sync::OnceLock<fn()> = std::sync::OnceLock::new();
 
@@ -45,7 +45,7 @@ pub fn set_lane_boost(boost: fn()) {
     let _ = LANE_BOOST.set(boost);
 }
 
-impl<J: Send + 'static> Lane<J> {
+impl<J: Send + 'static> JobLane<J> {
     /// Thread `name` runs the [`set_lane_boost`] hook, then `work` on each job, handing it
     /// back, until the lane drops. `None` if the thread can't start.
     fn start(name: &str, mut work: impl FnMut(&mut J) + Send + 'static) -> Option<Self> {
@@ -65,7 +65,7 @@ impl<J: Send + 'static> Lane<J> {
                 }
             })
             .ok()?;
-        Some(Lane {
+        Some(JobLane {
             to_worker,
             from_worker,
         })
@@ -74,7 +74,7 @@ impl<J: Send + 'static> Lane<J> {
 
 impl SealLane {
     pub(super) fn spawn(crypto: std::sync::Arc<SessionCrypto>) -> Option<SealLane> {
-        Lane::start("punktfunk-seal2", move |job: &mut SealJob| {
+        JobLane::start("punktfunk-seal2", move |job: &mut SealJob| {
             let t0 = job.timed.then(std::time::Instant::now);
             job.result = seal_wire_slice(&crypto, &mut job.bufs, job.seq_base);
             if let Some(t0) = t0 {
@@ -99,7 +99,7 @@ pub(super) struct ParityJob {
 impl ParityLane {
     /// Shares the session's coder: one frame at a time uses its work buffers.
     pub(super) fn spawn(coder: std::sync::Arc<dyn ErasureCoder>) -> Option<ParityLane> {
-        Lane::start("punktfunk-fec", move |job: &mut ParityJob| {
+        JobLane::start("punktfunk-fec", move |job: &mut ParityJob| {
             let ns = std::sync::atomic::AtomicU64::new(0);
             let timed = TimedCoder {
                 inner: coder.as_ref(),
