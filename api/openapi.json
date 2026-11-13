@@ -4472,7 +4472,7 @@
           "library"
         ],
         "summary": "Read the game overrides",
-        "description": "The shared overrides, each game's entry and each source's, as `library-overrides.json`\nholds them. `GET /library` carries what each title resolves to. With `as`, the profile's own\nfile: where it has an entry for a game or its source, that entry wins over the box's. Beside\nit, `box_sets`: the box's shared overrides it may point at, which only the console changes.",
+        "description": "The shared overrides, each game's entry and each source's, as `library-overrides.json`\nholds them. `GET /library` carries what each title resolves to. With `as`, the profile's own\nfile: where it has an entry for a game or its source, that entry wins over the box's. Beside\nit, `box_sets`: the box's shared overrides it may point at, which only the console changes,\nand `box_games` and `box_sources`: the box's entries for what that profile's library lists.",
         "operationId": "getLibraryOverrides",
         "parameters": [
           {
@@ -10282,7 +10282,7 @@
           "store"
         ],
         "summary": "Install a plugin",
-        "description": "`{source, id}` installs the catalog pin after re-checking integrity, or `{spec,\naccept_unverified: true}` installs unreviewed code the operator owns. `202` + job id; watch at\n`GET /store/jobs/{id}`. A Windows seat host installs none: the box's runner, which it shares,\nnever reads them. A seat host on a person's own account installs from the built-in source\nalone: anything else would run code the box chose as that person.\n\nOne package operation at a time (`409` otherwise): `bun` shares a lockfile and `node_modules`.",
+        "description": "`{source, id}` installs the catalog pin after re-checking integrity, or `{spec,\naccept_unverified: true}` installs unreviewed code the operator owns. `202` + job id; watch at\n`GET /store/jobs/{id}`. A Windows seat host installs none: the box's runner, which it shares,\nnever reads them. A seat host on a person's own account installs for that person's own\nsession, from the built-in source alone: what it installs runs as them.\n\nOne package operation at a time (`409` otherwise): `bun` shares a lockfile and `node_modules`.",
         "operationId": "installPlugin",
         "requestBody": {
           "content": {
@@ -10553,7 +10553,7 @@
           "store"
         ],
         "summary": "Plugin runner state",
-        "description": "Plugins run only while the runner is on. The runner discovers units at startup, so a freshly\ninstalled plugin may not have appeared yet.",
+        "description": "Plugins run only while the runner is on. The runner discovers units at startup, so a freshly\ninstalled plugin may not have appeared yet. On a seat host on a person's own account the\nrunner is theirs: any lane but their own session reads it as not installed.",
         "operationId": "getPluginRuntime",
         "responses": {
           "200": {
@@ -10594,6 +10594,7 @@
           "store"
         ],
         "summary": "Turn the plugin runner on or off",
+        "description": "On a seat host on a person's own account only their own session switches it.",
         "operationId": "setPluginRuntime",
         "requestBody": {
           "content": {
@@ -12703,7 +12704,7 @@
               },
               "person": {
                 "type": "boolean",
-                "description": "A seat host's own title its person wrote, in their own session. On a person's own account\na title without it is neither listed nor started. Set by the host, never from a body.",
+                "description": "A seat host's own title its person wrote, in their own session, or one of their plugins\npublished. On a person's own account a title without it is neither listed nor started.\nSet by the host, never from a body.",
                 "readOnly": true
               },
               "prep": {
@@ -16928,6 +16929,19 @@
           {
             "type": "object",
             "properties": {
+              "box_games": {
+                "type": [
+                  "object",
+                  "null"
+                ],
+                "description": "Beside `box_sets`: the box's entries for the games that profile's library lists, which\napply where it has none of its own.",
+                "additionalProperties": {
+                  "$ref": "#/components/schemas/OverrideEntry"
+                },
+                "propertyNames": {
+                  "type": "string"
+                }
+              },
               "box_sets": {
                 "type": [
                   "object",
@@ -16936,6 +16950,19 @@
                 "description": "With `as` naming a profile with a layer of its own: the box's shared overrides by id,\nwhich that profile's entries may name with `set`. Read only here.",
                 "additionalProperties": {
                   "$ref": "#/components/schemas/GameOverrides"
+                },
+                "propertyNames": {
+                  "type": "string"
+                }
+              },
+              "box_sources": {
+                "type": [
+                  "object",
+                  "null"
+                ],
+                "description": "Beside `box_sets`: the box's entries for the sources with a title in that library.",
+                "additionalProperties": {
+                  "$ref": "#/components/schemas/OverrideEntry"
                 },
                 "propertyNames": {
                   "type": "string"

@@ -72,8 +72,9 @@ The profile's card under **Profiles** lists each device signed in to it, as **Si
 - **Nothing is set up in the account.** Punktfunk makes no user or group and doesn't prepare their
   home; the apps the profile runs write there what they always write. **Remove** ends only the
   profile's own session. The account and its files stay.
-- **The console manages nothing inside.** No plugin runs there, and the console adds no plugin,
-  folder access or emulator: **Plugins** says so for that profile. It sets no
+- **The console manages nothing inside.** The console adds no plugin, folder access or emulator
+  there: **Plugins** says so for that profile. On Linux the person installs plugins from the
+  Plugins page of their own console, and only those run, as them. It sets no
   [hooks](/docs/automation#hooks) there. The profile's [own library](/docs/profiles#each-profiles-own-library)
   is kept on the host, not in the account. A game from the box's library starts without the
   commands the owner set to run before it, and a tile that is itself a command isn't offered:

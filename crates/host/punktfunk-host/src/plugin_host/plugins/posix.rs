@@ -1,10 +1,40 @@
 //! The plugin runner off Windows: a `punktfunk-scripting` wrapper found by rung, driven as a
 //! systemd USER unit on Linux. Other Unix hosts resolve the runner but cannot run it.
+//!
+//! On a person's own account the unit is their seat's instance of `punktfunk-scripting-seat@`,
+//! which reads the seat's config dir. The seat's host starts and stops it in their user manager
+//! and never enables it; its roots drop-in is a runtime one. Their own `punktfunk-scripting` is
+//! never named.
 
 use super::*;
 
+/// The runner this host drives, fixed for the process ([`unit_for`]).
 #[cfg(target_os = "linux")]
-const UNIT: &str = "punktfunk-scripting";
+fn unit() -> &'static str {
+    static UNIT: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    UNIT.get_or_init(|| {
+        let seat = super::person_runner()
+            .then(|| pf_paths::seat::seat_id().ok().flatten().unwrap_or_default());
+        unit_for(seat.as_deref())
+    })
+}
+
+/// The operator's own `punktfunk-scripting`, or the instance for seat `seat` on a person's own
+/// account. A seat without an id names the bare template, which systemd refuses to run.
+#[cfg(any(test, target_os = "linux"))]
+fn unit_for(seat: Option<&str>) -> String {
+    match seat {
+        Some(id) => format!("punktfunk-scripting-seat@{id}"),
+        None => "punktfunk-scripting".into(),
+    }
+}
+
+/// On a person's own account, the file in the seat's config dir that keeps their seat's runner
+/// on. Their manager runs it only while the seat's host has started it.
+#[cfg(target_os = "linux")]
+fn person_switch() -> Option<std::path::PathBuf> {
+    super::person_runner().then(|| pf_paths::config_dir().join("plugin-runner-on"))
+}
 
 /// Wrapper name every non-Windows package installs (`/usr/bin`, `~/.local/bin`, `$out/bin`).
 const RUNNER_BIN: &str = "punktfunk-scripting";
@@ -121,26 +151,45 @@ pub(super) fn revoke(_plugin: &str, _dir: &std::path::Path, _files: bool) -> Res
 
 pub(super) fn converge_runner_acls(_status: &RuntimeStatus) {}
 
-/// Lifts a mask left by [`disable`] first; a no-op when there is none.
+/// Lifts a mask left by [`disable`] first; a no-op when there is none. A person's seat runner
+/// is started, never enabled: its switch is [`person_switch`].
 #[cfg(target_os = "linux")]
 pub(super) fn enable() -> Result<()> {
-    run_systemctl(&["unmask", UNIT])?;
-    run_systemctl(&["enable", "--now", UNIT])?;
-    println!("Plugin runner enabled and started ({UNIT}).");
+    let unit = unit();
+    if let Some(switch) = person_switch() {
+        pf_paths::replace_file(&switch, b"")
+            .with_context(|| format!("replace {}", switch.display()))?;
+        run_systemctl(&["start", unit])?;
+    } else {
+        run_systemctl(&["unmask", unit])?;
+        run_systemctl(&["enable", "--now", unit])?;
+    }
+    println!("Plugin runner enabled and started ({unit}).");
     Ok(())
 }
 
 /// The packages enable the unit in GLOBAL scope (`/etc/systemd/user`), which a user-scope
 /// disable cannot undo: `is-enabled` keeps answering `enabled`. Mask is the per-user opt-out
 /// there. The SteamOS install writes the unit into `~/.config/systemd/user`, where mask is
-/// refused, so mask only when disable left it enabled.
+/// refused, so mask only when disable left it enabled. A person's seat runner loses its switch
+/// and stops.
 #[cfg(target_os = "linux")]
 pub(super) fn disable() -> Result<()> {
-    run_systemctl(&["disable", "--now", UNIT])?;
-    if systemctl_output(&["is-enabled", UNIT]).as_deref() == Some("enabled") {
-        run_systemctl(&["mask", UNIT])?;
+    let unit = unit();
+    if let Some(switch) = person_switch() {
+        match std::fs::remove_file(&switch) {
+            Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
+                return Err(e).with_context(|| format!("remove {}", switch.display()));
+            }
+            _ => run_systemctl(&["stop", unit])?,
+        }
+    } else {
+        run_systemctl(&["disable", "--now", unit])?;
+        if systemctl_output(&["is-enabled", unit]).as_deref() == Some("enabled") {
+            run_systemctl(&["mask", unit])?;
+        }
     }
-    println!("Plugin runner stopped and disabled ({UNIT}).");
+    println!("Plugin runner stopped and disabled ({unit}).");
     Ok(())
 }
 
@@ -150,22 +199,35 @@ pub(super) fn disable() -> Result<()> {
 const RUNNER_FAILING: &str =
     "The plugin runner isn't running. Troubleshooting → Plugins shows why.";
 
+/// A person's seat runner is installed when its template is, and on when its switch is.
 #[cfg(target_os = "linux")]
 pub(super) fn runtime_status() -> RuntimeStatus {
-    let enabled_raw = systemctl_output(&["is-enabled", UNIT]);
-    let active = systemctl_output(&["is-active", UNIT]).unwrap_or_default();
-    // `is-enabled` is `not-found` when the unit file is missing; the runner payload
-    // is the other half of "can we install plugins".
-    let unit_known = enabled_raw.as_deref().is_some_and(|s| s != "not-found");
-    let installed = unit_known || runner_command().is_ok();
+    let unit = unit();
+    let active = systemctl_output(&["is-active", unit]).unwrap_or_default();
+    let (installed, enabled) = match person_switch() {
+        Some(switch) => {
+            let load = systemctl_output(&["show", unit, "-p", "LoadState", "--value"]);
+            (load.as_deref() == Some("loaded"), switch.exists())
+        }
+        None => {
+            // `is-enabled` is `not-found` when the unit file is missing; the runner payload
+            // is the other half of "can we install plugins".
+            let enabled_raw = systemctl_output(&["is-enabled", unit]);
+            let unit_known = enabled_raw.as_deref().is_some_and(|s| s != "not-found");
+            (
+                unit_known || runner_command().is_ok(),
+                enabled_raw.as_deref() == Some("enabled"),
+            )
+        }
+    };
     let failing = active == "failed"
-        || systemctl_output(&["show", UNIT, "-p", "SubState", "--value"]).as_deref()
+        || systemctl_output(&["show", unit, "-p", "SubState", "--value"]).as_deref()
             == Some("auto-restart");
     RuntimeStatus {
         installed,
-        enabled: enabled_raw.as_deref() == Some("enabled"),
+        enabled,
         running: active == "active",
-        unit: UNIT,
+        unit,
         principal: None,
         detail: if !installed {
             RUNNER_MISSING.into()
@@ -189,12 +251,25 @@ pub(super) fn runtime_status() -> RuntimeStatus {
     }
 }
 
+/// `systemctl --user <args>` in the stored session. It reaches the manager on its private socket
+/// in `XDG_RUNTIME_DIR`. A person's seat host sits on a D-Bus of its own, where their manager
+/// isn't, so its fallback is their own user bus.
+#[cfg(target_os = "linux")]
+fn systemctl(args: &[&str]) -> Command {
+    let mut cmd = Command::new("systemctl");
+    cmd.arg("--user").args(args);
+    if super::person_runner() {
+        cmd.env_remove("DBUS_SESSION_BUS_ADDRESS");
+    }
+    pf_host_config::session::export_to(&mut cmd);
+    cmd
+}
+
 #[cfg(target_os = "linux")]
 fn run_systemctl(args: &[&str]) -> Result<()> {
-    let status =
-        pf_host_config::session::export_to(Command::new("systemctl").arg("--user").args(args))
-            .status()
-            .context("run systemctl (is systemd available in this session?)")?;
+    let status = systemctl(args)
+        .status()
+        .context("run systemctl (is systemd available in this session?)")?;
     if !status.success() {
         bail!(
             "systemctl --user {} failed — is the punktfunk-scripting package installed?",
@@ -208,10 +283,7 @@ fn run_systemctl(args: &[&str]) -> Result<()> {
 /// non-zero for a normal "inactive"/"disabled", so the text is the answer.
 #[cfg(target_os = "linux")]
 fn systemctl_output(args: &[&str]) -> Option<String> {
-    let out =
-        pf_host_config::session::export_to(Command::new("systemctl").arg("--user").args(args))
-            .output()
-            .ok()?;
+    let out = systemctl(args).output().ok()?;
     let s = String::from_utf8_lossy(&out.stdout).trim().to_string();
     if s.is_empty() {
         None
@@ -224,7 +296,7 @@ fn systemctl_output(args: &[&str]) -> Option<String> {
 /// environment says nothing about it: the runner reads only what its unit sets.
 #[cfg(target_os = "linux")]
 pub(super) fn runner_sandbox_off() -> bool {
-    systemctl_output(&["show", UNIT, "-p", "Environment", "--value"]).is_some_and(|env| {
+    systemctl_output(&["show", unit(), "-p", "Environment", "--value"]).is_some_and(|env| {
         env.split_whitespace().any(|kv| {
             kv.strip_prefix("PUNKTFUNK_PLUGIN_SANDBOX=")
                 .is_some_and(|v| matches!(v.trim_matches('"'), "0" | "off" | "false"))
@@ -234,32 +306,42 @@ pub(super) fn runner_sandbox_off() -> bool {
 
 #[cfg(target_os = "linux")]
 pub(super) fn restart_runtime() -> Result<()> {
-    run_systemctl(&["restart", UNIT])
+    run_systemctl(&["restart", unit()])
 }
 
 /// The runner unit's drop-in naming every root a sandbox binds; its tmpfs home hides the rest.
 #[cfg(target_os = "linux")]
 const ROOTS_DROPIN: &str = "50-plugin-roots.conf";
 
-/// Install the roots drop-in, then reload and restart the runner when it changed.
+/// Install the roots drop-in, then reload and restart the runner when it changed. A person's
+/// seat runner takes it in their runtime dir, which their manager reads and their login clears,
+/// and also has the seats' state hidden.
 #[cfg(target_os = "linux")]
 pub(super) fn converge_runner_roots(
     roots: &[access::RunnerRoot],
     home: &std::path::Path,
     _manifests: &std::collections::BTreeMap<String, manifest::PluginManifest>,
 ) -> Result<bool> {
-    // `home` is `$HOME`, the fallback `xdg_home` reads.
-    let config = pf_paths::xdg_home("XDG_CONFIG_HOME", ".config");
-    let dir = config.join(format!("systemd/user/{UNIT}.service.d"));
-    let path = dir.join(ROOTS_DROPIN);
-    let body = render_roots(roots, &hidden_roots(home));
+    let unit = unit();
+    let mut hidden = hidden_roots(home);
+    let units = if person_switch().is_some() {
+        hidden.push(pf_seats::linux::STATE_DIR.into());
+        let runtime = pf_host_config::session::runtime_dir()
+            .context("find the runtime dir of the person's user manager")?;
+        std::path::PathBuf::from(runtime).join("systemd/user")
+    } else {
+        // `home` is `$HOME`, the fallback `xdg_home` reads.
+        pf_paths::xdg_home("XDG_CONFIG_HOME", ".config").join("systemd/user")
+    };
+    let path = units.join(format!("{unit}.service.d")).join(ROOTS_DROPIN);
+    let body = render_roots(roots, &hidden);
     if std::fs::read_to_string(&path).is_ok_and(|old| old == body) {
         return Ok(false);
     }
     pf_paths::replace_file(&path, body.as_bytes())
         .with_context(|| format!("replace {}", path.display()))?;
     run_systemctl(&["daemon-reload"])?;
-    run_systemctl(&["--no-block", "try-restart", UNIT])?;
+    run_systemctl(&["--no-block", "try-restart", unit])?;
     Ok(true)
 }
 
@@ -476,6 +558,37 @@ mod tests {
         ] {
             assert!(RUNNER_MISSING.contains(hint), "missing hint: {hint}");
         }
+    }
+
+    /// A person's seat runner is that seat's instance of the packaged template, which reads the
+    /// seat's config dir alone, runs only their plugins and is never enabled. Every other host
+    /// drives the operator's own unit.
+    #[test]
+    fn a_person_s_seat_runs_its_own_instance_of_the_template() {
+        const TEMPLATE: &str =
+            include_str!("../../../../../../scripts/punktfunk-scripting-seat@.service");
+        let id = "0123456789abcdef0123456789abcdef";
+        assert_eq!(unit_for(None), "punktfunk-scripting");
+        assert_eq!(unit_for(Some(id)), format!("punktfunk-scripting-seat@{id}"));
+        assert_eq!(unit_for(Some("")), "punktfunk-scripting-seat@");
+        for line in [
+            "Environment=PUNKTFUNK_CONFIG_DIR=/var/lib/punktfunk-seats/seats/%i/config",
+            "Environment=PUNKTFUNK_PERSON_PLUGINS=1",
+            "TemporaryFileSystem=/var/lib/punktfunk-seats:ro",
+            "InaccessiblePaths=-%h/.config/punktfunk",
+            "ProtectHome=tmpfs",
+        ] {
+            assert!(TEMPLATE.lines().any(|l| l == line), "{line}");
+        }
+        assert!(
+            !TEMPLATE.contains("[Install]"),
+            "a person's runner is never enabled"
+        );
+        let desk = TEMPLATE
+            .lines()
+            .filter(|l| !l.starts_with('#'))
+            .any(|l| l.contains(".config/punktfunk/") || l.contains("punktfunk-scripting.service"));
+        assert!(!desk, "the template names the person's own desk runner");
     }
 
     fn root(path: &str, write: bool) -> access::RunnerRoot {

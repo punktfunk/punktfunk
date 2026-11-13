@@ -231,10 +231,12 @@ pub(crate) fn prepare_serve(args: ServeArgs) -> Result<(mgmt::Options, native::N
     let runner = crate::plugins::runtime_status();
     let (mints, may_restart) = runner_token(pf_paths::seat::role());
     if runner.installed && mints {
-        opts.restart_runner = may_restart
-            && !pf_paths::config_dir()
-                .join(crate::mgmt_token::PLUGIN_FILE)
-                .exists();
+        // A person's own seat runner is started by its host alone, at each start it is on.
+        opts.restart_runner = crate::plugins::person_runner()
+            || (may_restart
+                && !pf_paths::config_dir()
+                    .join(crate::mgmt_token::PLUGIN_FILE)
+                    .exists());
         opts.plugin_token = Some(crate::mgmt_token::load_or_generate_plugin()?);
         // One token per installed plugin, so the API can tell them apart: a plugin may write its
         // own registration and its own provider, and no other's.

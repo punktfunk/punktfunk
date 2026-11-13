@@ -168,7 +168,7 @@ pub(super) fn on_seat(path: &str, marker: &str, own: bool) -> String {
 }
 
 /// What each lane that existed before the person's own got on a person's own account: hooks,
-/// command titles, the store, plugin access and emulator writes are refused on every one, a
+/// command titles, the store, folder decisions and emulator writes are refused on every one, a
 /// prep step runs nothing, and the box's command tile is not listed.
 #[tokio::test]
 async fn every_lane_keeps_its_refusals_on_a_person_s_own_account() {
@@ -230,9 +230,9 @@ async fn every_lane_keeps_its_refusals_on_a_person_s_own_account() {
                 json!({"enabled": true}),
             ),
             (
-                Method::POST,
-                "/api/v1/plugin-access/requests",
-                json!({"path": "/srv"}),
+                Method::PUT,
+                "/api/v1/store/sources/retro",
+                json!({"url": "https://retro.example/index.json"}),
             ),
             (
                 Method::POST,
@@ -295,7 +295,8 @@ const MINE: &str = "a1b2c3d4e5f6";
 /// On their own account a person's own session sets hooks and adds titles with a command, and
 /// only what it wrote runs there: a hooks file or an own title planted without its mark does
 /// nothing, and the box's prep step runs nothing. The console still sets, changes and reads none
-/// of it. The store and emulators stay closed on the person's lane too.
+/// of it. The store takes reviewed plugins alone from the person, and emulator installs stay
+/// closed.
 #[tokio::test]
 async fn the_person_s_own_lane_writes_and_runs_only_what_it_wrote() {
     use serde_json::json;
@@ -425,7 +426,10 @@ async fn the_person_s_own_lane_writes_and_runs_only_what_it_wrote() {
         let (status, why) = send(&app, person(install)).await;
         assert_eq!(
             (status, &why["code"]),
-            (StatusCode::FORBIDDEN, &json!("plugins_own_account"))
+            (
+                StatusCode::FORBIDDEN,
+                &json!("plugin_own_account_unreviewed")
+            )
         );
         let emulator = json_req(Method::POST, "/api/v1/emulators/rpcs3/install", json!({}));
         let (status, why) = send(&app, person(emulator)).await;

@@ -521,6 +521,8 @@ package_punktfunk-scripting() {
   # systemd USER unit — installed but NOT auto-enabled (opt-in). Enable once you have automation:
   #   systemctl --user enable --now punktfunk-scripting
   install -Dm0644 "$R/scripts/punktfunk-scripting.service" "$pkgdir/usr/lib/systemd/user/punktfunk-scripting.service"
+  install -Dm0644 "$R/scripts/punktfunk-scripting-seat@.service" \
+    "$pkgdir/usr/lib/systemd/user/punktfunk-scripting-seat@.service"
   # Where AppArmor restricts unprivileged user namespaces, the generator trades the unit's namespace
   # sandbox for this profile.
   install -Dm0644 "$R/packaging/linux/apparmor/punktfunk-scripting" "$pkgdir/etc/apparmor.d/punktfunk-scripting"

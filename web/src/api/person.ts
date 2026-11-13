@@ -24,14 +24,14 @@ export const usePersonMe = (enabled = true) =>
 	});
 
 /**
- * Whether the person's own plugins have a page: their seat host's runner answers, installed. On
- * their own account the host runs none of theirs, so it is not asked. `pending` until it answers.
+ * Whether the person's own plugins have a page: their seat host's runner answers, installed, on a
+ * desktop Punktfunk made and on their own account alike. `pending` until it answers.
  */
 export function usePersonPlugins(me: PersonMe | null): {
 	offered: boolean;
 	pending: boolean;
 } {
-	const ask = me !== null && !me.own;
+	const ask = me !== null;
 	const runtime = useGetPluginRuntime({
 		query: { enabled: ask, retry: false, staleTime: 60_000 },
 	});

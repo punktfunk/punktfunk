@@ -189,6 +189,38 @@ describe("discovery", () => {
 		);
 		expect(discoverUnits(d)).toEqual([]);
 	});
+
+	test("a person's own account runs only what their lane installed, and no script", () => {
+		const d = mkdirs("discover-person");
+		write(path.join(d.scriptsDir, "mine.ts"), "export {};");
+		for (const name of ["plugin-theirs", "plugin-planted"]) {
+			write(
+				path.join(d.pluginsDir, "node_modules", "@punktfunk", name, "package.json"),
+				JSON.stringify({ name: `@punktfunk/${name}`, main: "index.js" }),
+			);
+			write(path.join(d.pluginsDir, "node_modules", "@punktfunk", name, "index.js"), "");
+		}
+		write(
+			path.join(d.pluginsDir, "package.json"),
+			JSON.stringify({
+				dependencies: { "@punktfunk/plugin-theirs": "1", "@punktfunk/plugin-planted": "1" },
+			}),
+		);
+		const person = { ...d, configDir: d.dir, personOnly: true };
+		const logs: string[] = [];
+		expect(discoverUnits(person, (l) => logs.push(l))).toEqual([]);
+		expect(logs.join("\n")).toContain("plugin-planted: its person didn't install it");
+		write(
+			path.join(d.dir, "plugin-run", "person-plugins.json"),
+			JSON.stringify(["@punktfunk/plugin-theirs"]),
+		);
+		expect(discoverUnits(person).map((u) => u.name)).toEqual(["@punktfunk/plugin-theirs"]);
+		expect(discoverUnits(d).map((u) => u.name)).toEqual([
+			"mine",
+			"@punktfunk/plugin-planted",
+			"@punktfunk/plugin-theirs",
+		]);
+	});
 });
 
 describe("describeFailure", () => {
@@ -692,9 +724,11 @@ describe("supervision", () => {
 	test("every supervisor leaves the runner stopped on the refusal status", () => {
 		const repo = path.join(import.meta.dir, "..", "..");
 		const read = (rel: string) => fs.readFileSync(path.join(repo, rel), "utf8");
-		expect(read("scripts/punktfunk-scripting.service")).toContain(
-			`\nRestartPreventExitStatus=${SANDBOX_REFUSED_EXIT}\n`,
-		);
+		for (const unit of ["punktfunk-scripting.service", "punktfunk-scripting-seat@.service"]) {
+			expect(read(`scripts/${unit}`)).toContain(
+				`\nRestartPreventExitStatus=${SANDBOX_REFUSED_EXIT}\n`,
+			);
+		}
 		// NixOS runs that same unit: the scripting package installs it, and the module's drop-in
 		// leaves the status alone.
 		expect(read("packaging/nix/packages.nix")).toContain(

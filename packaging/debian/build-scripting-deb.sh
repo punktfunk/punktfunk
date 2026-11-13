@@ -52,6 +52,8 @@ exec /usr/lib/punktfunk-bun/bun /usr/share/punktfunk-scripting/runner-cli.js "$@
 WRAP
 chmod 0755 "$STAGE/usr/bin/punktfunk-scripting"
 install -Dm0644 scripts/punktfunk-scripting.service "$STAGE/usr/lib/systemd/user/punktfunk-scripting.service"
+install -Dm0644 scripts/punktfunk-scripting-seat@.service \
+  "$STAGE/usr/lib/systemd/user/punktfunk-scripting-seat@.service"
 # Where AppArmor restricts unprivileged user namespaces, the generator trades the unit's namespace
 # sandbox for this profile.
 install -Dm0644 packaging/linux/apparmor/punktfunk-scripting "$STAGE/etc/apparmor.d/punktfunk-scripting"

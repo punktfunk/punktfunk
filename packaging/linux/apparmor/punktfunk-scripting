@@ -64,3 +64,55 @@ profile punktfunk-scripting flags=(attach_disconnected,mediate_deleted) {
 
   include if exists <local/punktfunk-scripting>
 }
+
+# The runner of a seat on a person's own account (punktfunk-scripting-seat@.service): the profile
+# above over the seat's config directory, with none of the person's own.
+profile punktfunk-scripting-seat flags=(attach_disconnected,mediate_deleted) {
+  include <abstractions/base>
+  include <abstractions/nameservice>
+  include <abstractions/private-files-strict>
+
+  userns,
+  capability sys_admin,
+  capability setpcap,
+  capability net_admin,
+  capability sys_ptrace,
+  capability dac_override,
+  capability sys_resource,
+  mount,
+  umount,
+  pivot_root,
+  @{PROC}/sys/user/max_user_namespaces w,
+  deny mount /**/.config/punktfunk{,/,/*} -> /**,
+  deny mount /**/.config{,/} -> /**,
+  deny mount /{,**/}home/{,*,*/} -> /**,
+  deny mount /{,oldroot/} -> /**,
+  deny mount /var/lib/punktfunk-seats/{,seats/,seats/*/,seats/*/config/,seats/*/config/*} -> /**,
+
+  network,
+  unix,
+  dbus,
+  signal (receive) peer=unconfined,
+  signal peer="{,bwrap//&}punktfunk-scripting-seat{,//&unconfined,//&unpriv_bwrap}",
+  ptrace (read, trace) peer="{,bwrap//&}punktfunk-scripting-seat{,//&unconfined,//&unpriv_bwrap}",
+
+  / r,
+  /** rmix,
+  owner /** wlk,
+
+  # The person's own desk config, and the seat's trust copy: none of either.
+  deny @{HOME}/.config/punktfunk/** mrwlkx,
+  deny /var/lib/punktfunk-seats/trust/** mrwlkx,
+  # The seat's config dir: only what the unit binds.
+  deny /var/lib/punktfunk-seats/seats/*/config/** mrwlkx,
+  priority=1 owner /var/lib/punktfunk-seats/seats/*/config/ r,
+  priority=1 owner /var/lib/punktfunk-seats/seats/*/config/{plugin-token,mgmt-endpoint,native-cert.pem,cert.pem} r,
+  priority=1 owner /var/lib/punktfunk-seats/seats/*/config/{ingest,plugin-run}/{,**} r,
+  priority=1 owner /var/lib/punktfunk-seats/seats/*/config/{plugins,plugin-state}/{,**} mrwlkix,
+
+  deny @{HOME}/.config/systemd/** wl,
+  deny @{HOME}/.local/share/systemd/** wl,
+  deny @{HOME}/.config/environment.d/** wl,
+
+  include if exists <local/punktfunk-scripting-seat>
+}

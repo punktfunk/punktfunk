@@ -411,7 +411,10 @@ fn app(
     // caller without a credential gets 401, only the lane auth stamped is passed on, and a
     // library write a door passes to the owner never meets the 409 of the box copy.
     let routed = api_routes
-        .route_layer(middleware::from_fn(own_account::gate))
+        .route_layer(middleware::from_fn_with_state(
+            shared.clone(),
+            own_account::gate,
+        ))
         .route_layer(middleware::from_fn(move |req: Request, next: Next| {
             library::box_library_is_read_only(box_library, person_lane, req, next)
         }))
