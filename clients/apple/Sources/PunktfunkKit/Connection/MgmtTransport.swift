@@ -26,6 +26,7 @@
 import CryptoKit
 import Foundation
 import Network
+import os
 import PunktfunkCore
 import Security
 
@@ -255,9 +256,10 @@ actor MgmtConnectionPool {
 /// One TLS connection to a host, serving requests one at a time. The pool guarantees a single
 /// caller at a time, so there is no request queueing here.
 ///
-/// Everything mutable is touched only on `queue`, which also runs the connection's callbacks, the
-/// verify block and the timeout — so the state below needs no locking and two callbacks can never
-/// race to resume the same continuation.
+/// The request state is touched only on `queue`, which also runs the connection's callbacks, the
+/// verify block and the timeout, so two callbacks can never race to resume the same continuation.
+/// `isHealthy` is the exception: the pool reads it from its actor while `queue` may be writing it,
+/// so it sits behind a lock. `poolEpoch` and `pooledAt` belong to the pool alone.
 final class MgmtConnection: @unchecked Sendable {
     private let queue = DispatchQueue(label: "io.unom.punktfunk.mgmt-connection")
     private let connection: NWConnection
@@ -280,7 +282,11 @@ final class MgmtConnection: @unchecked Sendable {
     /// When the pool last took it back (system uptime). Pool-owned, like `poolEpoch`.
     var pooledAt: TimeInterval = 0
     /// False once the connection has failed; the pool discards these instead of handing them out.
-    private(set) var isHealthy = true
+    private(set) var isHealthy: Bool {
+        get { healthy.withLock { $0 } }
+        set { healthy.withLock { $0 = newValue } }
+    }
+    private let healthy = OSAllocatedUnfairLock(initialState: true)
     /// Has this connection completed at least one request? Drives the retry-once rule in
     /// `MgmtTransport.request` — only a connection the host may have dropped since is worth retrying.
     var hasServedRequest: Bool { servedRequest }
