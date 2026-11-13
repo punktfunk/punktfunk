@@ -8,8 +8,8 @@
 //
 // CoreBluetooth negotiates MTU and connection interval itself, unlike Android's `Sc2BleLink.kt`.
 // A Steam Controller 2 falls back to lizard mode after ~3 s without DISABLE_LIZARD, so the link
-// sends it on ready and every 3 s, until Steam's own writes take over. `stop()` writes lizard
-// mode back on before it disconnects. The client never enables the gyro; Steam's write does.
+// sends it on ready and every 3 s for as long as it is connected, beside whatever Steam forwards.
+// `stop()` writes lizard mode back on before it disconnects. The client never enables the gyro; Steam's write does.
 //
 // A 2015 pad (`isClassic`) notifies segments on `Sc1Device.bleInputCharUUID` and takes and
 // answers features in segments on 100F6C34; core turns its input into wired frames, which
