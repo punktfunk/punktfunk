@@ -127,12 +127,15 @@ export const runSandboxed = (
 		const home = os.homedir();
 		const grants = grantedRoots(config, id);
 		const refused = [
-			...[...(manifest.reads ?? []), ...(manifest.files ?? [])].map((p) => [p, false] as const),
-			...(manifest.writes ?? []).map((p) => [p, true] as const),
-			...grants.map((g) => [g.path, g.write] as const),
+			...[...(manifest.reads ?? []), ...(manifest.files ?? [])].map((p) => [p, false, false] as const),
+			...(manifest.writes ?? []).map((p) => [p, true, false] as const),
+			...grants.map((g) => [g.path, g.write, true] as const),
 		]
-			.map(([p, write]) => [expandHome(p, home), write] as const)
-			.filter(([p, write]) => path.isAbsolute(p) && refusedRoot(p, home, config, write))
+			.map(([p, write, operator]) => [expandHome(p, home), write, operator] as const)
+			.filter(
+				([p, write, operator]) =>
+					path.isAbsolute(p) && refusedRoot(p, home, config, write, operator),
+			)
 			.map(([p]) => p);
 		if (refused.length > 0)
 			log(`[runner] ${id}: not sharing ${refused.join(", ")} — no plugin gets those`, "warn");

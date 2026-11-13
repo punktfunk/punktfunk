@@ -506,8 +506,8 @@ fn covers(
 }
 
 /// Windows-only refusals: `C:\Users`, the profile roots directly under it, `C:\Windows` and
-/// everything inside, and the sensitive dirs inside any profile root. Drive roots are
-/// already refused as filesystem roots.
+/// everything inside, and the sensitive dirs inside any profile root: keys, the punktfunk config,
+/// and [`PROFILE_SECRETS`] or a parent of one. Drive roots are already refused as filesystem roots.
 #[cfg(windows)]
 fn windows_protected(canonical: &Path) -> bool {
     let users = Path::new(r"C:\Users");
@@ -528,12 +528,21 @@ fn windows_protected(canonical: &Path) -> bool {
                 return true;
             }
         }
+        let inner = rel.split_once('\\').map_or("", |(_profile, inner)| inner);
+        let below = |p: &str, base: &str| p == base || p.starts_with(&format!("{base}\\"));
+        if PROFILE_SECRETS
+            .iter()
+            .any(|s| below(inner, s) || below(s, inner))
+        {
+            return true;
+        }
     }
     false
 }
 
-/// Under the home: what the user's login or session runs at start. A writable bind of one, or of
-/// a parent, escapes the sandbox; a read-only one is fine. The SDK's `STARTUP` is the same list.
+/// Under the home: what the user's login, session, desktop or compositor runs. A writable bind of
+/// one, or of a parent, escapes the sandbox; a read-only one is fine. The SDK's `STARTUP` is the
+/// same list.
 #[cfg(unix)]
 const STARTUP_PATHS: &[&str] = &[
     ".config/systemd",
@@ -557,13 +566,73 @@ const STARTUP_PATHS: &[&str] = &[
     ".config/plasma-workspace/env",
     ".config/autostart-scripts",
     ".local/share/applications",
+    ".local/share/gnome-shell",
+    ".local/share/dbus-1",
+    ".local/share/kwin",
+    ".config/hypr",
+    ".config/sway",
+    ".config/i3",
+    ".config/labwc",
+    ".xsession",
+];
+
+/// Under the home: browser profiles, keyrings and cloud credentials. No root holds one or a parent
+/// of one. The SDK's `SECRETS` is the same list.
+#[cfg(unix)]
+const SECRET_PATHS: &[&str] = &[
+    ".mozilla",
+    ".config/mozilla",
+    ".config/google-chrome",
+    ".config/chromium",
+    ".config/BraveSoftware",
+    ".config/microsoft-edge",
+    ".config/vivaldi",
+    ".var/app/org.mozilla.firefox",
+    ".var/app/com.google.Chrome",
+    ".var/app/org.chromium.Chromium",
+    ".var/app/com.brave.Browser",
+    ".var/app/com.microsoft.Edge",
+    ".var/app/com.vivaldi.Vivaldi",
+    "snap/firefox",
+    "snap/chromium",
+    ".local/share/keyrings",
+    ".local/share/kwalletd",
+    ".password-store",
+    ".aws",
+    ".azure",
+    ".kube",
+    ".docker",
+    ".config/gcloud",
+    ".config/gh",
+];
+
+/// Under the home: the host's own data and state on Linux, where it runs the emulators it
+/// installs. Only the operator's grant writes there. The SDK's `HOST_DATA` is the same list.
+const HOST_DATA_PATHS: &[&str] = &[".local/share/punktfunk", ".local/state/punktfunk"];
+
+/// Inside any Windows profile, folded: browser profiles and credential stores. No root holds one
+/// or a parent of one.
+#[cfg(windows)]
+const PROFILE_SECRETS: &[&str] = &[
+    r"appdata\roaming\mozilla\firefox\profiles",
+    r"appdata\local\google\chrome\user data",
+    r"appdata\local\chromium\user data",
+    r"appdata\local\bravesoftware\brave-browser\user data",
+    r"appdata\local\microsoft\edge\user data",
+    r"appdata\local\vivaldi\user data",
+    r"appdata\roaming\microsoft\credentials",
+    r"appdata\local\microsoft\credentials",
+    r"appdata\roaming\microsoft\protect",
+    r".aws",
+    r".azure",
+    r".kube",
 ];
 
 /// The safety refusals for a path, in order; `None` means the path is a directory the host
 /// could in principle grant. `operator` is true for a grant the operator makes (CLI, console)
-/// and false for a plugin's request or manifest. `write` also refuses the login and session
-/// start-up files and their parents. Coverage, sticky denial, and caps are the caller's business
-/// and are checked after this.
+/// and false for a plugin's request or manifest. `write` also refuses what the session runs and
+/// its parents. Coverage, sticky denial, and caps are the caller's business and are checked after
+/// this.
 fn refusal_rule(
     raw: &Path,
     canonical: &Path,
@@ -611,17 +680,21 @@ fn refusal_rule(
         let volume = canonical
             .parent()
             .is_some_and(|p| within(p, Path::new("/run/media")));
+        let homed = !home.as_os_str().is_empty();
+        let near = |list: &[&str]| {
+            homed
+                && list.iter().any(|d| {
+                    let d = home.join(d);
+                    within(canonical, &d) || within(&d, canonical)
+                })
+        };
         protected = protected
             || (!volume
                 && ["/proc", "/sys", "/dev", "/run"]
                     .iter()
                     .any(|r| within(canonical, Path::new(r))))
-            || (write
-                && !home.as_os_str().is_empty()
-                && STARTUP_PATHS.iter().any(|d| {
-                    let d = home.join(d);
-                    within(canonical, &d) || within(&d, canonical)
-                }));
+            || near(SECRET_PATHS)
+            || (write && near(STARTUP_PATHS));
     }
     #[cfg(windows)]
     {
@@ -634,6 +707,27 @@ fn refusal_rule(
         return Some("write_not_owned");
     }
     None
+}
+
+/// What a runner may bind: [`refusal_rule`], and no write into the host's own data that the
+/// operator didn't grant. A plugin's request there still pends, since the operator's yes makes the
+/// grant; a manifest's `writes` never binds there. The SDK's `refusedRoot` is this rule's twin.
+fn bind_refusal(
+    spelled: &Path,
+    canonical: &Path,
+    write: bool,
+    operator: bool,
+    policy: &PathPolicy,
+    facts: PathFacts,
+) -> Option<&'static str> {
+    refusal_rule(spelled, canonical, write, operator, policy, facts).or_else(|| {
+        let home = &policy.home;
+        let host_data = !home.as_os_str().is_empty()
+            && HOST_DATA_PATHS
+                .iter()
+                .any(|d| within(canonical, &home.join(d)));
+        (write && !operator && host_data).then_some("protected_path")
+    })
 }
 
 /// `~/.config/<anything starting with punktfunk>` — the host's own dir and any sibling a
@@ -1460,14 +1554,14 @@ impl AccessStore {
         self.resolve_roots(declared_entries(manifest), std::iter::empty())
     }
 
-    /// May the runner see `real`, asked for as `spelled`? A missing root is the drop-in's `-`
-    /// prefix's business, and a root may be a file.
+    /// May the runner see `real`, asked for as `spelled`, by [`bind_refusal`]? A missing root is
+    /// the drop-in's `-` prefix's business, and a root may be a file.
     fn may_bind(&self, spelled: &Path, real: &Path, write: bool, operator: bool) -> bool {
         let facts = PathFacts {
             is_dir: true,
             ..path_facts(real)
         };
-        refusal_rule(spelled, real, write, operator, &self.policy, facts).is_none()
+        bind_refusal(spelled, real, write, operator, &self.policy, facts).is_none()
     }
 
     /// The links on the way to `spelled` when it resolves elsewhere, each a root of its own,
@@ -2026,16 +2120,17 @@ mod tests {
         assert_eq!(rule("/run/mediax/games"), Some("protected_path"));
     }
 
-    /// The root rules the runner's sandbox twins (`refusedRoot` in sdk/src/sandbox.ts), on
+    /// The bind rule the runner's sandbox twins (`refusedRoot` in sdk/src/sandbox.ts), on
     /// canonical absolute paths: the shape rules (`..`, length, not a directory) stay host-only.
     #[cfg(unix)]
     fn path_refusal_vectors() -> String {
         const HOME: &str = "/home/u";
         const USER_CONFIG: &str = "/home/u/.config/punktfunk";
         const SYSTEM_CONFIG: &str = "/var/lib/punktfunk";
-        // `(config dir, read-only roots, read-write roots)`; every start-up location is added to
-        // both lists below, so a read of it is pinned allowed and a write of it refused.
-        let rows: &[(&str, &[&str], &[&str])] = &[
+        // `(config dir, read-only roots, read-write roots, the operator's read-write roots)`;
+        // every start-up location and credential store joins the first two lists below.
+        type Row<'a> = (&'a str, &'a [&'a str], &'a [&'a str], &'a [&'a str]);
+        let rows: &[Row] = &[
             (
                 USER_CONFIG,
                 &[
@@ -2076,6 +2171,19 @@ mod tests {
                     "/mnt/games1",
                     "/tmp/vhclient_response",
                     "/usr/share/applications",
+                    "/home/u/.var",
+                    "/home/u/.var/app",
+                    "/home/u/snap",
+                    "/home/u/.awsx",
+                    "/home/u/.config/hydralauncher/hydra-db",
+                    "/home/u/snap/hydralauncher/current/.config/hydralauncher/hydra-db",
+                    "/home/u/.config/retroarch/cores",
+                    "/home/u/.var/app/org.libretro.RetroArch",
+                    "/home/u/.var/app/org.libretro.RetroArch/config/retroarch/cores",
+                    "/home/u/.local/share/flatpak/app",
+                    "/home/u/.local/share/flatpak/app/org.libretro.RetroArch",
+                    "/var/lib/flatpak/app/org.libretro.RetroArch",
+                    "/home/u/.local/share/punktfunk/emulators/ryujinx/app",
                 ],
                 &[
                     "/home/u/.ssh",
@@ -2097,6 +2205,17 @@ mod tests {
                     "/home/u/.config/plasma-workspace-extra",
                     "/home/u/Emu",
                     "/home/u/Games",
+                    "/home/u/.local/share/punktfunk",
+                    "/home/u/.local/share/punktfunk/emulators/ryujinx/app",
+                    "/home/u/.local/state/punktfunk",
+                    "/home/u/.local/share/punktfunk-extra",
+                ],
+                &[
+                    "/home/u/.local/share/punktfunk/emulators/ryujinx/app",
+                    "/home/u/.local/state/punktfunk",
+                    "/home/u/.config/hypr",
+                    "/home/u/.aws",
+                    "/home/u/Games",
                 ],
             ),
             (
@@ -2110,6 +2229,7 @@ mod tests {
                     "/var/lib/flatpak",
                     "/home/u",
                     "/home/u/.ssh",
+                    "/home/u/.config",
                     "/home/u/.config/punktfunk",
                     "/home/u/.config/punktfunk-extra",
                     "/home/u/.config/systemd/user",
@@ -2125,7 +2245,9 @@ mod tests {
                     "/home/u/.local/share/Steam",
                     "/home/u/.config/retroarch",
                     "/home/u/Games",
+                    "/home/u/.local/share/punktfunk/emulators/ryujinx/app",
                 ],
+                &[],
             ),
         ];
         let facts = PathFacts {
@@ -2133,37 +2255,45 @@ mod tests {
             owner_uid: None,
         };
         let mut lines = Vec::new();
-        for (config_dir, reads, writes) in rows {
+        for (config_dir, reads, writes, owned) in rows {
             let policy = PathPolicy {
                 home: HOME.into(),
                 config_dir: (*config_dir).into(),
                 runtime_dir: Some("/run/user/1000".into()),
             };
-            let startup = || STARTUP_PATHS.iter().map(|d| format!("{HOME}/{d}"));
-            let reads = reads.iter().map(|p| (false, (*p).to_string()));
-            let writes = writes.iter().map(|p| (true, (*p).to_string()));
+            let listed = || {
+                STARTUP_PATHS
+                    .iter()
+                    .chain(SECRET_PATHS)
+                    .map(|d| format!("{HOME}/{d}"))
+            };
+            let row = |write, operator| move |p: &&str| (write, operator, (*p).to_string());
             let rows = reads
-                .chain(startup().map(|p| (false, p)))
-                .chain(writes)
-                .chain(startup().map(|p| (true, p)));
-            for (write, path) in rows {
+                .iter()
+                .map(row(false, false))
+                .chain(listed().map(|p| (false, false, p)))
+                .chain(writes.iter().map(row(true, false)))
+                .chain(listed().map(|p| (true, false, p)))
+                .chain(owned.iter().map(row(true, true)));
+            for (write, operator, path) in rows {
                 let p = Path::new(&path);
-                let rule = refusal_rule(p, p, write, false, &policy, facts);
+                let rule = bind_refusal(p, p, write, operator, &policy, facts);
                 assert!(
                     matches!(rule, None | Some("broad_root" | "protected_path")),
                     "{path}: {rule:?}"
                 );
                 lines.push(format!(
                     "    {{\"path\": \"{path}\", \"home\": \"{HOME}\", \"config_dir\": \"{config_dir}\", \
-                     \"write\": {write}, \"refused\": {}}}",
+                     \"write\": {write}, \"operator\": {operator}, \"refused\": {}}}",
                     rule.is_some()
                 ));
             }
         }
         format!(
-            "{{\n  \"$comment\": \"Generated from punktfunk-host plugin_host access::refusal_rule by \
+            "{{\n  \"$comment\": \"Generated from punktfunk-host plugin_host access::bind_refusal by \
              path_refusal_vectors_are_checked_in (UPDATE_VECTORS=1 rewrites it). The SDK's sandbox \
-             replays it; `write` is a read-write bind.\",\n  \"vectors\": [\n{}\n  ]\n}}\n",
+             replays it; `write` is a read-write bind, `operator` the operator's grant.\",\n  \
+             \"vectors\": [\n{}\n  ]\n}}\n",
             lines.join(",\n")
         )
     }
@@ -2351,6 +2481,51 @@ mod tests {
         assert_eq!(f.request(apps.to_str().unwrap()), "pending");
         f.store().grant("demo", &apps, false, "cli").unwrap();
         assert_eq!(f.store().grants_for("demo").len(), 1);
+    }
+
+    /// The host runs the emulators it installs from its data folder: a manifest's `writes` never
+    /// binds there, while a plugin's request pends and the operator's yes binds.
+    #[cfg(unix)]
+    #[test]
+    fn only_the_operators_grant_writes_into_the_hosts_data() {
+        let f = fixture();
+        let app = f.dir("home/.local/share/punktfunk/emulators/ryujinx/app");
+        let declared = manifest(&[], &["~/.local/share/punktfunk/emulators/ryujinx/app"]);
+        assert_eq!(targets(&f.store().runner_roots(&declared)), vec![]);
+        assert_eq!(f.request_w(app.to_str().unwrap(), true), "pending");
+        f.store().grant("demo", &app, true, "console").unwrap();
+        assert_eq!(
+            targets(&f.store().runner_roots(&declared)),
+            vec![(app.to_string_lossy().into_owned(), true)]
+        );
+    }
+
+    /// Browser profiles, keyrings and cloud credentials never bind, nor does a parent of one; a
+    /// launcher's folder beside them does.
+    #[cfg(unix)]
+    #[test]
+    fn credential_stores_and_their_parents_are_never_bound() {
+        let f = fixture();
+        f.dir("home/.local/share/keyrings");
+        f.dir("home/.var/app/org.mozilla.firefox");
+        let retroarch = f.dir("home/.var/app/org.libretro.RetroArch");
+        let roots = f.store().runner_roots(&manifest(
+            &[
+                "~/.local/share/keyrings",
+                "~/.local/share",
+                "~/.var/app",
+                "~/.var/app/org.mozilla.firefox",
+                "~/.var/app/org.libretro.RetroArch",
+            ],
+            &[],
+        ));
+        assert_eq!(
+            targets(&roots),
+            vec![(retroarch.to_string_lossy().into_owned(), false)]
+        );
+        let aws = f.dir("home/.aws");
+        assert_eq!(f.request(aws.to_str().unwrap()), "refused:protected_path");
+        assert!(f.store().grant("demo", &aws, false, "cli").is_err());
     }
 
     #[cfg(unix)]
@@ -3164,6 +3339,31 @@ mod tests {
         // Ordinary profile content is not protected — only the named roots are.
         assert!(!windows_protected(Path::new(r"C:\Users\ann\Games")));
         assert!(!windows_protected(Path::new(r"D:\data\games")));
+    }
+
+    /// Browser profiles and credential stores are refused in every profile, with their parents;
+    /// a launcher's folder beside them is not.
+    #[cfg(windows)]
+    #[test]
+    fn windows_credential_stores_and_their_parents_are_protected() {
+        for p in [
+            r"C:\Users\ann\AppData\Roaming\Mozilla\Firefox\Profiles\x.default",
+            r"C:\Users\ann\AppData\Local\Google\Chrome\User Data",
+            r"c:\users\bob\appdata\roaming\microsoft\protect",
+            r"C:\Users\ann\AppData\Local\Microsoft\Credentials",
+            r"C:\Users\ann\.aws",
+            r"C:\Users\ann\AppData\Local",
+            r"C:\Users\ann\AppData",
+        ] {
+            assert!(windows_protected(Path::new(p)), "{p}");
+        }
+        for p in [
+            r"C:\Users\ann\AppData\Local\Amazon Games",
+            r"C:\Users\ann\AppData\Roaming\itch",
+            r"C:\Users\ann\.awsx",
+        ] {
+            assert!(!windows_protected(Path::new(p)), "{p}");
+        }
     }
 
     /// A junction is a link the runner opens through, so the ACE must land on it as well as on

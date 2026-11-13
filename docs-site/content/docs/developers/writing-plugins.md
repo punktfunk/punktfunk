@@ -51,11 +51,17 @@ nothing the plugin does at runtime widens it. Without it, a plugin does not star
 | `exec` | Named argv templates the host may run for this plugin's titles. |
 
 The sandbox never binds `/`, the home directory or its parents, `/proc`, `/sys`, `/dev`, `/run`
-(except `/run/media`), `~/.ssh`, `~/.gnupg` or `~/.config/punktfunk`. On Linux a `writes` entry
-(or a write grant) also never binds what runs at login or session start, nor a parent of it:
-`~/.config/systemd`, `~/.config/autostart`, `~/.local/bin`, `~/.local/share/applications`, the
-shell and X start-up files such as `~/.bashrc`, `~/.profile` and `~/.xinitrc`, and so `~/.config`
-and `~/.local`. Reading them with `reads` is fine.
+(except `/run/media`), `~/.ssh`, `~/.gnupg` or `~/.config/punktfunk`. On Linux it never binds a
+browser profile, keyring or cloud credential either, nor a parent of one: `~/.mozilla`,
+`~/.config/google-chrome`, `~/.var/app/org.mozilla.firefox`, `~/.local/share/keyrings`, `~/.aws`,
+`~/.kube` and the like, and so `~/.config`, `~/.local` and `~/.var/app` whole. On Windows the same
+holds for a profile's `AppData\Local\Google\Chrome\User Data`, `AppData\Roaming\Microsoft\Protect`,
+`.aws` and their kind. On Linux a `writes` entry (or a write grant) also never binds what runs at
+login, session start or a compositor reload, nor a parent of it: `~/.config/systemd`,
+`~/.config/autostart`, `~/.config/hypr`, `~/.local/bin`, `~/.local/share/applications`,
+`~/.local/share/gnome-shell`, and the shell and X start-up files such as `~/.bashrc`, `~/.profile`
+and `~/.xinitrc`. Reading those with `reads` is fine. A `writes` entry never binds the host's own
+`~/.local/share/punktfunk`: ask for a folder there, and the owner decides.
 
 An `exec` template names a program and its arguments with `{param}` placeholders. A title supplies
 the values, and the host builds the argv itself. `exe` is a program name looked up on `PATH`, or an absolute path inside the plugin's roots; it may
