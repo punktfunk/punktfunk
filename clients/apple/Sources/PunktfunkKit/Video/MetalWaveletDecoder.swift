@@ -555,8 +555,8 @@ public final class MetalWaveletDecoder {
         mirrorSampler = sampler
     }
 
-    /// `decode(_:)` of an AU in its own memory: copied into a pool slot first. Tests, and the
-    /// pump's fallback for an AU the core assembled elsewhere.
+    /// `decode(_:)` of an AU in its own memory: copied into a pool slot first. For tests: the
+    /// pump stages such an AU itself (`pool.stage`).
     func decode(
         au: Data, chunkAligned: Bool, windowSize: Int,
         completion: @escaping @Sendable (WaveletPlanes?) -> Void

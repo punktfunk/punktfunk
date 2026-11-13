@@ -945,7 +945,7 @@ public final class MetalVideoPresenter {
 
     // MARK: Late latch
 
-    /// `PUNKTFUNK_LATE_LATCH=0` encodes at the pick as before, for the A/B.
+    /// `PUNKTFUNK_LATE_LATCH=0` encodes every pass at the pick: the A/B lever.
     static let lateLatchEnabled =
         ProcessInfo.processInfo.environment["PUNKTFUNK_LATE_LATCH"] != "0"
     /// Parked passes queue apart from `queue`: one waiting on its event would hold the
