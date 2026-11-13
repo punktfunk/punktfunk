@@ -741,9 +741,16 @@ impl Retrieve {
             RetrieveThread::spawn("punktfunk-qsv-out", move |stop| sync_loop(s, &t_q, &stop))?;
         Ok(Self { q, thread })
     }
+
+    /// Queue `p` behind the frames in flight and wake the sync thread if it is parked.
+    fn push(&self, p: Pending) {
+        self.q.lock().pending.push_back(p);
+        self.thread.wake();
+    }
 }
 
-/// How long one `SyncOperation` may block before the loop looks at the stop flag.
+/// How long one `SyncOperation` may block, or the loop sleep on an empty queue, before it looks
+/// at the stop flag.
 const SYNC_WAIT_MS: u32 = 50;
 
 /// Sync finished frames and hand their AUs to the encode thread. The session travels as `usize`;
@@ -755,8 +762,9 @@ fn sync_loop(session: usize, q: &OutQueue, stop: &AtomicBool) {
         // The front's sync point, copied out so the lock is not held across the wait. Only this
         // thread pops, so the entry it names is still the front when the lock comes back.
         let Some(syncp) = q.lock().pending.front().map(|p| p.syncp) else {
-            // Nothing owed: wait for `submit` rather than spin on an empty queue.
-            std::thread::sleep(std::time::Duration::from_micros(250));
+            // Nothing owed: park until `Retrieve::push` wakes us. A push between the check and
+            // the park leaves the wake pending, so the park returns at once.
+            std::thread::park_timeout(std::time::Duration::from_millis(SYNC_WAIT_MS.into()));
             continue;
         };
         // SAFETY: `session` is live until this thread is joined, and `syncp` belongs to an
@@ -1350,7 +1358,7 @@ impl QsvEncoder {
             // Releases here; the runtime holds its own reference for the in-flight encode.
             FrameInput::Runtime(_) => None,
         };
-        inner.retrieve.q.lock().pending.push_back(Pending {
+        inner.retrieve.push(Pending {
             syncp,
             bs,
             pts_ns: captured.pts_ns,
@@ -2002,7 +2010,7 @@ impl Encoder for QsvEncoder {
                 if sts < vpl::MFX_ERR_NONE || syncp.is_null() {
                     break; // MFX_ERR_MORE_DATA = drained
                 }
-                inner.retrieve.q.lock().pending.push_back(Pending {
+                inner.retrieve.push(Pending {
                     syncp,
                     bs,
                     pts_ns: 0,

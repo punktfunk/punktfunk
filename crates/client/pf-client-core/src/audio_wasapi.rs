@@ -29,6 +29,9 @@ const SAMPLE_RATE: usize = 48_000;
 /// Downmix to mono in code before encode — voice is mono, half the samples, half the wire.
 const CAPT_CHANNELS: usize = 2;
 
+/// The longest `spawn` waits for an endpoint to start. One that opens later is stopped.
+const OPEN_TIMEOUT: Duration = Duration::from_secs(3);
+
 /// Named once so the decode thread and the render loop share the same de-prime fuse.
 pub(crate) const TUNING: punktfunk_core::audio::JitterTuning =
     punktfunk_core::audio::JitterTuning::WASAPI;
@@ -246,7 +249,7 @@ impl AudioPlayer {
                 }
             })
             .context("spawn audio thread")?;
-        match ready_rx.recv_timeout(Duration::from_secs(3)) {
+        match ready_rx.recv_timeout(OPEN_TIMEOUT) {
             Ok(Ok(engine_hz)) => {
                 tracing::info!(
                     channels = fmt.channels,
@@ -604,6 +607,8 @@ impl MicStreamer {
     /// `muted` is live with the capture loop (B4): keep reading, send nothing. Do not stop
     /// the `IAudioClient` — stop/start re-primes buffers and re-runs category negotiation.
     /// `echo_cancel` is the Settings toggle; `PUNKTFUNK_NO_AEC=1` overrides it off.
+    ///
+    /// `Err` when capture does not start within [`OPEN_TIMEOUT`]: no uplink runs.
     pub fn spawn(
         connector: Arc<NativeClient>,
         muted: Arc<AtomicBool>,
@@ -611,18 +616,28 @@ impl MicStreamer {
     ) -> Result<MicStreamer> {
         let stop = Arc::new(AtomicBool::new(false));
         let stop_t = stop.clone();
+        let (ready_tx, ready_rx) = std::sync::mpsc::sync_channel::<Result<()>>(1);
         let thread = std::thread::Builder::new()
             .name("punktfunk-mic".into())
             .spawn(move || {
-                if let Err(e) = mic_thread(&connector, stop_t, muted, echo_cancel) {
+                if let Err(e) = mic_thread(&connector, stop_t, &ready_tx, muted, echo_cancel) {
                     tracing::warn!(error = %format!("{e:#}"), "mic uplink thread ended");
+                    let _ = ready_tx.try_send(Err(e));
                 }
             })
             .context("spawn mic thread")?;
-        Ok(MicStreamer {
-            stop,
-            thread: Some(thread),
-        })
+        match ready_rx.recv_timeout(OPEN_TIMEOUT) {
+            Ok(Ok(())) => Ok(MicStreamer {
+                stop,
+                thread: Some(thread),
+            }),
+            Ok(Err(e)) => Err(e),
+            Err(_) => {
+                // A late start sees the flag and ends.
+                stop.store(true, Ordering::SeqCst);
+                Err(anyhow!("wasapi capture init timed out (no microphone?)"))
+            }
+        }
     }
 }
 
@@ -642,9 +657,11 @@ fn aec_enabled(echo_cancel: bool) -> bool {
     echo_cancel && crate::env_on("PUNKTFUNK_NO_AEC") != Some(true)
 }
 
+/// Sends `ready` once capture runs. An `Err` before that is [`MicStreamer::spawn`]'s answer.
 fn mic_thread(
     connector: &Arc<NativeClient>,
     stop: Arc<AtomicBool>,
+    ready: &SyncSender<Result<()>>,
     muted: Arc<AtomicBool>,
     echo_cancel: bool,
 ) -> Result<()> {
@@ -688,6 +705,7 @@ fn mic_thread(
     audio_client
         .start_stream()
         .context("start capture stream")?;
+    let _ = ready.send(Ok(()));
 
     let mut bytes: VecDeque<u8> = VecDeque::new();
 

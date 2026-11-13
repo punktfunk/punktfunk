@@ -82,10 +82,7 @@ pub(crate) async fn run(
         return Ok(Served::Session);
     };
     let permit = match knock {
-        None => sem
-            .acquire_owned()
-            .await
-            .expect("session semaphore is never closed"),
+        None => crate::native::slot_while_connected(&link, &sem).await?,
         Some(label) => {
             let fp = link
                 .peer_fingerprint()

@@ -401,17 +401,20 @@ fn pad_capture_thread(
 
     // Endpoint invalidated or engine restart ends the thread; next_chunk Err, caller reopens.
     let mut bytes: VecDeque<u8> = VecDeque::new();
+    let mut scratch: Vec<u8> = Vec::new();
     while !stop.load(Ordering::Relaxed) {
         // Loopback fires events only while a game renders; the timeout keeps `stop` responsive.
         let _ = h_event.wait_for_event(100);
         loop {
             match capture_client.get_next_packet_size() {
                 Ok(Some(0)) | Ok(None) => break,
-                Ok(Some(_n)) => {
+                Ok(Some(n)) => {
                     let before = bytes.len();
-                    let info = capture_client
-                        .read_from_device_to_deque(&mut bytes)
+                    scratch.resize(n as usize * PAD_BLOCK_ALIGN, 0);
+                    let (read, info) = capture_client
+                        .read_from_device(&mut scratch)
                         .context("read pad loopback")?;
+                    bytes.extend(&scratch[..read as usize * PAD_BLOCK_ALIGN]);
                     // WASAPI: a SILENT packet's data is not defined; it is silence, or noise
                     // through the pad's speaker and coils.
                     if info.flags.silent {

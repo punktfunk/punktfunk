@@ -379,6 +379,13 @@ pub fn all_games_for(view: &View) -> Vec<GameEntry> {
         .collect()
 }
 
+/// Title `id` as [`all_games_for`] lists it in `view`, with one entry cloned, not the list.
+pub fn find_game_for(view: &View, id: &str) -> Option<GameEntry> {
+    let game = sorted_games_for(view).iter().find(|g| g.id == id)?.clone();
+    let (by_box, by_profile) = hidden_layers(view);
+    (!by_box.contains(id) && !by_profile.contains(id)).then_some(game)
+}
+
 /// Whether `view`'s library lists title `id`, hidden or not.
 pub(crate) fn lists(view: &View, id: &str) -> bool {
     sorted_games_for(view).iter().any(|g| g.id == id)
@@ -588,7 +595,8 @@ pub(crate) fn game_mode_entry(gamescope_session: bool, contract_seat: bool) -> O
     })
 }
 
-/// Absent or malformed → the default. A bad file must cost its own contents, not the library.
+/// A reader's load: absent or malformed → the default. A bad file must cost its own contents,
+/// not the library. A writer loads with [`read_json_for_write`] instead.
 fn read_json_or_default<T: serde::de::DeserializeOwned + Default>(path: &Path) -> T {
     match std::fs::read_to_string(path) {
         Ok(raw) => serde_json::from_str(&raw).unwrap_or_else(|e| {
@@ -596,6 +604,18 @@ fn read_json_or_default<T: serde::de::DeserializeOwned + Default>(path: &Path) -
             T::default()
         }),
         Err(_) => T::default(),
+    }
+}
+
+/// A writer's load: absent → the default, a file that exists but does not read or parse → an
+/// error, so the save that follows never replaces what it could not read.
+fn read_json_for_write<T: serde::de::DeserializeOwned + Default>(path: &Path) -> Result<T> {
+    match std::fs::read_to_string(path) {
+        Ok(raw) => {
+            serde_json::from_str(&raw).map_err(|e| anyhow::anyhow!("parse {}: {e}", path.display()))
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(T::default()),
+        Err(e) => Err(anyhow::anyhow!("read {}: {e}", path.display())),
     }
 }
 
@@ -624,6 +644,23 @@ mod tests {
         assert_eq!(m.publisher.as_deref(), Some("A"));
         let m: GameMeta = serde_json::from_str(r#"{"release_year":2001,"players":4}"#).unwrap();
         assert_eq!((m.release_year, m.players), (Some(2001), Some(4)));
+    }
+
+    #[test]
+    fn a_writer_load_refuses_a_file_it_cannot_parse() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("library-hidden.json");
+        let absent: Result<BTreeMap<String, String>> = read_json_for_write(&path);
+        assert!(absent.unwrap().is_empty(), "no file is the default");
+        std::fs::write(&path, b"{ not json").unwrap();
+        let bad: Result<BTreeMap<String, String>> = read_json_for_write(&path);
+        assert!(bad.unwrap_err().to_string().starts_with("parse "));
+        let lenient: BTreeMap<String, String> = read_json_or_default(&path);
+        assert!(lenient.is_empty(), "a reader still falls back");
+        assert_eq!(std::fs::read(&path).unwrap(), b"{ not json");
+        std::fs::write(&path, br#"{"a":"b"}"#).unwrap();
+        let ok: BTreeMap<String, String> = read_json_for_write(&path).unwrap();
+        assert_eq!(ok["a"], "b");
     }
 
     fn entry(id: &str, title: &str) -> GameEntry {

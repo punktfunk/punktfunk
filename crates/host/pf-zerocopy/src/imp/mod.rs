@@ -107,28 +107,85 @@ pub fn nvenc_rm_import_enabled() -> bool {
 /// which builds the whole pipeline (modifier import, timeline export, the shader) and so answers
 /// the same question the first frame would — before a session is committed to the raw lane.
 ///
-/// Cached: the answer is a property of the driver, not of a session or its range. `false` keeps
-/// capture on the import path from the start instead of failing the first session that reaches
-/// the convert.
+/// A worker's answer is kept: it is a property of the driver, not of a session or its range.
+/// `false` keeps capture on the import path from the start instead of failing the first session
+/// that reaches the convert. A probe no worker answered is `false` for now and runs again after
+/// [`FUSED_RETRY_AFTER`], not on every ask.
 pub fn fused_convert_available() -> bool {
-    static OK: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *OK.get_or_init(|| {
-        if !nvenc_raw_enabled() {
+    static VERDICT: std::sync::Mutex<FusedVerdict> = std::sync::Mutex::new(FusedVerdict::Unasked);
+    fused_convert_in(&VERDICT, std::time::Instant::now(), probe_fused_convert)
+}
+
+/// How long an unanswered fused-convert probe stays unasked. A driver still starting is up
+/// within seconds; a box that never answers costs one worker spawn per half minute.
+const FUSED_RETRY_AFTER: std::time::Duration = std::time::Duration::from_secs(30);
+
+enum FusedVerdict {
+    Unasked,
+    Missed(std::time::Instant),
+    Answered(bool),
+}
+
+/// The kept verdict, else what `probe` finds unless one missed inside [`FUSED_RETRY_AFTER`] of
+/// `now`. The probe runs under the lock, so concurrent asks wait for one probe.
+fn fused_convert_in(
+    cell: &std::sync::Mutex<FusedVerdict>,
+    now: std::time::Instant,
+    probe: impl FnOnce() -> Option<bool>,
+) -> bool {
+    let mut verdict = cell.lock().unwrap_or_else(|e| e.into_inner());
+    match *verdict {
+        FusedVerdict::Answered(a) => return a,
+        FusedVerdict::Missed(at) if now.saturating_duration_since(at) < FUSED_RETRY_AFTER => {
             return false;
         }
-        let probe =
-            Importer::new_for_capture(true).and_then(|mut i| i.convert_timeline().map(|_| ()));
-        match probe {
-            Ok(()) => true,
-            Err(e) => {
-                tracing::info!(
-                    error = %format!("{e:#}"),
-                    "fused convert unavailable on this box — capture keeps the import path"
-                );
-                false
-            }
+        _ => {}
+    }
+    match probe() {
+        Some(a) => {
+            *verdict = FusedVerdict::Answered(a);
+            a
         }
-    })
+        None => {
+            *verdict = FusedVerdict::Missed(now);
+            false
+        }
+    }
+}
+
+/// `Some(verdict)` once a worker answered; `None` when none did (it did not start, or died
+/// mid-ask).
+fn probe_fused_convert() -> Option<bool> {
+    if !nvenc_raw_enabled() {
+        return Some(false);
+    }
+    let mut importer = match Importer::new_for_capture(true) {
+        Ok(i) => i,
+        Err(e) => {
+            tracing::info!(
+                error = %format!("{e:#}"),
+                "fused convert probe has no worker to ask — asked again later"
+            );
+            return None;
+        }
+    };
+    match importer.convert_timeline() {
+        Ok(_) => Some(true),
+        Err(e) if importer.dead() => {
+            tracing::info!(
+                error = %format!("{e:#}"),
+                "fused convert probe lost its worker — asked again later"
+            );
+            None
+        }
+        Err(e) => {
+            tracing::info!(
+                error = %format!("{e:#}"),
+                "fused convert unavailable on this box — capture keeps the import path"
+            );
+            Some(false)
+        }
+    }
 }
 
 /// Tiled modifiers the fused convert can sample for packed-RGB `fourcc`; LINEAR excluded, driver
@@ -683,5 +740,42 @@ mod tests {
         });
         assert!(failing.raw_disabled());
         assert!(!healthy.raw_disabled());
+    }
+
+    /// A probe no worker answered is `false` until the hold-off passes, then asks again; an
+    /// answer, `false` included, is never asked again.
+    #[test]
+    fn an_unanswered_fused_probe_is_asked_again_after_the_hold_off() {
+        use std::time::{Duration, Instant};
+        fn kept() -> Option<bool> {
+            panic!("an answered cell is not asked again")
+        }
+        let cell = std::sync::Mutex::new(FusedVerdict::Unasked);
+        let t0 = Instant::now();
+        let mut asks = 0;
+        assert!(!fused_convert_in(&cell, t0, || {
+            asks += 1;
+            None
+        }));
+        let inside = t0 + FUSED_RETRY_AFTER - Duration::from_secs(1);
+        assert!(!fused_convert_in(&cell, inside, || {
+            asks += 1;
+            Some(true)
+        }));
+        assert_eq!(asks, 1, "no second probe inside the hold-off");
+        assert!(fused_convert_in(&cell, t0 + FUSED_RETRY_AFTER, || {
+            asks += 1;
+            Some(true)
+        }));
+        assert_eq!(asks, 2);
+        assert!(fused_convert_in(&cell, t0 + FUSED_RETRY_AFTER * 9, kept));
+
+        let refused = std::sync::Mutex::new(FusedVerdict::Unasked);
+        assert!(!fused_convert_in(&refused, t0, || Some(false)));
+        assert!(!fused_convert_in(
+            &refused,
+            t0 + FUSED_RETRY_AFTER * 9,
+            kept
+        ));
     }
 }

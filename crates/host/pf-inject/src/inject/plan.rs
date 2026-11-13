@@ -103,7 +103,8 @@ pub(crate) struct Plan {
 impl Plan {
     /// What the device emits for `ev`, noting what it now holds. `None` for a repeat, a stale
     /// key up, a key another held VK keeps down (VK_SHIFT beside VK_LSHIFT), an unmapped
-    /// code, a zero-sized surface, scroll and pads.
+    /// code, a zero-sized surface, scroll and pads. A touch id is down once: a lost up makes
+    /// the next down a move, and a move or up for an id not down is `None`.
     pub fn step(&mut self, ev: &InputEvent) -> Option<Op> {
         let down = matches!(ev.kind, InputKind::KeyDown | InputKind::MouseButtonDown);
         Some(match ev.kind {
@@ -134,15 +135,25 @@ impl Plan {
             }
             InputKind::TouchDown => {
                 let at = Abs::of(ev)?;
-                self.held.note(ev);
-                Op::TouchDown { id: ev.code, at }
+                if self.held.touching(ev.code) {
+                    Op::TouchMove { id: ev.code, at }
+                } else if self.held.note(ev) {
+                    Op::TouchDown { id: ev.code, at }
+                } else {
+                    return None;
+                }
             }
-            InputKind::TouchMove => Op::TouchMove {
-                id: ev.code,
-                at: Abs::of(ev)?,
-            },
+            InputKind::TouchMove => {
+                let at = Abs::of(ev)?;
+                if !self.held.touching(ev.code) {
+                    return None;
+                }
+                Op::TouchMove { id: ev.code, at }
+            }
             InputKind::TouchUp => {
-                self.held.note(ev);
+                if !self.held.note(ev) {
+                    return None;
+                }
                 Op::TouchUp { id: ev.code }
             }
             InputKind::TextInput => Op::Text(ev.code),
@@ -334,6 +345,31 @@ mod tests {
                     Op::TouchMove { id: 7, at: sample },
                     Op::TouchUp { id: 7 },
                 ],
+            ),
+            (
+                "a down for a live id moves it, so a lost up never doubles a down",
+                vec![
+                    at(InputKind::TouchDown, 7, (10, 20), (100, 50)),
+                    at(InputKind::TouchDown, 7, (10, 20), (100, 50)),
+                    ev(InputKind::TouchUp, 7),
+                ],
+                vec![
+                    Op::TouchDown { id: 7, at: sample },
+                    Op::TouchMove { id: 7, at: sample },
+                    Op::TouchUp { id: 7 },
+                ],
+            ),
+            (
+                "a move or up for an id that is not down stops here",
+                vec![
+                    at(InputKind::TouchMove, 7, (10, 20), (100, 50)),
+                    ev(InputKind::TouchUp, 7),
+                    at(InputKind::TouchDown, 8, (10, 20), (100, 50)),
+                    ev(InputKind::TouchUp, 8),
+                    ev(InputKind::TouchUp, 8),
+                    at(InputKind::TouchMove, 8, (10, 20), (100, 50)),
+                ],
+                vec![Op::TouchDown { id: 8, at: sample }, Op::TouchUp { id: 8 }],
             ),
             (
                 "committed text passes",

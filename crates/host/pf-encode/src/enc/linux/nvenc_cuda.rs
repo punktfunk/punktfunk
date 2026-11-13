@@ -89,10 +89,43 @@ pub(crate) struct ProbedSupport {
     pub ten_bit: crate::CodecSupport,
 }
 
-/// Cached [`probe_support_uncached`] — one throwaway session per process.
+/// [`probe_support_uncached`], kept for the process once the driver has listed its codecs. A
+/// probe that could not ask (no CUDA context, no session, no GUID list) is not kept: a later
+/// ask runs it again, so a driver still starting does not pin 10-bit and 4:4:4 off. The caller
+/// bounds how often it asks.
 pub(crate) fn probe_support() -> ProbedSupport {
     static CACHE: std::sync::OnceLock<ProbedSupport> = std::sync::OnceLock::new();
-    *CACHE.get_or_init(probe_support_uncached)
+    // One probe at a time: a second ask waits for the first one's answer.
+    static BUSY: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    if let Some(p) = CACHE.get() {
+        return *p;
+    }
+    let _one = BUSY.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(p) = CACHE.get() {
+        return *p;
+    }
+    let p = probe_support_uncached();
+    if p.codecs.h264 || p.codecs.h265 || p.codecs.av1 {
+        return *CACHE.get_or_init(|| p);
+    }
+    p
+}
+
+/// A probe that could not ask. The first miss warns with its cause; a repeat stays at debug,
+/// since the probe runs again for as long as it stays unanswered.
+fn probe_missed(what: &str, error: &str) {
+    static WARNED: std::sync::OnceLock<()> = std::sync::OnceLock::new();
+    let mut first = false;
+    WARNED.get_or_init(|| first = true);
+    if first {
+        tracing::warn!(
+            what,
+            error,
+            "NVENC codec probe unanswered — advertising the static set and probing again later"
+        );
+    } else {
+        tracing::debug!(what, error, "NVENC codec probe unanswered");
+    }
 }
 
 /// Ask this GPU's driver which codecs it encodes, plus HEVC 4:4:4 / 10-bit.
@@ -120,7 +153,7 @@ fn probe_support_uncached() -> ProbedSupport {
     let cu_ctx = match cuda::context() {
         Ok(c) => c,
         Err(e) => {
-            tracing::warn!(error = %format!("{e:#}"), "NVENC codec probe: no CUDA context");
+            probe_missed("no CUDA context", &format!("{e:#}"));
             return unknown;
         }
     };
@@ -136,10 +169,8 @@ fn probe_support_uncached() -> ProbedSupport {
         let enc = match open_session(api, target) {
             Ok(enc) => enc,
             Err(e) => {
-                tracing::warn!(
-                    error = %format!("{:#}", nvenc_status::call_err("open_encode_session_ex (codec probe)", e)),
-                    "NVENC codec probe failed — keeping the static codec advertisement"
-                );
+                let e = nvenc_status::call_err("open_encode_session_ex (codec probe)", e);
+                probe_missed("no encode session", &format!("{e:#}"));
                 return unknown;
             }
         };
@@ -195,9 +226,7 @@ fn probe_support_uncached() -> ProbedSupport {
         }
         let _ = (api.destroy_encoder)(enc);
         if !listed {
-            tracing::warn!(
-                "NVENC codec probe: driver listed no encode GUIDs — keeping the static advertisement"
-            );
+            probe_missed("no encode GUIDs listed", "");
             return unknown;
         }
         ProbedSupport {
@@ -405,7 +434,7 @@ const DIRECT_IDLE: u64 = 600;
 
 /// The span NVENC reads a LINEAR raw frame from in place, and the chroma's byte offset from
 /// the luma (0 for packed RGB). `None` leaves the frame to the worker: tiled, a format NVENC
-/// does not take as is, or chroma that is not below the luma at the luma's stride.
+/// does not take as is, a zero stride, or chroma that is not below the luma at the luma's stride.
 fn direct_span(captured: &CapturedFrame, d: &DmabufFrame) -> Option<(pf_zerocopy::Span, u32)> {
     use pf_frame::PixelFormat as F;
     if d.modifier != 0 {
@@ -417,7 +446,11 @@ fn direct_span(captured: &CapturedFrame, d: &DmabufFrame) -> Option<(pf_zerocopy
             // A producer may pad the luma: the view runs on to the chroma's last row.
             let (off1, stride1) = chroma_plane(captured, d)?;
             let chroma = off1.checked_sub(d.offset)?;
-            if stride1 != d.stride || u64::from(chroma) < u64::from(d.stride) * u64::from(h) {
+            // The row count below divides by the stride.
+            if d.stride == 0
+                || stride1 != d.stride
+                || u64::from(chroma) < u64::from(d.stride) * u64::from(h)
+            {
                 return None;
             }
             let bytes = if captured.format == F::P010 { 2 } else { 1 };

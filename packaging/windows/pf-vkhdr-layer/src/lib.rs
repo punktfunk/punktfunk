@@ -143,8 +143,9 @@ struct SurfaceFormat2Raw {
     p_next: *mut c_void,
     surface_format: vk::SurfaceFormatKHR,
 }
-// Layout proof for the mirror: arrays of it are handed to the ICD and stamped over the caller's
-// VkSurfaceFormat2KHR array, so a size or alignment drift would corrupt either side.
+// Layout proof for the mirror: scratch arrays of it are handed to the ICD, and the caller's
+// VkSurfaceFormat2KHR array is read and stamped through it, so a size or alignment drift would
+// corrupt either side.
 const _: () = assert!(
     std::mem::size_of::<SurfaceFormat2Raw>() == std::mem::size_of::<vk::SurfaceFormat2KHR>()
 );
@@ -1073,6 +1074,10 @@ unsafe extern "system" fn get_surface_formats(
     }
 }
 
+/// A non-null array goes down to the driver as the application built it, so the driver fills each
+/// element's `pNext` chain, and the missing HDR formats are appended after the driver's own.
+/// The driver never saw those entries: a struct the application chained to one stays as it was.
+/// A count query has no array, so the driver fills a scratch one to deduplicate against.
 unsafe extern "system" fn get_surface_formats2(
     pdev: vk::PhysicalDevice,
     p_info: *const c_void,
@@ -1088,79 +1093,159 @@ unsafe extern "system" fn get_surface_formats2(
         Some(f) => f,
         None => return vk::Result::ERROR_INITIALIZATION_FAILED,
     };
+    // SAFETY: the spec requires `p_info` to be a live, aligned VkPhysicalDeviceSurfaceInfo2KHR.
+    // The C-layout mirror reads its typed surface field without relying on one target's padding.
+    let surface = unsafe { (*(p_info as *const PhysicalDeviceSurfaceInfo2Raw)).surface };
 
-    let mut n = 0u32;
-    // SAFETY: count-query form of the two-call idiom — null pSurfaceFormats plus a count
-    // out-pointer backed by the live local `n`; the caller's pdev/pSurfaceInfo are forwarded
-    // unchanged (the spec requires pSurfaceInfo to stay valid for the call).
-    let r = unsafe { down(pdev, p_info, &mut n, ptr::null_mut()) };
-    if r != vk::Result::SUCCESS {
-        return r;
-    }
-    let mut real: Vec<SurfaceFormat2Raw> = (0..n)
-        .map(|_| SurfaceFormat2Raw {
-            s_type: vk::StructureType::SURFACE_FORMAT_2_KHR,
-            p_next: ptr::null_mut(),
-            surface_format: vk::SurfaceFormatKHR::default(),
-        })
-        .collect();
-    if n > 0 {
-        // SAFETY: `real` holds exactly `n` properly-stamped VkSurfaceFormat2KHR mirrors
-        // (SurfaceFormat2Raw layout-asserted at the type), and `n` is passed as the in/out
-        // capacity, so the down-chain writes at most `n` entries.
-        let r = unsafe { down(pdev, p_info, &mut n, real.as_mut_ptr() as *mut c_void) };
+    if p_formats.is_null() {
+        let mut n = 0u32;
+        // SAFETY: count-query form of the two-call idiom — null pSurfaceFormats plus a count
+        // out-pointer backed by the live local `n`; the caller's pdev/pSurfaceInfo are forwarded
+        // unchanged (the spec requires pSurfaceInfo to stay valid for the call).
+        let r = unsafe { down(pdev, p_info, &mut n, ptr::null_mut()) };
         if r != vk::Result::SUCCESS {
             return r;
         }
-    }
-    real.truncate(n as usize);
-
-    // SAFETY: the spec requires `p_info` to be a live, aligned
-    // VkPhysicalDeviceSurfaceInfo2KHR. The C-layout mirror reads its typed surface field without
-    // relying on one target's padding.
-    let surface = unsafe { (*(p_info as *const PhysicalDeviceSurfaceInfo2Raw)).surface };
-
-    let mut extras: Vec<vk::SurfaceFormatKHR> = Vec::new();
-    if !real.is_empty() && should_inject(surface) {
-        for e in hdr_extra() {
-            if !real.iter().any(|x| {
-                x.surface_format.format == e.format && x.surface_format.color_space == e.color_space
-            }) {
-                extras.push(e);
+        let mut real: Vec<SurfaceFormat2Raw> = (0..n)
+            .map(|_| SurfaceFormat2Raw {
+                s_type: vk::StructureType::SURFACE_FORMAT_2_KHR,
+                p_next: ptr::null_mut(),
+                surface_format: vk::SurfaceFormatKHR::default(),
+            })
+            .collect();
+        if n > 0 {
+            // SAFETY: `real` holds exactly `n` properly-stamped VkSurfaceFormat2KHR mirrors
+            // (SurfaceFormat2Raw layout-asserted at the type), and `n` is passed as the in/out
+            // capacity, so the down-chain writes at most `n` entries.
+            let r = unsafe { down(pdev, p_info, &mut n, real.as_mut_ptr() as *mut c_void) };
+            if r != vk::Result::SUCCESS {
+                return r;
             }
         }
-    }
-    let total = real.len() + extras.len();
-
-    if p_formats.is_null() {
+        real.truncate(n as usize);
+        let extra = if !real.is_empty() && should_inject(surface) {
+            missing_hdr(&real).len()
+        } else {
+            0
+        };
         // SAFETY: vkGetPhysicalDeviceSurfaceFormats2KHR requires pSurfaceFormatCount to be a
         // valid u32 pointer in both call forms.
-        unsafe { *p_count = total as u32 };
+        unsafe { *p_count = (real.len() + extra) as u32 };
         return vk::Result::SUCCESS;
     }
-    // SAFETY: with a non-null pSurfaceFormats the spec requires *pSurfaceFormatCount to be
-    // readable and pSurfaceFormats to point at at least that many VkSurfaceFormat2KHR — whose
-    // layout SurfaceFormat2Raw mirrors (asserted at the type). `m` is clamped to both bounds.
-    // Only sType and surfaceFormat are stamped per element; each element's pNext chain is left
-    // exactly as the caller built it.
-    unsafe {
-        let m = (*p_count as usize).min(total);
-        let out = p_formats as *mut SurfaceFormat2Raw;
-        for i in 0..m {
-            let sf = if i < real.len() {
-                real[i].surface_format
-            } else {
-                extras[i - real.len()]
-            };
-            let dst = out.add(i);
+
+    // SAFETY: with a non-null pSurfaceFormats the spec requires *pSurfaceFormatCount to be a
+    // readable u32 holding the array's capacity.
+    let cap = unsafe { *p_count } as usize;
+    // SAFETY: the caller's own array and count go down unchanged, so valid usage for this call is
+    // exactly valid usage for the down-chain call.
+    let r = unsafe { down(pdev, p_info, p_count, p_formats) };
+    if r != vk::Result::SUCCESS {
+        // INCOMPLETE: the driver's own formats already fill the array.
+        return r;
+    }
+    // SAFETY: the down-chain wrote the count through `p_count`; it is clamped to the capacity.
+    let n = (unsafe { *p_count } as usize).min(cap);
+    if n == 0 || !should_inject(surface) {
+        return r;
+    }
+    // SAFETY: the array holds `cap` VkSurfaceFormat2KHR — whose layout SurfaceFormat2Raw mirrors
+    // (asserted at the type) — and the down-chain initialised the first `n <= cap`.
+    let (count, complete) = unsafe { append_hdr(p_formats as *mut SurfaceFormat2Raw, n, cap) };
+    // SAFETY: `p_count` is the caller's valid count pointer, read above.
+    unsafe { *p_count = count as u32 };
+    if complete {
+        vk::Result::SUCCESS
+    } else {
+        vk::Result::INCOMPLETE
+    }
+}
+
+/// The HDR formats `real` does not list yet.
+fn missing_hdr(real: &[SurfaceFormat2Raw]) -> Vec<vk::SurfaceFormatKHR> {
+    hdr_extra()
+        .into_iter()
+        .filter(|e| {
+            !real.iter().any(|x| {
+                x.surface_format.format == e.format && x.surface_format.color_space == e.color_space
+            })
+        })
+        .collect()
+}
+
+/// Writes the HDR formats `out[..n]` lacks into `out[n..cap]`. Returns the new count and whether
+/// every one fit. Only sType and surfaceFormat of an appended element are written.
+///
+/// # Safety
+/// `out` points at `cap` VkSurfaceFormat2KHR elements, the first `n <= cap` of them initialised.
+unsafe fn append_hdr(out: *mut SurfaceFormat2Raw, n: usize, cap: usize) -> (usize, bool) {
+    // SAFETY: the first `n` elements are initialised, per this function's contract.
+    let missing = missing_hdr(unsafe { std::slice::from_raw_parts(out, n) });
+    let fit = missing.len().min(cap - n);
+    for (i, sf) in missing.iter().take(fit).enumerate() {
+        // SAFETY: `n + i < n + fit <= cap`, inside the array this function's contract describes.
+        unsafe {
+            let dst = out.add(n + i);
             (*dst).s_type = vk::StructureType::SURFACE_FORMAT_2_KHR;
-            (*dst).surface_format = sf;
+            (*dst).surface_format = *sf;
         }
-        *p_count = m as u32;
-        if m < total {
-            vk::Result::INCOMPLETE
-        } else {
-            vk::Result::SUCCESS
+    }
+    (n + fit, fit == missing.len())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn elem(tag: usize, f: vk::SurfaceFormatKHR) -> SurfaceFormat2Raw {
+        SurfaceFormat2Raw {
+            s_type: vk::StructureType::SURFACE_FORMAT_2_KHR,
+            p_next: tag as *mut c_void,
+            surface_format: f,
         }
+    }
+
+    fn sdr() -> vk::SurfaceFormatKHR {
+        vk::SurfaceFormatKHR {
+            format: vk::Format::B8G8R8A8_UNORM,
+            color_space: vk::ColorSpaceKHR::SRGB_NONLINEAR,
+        }
+    }
+
+    fn array(cap: usize, n: usize) -> Vec<SurfaceFormat2Raw> {
+        (0..cap)
+            .map(|i| elem(i + 1, if i < n { sdr() } else { Default::default() }))
+            .collect()
+    }
+
+    #[test]
+    fn appended_elements_keep_the_applications_chain() {
+        let mut out = array(4, 2);
+        // SAFETY: `out` holds 4 elements and the first 2 are initialised.
+        let (count, complete) = unsafe { append_hdr(out.as_mut_ptr(), 2, 4) };
+        assert_eq!((count, complete), (4, true));
+        assert_eq!(out[2].surface_format.format, hdr_extra()[0].format);
+        assert_eq!(out[3].surface_format.format, hdr_extra()[1].format);
+        for (i, e) in out.iter().enumerate() {
+            assert_eq!(e.p_next as usize, i + 1);
+        }
+    }
+
+    #[test]
+    fn a_short_array_reports_incomplete() {
+        let mut out = array(3, 2);
+        // SAFETY: `out` holds 3 elements and the first 2 are initialised.
+        let (count, complete) = unsafe { append_hdr(out.as_mut_ptr(), 2, 3) };
+        assert_eq!((count, complete), (3, false));
+    }
+
+    #[test]
+    fn a_format_the_driver_listed_is_not_repeated() {
+        let mut out = array(4, 2);
+        out[1].surface_format = hdr_extra()[0];
+        // SAFETY: `out` holds 4 elements and the first 2 are initialised.
+        let (count, complete) = unsafe { append_hdr(out.as_mut_ptr(), 2, 4) };
+        assert_eq!((count, complete), (3, true));
+        assert_eq!(out[2].surface_format.format, hdr_extra()[1].format);
     }
 }

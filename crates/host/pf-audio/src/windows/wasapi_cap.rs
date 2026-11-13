@@ -872,10 +872,12 @@ fn converge_default(
 }
 
 /// Reads every ready packet into `bytes`, zeroing SILENT ones, and scores holes and empty
-/// reads. `true` when any packet was ready.
+/// reads. `true` when any packet was ready. `scratch` is the reused packet buffer: a release
+/// failure on a lost device comes back as `Err`, where the deque read panics.
 fn read_packets(
     capture: &wasapi::AudioCaptureClient,
     bytes: &mut VecDeque<u8>,
+    scratch: &mut Vec<u8>,
     block_align: usize,
     gaps: &mut LoopbackGaps,
     stats: &mut CaptureStats,
@@ -884,12 +886,12 @@ fn read_packets(
     loop {
         match capture.get_next_packet_size() {
             Ok(Some(0)) | Ok(None) => return Ok(saw),
-            Ok(Some(_n)) => {
+            Ok(Some(n)) => {
                 saw = true;
                 let before = bytes.len();
-                let info = capture
-                    .read_from_device_to_deque(bytes)
-                    .context("read loopback")?;
+                scratch.resize(n as usize * block_align, 0);
+                let (read, info) = capture.read_from_device(scratch).context("read loopback")?;
+                bytes.extend(&scratch[..read as usize * block_align]);
                 // WASAPI: a SILENT packet's data is not defined; it is silence.
                 if info.flags.silent {
                     bytes.range_mut(before..).for_each(|b| *b = 0);
@@ -938,6 +940,7 @@ fn run_loop(
     // 4 bytes per f32 sample, interleaved.
     let block_align = channels as usize * 4;
     let mut bytes: VecDeque<u8> = VecDeque::new();
+    let mut scratch: Vec<u8> = Vec::new();
     let mut last_fp_check = Instant::now();
     // 30 s with zero packets: a broken loopback looks like a quiet desktop. Info, not warn —
     // idle hosts are silent — except last-resort, where the plan already knew the tap is silent.
@@ -965,6 +968,7 @@ fn run_loop(
         saw_packets |= read_packets(
             &opened.capture,
             &mut bytes,
+            &mut scratch,
             block_align,
             &mut gaps,
             &mut stats,

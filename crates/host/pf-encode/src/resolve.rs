@@ -8,6 +8,8 @@ use crate::*;
 use anyhow::Result;
 use std::collections::HashMap;
 use std::sync::{Arc, LazyLock, Mutex, OnceLock};
+#[cfg(any(target_os = "linux", target_os = "windows"))]
+use std::time::{Duration, Instant};
 
 // One module per OS, each answering the same `pub(crate)` questions; Linux's free public
 // functions re-export from here.
@@ -56,12 +58,12 @@ mod imp {
         None
     }
 
-    pub(crate) fn hevc_444(_: &Resolved) -> bool {
-        false
+    pub(crate) fn hevc_444(_: &Resolved) -> Option<bool> {
+        Some(false)
     }
 
-    pub(crate) fn ten_bit(_: &Resolved, _codec: Codec) -> bool {
-        false
+    pub(crate) fn ten_bit(_: &Resolved, _codec: Codec) -> Option<bool> {
+        Some(false)
     }
 
     pub(crate) fn sdr10(_: &Resolved, _codec: Codec) -> bool {
@@ -221,17 +223,22 @@ impl Resolved {
     }
 
     /// Whether the backend can emit 4:4:4 for `codec`, asked before Welcome. 4:4:4 is HEVC and
-    /// PyroWave only; VAAPI/AMF/QSV must be probed, never assumed.
+    /// PyroWave only; VAAPI/AMF/QSV must be probed, never assumed. A verdict whose probe could
+    /// not ask is `false` for this call, and asked again once [`RETRY_AFTER`] has passed.
     pub fn can_encode_444(&self, codec: Codec) -> bool {
         match codec {
             // Own RGB→YCbCr CSC from a full-chroma source — no GPU encode probe.
             // See `design/pyrowave-444-hdr.md`.
             Codec::PyroWave => cfg!(any(target_os = "linux", target_os = "windows")),
             Codec::H265 if cfg!(any(target_os = "linux", target_os = "windows")) => {
-                *self.hevc_444.get_or_init(|| {
-                    let supported = imp::hevc_444(self);
-                    tracing::info!(supported, "HEVC 4:4:4 encode capability probed");
-                    supported
+                if let Some(v) = self.hevc_444.get() {
+                    return *v;
+                }
+                imp::hevc_444(self).is_some_and(|supported| {
+                    *self.hevc_444.get_or_init(|| {
+                        tracing::info!(supported, "HEVC 4:4:4 encode capability probed");
+                        supported
+                    })
                 })
             }
             _ => false,
@@ -240,7 +247,8 @@ impl Resolved {
 
     /// Whether the backend can emit 10-bit for `codec` (HEVC Main10 / AV1), asked before
     /// Welcome. Without this gate `PUNKTFUNK_10BIT` would negotiate 10-bit and then emit 8-bit
-    /// (label HDR / stream SDR).
+    /// (label HDR / stream SDR). A verdict whose probe could not ask is `false` for this call,
+    /// and asked again once [`RETRY_AFTER`] has passed.
     pub fn can_encode_10bit(&self, codec: Codec) -> bool {
         if !codec.supports_10bit() || !cfg!(any(target_os = "linux", target_os = "windows")) {
             return false;
@@ -254,10 +262,14 @@ impl Resolved {
         let Some(slot) = codec_slot(codec) else {
             return false;
         };
-        *self.ten_bit[slot].get_or_init(|| {
-            let supported = imp::ten_bit(self, codec);
-            tracing::info!(codec = ?codec, supported, "10-bit encode capability probed");
-            supported
+        if let Some(v) = self.ten_bit[slot].get() {
+            return *v;
+        }
+        imp::ten_bit(self, codec).is_some_and(|supported| {
+            *self.ten_bit[slot].get_or_init(|| {
+                tracing::info!(codec = ?codec, supported, "10-bit encode capability probed");
+                supported
+            })
         })
     }
 
@@ -322,27 +334,92 @@ fn resolve_in(
     r
 }
 
-/// `probe` until it finds a codec. `None` leaves `cell` empty, so the next ask probes again,
-/// and warns once per `missed`; the caller advertises its superset meanwhile.
+/// How long a probe that could not ask stays unasked. A driver still starting is up within a
+/// few seconds; a box that never answers costs one probe per half minute, not one per handshake
+/// ask and `/serverinfo` poll.
 #[cfg(any(target_os = "linux", target_os = "windows"))]
-fn probe_until_found(
-    cell: &OnceLock<CodecSupport>,
+const RETRY_AFTER: Duration = Duration::from_secs(30);
+
+/// One probe's kept answer. A probe that could not ask (`None`) leaves the cell empty and is not
+/// run again for [`RETRY_AFTER`]: asks inside that window answer "unanswered" without probing,
+/// so asks made together get the same answer. The probe runs under the cell's lock, one at a
+/// time, and must not ask its own cell.
+#[cfg(any(target_os = "linux", target_os = "windows"))]
+#[derive(Debug)]
+pub(crate) struct Probed<T> {
+    answer: OnceLock<T>,
+    missed_at: Mutex<Option<Instant>>,
+}
+
+#[cfg(any(target_os = "linux", target_os = "windows"))]
+impl<T> Default for Probed<T> {
+    fn default() -> Self {
+        Probed {
+            answer: OnceLock::new(),
+            missed_at: Mutex::new(None),
+        }
+    }
+}
+
+#[cfg(any(target_os = "linux", target_os = "windows"))]
+impl<T: Copy> Probed<T> {
+    /// The kept answer; `None` until a probe has answered.
+    pub(crate) fn get(&self) -> Option<T> {
+        self.answer.get().copied()
+    }
+
+    /// The kept answer, else what `probe` finds, unless one missed inside [`RETRY_AFTER`]. A
+    /// `None` from `probe` starts the window.
+    pub(crate) fn ask(&self, probe: impl FnOnce() -> Option<T>) -> Option<T> {
+        self.ask_at(Instant::now(), probe)
+    }
+
+    /// [`Self::ask`] at `now`, so a test crosses the window without sleeping.
+    fn ask_at(&self, now: Instant, probe: impl FnOnce() -> Option<T>) -> Option<T> {
+        if let Some(v) = self.get() {
+            return Some(v);
+        }
+        let mut missed_at = self.missed_at.lock().unwrap_or_else(|e| e.into_inner());
+        // An ask that waited on the lock reads the answer, or the miss, the first one left.
+        if let Some(v) = self.get() {
+            return Some(v);
+        }
+        if missed_at.is_some_and(|at| now.saturating_duration_since(at) < RETRY_AFTER) {
+            return None;
+        }
+        match probe() {
+            Some(v) => Some(*self.answer.get_or_init(|| v)),
+            None => {
+                *missed_at = Some(now);
+                None
+            }
+        }
+    }
+
+    /// Hand-fill the cell, as a resolution-table row does.
+    #[cfg(test)]
+    pub(crate) fn fill(&self, v: T) {
+        assert!(self.answer.set(v).is_ok(), "a row fills each cell once");
+    }
+}
+
+/// `probe`'s codec set once it finds a codec; `None` while it finds none, warning once per
+/// `missed`. The caller advertises its superset meanwhile.
+#[cfg(any(target_os = "linux", target_os = "windows"))]
+fn codec_found(
     missed: &OnceLock<()>,
     what: &'static str,
     probe: impl FnOnce() -> CodecSupport,
 ) -> Option<CodecSupport> {
-    if let Some(caps) = cell.get() {
-        return Some(*caps);
-    }
     let caps = probe();
     if caps.h264 || caps.h265 || caps.av1 {
-        return Some(*cell.get_or_init(|| caps));
+        return Some(caps);
     }
     missed.get_or_init(|| {
         tracing::warn!(
             probe = what,
-            "encode probe found no codec — advertising the superset and probing again on the \
-             next ask"
+            retry_after_secs = RETRY_AFTER.as_secs(),
+            "encode probe found no codec — advertising the superset and probing again later"
         );
     });
     None
@@ -522,12 +599,11 @@ mod tests {
         assert_eq!(codec_support_wire_mask(none), None);
     }
 
-    /// A codec set that found nothing is not kept: the next ask probes again, and the miss
-    /// warns once (sweep R5-03). A found set is kept and never probed again.
+    /// A codec set that found nothing is unanswered, and warns once; a found set is the answer.
     #[cfg(any(target_os = "linux", target_os = "windows"))]
     #[test]
-    fn a_probe_that_found_nothing_runs_again() {
-        let (cell, missed) = (OnceLock::new(), OnceLock::new());
+    fn a_codec_set_that_found_nothing_is_unanswered() {
+        let missed = OnceLock::new();
         let nothing = CodecSupport {
             h264: false,
             h265: false,
@@ -538,11 +614,39 @@ mod tests {
             h265: true,
             av1: false,
         };
-        assert!(probe_until_found(&cell, &missed, "test", || nothing).is_none());
-        assert!(cell.get().is_none() && missed.get().is_some());
-        let found = probe_until_found(&cell, &missed, "test", || hevc).expect("found");
+        assert!(codec_found(&missed, "test", || nothing).is_none());
+        assert!(missed.get().is_some());
+        let found = codec_found(&missed, "test", || hevc).expect("found");
         assert!(found.h265 && !found.h264);
-        let kept = probe_until_found(&cell, &missed, "test", || panic!("a found set is kept"));
-        assert!(kept.is_some_and(|c| c.h265));
+    }
+
+    /// An unanswered probe is not run again inside the window, runs again once it has passed,
+    /// and an answer is kept for good.
+    #[cfg(any(target_os = "linux", target_os = "windows"))]
+    #[test]
+    fn an_unanswered_probe_waits_out_the_window() {
+        let cell = Probed::<bool>::default();
+        let t0 = Instant::now();
+        let count = std::cell::Cell::new(0u32);
+        let runs = &count;
+        let counted = |v| {
+            move || {
+                runs.set(runs.get() + 1);
+                v
+            }
+        };
+        assert_eq!(cell.ask_at(t0, counted(None)), None);
+        let inside = t0 + RETRY_AFTER - Duration::from_secs(1);
+        assert_eq!(cell.ask_at(inside, counted(Some(true))), None);
+        assert_eq!(runs.get(), 1, "a held-off ask does not probe");
+        // A second miss opens a new window from where it missed.
+        assert_eq!(cell.ask_at(t0 + RETRY_AFTER, counted(None)), None);
+        assert_eq!(cell.ask_at(inside + RETRY_AFTER, counted(Some(true))), None);
+        assert_eq!(runs.get(), 2);
+        let after = t0 + RETRY_AFTER * 2;
+        assert_eq!(cell.ask_at(after, counted(Some(true))), Some(true));
+        assert_eq!(runs.get(), 3);
+        assert_eq!(cell.ask_at(t0, counted(Some(false))), Some(true));
+        assert_eq!(runs.get(), 3, "an answer is kept");
     }
 }

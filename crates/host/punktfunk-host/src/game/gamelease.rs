@@ -599,7 +599,7 @@ fn spawn_watcher(
     if matches!(shared.kind, LeaseKind::Untracked)
         || (matches!(shared.kind, LeaseKind::Nested) && shared.spec.is_empty())
     {
-        reap_later(child);
+        reap_later(child, &shared);
         return None;
     }
     // No matcher (macOS has no launch path): status lease, no poll.
@@ -1079,7 +1079,7 @@ impl Watcher {
         let mut seen_since: Option<Instant> = None;
         loop {
             if self.cancelled() {
-                reap_later(self.child.take());
+                reap_later(self.child.take(), &self.shared);
                 return None;
             }
             let child_kind = matches!(self.kind, LeaseKind::Child);
@@ -1193,7 +1193,7 @@ impl Watcher {
                 if let Some(run) = run.as_mut() {
                     run.flush();
                 }
-                reap_later(self.child.take());
+                reap_later(self.child.take(), &self.shared);
                 return;
             }
             let mut live = Vec::new();
@@ -1417,15 +1417,20 @@ fn start_secs(p: crate::procscan::ProcRef) -> f64 {
 
 /// The session left but the game runs on: wait for the child on a thread of
 /// its own so it never lingers as a zombie under the host. One thread per
-/// unwatched game, gone with it.
-fn reap_later(child: Option<std::process::Child>) {
+/// unwatched game, gone with it. The reap frees the pid, so the lease forgets it
+/// right after ([`LeaseShared::forget_child`]) and the end-game ladder never signals it.
+fn reap_later(child: Option<std::process::Child>, shared: &Arc<LeaseShared>) {
     let Some(mut c) = child else {
         return;
     };
+    let shared = Arc::downgrade(shared);
     let _ = std::thread::Builder::new()
         .name("pf1-childwait".into())
         .spawn(move || {
             let _ = c.wait();
+            if let Some(shared) = shared.upgrade() {
+                shared.forget_child();
+            }
         });
 }
 
@@ -2663,6 +2668,36 @@ mod tests {
         // SAFETY: probing our own dead child with WNOHANG; ECHILD (reaped) is the pass.
         let r = unsafe { libc::waitpid(pid as i32, &mut status, libc::WNOHANG) };
         assert_eq!(r, -1, "the child must have been reaped");
+    }
+
+    /// The waiter that reaps a child after the session left also clears the lease's copy: the
+    /// pid is free from then on, and the end-game ladder would signal whoever got it next.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_child_reaped_after_the_session_left_is_forgotten() {
+        let child = std::process::Command::new("sleep")
+            .arg("1")
+            .spawn()
+            .expect("spawn sleep");
+        let lease = open(
+            req("custom:forget", DetectSpec::default(), false),
+            Box::new(|| {}),
+        );
+        let shared = lease.shared();
+        *shared.child.lock().unwrap() = Some(OwnedChild {
+            pid: child.id(),
+            group_leader: false,
+        });
+        reap_later(Some(child), &shared);
+        assert!(shared.owned_child().is_some(), "still running, still ours");
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while shared.owned_child().is_some() && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert!(
+            shared.owned_child().is_none(),
+            "a reaped pid must not stay on the lease"
+        );
     }
 
     /// A Steam title is launched with `steam steam://rungameid/…`, and with Steam not already

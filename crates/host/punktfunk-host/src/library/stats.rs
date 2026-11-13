@@ -102,11 +102,18 @@ fn save_file(file: &StatsFile) -> Result<()> {
 }
 
 /// Load-modify-save under one lock: a launch and another game's minute flush
-/// run on different threads and must not lose each other's write.
+/// run on different threads and must not lose each other's write. A file that does not parse
+/// is left as it is.
 fn update(id: &str, f: impl FnOnce(&mut TitleStats)) {
     static LOCK: Mutex<()> = Mutex::new(());
     let _serial = LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    let mut file = load_file();
+    let mut file: StatsFile = match read_json_for_write(&stats_path()) {
+        Ok(file) => file,
+        Err(e) => {
+            tracing::warn!(error = %e, id, "library-stats.json not updated");
+            return;
+        }
+    };
     f(file.games.entry(id.to_string()).or_default());
     if let Err(e) = save_file(&file) {
         tracing::warn!(error = %e, id, "library-stats.json not written");

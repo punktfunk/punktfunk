@@ -216,7 +216,9 @@ impl VirtualMouse {
             .is_some_and(|kids| !kids.is_empty())
     }
 
-    /// The driver drains the ring and ticked within [`DRIVER_STALE`].
+    /// The driver drains the ring and ticked within [`DRIVER_STALE`]. A driver coming back starts
+    /// from rest: a press `SendInput` released meanwhile must not return with the first report,
+    /// so the mirror clears and one neutral report per collection follows.
     fn ready(&mut self) -> bool {
         let shm = self.channel.data();
         let ring = shm.load_u32(OFF_FEATURES, Ordering::Acquire) & MOUSE_FEATURE_RING != 0;
@@ -229,6 +231,7 @@ impl VirtualMouse {
             self.was_ready = ready;
             if ready {
                 tracing::info!("input: mouse and keyboard go through the virtual HID device");
+                self.rest();
             } else {
                 tracing::warn!(
                     driver_ring = ring,
@@ -237,6 +240,23 @@ impl VirtualMouse {
             }
         }
         ready
+    }
+
+    /// Nothing held: the mirror clears and one neutral report per collection follows.
+    fn rest(&mut self) {
+        self.buttons = 0;
+        self.keys = [0; KEYBOARD_BITMAP_LEN];
+        self.push(&relative_report(0, 0, 0, 0, 0));
+        let report = keyboard_report(&self.keys);
+        self.push(&report);
+    }
+
+    /// Let go of every button and key the device holds, for an injector that goes away with
+    /// presses down. Writes nothing when nothing is held.
+    pub fn release_held(&mut self) {
+        if self.buttons != 0 || self.keys != [0; KEYBOARD_BITMAP_LEN] {
+            self.rest();
+        }
     }
 
     /// Queue one report, ringing the doorbell when the driver may have stopped draining.
@@ -315,17 +335,20 @@ impl VirtualMouse {
     }
 
     /// Button `bit` (HID order: primary, secondary, middle, X1, X2) down or up. Buttons travel
-    /// the relative collection whichever collection moved the pointer.
-    pub fn button(&mut self, bit: u8, down: bool) {
+    /// the relative collection whichever collection moved the pointer. `true` when the
+    /// mirror moved; an up that moved nothing is a press this device never made.
+    pub fn button(&mut self, bit: u8, down: bool) -> bool {
         let held = if down {
             self.buttons | 1 << bit
         } else {
             self.buttons & !(1 << bit)
         };
-        if held != self.buttons {
+        let changed = held != self.buttons;
+        if changed {
             self.buttons = held;
             self.push(&relative_report(held, 0, 0, 0, 0));
         }
+        changed
     }
 
     /// Wheel motion in 1/120 notches, scaled to the counts per notch Windows set up.
@@ -355,18 +378,21 @@ impl VirtualMouse {
     }
 
     /// Key `usage` (keyboard page) down or up. A repeated down changes nothing: Windows
-    /// repeats a held HID key itself.
-    pub fn key(&mut self, usage: u8, down: bool) {
+    /// repeats a held HID key itself. `true` when the mirror moved; an up that moved nothing is
+    /// a press this device never made.
+    pub fn key(&mut self, usage: u8, down: bool) -> bool {
         let Some(byte) = self.keys.get_mut(usize::from(usage / 8)) else {
-            return;
+            return false;
         };
         let bit = 1 << (usage % 8);
         let held = if down { *byte | bit } else { *byte & !bit };
-        if held != *byte {
+        let changed = held != *byte;
+        if changed {
             *byte = held;
             let report = keyboard_report(&self.keys);
             self.push(&report);
         }
+        changed
     }
 
     /// Whether the doorbell collection is open, so reports leave without waiting for a tick.
@@ -418,6 +444,11 @@ pub(crate) fn with_hid<R>(f: impl FnOnce(&mut VirtualMouse) -> R) -> Option<R> {
     let mut resident = RESIDENT.lock().unwrap_or_else(PoisonError::into_inner);
     let m = resident.as_mut()?;
     (m.route_input && m.fenced && m.ready()).then(|| f(m))
+}
+
+/// Let go of every button and key the resident device holds. A no-op while it carries no input.
+pub(crate) fn release_hid() {
+    with_hid(VirtualMouse::release_held);
 }
 
 /// Ensure the one process-wide virtual mouse exists. Called from

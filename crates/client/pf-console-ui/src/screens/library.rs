@@ -677,9 +677,9 @@ impl LibraryScreen {
         self.arriving
             .extend(decoded.map(|(id, poster)| (id, poster.into_image())));
         self.adopt_decoded();
-        // What this screen lacks goes to its decoder. The bytes stay in the model, so a cover
-        // another screen took, or one this screen evicted, comes back here.
-        // Another screen's cover is a clone, no decode and no upload; the rest decode here.
+        // What this screen lacks goes to its decoder, eight a frame and never past its queue.
+        // The bytes stay in the model, so a cover another screen took, or one this screen
+        // evicted, comes back here. Another screen's cover is a clone: no decode, no upload.
         let mut wanted = self.art_wanted();
         wanted.retain(|id| match shared_cover(&self.host.fp_hex, id, k) {
             Some(img) => {
@@ -689,7 +689,8 @@ impl LibraryScreen {
             None => true,
         });
         let ask = wanted.iter().filter(|id| !self.decoder.pending(id));
-        for (id, bytes) in shared.art_for(ask.map(String::as_str), 8) {
+        let room = self.decoder.room().min(8);
+        for (id, bytes) in shared.art_for(ask.map(String::as_str), room) {
             self.decoder.want(id, bytes, k);
         }
     }

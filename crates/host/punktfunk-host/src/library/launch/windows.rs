@@ -118,9 +118,7 @@ impl WindowsLaunch {
 /// [`crate::gamelease::LeaseRequest::spawned`] only when it owns the game rather
 /// than a protocol hand-off.
 pub fn launch_title(id: &str) -> Result<WindowsLaunch> {
-    let entry = all_games()
-        .into_iter()
-        .find(|g| g.id == id)
+    let entry = find_game_for(&View::here(), id)
         .filter(|g| g.launch.is_some())
         .ok_or_else(|| anyhow::anyhow!("no launchable library entry '{id}'"))?;
     let spec = entry.launch.clone().expect("filtered to Some above");

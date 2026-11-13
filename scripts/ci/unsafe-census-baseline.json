@@ -34,6 +34,6 @@
     "crates/host/punktfunk-host": 63,
     "crates/install/punktfunk-tray": 7,
     "packaging/windows/drivers": 55,
-    "packaging/windows/pf-vkhdr-layer": 38
+    "packaging/windows/pf-vkhdr-layer": 41
   }
 }

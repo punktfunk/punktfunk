@@ -18,6 +18,7 @@
 use anyhow::Result;
 use punktfunk_core::input::{InputEvent, InputKind};
 
+use crate::held::HeldInput;
 use crate::scroll::{ScrollBackend, ScrollMapper, ScrollOp};
 use std::mem::size_of;
 use windows::Win32::System::StationsAndDesktops::{
@@ -49,6 +50,9 @@ pub struct SendInputInjector {
     touch_failed: bool,
     /// Scroll lowering, legacy and normalized, onto WHEEL/HWHEEL clicks.
     scroll: ScrollMapper,
+    /// Keys and buttons pressed through `SendInput`, lifted when the injector goes. The HID
+    /// device keeps its own mirror, lifted through it.
+    held: HeldInput,
 }
 
 // SAFETY: the only non-`Send` field is `Option<HDESK>` (`SyntheticTouch` is `Send`
@@ -64,6 +68,7 @@ impl SendInputInjector {
             touch: None,
             touch_failed: false,
             scroll: ScrollMapper::new(ScrollBackend::Windows),
+            held: HeldInput::default(),
         };
         me.reattach_input_desktop(); // best-effort
         tracing::info!("SendInput injector ready (Win32 KeyboardAndMouse)");
@@ -129,7 +134,8 @@ impl SendInputInjector {
 
     /// Send `event` as a report from the resident HID device, which raw input and anti-cheat
     /// read as hardware. `false` leaves it to `SendInput`: no device (a seat host, an old
-    /// driver), text, touch, an unmapped key, or a point off the primary monitor.
+    /// driver), text, touch, an unmapped key, or a point off the primary monitor. A release
+    /// follows its press: an up the device never held was pressed through `SendInput`.
     fn inject_hid(&mut self, event: &InputEvent) -> bool {
         use crate::mouse_windows::with_hid;
         let down = matches!(event.kind, InputKind::MouseButtonDown | InputKind::KeyDown);
@@ -141,7 +147,7 @@ impl SendInputInjector {
                 .is_some(),
             InputKind::MouseButtonDown | InputKind::MouseButtonUp => hid_button_bit(event.code)
                 .and_then(|bit| with_hid(|m| m.button(bit, down)))
-                .is_some(),
+                .is_some_and(|changed| changed || down),
             InputKind::MouseScroll | InputKind::Scroll => with_hid(|m| {
                 for op in self.scroll.plan(event) {
                     if let ScrollOp::Discrete120 { horizontal, value } = op {
@@ -159,7 +165,9 @@ impl SendInputInjector {
                     key_scan(vk, semantic, |vk| scan_ex(vk, semantic))
                         .and_then(|(scan, ext)| crate::keymap::scan_to_hid_usage(scan, ext))
                 };
-                usage.and_then(|u| with_hid(|m| m.key(u, down))).is_some()
+                usage
+                    .and_then(|u| with_hid(|m| m.key(u, down)))
+                    .is_some_and(|changed| changed || down)
             }
             _ => false,
         }
@@ -196,7 +204,13 @@ impl SendInputInjector {
 }
 
 impl Drop for SendInputInjector {
+    /// Lift what is still down first: the HID device outlives the injector, and a failed inject
+    /// drops it with a press whose up is later in the batch or inside the reopen backoff.
     fn drop(&mut self) {
+        crate::mouse_windows::release_hid();
+        for up in self.held.release() {
+            let _ = self.inject(&up);
+        }
         if let Some(h) = self.desktop.take() {
             // SAFETY: `h` is the `HDESK` this injector owned (moved out of `self.desktop`);
             // `CloseDesktop` runs once here in `Drop` on that still-valid handle, with no later use —
@@ -212,6 +226,15 @@ impl InputInjector for SendInputInjector {
     fn inject(&mut self, event: &InputEvent) -> Result<()> {
         if self.inject_hid(event) {
             return Ok(());
+        }
+        if matches!(
+            event.kind,
+            InputKind::KeyDown
+                | InputKind::KeyUp
+                | InputKind::MouseButtonDown
+                | InputKind::MouseButtonUp
+        ) {
+            self.held.note(event);
         }
         let down = matches!(event.kind, InputKind::MouseButtonDown | InputKind::KeyDown);
         match event.kind {

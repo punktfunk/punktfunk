@@ -47,6 +47,13 @@ Modifications by the punktfunk project:
     measurably slow (~26 % under load) — the PCM backed up into xruns and
     anything clocked off the device dragged. Late completions now catch up;
     a stall beyond 20 ms re-anchors instead of fast-forwarding.
+  - Requests the simulation does not serve no longer panic: a control request
+    no handler takes (standard `GET_STATUS` to the device, anything to an
+    endpoint) or one addressed past the last interface gets the failed
+    `RET_SUBMIT` a stalled endpoint sends, and a `CMD_SUBMIT` before the
+    import ends that connection with an error. Upstream hit `unimplemented!`,
+    an unchecked index and `unwrap` there, so any local `lsusb -v` dropped
+    the virtual device.
 
 Only the USB/IP server *simulation* path is retained: the device model, the
 USB/IP wire protocol, and the `UsbInterfaceHandler` trait. The original MIT

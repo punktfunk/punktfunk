@@ -495,6 +495,12 @@ fn run_codec(
         ev_tx,
         last_gap_ns.clone(),
     );
+    // No feeder, no access units: the run ends as a failed one. Unclean, so a thread shortage
+    // never steps the bring-up floor down.
+    if !feeder.running() {
+        state.fatal = true;
+        state.unclean = true;
+    }
     // ADPF: register this thread now. `aux` creates the session on the first presented frame, by
     // when the pump, audio and feeder threads have registered their tids too.
     client.register_hot_thread();
@@ -1755,9 +1761,15 @@ impl Feeder {
                         held,
                     );
                 })
+                .map_err(|e| log::error!("decode: feeder thread spawn failed: {e}"))
                 .ok()
         };
         Feeder { stop, held, join }
+    }
+
+    /// The thread started. `false` after a failed spawn, which `spawn` has logged.
+    fn running(&self) -> bool {
+        self.join.is_some()
     }
 
     /// The loop took `ev` off the channel: an AU head leaves the backlog. The feeder counts a

@@ -8,11 +8,12 @@
 //! or 48/96 kHz PCM of 1–5 ms (`0xD3`, `design/hi-res-audio.md`). Graph format is
 //! F32LE at every rate — core already decoded to f32 (process-callback `stride`).
 
-use anyhow::{Context, Result};
+use anyhow::{anyhow, Context, Result};
 use punktfunk_core::client::NativeClient;
 use std::collections::VecDeque;
 use std::sync::mpsc::{Receiver, SyncSender, TrySendError};
 use std::sync::Arc;
+use std::time::Duration;
 
 /// Mic uplink only. libopus is 48 kHz; playback takes its rate from [`PlaybackFormat`].
 const SAMPLE_RATE: u32 = 48_000;
@@ -20,6 +21,9 @@ const SAMPLE_RATE: u32 = 48_000;
 const MIC_CHANNELS: usize = 1;
 
 struct Terminate;
+
+/// The longest `spawn` waits for a stream to connect. A connect that lands later is stopped.
+const OPEN_TIMEOUT: Duration = Duration::from_secs(3);
 
 /// PipeWire endpoint for the settings pickers.
 #[derive(Clone, Debug)]
@@ -126,7 +130,8 @@ pub struct AudioPlayer {
 }
 
 impl AudioPlayer {
-    /// No PipeWire → `Err`; caller continues video-only. `policy` is the session's
+    /// No PipeWire, or a stream that does not connect within [`OPEN_TIMEOUT`] → `Err`; caller
+    /// continues video-only. `policy` is the session's
     /// ([`punktfunk_core::audio::AudioPlayout::jitter`]); the callback owns it from here.
     pub fn spawn(
         fmt: PlaybackFormat,
@@ -143,24 +148,34 @@ impl AudioPlayer {
         let sync_cb = sync.clone();
         let vitals: Arc<crate::audio_vitals::PlaybackVitals> = Arc::default();
         let vitals_cb = vitals.clone();
+        let (ready_tx, ready_rx) = std::sync::mpsc::sync_channel::<Result<()>>(1);
         let thread = std::thread::Builder::new()
             .name("punktfunk-audio".into())
             .spawn(move || {
-                if let Err(e) =
-                    pw_thread(pcm_rx, recycle_tx, quit_rx, fmt, policy, sync_cb, vitals_cb)
-                {
-                    tracing::warn!(error = %e, "audio playback thread ended");
+                if let Err(e) = pw_thread(
+                    pcm_rx, recycle_tx, quit_rx, &ready_tx, fmt, policy, sync_cb, vitals_cb,
+                ) {
+                    tracing::warn!(error = %format!("{e:#}"), "audio playback thread ended");
+                    let _ = ready_tx.try_send(Err(e));
                 }
             })
             .context("spawn audio thread")?;
-        Ok(AudioPlayer {
-            pcm_tx,
-            recycle_rx,
-            quit_tx,
-            thread: Some(thread),
-            sync,
-            vitals,
-        })
+        match ready_rx.recv_timeout(OPEN_TIMEOUT) {
+            Ok(Ok(())) => Ok(AudioPlayer {
+                pcm_tx,
+                recycle_rx,
+                quit_tx,
+                thread: Some(thread),
+                sync,
+                vitals,
+            }),
+            Ok(Err(e)) => Err(e),
+            Err(_) => {
+                // The thread quits as soon as its loop runs.
+                let _ = quit_tx.send(Terminate);
+                Err(anyhow!("pipewire playback open timed out"))
+            }
+        }
     }
 
     pub fn sync_cell(&self) -> Arc<punktfunk_core::audio::AudioSyncCell> {
@@ -225,10 +240,13 @@ struct PlayerData {
     vitals: Arc<crate::audio_vitals::PlaybackVitals>,
 }
 
+/// Every `Err` precedes the `ready` signal, which [`AudioPlayer::spawn`] waits on.
+#[allow(clippy::too_many_arguments)] // one call site, `AudioPlayer::spawn`
 fn pw_thread(
     pcm_rx: Receiver<Vec<f32>>,
     recycle_tx: SyncSender<Vec<f32>>,
     quit_rx: pipewire::channel::Receiver<Terminate>,
+    ready: &SyncSender<Result<()>>,
     fmt: PlaybackFormat,
     policy: punktfunk_core::audio::JitterPolicy,
     sync: Arc<punktfunk_core::audio::AudioSyncCell>,
@@ -470,6 +488,7 @@ fn pw_thread(
             &mut params,
         )
         .context("pw stream connect")?;
+    let _ = ready.send(Ok(()));
 
     mainloop.run();
     tracing::debug!("pipewire playback loop exited");
@@ -488,26 +507,38 @@ impl MicStreamer {
     /// source selection, so the first second back is glitchy.
     ///
     /// `echo_cancel` is the Settings toggle; `PUNKTFUNK_NO_AEC=1` overrides it off.
+    ///
+    /// `Err` when the stream does not connect within [`OPEN_TIMEOUT`]: no uplink runs.
     pub fn spawn(
         connector: Arc<NativeClient>,
         muted: Arc<std::sync::atomic::AtomicBool>,
         echo_cancel: bool,
     ) -> Result<MicStreamer> {
         let (quit_tx, quit_rx) = pipewire::channel::channel::<Terminate>();
+        let (ready_tx, ready_rx) = std::sync::mpsc::sync_channel::<Result<()>>(1);
         let thread = std::thread::Builder::new()
             .name("punktfunk-mic".into())
             .spawn(move || {
                 // Capture `process` runs here (no RT_PROCESS): encode and send are on this thread; a late tick is mic latency.
                 crate::audio_rt::boost_and_log("punktfunk-mic");
-                if let Err(e) = mic_thread(&connector, quit_rx, muted, echo_cancel) {
-                    tracing::warn!(error = %e, "mic uplink thread ended");
+                if let Err(e) = mic_thread(&connector, quit_rx, &ready_tx, muted, echo_cancel) {
+                    tracing::warn!(error = %format!("{e:#}"), "mic uplink thread ended");
+                    let _ = ready_tx.try_send(Err(e));
                 }
             })
             .context("spawn mic thread")?;
-        Ok(MicStreamer {
-            quit_tx,
-            thread: Some(thread),
-        })
+        match ready_rx.recv_timeout(OPEN_TIMEOUT) {
+            Ok(Ok(())) => Ok(MicStreamer {
+                quit_tx,
+                thread: Some(thread),
+            }),
+            Ok(Err(e)) => Err(e),
+            Err(_) => {
+                // The thread quits as soon as its loop runs.
+                let _ = quit_tx.send(Terminate);
+                Err(anyhow!("pipewire mic open timed out"))
+            }
+        }
     }
 }
 
@@ -572,9 +603,11 @@ fn echo_cancel_source() -> Option<String> {
     })
 }
 
+/// Every `Err` precedes the `ready` signal, which [`MicStreamer::spawn`] waits on.
 fn mic_thread(
     connector: &Arc<NativeClient>,
     quit_rx: pipewire::channel::Receiver<Terminate>,
+    ready: &SyncSender<Result<()>>,
     muted: Arc<std::sync::atomic::AtomicBool>,
     echo_cancel: bool,
 ) -> Result<()> {
@@ -689,6 +722,7 @@ fn mic_thread(
             &mut params,
         )
         .context("pw mic stream connect")?;
+    let _ = ready.send(Ok(()));
 
     mainloop.run();
     tracing::debug!("pipewire mic capture loop exited");

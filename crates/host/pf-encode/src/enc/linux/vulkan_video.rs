@@ -160,6 +160,9 @@ const AV1_BASE_Q_IDX: u8 = 128;
 struct IntraRefreshCaps {
     /// `maxIntraRefreshCycleDuration`, in frames.
     max_cycle: u32,
+    /// The cycle `PUNKTFUNK_IR_PERIOD_FRAMES` pins, read once so a frame does not scan the
+    /// environment ([`crate::rfi::pinned_cycle`]).
+    pinned: Option<u32>,
 }
 
 /// The two per-frame structs of a wave frame, built unconditionally so a record path can
@@ -219,6 +222,7 @@ fn intra_refresh_caps(
     }
     Ok(IntraRefreshCaps {
         max_cycle: caps.max_intra_refresh_cycle_duration,
+        pinned: crate::rfi::pinned_cycle(),
     })
 }
 
@@ -728,12 +732,13 @@ pub(crate) struct VulkanEncodeCaps {
     pub vcn: Option<crate::vcn_firmware::VcnFirmware>,
 }
 
-/// Probe [`VulkanEncodeCaps`] for `codec`. Uncached — [`crate::vulkan_encode_caps`] owns the
-/// per-(GPU, codec) cache. Depth answers come from `vkGetPhysicalDeviceVideoCapabilitiesKHR`
-/// against a profile at that depth, the same query session open makes.
-pub(crate) fn probe_encode_caps(codec: Codec) -> VulkanEncodeCaps {
+/// Probe [`VulkanEncodeCaps`] for `codec`, uncached: the resolution keeps the answer. Depth
+/// answers come from `vkGetPhysicalDeviceVideoCapabilitiesKHR` against a profile at that depth,
+/// the same query session open makes. `None` when the probe could not ask (the instance did not
+/// come up, or no device list); no loader, no driver and no encode queue are answers.
+pub(crate) fn probe_encode_caps(codec: Codec) -> Option<VulkanEncodeCaps> {
     if !matches!(codec, Codec::H265 | Codec::Av1) {
-        return VulkanEncodeCaps::default();
+        return Some(VulkanEncodeCaps::default());
     }
     let av1 = codec == Codec::Av1;
     let codec_op = codec_op_for(av1);
@@ -743,32 +748,40 @@ pub(crate) fn probe_encode_caps(codec: Codec) -> VulkanEncodeCaps {
     // `find_encode_device` / `depth_supported` get that live instance and the device it returned.
     unsafe {
         let Ok(entry) = ash::Entry::load() else {
-            return VulkanEncodeCaps::default();
+            return Some(VulkanEncodeCaps::default());
         };
         let app = vk::ApplicationInfo::default().api_version(vk::API_VERSION_1_3);
-        let Ok(instance) = entry.create_instance(
+        let instance = match entry.create_instance(
             &vk::InstanceCreateInfo::default().application_info(&app),
             None,
-        ) else {
-            return VulkanEncodeCaps::default();
+        ) {
+            Ok(instance) => instance,
+            // The loader found no driver: this box has no Vulkan.
+            Err(vk::Result::ERROR_INCOMPATIBLE_DRIVER) => {
+                return Some(VulkanEncodeCaps::default());
+            }
+            Err(_) => return None,
         };
         let found = match instance.enumerate_physical_devices() {
-            Ok(devices) => find_encode_device(&instance, &devices, codec_op).map(|(pd, _)| pd),
+            Ok(devices) => {
+                Some(find_encode_device(&instance, &devices, codec_op).map(|(pd, _)| pd))
+            }
             Err(_) => None,
         };
         let caps = match found {
-            Some(pd) => {
+            Some(Some(pd)) => {
                 let vq_inst = ash::khr::video_queue::Instance::new(&entry, &instance);
                 let eight_bit = depth_supported(&vq_inst, pd, codec_op, av1, false);
-                VulkanEncodeCaps {
+                Some(VulkanEncodeCaps {
                     supported: true,
                     eight_bit,
                     ten_bit: depth_supported(&vq_inst, pd, codec_op, av1, true),
                     efc: build::probe_efc_pairs(&instance, &vq_inst, pd, codec_op, av1, !eight_bit),
                     vcn: build::vcn_firmware_of(&instance, pd),
-                }
+                })
             }
-            None => VulkanEncodeCaps::default(),
+            Some(None) => Some(VulkanEncodeCaps::default()),
+            None => None,
         };
         instance.destroy_instance(None);
         caps
@@ -2272,17 +2285,13 @@ impl VulkanVideoEncoder {
     }
 
     /// How this session recovers. It places each stripe and owns the dirty state, so a loss
-    /// mid-wave restarts the sweep and an anchor or a confirmed reference abandons it.
+    /// mid-wave restarts the sweep and an anchor or a confirmed reference abandons it. It reads
+    /// only what the open latched, so it runs every frame without touching the environment.
     fn recovery_policy(&self) -> RecoveryPolicy {
         RecoveryPolicy {
             // RADV's stripe unit is the 64-px CTB row for HEVC and AV1.
             cycle: self.intra_refresh.map(|ir| {
-                crate::rfi::wave_cycle(
-                    self.height.div_ceil(64),
-                    self.fps,
-                    ir.max_cycle,
-                    crate::rfi::pinned_cycle(),
-                )
+                crate::rfi::wave_cycle(self.height.div_ceil(64), self.fps, ir.max_cycle, ir.pinned)
             }),
             mid_wave: MidWave::Restart,
             abandons: true,

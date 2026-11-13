@@ -1148,9 +1148,9 @@ impl Drop for NativeVulkanDecoder {
     fn drop(&mut self) {
         // Join the decode wait first: nothing below may destroy a semaphore under it.
         drop(self.waiter.take());
-        // Run loop drops the presenter's retired frame before joining this pump, so
-        // tokens are in-channel or imminent. Bound below is that hand-off, not GPU work.
-        // Frames never handed to the pump release unsampled.
+        // The run loop drops the presenter's frame and every queued one before joining
+        // this pump, so tokens are in-channel or imminent. Bound below is that hand-off,
+        // not GPU work. Frames never handed to the pump release unsampled.
         for frame in std::mem::take(&mut self.deliverable) {
             if let Err(e) = self.dec.release_frame(&frame, false) {
                 tracing::debug!(error = %e, "releasing an undelivered frame failed");
