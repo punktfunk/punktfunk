@@ -1030,9 +1030,23 @@ pub(crate) async fn reconcile_provider_entries(
     Extension(lane): Extension<AuthLane>,
     OwnedId(provider, _): OwnedId<ProviderId>,
     Query(q): Query<ReconcileQuery>,
-    ApiJson(mut inputs): ApiJson<Vec<crate::library::ProviderEntryInput>>,
+    ApiJson(inputs): ApiJson<Vec<crate::library::ProviderEntryInput>>,
 ) -> Response {
     let store = q.store.filter(|s| !s.is_empty());
+    // Validation, art checks and the catalog diff read files and the registry. A plugin's timer
+    // repeats them every tick, so they run off the async workers.
+    tokio::task::spawn_blocking(move || reconcile_provider_now(lane, provider, store, inputs))
+        .await
+        .unwrap_or_else(|e| host_error("library change refused", &e))
+}
+
+/// [`reconcile_provider_entries`] once the extractors have run. Blocking IO.
+fn reconcile_provider_now(
+    lane: AuthLane,
+    provider: String,
+    store: Option<String>,
+    mut inputs: Vec<crate::library::ProviderEntryInput>,
+) -> Response {
     if let Some(store) = &store {
         if let Err(e) = crate::library::validate_store_claim(store) {
             return api_error(StatusCode::BAD_REQUEST, &e);
@@ -1212,12 +1226,13 @@ pub(crate) async fn report_provider_running(
 ) -> Response {
     // Map the provider's `external_id`s to catalog library ids. Only published entries
     // resolve, so a report cannot name a title it does not own.
-    let mine: Vec<(String, String)> = crate::library::load_custom()
-        .into_iter()
+    let mine: Vec<(String, String)> = crate::library::catalog()
+        .entries
+        .iter()
         .filter(|e| e.provider.as_deref() == Some(provider.as_str()))
         .filter_map(|e| {
             let external = e.external_id.clone()?;
-            Some((external, crate::library::library_id_for(&e)))
+            Some((external, crate::library::library_id_for(e)))
         })
         .collect();
     let owned: std::collections::HashSet<String> = mine.iter().map(|(_, id)| id.clone()).collect();

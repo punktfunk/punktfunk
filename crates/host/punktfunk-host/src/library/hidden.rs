@@ -58,9 +58,12 @@ pub(super) fn store_of(id: &str) -> &str {
 }
 
 /// Hides `id` in `view`'s layer. Not checked against the live catalog: a title can be absent
-/// (launcher closed, disk unmounted) and the hide must still stick when it returns.
+/// (launcher closed, disk unmounted) and the hide must still stick when it returns. Load-edit-save
+/// runs under one lock, and a file that does not parse is refused rather than replaced.
 pub fn set_entry_hidden(view: &View, id: &str, hidden: bool) -> Result<bool> {
-    let mut settings = load_settings(view);
+    static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let _serial = LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let mut settings: HiddenSettings = read_json_for_write(&view.path(FILE))?;
     let was_hidden = settings.hidden.iter().any(|h| h == id);
     if was_hidden == hidden {
         return Ok(hidden);

@@ -277,12 +277,13 @@ fn changed(app: &str, title: &str, state: &str) {
 /// `provider`'s titles by `external_id`: library id and title. Only published entries resolve,
 /// so a report can't name a title it doesn't own.
 fn owned_by(provider: &str) -> HashMap<String, (String, String)> {
-    super::load_custom()
-        .into_iter()
+    super::catalog()
+        .entries
+        .iter()
         .filter(|e| e.provider.as_deref() == Some(provider))
         .filter_map(|e| {
             let external = e.external_id.clone()?;
-            Some((external, (super::library_id_for(&e), e.title.clone())))
+            Some((external, (super::library_id_for(e), e.title.clone())))
         })
         .collect()
 }

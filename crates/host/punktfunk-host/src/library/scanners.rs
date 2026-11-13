@@ -159,11 +159,13 @@ pub(crate) fn disabled_scanners(view: &View) -> HashSet<String> {
 pub fn list_scanners(view: &View) -> Vec<ScannerInfo> {
     let (by_box, by_profile) = disabled_layers(view);
     let claims = crate::library::claimed_stores();
-    let mut entries = crate::library::load_custom();
+    let catalog = crate::library::catalog();
     let seat = view.reach.linux_seat;
-    if seat {
-        entries.retain(plays_on_a_seat);
-    }
+    let entries: Vec<&CustomEntry> = catalog
+        .entries
+        .iter()
+        .filter(|e| !seat || plays_on_a_seat(e))
+        .collect();
 
     let mut plugin_ids: Vec<(String, String)> = claims
         .iter()
@@ -229,7 +231,8 @@ fn store_label(id: &str) -> String {
 
 /// Enable or disable one source in `view`'s layer. `None` (unknown or never reconciled) → mgmt
 /// maps to 404. Persists and emits `library.changed` only when the layer's state changed
-/// (repeated PUT is a no-op). A profile's `enabled` clears only its own switch.
+/// (repeated PUT is a no-op). A profile's `enabled` clears only its own switch. Load-edit-save
+/// runs under one lock, and a file that does not parse is refused rather than replaced.
 pub fn set_scanner_enabled(
     view: &View,
     id: &str,
@@ -238,22 +241,30 @@ pub fn set_scanner_enabled(
     if !list_scanners(view).iter().any(|s| s.id == id) {
         return Ok(None);
     }
-    let mut settings = load_settings(view);
-    let was_disabled = settings.disabled.iter().any(|d| d == id);
-    if enabled != was_disabled {
-        return Ok(Some(list_scanners(view)));
+    let changed = {
+        static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        let _serial = LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let mut settings: ScannerSettings = read_json_for_write(&view.path(FILE))?;
+        let was_disabled = settings.disabled.iter().any(|d| d == id);
+        if enabled != was_disabled {
+            false
+        } else {
+            if enabled {
+                settings.disabled.retain(|d| d != id);
+            } else {
+                settings.disabled.push(id.to_string());
+                settings.disabled.sort();
+                settings.disabled.dedup();
+            }
+            save_json(&view.path(FILE), &serde_json::to_string_pretty(&settings)?)?;
+            true
+        }
+    };
+    if changed {
+        crate::events::emit(crate::events::EventKind::LibraryChanged {
+            source: id.to_string(),
+        });
     }
-    if enabled {
-        settings.disabled.retain(|d| d != id);
-    } else {
-        settings.disabled.push(id.to_string());
-        settings.disabled.sort();
-        settings.disabled.dedup();
-    }
-    save_json(&view.path(FILE), &serde_json::to_string_pretty(&settings)?)?;
-    crate::events::emit(crate::events::EventKind::LibraryChanged {
-        source: id.to_string(),
-    });
     Ok(Some(list_scanners(view)))
 }
 

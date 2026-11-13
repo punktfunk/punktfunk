@@ -274,7 +274,8 @@ pub fn overrides_for(view: &View, id: &str) -> Option<GameOverrides> {
 
 /// Load `view`'s layer, change and save it under one lock, then one `library.changed` per source
 /// `f` names. A bulk assign is many writes at once and must not lose one. No change, no save.
-/// `f` also gets the shared override ids a profile's entry may name in the box's file.
+/// `f` also gets the shared override ids a profile's entry may name in the box's file. A layer
+/// file that does not parse is refused rather than replaced.
 fn mutate<T>(
     view: &View,
     f: impl FnOnce(
@@ -288,7 +289,9 @@ fn mutate<T>(
         Some(_) => load_overrides(&view.base()).sets.into_keys().collect(),
         None => BTreeSet::new(),
     };
-    let mut doc = load_overrides(view);
+    let mut doc: OverridesDoc =
+        read_json_for_write(&view.path(FILE)).map_err(OverrideError::Save)?;
+    doc.version = VERSION;
     let before = doc.clone();
     let (out, sources) = f(&mut doc, &box_sets)?;
     if doc == before {
