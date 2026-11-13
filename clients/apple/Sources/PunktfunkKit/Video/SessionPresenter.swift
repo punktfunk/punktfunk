@@ -621,8 +621,8 @@ final class SessionPresenter {
         if let lastLayout { layout(in: lastLayout.bounds, contentsScale: lastLayout.contentsScale) }
     }
 
-    /// Stop the active pump/pipeline (≤ one poll timeout; stage-2 joins its pump) and detach the
-    /// stage-2 layer + link. Does not close the connection — that stays with whoever owns it.
+    /// Stop the active pump or pipeline (each joins its threads, ≤ one poll timeout) and detach
+    /// the stage-2 layer + link. Does not close the connection — that stays with whoever owns it.
     /// Idempotent.
     func stop() {
         restart = nil

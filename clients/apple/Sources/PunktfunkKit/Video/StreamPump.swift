@@ -14,17 +14,16 @@ private let pumpLog = ClientLog(category: "video")
 /// a restart hands the old pump its own token, so it can never be revived by a newer start()).
 final class StreamPump {
     private let token = StopFlag()
+    /// Signalled as the pump thread exits; the first `stop` waits on it.
+    private let exited = DispatchSemaphore(value: 0)
+    private var joinable = false
 
     /// Pump thread: pull AUs, wrap, enqueue. Non-IDR AUs before the first format
-    /// description are dropped. `onFrame`/`onSessionEnd` fire on the pump thread.
+    /// description are dropped. `onFrame`/`onSessionEnd` fire on the pump thread. Main thread.
     ///
-    /// `endToEndMeter` is stage-1's ONLY latency instrument, and it measures capture→ENQUEUE —
-    /// not capture→glass like the Metal rungs: the layer decodes AND presents after our hand-off,
-    /// and AVSampleBufferDisplayLayer has no presented callback, so the tail past enqueue (its
-    /// internal decode + the video-plane flip) is unmeasurable from the app. Cross-rung
-    /// comparisons must read this as e2e MINUS decode+display and settle the remainder on
-    /// camera. It is still worth wiring: matching pre-tail halves between rungs pins any felt
-    /// difference on the present tail — the video-plane-vs-compositor question itself.
+    /// `endToEndMeter` measures capture→ENQUEUE, not capture→glass like the Metal paths: the
+    /// layer decodes and presents after the hand-off and reports no presented time, so a
+    /// comparison across paths reads it as end-to-end minus decode and display.
     func start(
         connection: PunktfunkConnection,
         layer: AVSampleBufferDisplayLayer,
@@ -42,7 +41,9 @@ final class StreamPump {
         nonisolated(unsafe) let layer = layer
         layer.flush() // drop any frames a previous connection left queued
 
+        let exited = exited
         let thread = Thread {
+            defer { exited.signal() }
             var intake = AUIntake(connection: connection)
             // The core assembles each AU in a pool slot, and the sample is that slot.
             var pool = AccessUnitSlotPool(capacity: AccessUnitSlotPool.defaultCapacity)
@@ -107,6 +108,7 @@ final class StreamPump {
         }
         thread.name = "punktfunk-pump"
         thread.qualityOfService = .userInteractive
+        joinable = true
         thread.start()
     }
 
@@ -125,9 +127,13 @@ final class StreamPump {
             Unmanaged.passUnretained(kCFBooleanTrue).toOpaque())
     }
 
-    /// Stop pumping (≤ one poll timeout). Does not close the connection.
+    /// Stop pumping and wait for the pump thread, at most 0.5 s (one 100 ms poll in practice),
+    /// so a restart's pump never runs beside it. Does not close the connection. Main thread.
     func stop() {
         token.stop()
+        guard joinable else { return }
+        joinable = false
+        _ = exited.wait(timeout: .now() + 0.5)
     }
 
     deinit { token.stop() }
