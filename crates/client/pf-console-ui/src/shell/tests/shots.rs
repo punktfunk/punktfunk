@@ -739,12 +739,22 @@ impl Rig {
     }
 }
 
+/// Runs a capture set in `PF_CONSOLE_LANG` (a language tag such as `de`), English without it.
+fn in_shot_language(shots: impl FnOnce()) {
+    let lang = std::env::var("PF_CONSOLE_LANG").unwrap_or_else(|_| "en".into());
+    pf_l10n::with_language(&lang, shots);
+}
+
 /// Play Store TV captures. `PF_CONSOLE_STORE=<dir> cargo test -p pf-console-ui -- --ignored store_shots`.
 /// Android TV passes scale 0 (`SkiaConsoleShell.kt`), so a 1080p panel takes the couch
 /// formula: k = 1080 / 800 = 1.35, the same `render` derives for a plain 1920×1080 viewport.
 #[test]
 #[ignore]
 fn store_shots() {
+    in_shot_language(store_shots_in_language);
+}
+
+fn store_shots_in_language() {
     let rig = Rig::new(
         crate::console::Viewport::plain(1920, 1080),
         crate::platform::Platform::Android,
@@ -823,12 +833,19 @@ fn store_shots() {
 /// Apple scales are `ConsoleView.designScale`: iOS is screen scale × 0.75 on a phone and × 1
 /// on an iPad; macOS is max(short side px / 800, backing × 0.75). webOS passes none, so a
 /// panel takes the couch k = height / 800: 1.35 at 1080p, 2.7 at 4K. The Deck is twice its
-/// 1280×800 panel: k = 2 draws its 1× layout sharp enough for a close render. No safe-area
+/// 1280×800 panel: k = 2 draws its 1× layout sharp enough for a close render. An Android phone
+/// or tablet passes none either, at 2400×1080 and 2560×1600. No safe-area
 /// insets: the backdrop runs edge to edge.
 #[test]
 #[ignore]
 fn website_shots() {
-    use crate::platform::Platform::{Apple, Desktop, WebOS};
+    in_shot_language(website_shots_in_language);
+}
+
+fn website_shots_in_language() {
+    use crate::platform::Platform::{Android, Apple, Desktop, WebOS};
+    // `PF_CONSOLE_ONLY=phone` draws one device.
+    let only = std::env::var("PF_CONSOLE_ONLY").ok();
     let mut rig = Rig::new(crate::console::Viewport::plain(1920, 1080), WebOS);
     for (device, width, height, scale, platform) in [
         ("iphone", 2868, 1320, Some(3.0 * 0.75), Apple),
@@ -837,7 +854,12 @@ fn website_shots() {
         ("tv", 1920, 1080, None, WebOS),
         ("tv-4k", 3840, 2160, None, WebOS),
         ("deck", 2560, 1600, None, Desktop),
+        ("phone", 2400, 1080, None, Android),
+        ("tablet", 2560, 1600, None, Android),
     ] {
+        if only.as_deref().is_some_and(|o| o != device) {
+            continue;
+        }
         rig.viewport = crate::console::Viewport {
             width,
             height,
