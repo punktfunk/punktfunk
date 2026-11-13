@@ -148,11 +148,12 @@ public final class SessionAudio: @unchecked Sendable {
         self.connection = connection
     }
 
-    /// Backstop for an owner dropping us without stop() — unblocks the drain thread
-    /// (which captures the connection strongly, NOT self) within one poll timeout.
-    /// Engine teardown still belongs to stop().
+    /// Backstop for an owner dropping us without stop(): ends the drain thread (it holds the
+    /// connection, not self) within one poll timeout, and the engines with the mic worker,
+    /// which otherwise waits forever for a quantum and keeps the connection alive.
     deinit {
         flag.stop()
+        tearDownEngines()
         // The observers only hold self weakly, so we can be deinited with them still registered;
         // drop them here too rather than leaking them when an owner skips stop().
         deviceWatcher?.stop()
