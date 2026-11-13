@@ -145,18 +145,16 @@ final class Sc2UsbLink {
         return !devices.isEmpty
     }
 
-    /// One match dictionary per USB product id, each pinned to the controller collection's usage
-    /// pair. ⚠ The DEVICE-usage-pair keys, not the primary-usage ones: on-glass (Puck, macOS 27,
-    /// 2026-08-31) each controller interface is ONE `IOHIDDevice` carrying ALL its collections —
-    /// lizard mouse, pointer, lizard keyboard, and the vendor controller (`01:02 01:01 01:06
-    /// ff00:01`) — with PRIMARY usage `0001:0002`, so a primary-usage match finds nothing. The
-    /// pair keys match any declared pair: `ff00:01` selects exactly the four controller slots
-    /// and still excludes the management interface, whose only pair is `ff00:02`.
     /// An SC2 is attached and Input Monitoring lets this app open it. Safe from any thread.
     static func canOpenAttached() -> Bool {
         attached() && IOHIDCheckAccess(kIOHIDRequestTypeListenEvent) == kIOHIDAccessTypeGranted
     }
 
+    /// One match dictionary per USB product id, each pinned to the controller collection's usage
+    /// pair. ⚠ The DEVICE-usage-pair keys, not the primary-usage ones: on macOS 27 each controller
+    /// interface is ONE `IOHIDDevice` carrying ALL its collections (`01:02 01:01 01:06 ff00:01`)
+    /// with PRIMARY usage `0001:0002`, so a primary-usage match finds nothing. `ff00:01` selects
+    /// the four controller slots and excludes the Puck's management interface (`ff00:02`).
     private static func matchingCriteria() -> [CFDictionary] {
         (Sc2Device.usbPIDs + Sc1Device.usbPIDs).map { pid in
             [
