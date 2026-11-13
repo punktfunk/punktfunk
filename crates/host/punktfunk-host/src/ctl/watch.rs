@@ -34,7 +34,7 @@ pub fn run(kinds: Option<&str>, since: Option<u64>) -> Result<()> {
     // cannot be retried; spinning forever hides that from the caller.
     let mut client = Client::connect(None)?;
     loop {
-        match pump(&client, kinds, &mut cursor) {
+        match pump(&client, kinds, &mut cursor, &mut backoff) {
             // The stream ended cleanly (host shutdown) — reconnect like any other drop.
             Ok(()) => emit_control("ctl.disconnected", Some("stream closed by the host")),
             Err(e) if e.code == super::client::EXIT_PIN => return Err(e),
@@ -45,18 +45,22 @@ pub fn run(kinds: Option<&str>, since: Option<u64>) -> Result<()> {
         // Rebuild so we re-read `native-cert.pem`. Reusing the client pins forever if the
         // host regenerated its identity while we were down.
         match Client::connect(None) {
-            Ok(c) => {
-                client = c;
-                backoff = BACKOFF_MIN;
-            }
+            Ok(c) => client = c,
             Err(e) if e.code == super::client::EXIT_PIN => return Err(e),
             Err(e) => emit_control("ctl.disconnected", Some(&e.message)),
         }
     }
 }
 
-/// `Ok(())` means the server closed the stream, not that watch is done.
-fn pump(client: &Client, kinds: Option<&str>, cursor: &mut Option<u64>) -> Result<()> {
+/// `Ok(())` means the server closed the stream, not that watch is done. A line off the
+/// stream resets `backoff`: building a client touches no network, so only the host
+/// answering shows it is up.
+fn pump(
+    client: &Client,
+    kinds: Option<&str>,
+    cursor: &mut Option<u64>,
+    backoff: &mut Duration,
+) -> Result<()> {
     let mut path = String::from("/api/v1/events");
     let mut sep = '?';
     if let Some(k) = kinds {
@@ -74,6 +78,7 @@ fn pump(client: &Client, kinds: Option<&str>, cursor: &mut Option<u64>) -> Resul
     for line in reader.lines() {
         let line =
             line.map_err(|e| Failure::unreachable(format!("event stream read failed: {e}")))?;
+        *backoff = BACKOFF_MIN;
         if line.is_empty() {
             if let Some(k) = kind.take() {
                 dispatch(&k, &data, id, cursor);
