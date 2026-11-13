@@ -137,15 +137,9 @@ public final class GamepadFeedback {
             reset(slot.controller)
             slots[pad] = nil
             let renderer = withRouting { rumbleByPad.removeValue(forKey: pad) }
-            // OFF the main actor. `RumbleRenderer.stop()` is a `queue.sync`, and its body is a
-            // per-motor `CHHapticEngine.stop()` — an XPC round trip to gamecontrollerd, which the
-            // renderer's own notes record as able to hang — plus `DualSenseHID.close()`, whose
-            // blocking `IOHIDDeviceSetReport` goes to a device that has just departed. It also
-            // queues behind any in-flight `setup()`. This runs on every unplug and every pin
-            // change, and the main thread is what drives the presenter's CADisplayLink, so
-            // blocking here hitches the picture mid-stream. The renderer is already detached from
-            // routing above, so nothing observes it after this point.
-            if let renderer { Task.detached { renderer.stop() } }
+            // `stop()` blocks on XPC to gamecontrollerd and a HID write to a departed pad: keep it
+            // off main (the presenter's display link) and off the cooperative pool.
+            if let renderer { DispatchQueue.global(qos: .utility).async { renderer.stop() } }
         }
         for (pad, controller) in want {
             if let slot = slots[pad] {
