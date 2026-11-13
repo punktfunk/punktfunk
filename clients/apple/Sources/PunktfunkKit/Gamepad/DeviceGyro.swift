@@ -70,8 +70,7 @@ extension DeviceGyroRemap {
 public final class DeviceGyro {
     /// Whether this device can source motion at all — gates the settings rows (a device
     /// without an IMU would make the toggle a silent no-op, the rumble mirror's rule).
-    /// One shared probe: Apple recommends a single `CMMotionManager` per app, and the
-    /// settings UI asking per-render must not allocate one each time.
+    /// Probed once: the settings UI asks per render, and must not allocate a manager each time.
     public static let isAvailable: Bool = CMMotionManager().isDeviceMotionAvailable
 
     /// Everything the sample thread touches, behind one lock: the orientation remap (written

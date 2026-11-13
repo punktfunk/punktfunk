@@ -325,7 +325,8 @@ final class RumbleRenderer: @unchecked Sendable {
     private func reconcile(_ slot: inout Motor?, to desired: Float) -> Bool {
         guard var m = slot else { return true }
         defer { slot = m }
-        // Release a handed-off predecessor once it has expired on its own.
+        // Release a handed-off predecessor 0.25 s after its scheduled end: a handle dropped while
+        // it might still play could never be force-stopped.
         if let r = m.retiring, m.engine.currentTime >= r.endsAt + 0.25 {
             m.retiring = nil
         }
