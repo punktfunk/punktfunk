@@ -357,8 +357,8 @@ pub(crate) fn probe_entrypoint(codec: Codec, ten_bit: bool) -> Option<bool> {
     {
         Ok(d) => d,
         Err(e) => {
-            // A codec set that found nothing is probed again on the next ask; the resolution
-            // warns once per entry, so this line stays at debug.
+            // The resolution holds off asking again and warns once per entry, so this line
+            // stays at debug.
             tracing::debug!(error = %format!("{e:#}"), "no VAAPI display to probe");
             return None;
         }

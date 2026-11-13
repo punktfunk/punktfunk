@@ -17,18 +17,16 @@ pub(crate) struct Probes {
     pub(crate) auto_is_vaapi: OnceLock<bool>,
     /// The direct SDK's codec list, 4:4:4 and 10-bit caps, kept only once the driver listed
     /// its codecs.
-    pub(crate) nvenc: OnceLock<NvencFacts>,
+    pub(crate) nvenc: Probed<NvencFacts>,
     /// The AMD/Intel plane's 8-bit codec set ([`Resolved::probe_vaapi_codec_support`]), kept
     /// only once it finds a codec.
-    pub(crate) vaapi: OnceLock<CodecSupport>,
+    pub(crate) vaapi: Probed<CodecSupport>,
     /// Set when the `vaapi` probe found nothing, so the miss warns once.
     pub(crate) vaapi_missed: OnceLock<()>,
     /// libva's 10-bit encode entrypoints, HEVC then AV1, kept once a display answered.
-    pub(crate) vaapi_ten_bit: [OnceLock<bool>; 2],
+    pub(crate) vaapi_ten_bit: [Probed<bool>; 2],
     /// Vulkan Video encode caps, HEVC then AV1, kept once the probe could ask.
-    pub(crate) vulkan: [OnceLock<VulkanFacts>; 2],
-    /// pf-zerocopy's raw lane: `PUNKTFUNK_NVENC_RAW`, and a box that runs the fused convert.
-    pub(crate) nvenc_raw: OnceLock<bool>,
+    pub(crate) vulkan: [Probed<VulkanFacts>; 2],
 }
 
 /// The direct SDK's answers. Codecs fail open (all-`false` is unanswered); 4:4:4 and 10-bit
@@ -397,13 +395,13 @@ impl Resolved {
 
     /// May capture plan the NVENC raw-dmabuf lane? Its identity-scoped health applies the
     /// failure latch later, where the node id is known. Off without direct-SDK NVENC or on
-    /// the AMD/Intel plane.
+    /// the AMD/Intel plane. pf-zerocopy keeps the box's answer, and holds off asking again
+    /// while a worker has not answered, so this keeps no cell of its own.
     pub fn nvenc_raw_dmabuf_ok(&self) -> bool {
         self.inputs.features.nvenc
             && !self.zero_copy_is_vaapi()
-            && *self.probes.nvenc_raw.get_or_init(|| {
-                pf_zerocopy::nvenc_raw_enabled() && pf_zerocopy::fused_convert_available()
-            })
+            && pf_zerocopy::nvenc_raw_enabled()
+            && pf_zerocopy::fused_convert_available()
     }
 
     /// May an HDR capture stay zero-copy on NVIDIA (packed 10-bit PQ/BT.2020 CUDA)? Only
@@ -527,14 +525,13 @@ impl Resolved {
     }
 
     /// The direct SDK's answers, kept once the driver listed its codecs. `None` while the probe
-    /// could not ask; it runs again next ask.
+    /// could not ask; it runs again after [`RETRY_AFTER`].
     fn nvenc(&self) -> Option<NvencFacts> {
-        if let Some(f) = self.probes.nvenc.get() {
-            return Some(*f);
-        }
-        let facts = probe_nvenc();
-        let c = facts.codecs;
-        (c.h264 || c.h265 || c.av1).then(|| *self.probes.nvenc.get_or_init(|| facts))
+        self.probes.nvenc.ask(|| {
+            let facts = probe_nvenc();
+            let c = facts.codecs;
+            (c.h264 || c.h265 || c.av1).then_some(facts)
+        })
     }
 
     /// Whether the open's AMD/Intel arm tries Vulkan Video. The open, the cursor prediction and
@@ -559,18 +556,14 @@ impl Resolved {
 
     /// Vulkan Video encode caps for `codec`. The probe opens its own Vulkan instance; callers
     /// check the feature and the row first. A probe that could not ask answers "none" for this
-    /// call and runs again next ask.
+    /// call and runs again after [`RETRY_AFTER`].
     fn vulkan(&self, codec: Codec) -> VulkanFacts {
         let Some(i) = codec_slot(codec) else {
             return VulkanFacts::default();
         };
-        if let Some(f) = self.probes.vulkan[i].get() {
-            return *f;
-        }
-        match probe_vulkan_encode_caps(codec) {
-            Some(f) => *self.probes.vulkan[i].get_or_init(|| f),
-            None => VulkanFacts::default(),
-        }
+        self.probes.vulkan[i]
+            .ask(|| probe_vulkan_encode_caps(codec))
+            .unwrap_or_default()
     }
 
     /// [`Self::vulkan`] has no pending probe for `codec`: it answered, or nothing asks it.
@@ -605,28 +598,24 @@ impl Resolved {
     }
 
     /// libva's 10-bit entrypoint for `codec` (HEVC Main10; nothing else). `None` while no
-    /// display opened to ask; it runs again next ask.
+    /// display opened to ask; it runs again after [`RETRY_AFTER`].
     fn vaapi_ten_bit(&self, codec: Codec) -> Option<bool> {
         let Some(i) = codec_slot(codec) else {
             return Some(false);
         };
-        if let Some(v) = self.probes.vaapi_ten_bit[i].get() {
-            return Some(*v);
-        }
-        vaapi_native::probe_entrypoint(codec, true)
-            .map(|v| *self.probes.vaapi_ten_bit[i].get_or_init(|| v))
+        self.probes.vaapi_ten_bit[i].ask(|| vaapi_native::probe_entrypoint(codec, true))
     }
 
     /// What the AMD/Intel plane can encode: the native VAAPI session for H.264 and HEVC,
     /// Vulkan Video for HEVC and AV1 — the two arms the open tries, so nothing is advertised
-    /// that would die at open. `None` while the probe finds nothing; it runs again next ask.
+    /// that would die at open. `None` while the probe finds nothing; it runs again after
+    /// [`RETRY_AFTER`].
     fn vaapi_codec_support(&self) -> Option<CodecSupport> {
-        probe_until_found(
-            &self.probes.vaapi,
-            &self.probes.vaapi_missed,
-            "VAAPI",
-            || self.probe_vaapi_codec_support(),
-        )
+        self.probes.vaapi.ask(|| {
+            codec_found(&self.probes.vaapi_missed, "VAAPI", || {
+                self.probe_vaapi_codec_support()
+            })
+        })
     }
 
     /// The probe behind [`Self::vaapi_codec_support`].
@@ -1189,8 +1178,8 @@ mod tests {
                 nvidia: true,
                 ..inputs(pref, FULL)
             });
-            fill(&r.probes.vaapi, ALL);
-            fill(&r.probes.nvenc, nvenc(false, false));
+            r.probes.vaapi.fill(ALL);
+            r.probes.nvenc.fill(nvenc(false, false));
             let _ = (r.wire_caps(), r.is_gpu(), r.zero_copy_is_vaapi());
             assert!(r.probes.auto_is_vaapi.get().is_none(), "{pref}");
         }
@@ -1253,7 +1242,7 @@ mod tests {
             },
         ));
         fill(&vulkan_pin.probes.auto_is_vaapi, true);
-        fill(&vulkan_pin.probes.vaapi, ALL);
+        vulkan_pin.probes.vaapi.fill(ALL);
         assert_eq!(vulkan_pin.wire_caps() & codecs, 0);
         let nvenc_pin = Resolved::new(inputs(
             "nvenc",
@@ -1291,7 +1280,7 @@ mod tests {
     fn an_encoder_row_flip_resolves_afresh() {
         let cache = Mutex::new(HashMap::new());
         let nv = resolve_in(&cache, inputs("nvenc", FULL));
-        fill(&nv.probes.nvenc, nvenc(true, true));
+        nv.probes.nvenc.fill(nvenc(true, true));
         assert!(nv.can_encode_444(Codec::H265));
         let va = resolve_in(&cache, inputs("vaapi", FULL));
         assert!(!Arc::ptr_eq(&nv, &va));
@@ -1314,9 +1303,9 @@ mod tests {
         );
         assert!(!Arc::ptr_eq(&on, &off));
         for r in [&on, &off] {
-            fill(&r.probes.vulkan[0], vulkan(true, true));
-            fill(&r.probes.vulkan[1], vulkan(true, false));
-            fill(&r.probes.vaapi_ten_bit[0], false);
+            r.probes.vulkan[0].fill(vulkan(true, true));
+            r.probes.vulkan[1].fill(vulkan(true, false));
+            r.probes.vaapi_ten_bit[0].fill(false);
         }
         assert!(on.can_encode_10bit(Codec::H265) && !off.can_encode_10bit(Codec::H265));
         assert!(on.native_nv12_ok(Codec::Av1, 8, false, false, false));
@@ -1328,14 +1317,14 @@ mod tests {
     #[test]
     fn the_sdr10_carry_follows_the_backend() {
         let amd = Resolved::new(inputs("vaapi", FULL));
-        fill(&amd.probes.vulkan[1], vulkan(true, false));
+        amd.probes.vulkan[1].fill(vulkan(true, false));
         assert!(amd.carries_sdr10(Codec::H265));
         assert!(
             !amd.carries_sdr10(Codec::Av1),
             "AV1 needs Vulkan's 10-bit profile"
         );
         let amd_av1 = Resolved::new(inputs("vaapi", FULL));
-        fill(&amd_av1.probes.vulkan[1], vulkan(true, true));
+        amd_av1.probes.vulkan[1].fill(vulkan(true, true));
         assert!(amd_av1.carries_sdr10(Codec::Av1));
         assert!(Resolved::new(inputs("nvenc", FULL)).carries_sdr10(Codec::H265));
         let no_sdk = Features {
@@ -1344,7 +1333,7 @@ mod tests {
         };
         assert!(!Resolved::new(inputs("nvenc", no_sdk)).carries_sdr10(Codec::H265));
         let vulkan_pin = Resolved::new(inputs("vulkan", FULL));
-        fill(&vulkan_pin.probes.vulkan[0], vulkan(true, true));
+        vulkan_pin.probes.vulkan[0].fill(vulkan(true, true));
         assert!(vulkan_pin.carries_sdr10(Codec::H265) && !vulkan_pin.carries_sdr10(Codec::H264));
         assert!(!Resolved::new(inputs("software", FULL)).carries_sdr10(Codec::H265));
         assert!(Resolved::new(inputs("software", FULL)).carries_sdr10(Codec::PyroWave));
@@ -1356,7 +1345,7 @@ mod tests {
     }
 
     /// A direct-SDK probe that found no codec keeps neither its facts nor the verdicts read off
-    /// them, so a driver that was not up on the first ask is asked again.
+    /// them, so a driver that was not up on the first ask is asked again later.
     #[test]
     fn an_unanswered_nvenc_probe_is_asked_again() {
         let r = Resolved::new(inputs("nvenc", FULL));
@@ -1366,7 +1355,7 @@ mod tests {
         assert!(r.probes.nvenc.get().is_none());
         assert!(!r.can_encode_444(Codec::H265) && !r.can_encode_10bit(Codec::H265));
         assert!(r.hevc_444.get().is_none() && r.ten_bit[0].get().is_none());
-        fill(&r.probes.nvenc, nvenc(true, true));
+        r.probes.nvenc.fill(nvenc(true, true));
         assert!(r.can_encode_444(Codec::H265) && r.can_encode_10bit(Codec::H265));
     }
 
@@ -1374,11 +1363,11 @@ mod tests {
     #[test]
     fn the_444_verdict_follows_the_backend() {
         let nv = Resolved::new(inputs("nvenc", FULL));
-        fill(&nv.probes.nvenc, nvenc(true, false));
+        nv.probes.nvenc.fill(nvenc(true, false));
         assert!(nv.can_encode_444(Codec::H265) && !nv.can_encode_444(Codec::H264));
         assert!(nv.can_encode_444(Codec::PyroWave));
         let no_cap = Resolved::new(inputs("nvenc", FULL));
-        fill(&no_cap.probes.nvenc, nvenc(false, false));
+        no_cap.probes.nvenc.fill(nvenc(false, false));
         assert!(!no_cap.can_encode_444(Codec::H265));
         let no_sdk = Features {
             nvenc: false,

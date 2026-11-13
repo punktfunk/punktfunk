@@ -13,7 +13,7 @@ pub(crate) struct Probes {
     pub(crate) backend: OnceLock<WindowsBackend>,
     /// The resolved backend's codec probe ([`probe_codec_support`]), kept only once it finds a
     /// codec.
-    pub(crate) codecs: OnceLock<CodecSupport>,
+    pub(crate) codecs: Probed<CodecSupport>,
     /// Set when the `codecs` probe found nothing, so the miss warns once.
     pub(crate) codecs_missed: OnceLock<()>,
 }
@@ -169,14 +169,14 @@ impl Resolved {
     }
 
     /// The resolved backend's codec probe. Ask only when [`Self::is_probed`]. AV1 and HEVC must
-    /// be probed, not assumed. `None` while the probe finds nothing; it runs again next ask.
+    /// be probed, not assumed. `None` while the probe finds nothing; it runs again after
+    /// [`RETRY_AFTER`].
     fn codecs(&self) -> Option<CodecSupport> {
-        probe_until_found(
-            &self.probes.codecs,
-            &self.probes.codecs_missed,
-            "Windows",
-            || probe_codec_support(self.backend()),
-        )
+        self.probes.codecs.ask(|| {
+            codec_found(&self.probes.codecs_missed, "Windows", || {
+                probe_codec_support(self.backend())
+            })
+        })
     }
 }
 
@@ -326,14 +326,11 @@ mod tests {
             CODEC_H264
         );
         let amf = resolved(WindowsBackend::Amf, FULL);
-        amf.probes
-            .codecs
-            .set(CodecSupport {
-                h264: true,
-                h265: true,
-                av1: false,
-            })
-            .expect("unset");
+        amf.probes.codecs.fill(CodecSupport {
+            h264: true,
+            h265: true,
+            av1: false,
+        });
         assert_eq!(amf.wire_caps(), CODEC_H264 | CODEC_HEVC | CODEC_PYROWAVE);
         let qsv = resolved(
             WindowsBackend::Qsv,

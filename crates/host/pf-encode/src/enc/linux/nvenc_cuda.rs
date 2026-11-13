@@ -90,8 +90,9 @@ pub(crate) struct ProbedSupport {
 }
 
 /// [`probe_support_uncached`], kept for the process once the driver has listed its codecs. A
-/// probe that could not ask (no CUDA context, no session, no GUID list) is not kept: the next
-/// ask runs it again, so a driver still starting does not pin 10-bit and 4:4:4 off.
+/// probe that could not ask (no CUDA context, no session, no GUID list) is not kept: a later
+/// ask runs it again, so a driver still starting does not pin 10-bit and 4:4:4 off. The caller
+/// bounds how often it asks.
 pub(crate) fn probe_support() -> ProbedSupport {
     static CACHE: std::sync::OnceLock<ProbedSupport> = std::sync::OnceLock::new();
     // One probe at a time: a second ask waits for the first one's answer.
@@ -111,7 +112,7 @@ pub(crate) fn probe_support() -> ProbedSupport {
 }
 
 /// A probe that could not ask. The first miss warns with its cause; a repeat stays at debug,
-/// since every ask runs the probe again.
+/// since the probe runs again for as long as it stays unanswered.
 fn probe_missed(what: &str, error: &str) {
     static WARNED: std::sync::OnceLock<()> = std::sync::OnceLock::new();
     let mut first = false;
@@ -120,8 +121,7 @@ fn probe_missed(what: &str, error: &str) {
         tracing::warn!(
             what,
             error,
-            "NVENC codec probe unanswered — advertising the static set and probing again on the \
-             next ask"
+            "NVENC codec probe unanswered — advertising the static set and probing again later"
         );
     } else {
         tracing::debug!(what, error, "NVENC codec probe unanswered");
