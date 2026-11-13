@@ -381,7 +381,7 @@ pub fn validate_art_paths(art: &Artwork) -> Result<(), String> {
         ("header", &art.header),
     ] {
         let Some(v) = value.as_deref() else { continue };
-        if is_local_art_path(v) && !art_path_is_servable(v) {
+        if is_local_art_path(v) && !seat_may_serve(v) {
             return Err(format!(
                 "art.{field}: local art must be an image file (jpg/png/webp/gif/bmp/ico/tga) inside \
                  an allowed art root — set PUNKTFUNK_LIBRARY_ART_ROOTS if the library lives \
@@ -408,7 +408,7 @@ pub fn sanitize_art_paths(art: &mut Artwork) -> Vec<(&'static str, String)> {
     ] {
         let unservable = value
             .as_deref()
-            .is_some_and(|v| is_local_art_path(v) && !art_path_is_servable(v));
+            .is_some_and(|v| is_local_art_path(v) && !seat_may_serve(v));
         if unservable {
             if let Some(v) = value.take() {
                 dropped.push((field, v));
@@ -727,15 +727,33 @@ fn stored_remote_art(url: &str) -> Option<(Vec<u8>, String)> {
 
 /// Bytes for one art value: a confined local file, or a remote URL the host stores on first
 /// use. The two shapes [`proxy_art`] advertises and no other, so what the catalog points at is
-/// what this resolves. Blocking — call off the async runtime.
+/// what this resolves. A local file is read with the seat account's rights alone on a Windows
+/// seat host ([`crate::plugins::as_seat_account`]); the store is this host's own. Blocking —
+/// call off the async runtime.
 pub(crate) fn resolve_art_bytes(v: &str) -> Option<(Vec<u8>, String)> {
+    resolve_art_as(v, |read| {
+        crate::plugins::as_seat_account(read).ok().flatten()
+    })
+}
+
+/// [`resolve_art_bytes`] with `as_seat` running a local read.
+fn resolve_art_as(
+    v: &str,
+    as_seat: impl FnOnce(&dyn Fn() -> Option<(Vec<u8>, String)>) -> Option<(Vec<u8>, String)>,
+) -> Option<(Vec<u8>, String)> {
     if is_local_art_path(v) {
-        local_art_bytes(v)
+        as_seat(&|| local_art_bytes(v))
     } else if is_remote_art_url(v) {
         stored_remote_art(v)
     } else {
         None
     }
+}
+
+/// [`art_path_is_servable`] as [`resolve_art_bytes`] reads: a catalog keeps no path the seat's
+/// account couldn't serve.
+fn seat_may_serve(v: &str) -> bool {
+    crate::plugins::as_seat_account(|| art_path_is_servable(v)).unwrap_or(false)
 }
 
 /// Advertise the host's art proxy for every cover it can serve on `GET /library`: a local path
@@ -1025,6 +1043,26 @@ mod tests {
 
     fn confine_art_to(dir: &Path) -> ArtRootsEnv {
         ArtRootsEnv::set(&[("PUNKTFUNK_LIBRARY_ART_ROOTS", Some(dir))])
+    }
+
+    /// A local cover is read through the seat's hand alone, so a Windows seat host serves what the
+    /// seat's account reads: its refusal is no cover, whatever this host could read.
+    #[test]
+    fn a_local_cover_is_read_through_the_seat_s_hand() {
+        let dir = std::env::temp_dir().join(format!("pf-art-seat-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let _env = confine_art_to(&dir);
+        let cover = dir.join("cover.png");
+        std::fs::write(&cover, PNG).unwrap();
+        let mut asked = 0;
+        let served = resolve_art_as(cover.to_str().unwrap(), |read| {
+            asked += 1;
+            read()
+        });
+        assert_eq!(served.expect("the seat reads its cover").0, PNG);
+        assert_eq!(asked, 1);
+        assert!(resolve_art_as(&file_url(&cover), |_| None).is_none());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// Confinement, extension, and content sniff are all load-bearing: the proxy reads in the
