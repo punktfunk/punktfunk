@@ -23,7 +23,9 @@ final class DemoScene {
     private var sticks: [CGFloat] = [0, 0, 0, 0]
     /// LT, RT in 0…1.
     private var triggers: [CGFloat] = [0, 0]
+    /// An empty `PUNKTFUNK_DEMO_FLASH=` leaves the flash off.
     private static let flashLabel = ProcessInfo.processInfo.environment["PUNKTFUNK_DEMO_FLASH"]
+        .flatMap { $0.isEmpty ? nil : $0 }
     private(set) var lastInput = "Nothing yet"
     private var lastInputAt = -10.0
     private var lastRender: Double?
