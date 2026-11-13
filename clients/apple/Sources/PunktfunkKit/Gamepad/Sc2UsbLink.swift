@@ -178,12 +178,9 @@ final class Sc2UsbLink {
                 return
             }
             started = true
-            // The controller interface carries the lizard KEYBOARD collection too (on-glass
-            // census, see the header), so opening it sits behind the Input Monitoring TCC gate.
-            // Ask before the first open — without this, `IOHIDDeviceOpen` fails not-permitted
-            // forever and the user is never shown the question. ⚠ An UNBUNDLED binary (swift
-            // run) gets no prompt from this — measured silent-false 2026-08-31; the grant must
-            // be added by hand in System Settings for dev-shell runs. The bundled app prompts.
+            // The interface carries the lizard keyboard, so opening it needs Input Monitoring.
+            // Ask before the first open, or `IOHIDDeviceOpen` fails not-permitted with no prompt.
+            // An unbundled binary (`swift run`) gets no prompt: grant it in System Settings.
             if IOHIDCheckAccess(kIOHIDRequestTypeListenEvent) != kIOHIDAccessTypeGranted {
                 let granted = IOHIDRequestAccess(kIOHIDRequestTypeListenEvent)
                 log.info(
@@ -315,9 +312,8 @@ final class Sc2UsbLink {
     ///
     /// ⚠ Never opens or registers on the MANAGER's device object: `IOHIDManagerActivate`
     /// activates every device the manager owns, this callback runs during that activation, and
-    /// per-device callback registration on an activated device traps (on-glass crash
-    /// 2026-08-31: EXC_BREAKPOINT in `IOHIDDeviceRegisterInputReportCallback` under
-    /// `IOHIDManagerActivate`). A fresh `IOHIDDevice` minted from the same IOKit service is
+    /// per-device callback registration on an activated device traps (EXC_BREAKPOINT in
+    /// `IOHIDDeviceRegisterInputReportCallback`). A fresh `IOHIDDevice` minted from the same IOKit service is
     /// ours alone, so the register → set-queue → activate order the API requires holds.
     private func adopt(_ matched: IOHIDDevice) {
         guard started else { return }
@@ -441,10 +437,8 @@ final class Sc2UsbLink {
                 "SC2 USB: report id=0x\(String(id, radix: 16), privacy: .public) seen (len=\(len, privacy: .public))"
             )
         }
-        // The callback buffer arrives id-FIRST on-glass (0x45 at len 46 — the id-INCLUDED wire
-        // size; 2026-08-31), so it is forwarded verbatim: re-prepending shifted every field one
-        // byte and the typed mirror sprayed phantom input. The prepend survives only as the
-        // guard for a platform that ever delivers the buffer stripped.
+        // The callback buffer arrives id-first (0x45 at len 46, the id-included size), so it
+        // goes out verbatim. The prepend is for a platform that delivers it stripped.
         var framed: [UInt8]
         if report[0] == id {
             let n = min(Int(len), Self.reportBufSize)

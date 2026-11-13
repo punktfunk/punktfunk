@@ -243,12 +243,8 @@ public final class InputCapture {
         keyEngine = Shortcuts.Engine(
             connection.settings.resolvedShortcuts.runnable(dial: onShortcut != nil), device: .keyboard)
         forgetShortcutKeys()
-        // Attach EVERY connected mouse, not just GCMouse.current. With two pointing devices (e.g.
-        // the iPad's own Magic Keyboard trackpad AND a Universal Control "V-UC Automouse"), only one
-        // is `current` at a time; attaching just that one left the OTHER device's motion handler
-        // uninstalled, so moving it did nothing. Each GCMouse delivers its own deltas through its own
-        // handler, so handling all of them lets either device drive. New arrivals are caught by the
-        // GCMouseDidConnect observer below.
+        // Every connected mouse, not just `GCMouse.current`: each delivers through its own
+        // handler, and only one is current at a time. New ones arrive via GCMouseDidConnect.
         for mouse in GCMouse.mice() { attach(mouse: mouse) }
         if let keyboard = GCKeyboard.coalesced { attach(keyboard: keyboard) }
         observers.append(NotificationCenter.default.addObserver(
@@ -642,7 +638,7 @@ public final class InputCapture {
     /// 16 bits, NX_DEVICE*KEYMASK) disambiguate the two same-class keys, but some
     /// keyboards ship flagsChanged WITHOUT them — only the device-independent class
     /// bit (NX_CONTROLMASK & co.) is set. A pure diff of the device bits silently drops
-    /// those keys (seen live: Control never forwarded), so this is keyCode-driven with the
+    /// those keys, so this is keyCode-driven with the
     /// flags as evidence: class bit clear → the key went up; device bits present → they
     /// say which side is held now; class bit set with NO device bits → flip the held state
     /// we track (`isDown`, from pressedVKs — SDL ships the same fallback). Each keyCode
@@ -683,10 +679,8 @@ public final class InputCapture {
 
     /// The four modifiers a client chord is ever spelled with, isolated from the incidental bits
     /// `deviceIndependentFlagsMask` also carries: Caps Lock, and the `.function`/`.numericPad`
-    /// pair every arrow and F-key sets. Equality against the raw masked flags meant a chord
-    /// stopped being recognized the moment Caps Lock was on — ⌘⎋ and ⌃⌥⇧Q, both escape hatches,
-    /// included. That was survivable while the monitor claimed six chords; it is not, now that it
-    /// swallows every ⌘ chord there is.
+    /// pair every arrow and F-key sets. Compared raw, no chord matches while Caps Lock is on,
+    /// ⌘⎋ included.
     nonisolated static let chordFlagMask: NSEvent.ModifierFlags = [.command, .control, .option, .shift]
 
     /// One event's chord modifiers (see `chordFlagMask`).

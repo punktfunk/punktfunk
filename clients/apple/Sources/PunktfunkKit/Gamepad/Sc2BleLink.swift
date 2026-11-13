@@ -421,8 +421,8 @@ final class Sc2BleLink: NSObject {
         }
     }
 
-    /// The bench-proven "Steam" prefix plus Android's broader hint set — BLE exposes no PID
-    /// here, so the name is all there is.
+    /// The "Steam" name prefix plus Android's broader hint set: BLE exposes no PID here, so the
+    /// name is all there is.
     static func nameMatches(_ name: String?) -> Bool {
         guard let name else { return false }
         if name.hasPrefix("Steam") { return true }
@@ -450,9 +450,8 @@ final class Sc2BleLink: NSObject {
     /// lizard mode after a few seconds of silence, so the timer above re-sends on SDL's cadence.
     /// Framed through `Sc2Device.featurePayload`, the SAME path the host-forwarded feature
     /// writes take (`writeRaw` kind == 1): the characteristic VALUE carries no 0x01 channel
-    /// report-id — the firmware parses byte 0 as the settings-command id (the hardware-proven
-    /// bench-proven contract) — so writing `disableLizard` whole would arrive as command
-    /// 0x01 instead of 0x87 and silently do nothing. Throttled logging (the write repeats
+    /// report-id: the firmware parses byte 0 as the settings-command id, so writing
+    /// `disableLizard` whole would arrive as command 0x01 instead of 0x87 and do nothing. Throttled logging (the write repeats
     /// every 3 s for the whole session).
     private func sendLizardOff() {
         guard let controller, let reportChar,

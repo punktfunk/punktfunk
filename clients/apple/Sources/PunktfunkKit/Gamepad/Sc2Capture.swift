@@ -477,10 +477,9 @@ public final class Sc2Capture {
     /// One wireless connect/disconnect report (`0x79`/`0x46`).
     ///
     /// Authoritative ONLY through a Puck dongle, which is why this does nothing on any other
-    /// transport. A wired or BLE pad emits these too — truthfully, since it genuinely has no
-    /// radio link — and acting on that tore the wire slot down 255 ms after it was created on
-    /// Android's first on-glass run. SDL's wired path likewise marks the controller connected
-    /// unconditionally and reconnects on any state report.
+    /// transport. A wired or BLE pad emits these too, truthfully (it has no radio link), and
+    /// acting on one would tear the slot down right after its claim. SDL's wired path likewise
+    /// marks the controller connected unconditionally and reconnects on any state report.
     ///
     /// A connect needs nothing: the first state report claims the slot, and the host's virtual
     /// Puck queues its own connect edge.
