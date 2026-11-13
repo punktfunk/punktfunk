@@ -210,7 +210,7 @@ final class RumbleRenderer: @unchecked Sendable {
             if let onHealth { self.healthSink = onHealth }
             self.lastHealth = nil
             self.healthSink?(nil)
-            _ = self.openHIDIfDualSense(c)
+            self.openHIDIfDualSense(c)
             onBackend?(self.backendNote(for: c))
             // The target survives a SWAP: render replays the current level onto the new pad right
             // away, so a mid-rumble controller change keeps rumbling.
@@ -309,14 +309,6 @@ final class RumbleRenderer: @unchecked Sendable {
         guard problem != lastHealth else { return }
         lastHealth = problem
         healthSink?(problem)
-    }
-
-    /// Housekeeping heartbeat while audible: segment re-arm, HID keepalive, backoff retries.
-    /// Every liveness decision (lease expiry, legacy-host staleness, session close) lives in the
-    /// core policy engine now — it emits explicit zero commands, so the renderer never guesses
-    /// when a level should end.
-    private func tick() {
-        render()
     }
 
     /// Drive one motor toward `desired`, per the invariants above. Returns false when the
@@ -441,7 +433,7 @@ final class RumbleRenderer: @unchecked Sendable {
             let t = DispatchSource.makeTimerSource(queue: queue)
             t.schedule(
                 deadline: .now() + RumbleTuning.tickSeconds, repeating: RumbleTuning.tickSeconds)
-            t.setEventHandler { [weak self] in self?.tick() }
+            t.setEventHandler { [weak self] in self?.render() }
             t.resume()
             ticker = t
         } else if !needed, let t = ticker {
@@ -631,17 +623,14 @@ final class RumbleRenderer: @unchecked Sendable {
         #endif
     }
 
-    private func openHIDIfDualSense(_ c: GCController?) -> Bool {
+    private func openHIDIfDualSense(_ c: GCController?) {
         #if os(macOS)
-        guard let c, c.extendedGamepad is GCDualSenseGamepad else { return false }
+        guard let c, c.extendedGamepad is GCDualSenseGamepad else { return }
         let hid = DualSenseHID()
         // Ask for the device this renderer's controller actually is, so two attached DualSenses
         // do not both get driven through whichever one an unordered Set happened to yield first.
-        guard hid.open(preferringLocationID: Self.hidLocationID(for: c)) else { return false }
+        guard hid.open(preferringLocationID: Self.hidLocationID(for: c)) else { return }
         dualSenseHID = hid
-        return true
-        #else
-        return false
         #endif
     }
 
