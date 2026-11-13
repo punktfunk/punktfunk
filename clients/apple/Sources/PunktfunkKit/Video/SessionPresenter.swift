@@ -373,8 +373,12 @@ final class SessionPresenter {
                storePolicy: priority.storePolicy,
                vsyncPaced: vsyncPaced,
                adaptiveSlotPaced: adaptiveSlotPaced) {
-            pipeline.onPresentWedged = { [weak self] in
-                DispatchQueue.main.async { self?.rebuildPresentation() }
+            pipeline.onPresentWedged = { [weak self, weak pipeline] in
+                DispatchQueue.main.async {
+                    // A report queued before a restart must not rebuild the successor.
+                    guard let self, let pipeline, self.stage2 === pipeline else { return }
+                    self.rebuildPresentation()
+                }
             }
             let metal = pipeline.layer
             // Metal pacing overlays the idle video layer. The decoded path leaves the backing
