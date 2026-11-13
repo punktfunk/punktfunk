@@ -17,8 +17,9 @@ cargo run -p punktfunk-probe -- --connect HOST:PORT --pin <64-hex> --input-test
 ```
 
 The scripted plane exercisers are the reason to reach for it: `--input-test` (mouse/keyboard),
-`--mic-test` (a 440 Hz Opus tone up to the host mic), `--touch-test`, and `--rich-input-test`
-(DualSense touchpad and motion, logging the HID-output feedback that comes back). Negotiation knobs
+`--mic-test` (a 440 Hz Opus tone up to the host mic), `--touch-test`, `--type TEXT` (committed
+text, as a soft keyboard sends it), and `--rich-input-test` (DualSense touchpad and motion,
+logging the HID-output feedback that comes back). Negotiation knobs
 — `--mode`, `--remode` for a mid-stream change, `--bitrate`, `--codec`, `--audio-channels`,
 `--speed-test` — cover the rest.
 

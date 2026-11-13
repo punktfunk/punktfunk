@@ -9,7 +9,7 @@
 //!
 //! Usage: `punktfunk-probe [--connect HOST:PORT] [--mode WxHxFPS] [--out FILE]
 //! [--bitrate KBPS] [--codec auto|h264|hevc|av1]
-//! [--input-test|--mic-test|--touch-test|--pad-audio-test [--pads N]]
+//! [--input-test|--mic-test|--touch-test|--type TEXT|--pad-audio-test [--pads N]]
 //! [--pin HEX|--pair -] [--compositor NAME] [--gamepad NAME] [--trajectory FILE] |
 //! --discover [SECS]`
 #![forbid(unsafe_code)]
@@ -48,6 +48,8 @@ struct Args {
     mic_burst: bool,
     /// `--touch-test` — drag a synthetic finger in a circle (proves the touch path).
     touch_test: bool,
+    /// `--type TEXT` — type TEXT as committed text, one scalar per event (the soft-keyboard path).
+    type_text: Option<String>,
     /// `--rich-input-test` — drive the DualSense touchpad + motion over 0xCC (host needs
     /// `PUNKTFUNK_GAMEPAD=dualsense`); also logs the 0xCD HID-output feedback that comes back.
     rich_input_test: bool,
@@ -308,6 +310,7 @@ fn parse_argv(argv: Vec<String>) -> Args {
         mic_test: argv.iter().any(|a| a == "--mic-test"),
         mic_burst: argv.iter().any(|a| a == "--mic-burst"),
         touch_test: argv.iter().any(|a| a == "--touch-test"),
+        type_text: get("--type").map(String::from),
         rich_input_test: argv.iter().any(|a| a == "--rich-input-test"),
         pad_audio_test: argv.iter().any(|a| a == "--pad-audio-test"),
         pads: get("--pads")
@@ -704,6 +707,9 @@ async fn session(mut args: Args) -> Result<()> {
     }
     if args.touch_test {
         spawn_touch_test(&conn, args.mode);
+    }
+    if let Some(text) = args.type_text.clone() {
+        spawn_type_test(&conn, text);
     }
     if args.rich_input_test {
         spawn_rich_input_test(&conn);
@@ -1554,6 +1560,29 @@ fn spawn_input_test(conn: &Wire, mode: Mode) {
             tokio::time::sleep(std::time::Duration::from_millis(40)).await;
         }
         tracing::info!("input-test: done");
+    });
+}
+
+/// Text plane: `text` as committed text, the events a soft keyboard's commit sends. 80 ms
+/// apart is a fast typist; a host that needs longer between characters fails this.
+fn spawn_type_test(conn: &Wire, text: String) {
+    let conn2 = conn.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+        tracing::info!(chars = text.chars().count(), "type-test: typing");
+        for c in text.chars() {
+            let ev = InputEvent {
+                kind: InputKind::TextInput,
+                _pad: [0; 3],
+                code: c as u32,
+                x: 0,
+                y: 0,
+                flags: 0,
+            };
+            let _ = conn2.send_datagram(ev.encode().to_vec());
+            tokio::time::sleep(std::time::Duration::from_millis(80)).await;
+        }
+        tracing::info!("type-test: done");
     });
 }
 
