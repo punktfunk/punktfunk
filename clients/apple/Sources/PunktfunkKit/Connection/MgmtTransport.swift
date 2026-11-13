@@ -38,6 +38,8 @@ enum MgmtTransport {
     /// Largest response we will buffer. The host's art proxy serves Steam hero images that run to
     /// a few MB; anything past this is not a poster and not a library payload.
     static let maxResponseBytes = 16 * 1024 * 1024
+    /// How long one request waits for its whole answer.
+    static let requestTimeout: TimeInterval = 15
 
     /// One request to `https://host:port/path`, authenticated by mTLS (`identity`) and pinned by
     /// `pin`. A `body` goes out with `contentType` and a length.
@@ -54,8 +56,7 @@ enum MgmtTransport {
         body: Data?,
         contentType: String?,
         identity: SecIdentity,
-        pin: Data,
-        timeout: TimeInterval = 15
+        pin: Data
     ) async throws -> HTTPResponse {
         guard let nwPort = NWEndpoint.Port(rawValue: port) else {
             throw MgmtTransportError.invalidPort(port)
@@ -76,7 +77,7 @@ enum MgmtTransport {
             do {
                 let response = try await connection.perform(
                     method: method, path: path, body: body, contentType: contentType,
-                    timeout: timeout)
+                    timeout: requestTimeout)
                 await MgmtConnectionPool.shared.release(connection, key: key)
                 return response
             } catch {

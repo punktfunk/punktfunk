@@ -17,7 +17,6 @@
 // A 1 Hz `sweep` times out stuck resolves, retries failed ones on a backoff and re-arms a browser
 // that stopped working; `refresh()` (pull-to-refresh, the Refresh button) does so at once.
 
-#if canImport(Network)
 import Foundation
 import Network
 import PunktfunkShared
@@ -508,4 +507,3 @@ public final class HostDiscovery: ObservableObject {
         }
     }
 }
-#endif
