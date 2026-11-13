@@ -154,12 +154,11 @@ public enum DefaultsKey {
     /// and dense input once per link target. PUNKTFUNK_PRESENT_MODE=immediate|vsync|slot|adaptive
     /// overrides that path for A/B. Resolved once per session; see `PresentPolicy`.
     public static let vsync = "punktfunk.vsync"
-    /// Allow variable refresh rate: hand the display link a wide frame-rate RANGE (low floor,
-    /// preferred = stream rate) so a ProMotion / adaptive-sync display can vary its physical
-    /// refresh to match the stream. On by default; a no-op on fixed-refresh displays. On macOS,
-    /// VRR-on requests 24 Hz through the stream rate with the stream rate preferred; VRR-off
-    /// fixes the link at the stream rate. iOS keeps its proven 30 Hz floor when off.
-    /// Read per session/reconfigure by `SessionPresenter.syncFrameRate`.
+    /// Allow variable refresh rate, a Mac setting: hand the display link a wide frame-rate RANGE
+    /// (24 Hz through the stream rate, the stream rate preferred) so an adaptive-sync display can
+    /// vary its physical refresh to match the stream; off fixes the link at the stream rate. On
+    /// by default; a no-op on fixed-refresh displays. Read per session/reconfigure by
+    /// `SessionPresenter.syncFrameRate`, which other platforms' default pacing never reaches.
     public static let allowVRR = "punktfunk.allowVRR"
     /// Request a 10-bit BT.2020 PQ (HDR10) stream. On by default; only takes effect when the host
     /// has HDR content AND this display supports HDR — otherwise the stream stays 8-bit SDR.

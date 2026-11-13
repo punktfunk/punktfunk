@@ -210,9 +210,10 @@ final class SessionPresenter {
         #endif
     }
 
-    /// The display-link frame-rate hint for a stream of `hz` (see `syncFrameRate`). iOS/tvOS
-    /// keep a 120 ceiling (mandatory, or ProMotion caps the link at 60) with a 24/30 Hz VRR
-    /// floor. macOS spans 24…`hz` with VRR on and fixes min = max at `hz` with it off.
+    /// The ordinary display link's frame-rate hint for a stream of `hz` (see `syncFrameRate`).
+    /// macOS spans 24…`hz` with VRR on and fixes min = max at `hz` with it off. Elsewhere this
+    /// link exists only off deadline pacing (an env A/B, the visionOS curve): a 120 ceiling
+    /// (mandatory, or ProMotion caps the link at 60) with a 24/30 Hz floor.
     /// Internal (not private) for unit tests.
     nonisolated static func frameRateRange(hz: Float, allowVRR: Bool) -> CAFrameRateRange {
         #if os(macOS)
@@ -431,9 +432,9 @@ final class SessionPresenter {
     /// `renderTick`, and presenting on a denser grid shortens the decode→glass wait).
     ///
     /// The `allowVRR` setting (default on) widens that hint into a true variable-refresh request:
-    /// `preferred` = the stream rate with a low floor, so a ProMotion / adaptive-sync display can
-    /// drop its physical refresh to match the content. VRR off falls back to a fixed floor:
-    /// iOS keeps 30 Hz; macOS pins the link at the stream rate (see `frameRateRange`).
+    /// `preferred` = the stream rate with a low floor, so an adaptive-sync display can drop its
+    /// physical refresh to match the content. It reaches this link only; under deadline pacing
+    /// `FrameRateHint` pins the rate and the setting is not read (see `frameRateRange`).
     /// Re-applied from `layout` so a mid-session `Reconfigure` picks up a new refresh.
     private func syncFrameRate(hz: UInt32) {
         guard hz > 0 else { return }

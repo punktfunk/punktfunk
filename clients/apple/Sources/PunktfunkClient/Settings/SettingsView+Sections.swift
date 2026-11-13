@@ -787,15 +787,12 @@ extension SettingsView {
     }
 
     @ViewBuilder private var presentationRows: some View {
-        // macOS-only: iOS/tvOS layers always present on the display's vsync, so the choice
-        // only exists on the Mac (the layer's own sync stays off — see MetalVideoPresenter).
+        // macOS-only, both: elsewhere the layer presents on the display's vsync and the display
+        // link is pinned at the panel's top rate (`FrameRateHint`), so neither choice exists.
         #if os(macOS)
         described(L10n.playerVsyncHint, field: "vsync") {
             Toggle("V-Sync", isOn: scoped(SettingsFields.vsync))
         }
-        #endif
-        // Non-tvOS: the Apple TV drives a fixed HDMI mode, so there's no adaptive refresh.
-        #if !os(tvOS)
         described(L10n.playerAllowVrrHint, field: "allow_vrr") {
             Toggle(L10n.playerAllowVrr, isOn: scoped(SettingsFields.allowVRR))
         }
