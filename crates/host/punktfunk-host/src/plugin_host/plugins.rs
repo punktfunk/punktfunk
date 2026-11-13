@@ -692,12 +692,13 @@ pub(crate) fn converge_runner_data_dir(dir: &std::path::Path) -> Result<()> {
 ///
 /// Discovery runs once at runner startup ([`sdk/src/runner.ts`]); this restart is
 /// how a newly installed plugin becomes active. An enabled runner that is not running
-/// (installed after login, crashed out) is started, not skipped. The unit's roots are
-/// converged first: a new manifest may name paths the runner cannot see yet.
+/// (installed after login, crashed out) is started, not skipped, and a running one is
+/// restarted however it started: a made seat's starts with its account's login. The unit's
+/// roots are converged first: a new manifest may name paths the runner cannot see yet.
 pub(crate) fn restart_runtime() -> Result<bool> {
     converge_runner_roots();
     let st = runtime_status();
-    if !st.installed || !st.enabled {
+    if !st.installed || !(st.enabled || st.running) {
         return Ok(false);
     }
     plat::restart_runtime()?;

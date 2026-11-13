@@ -47,7 +47,8 @@ KillSignal=SIGTERM
 TimeoutStopSec=30
 # Sandbox, in two layers. This unit's directives confine the SUPERVISOR and the operator's own
 # loose scripts: an empty home, a read-only system, no setuid re-escalation, and a denylist over
-# the host's own credentials wherever the home tmpfs does not land.
+# the host's own credentials wherever the home tmpfs does not land (a made seat's home). A file
+# replaced after this unit started is hidden no longer: a seat's host restarts it at its start.
 #
 # They are not what confines a PLUGIN. These are mount-namespace options, and a mount namespace
 # does not hold against a process of the same uid: /proc/<host pid>/root reaches what it hides, as
@@ -76,7 +77,7 @@ PrivateTmp=no
 ProtectSystem=strict
 ProtectHome=tmpfs
 InaccessiblePaths=-%h/.config/punktfunk/mgmt-token -%h/.config/punktfunk/key.pem
-InaccessiblePaths=-%h/.config/punktfunk/native-key.pem
+InaccessiblePaths=-%h/.config/punktfunk/native-key.pem -%h/.config/punktfunk/person-token
 # Writable: the installed packages (the runner refreshes their shared SDK with `bun install` on
 # every start) and the one directory a plugin may persist into. '-' on both — neither exists until
 # the first plugin is installed.
