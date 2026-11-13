@@ -59,10 +59,9 @@ public struct AccessUnit: Sendable {
     public let frameIndex: UInt32
     public let flags: UInt32
     /// Client `CLOCK_REALTIME` instant the AU finished reassembly in the core (post-FEC,
-    /// decrypted — `PunktfunkFrame.received_ns`, ABI v9) — the **received** measurement point of
-    /// design/stats-unification.md. NOT the pull instant: stamping at the pull folded the
-    /// pre-decode hand-off wait into the network term, which is how the 2026-07 two-pair
-    /// standing-latency plateau hid as "network". The decode stage is `decodedNs - receivedNs`,
+    /// decrypted — `PunktfunkFrame.received_ns`) — the **received** measurement point of
+    /// design/stats-unification.md. NOT the pull instant, which would fold the pre-decode
+    /// hand-off wait into the network term. The decode stage is `decodedNs - receivedNs`,
     /// both client-local (no skew offset applies).
     public let receivedNs: Int64
     /// Client `CLOCK_REALTIME` instant this pull returned. `pulledNs - receivedNs` is the
@@ -244,14 +243,12 @@ public enum HostRejection: Sendable {
     /// at the handshake so the user gets a sentence, not a bare desktop they didn't ask for.
     case launchNotPermitted
     /// A host power action (`design/host-actions.md`) is ending every session: the host is
-    /// going to sleep or shutting down, deliberately. Without this case the close reads as a
-    /// transport failure, and sleeping your own host from the couch looks like a crash.
+    /// going to sleep or shutting down, deliberately, not failing.
     case hostPower
     /// The host accepted the connection and then failed to bring the stream up — no encoder
     /// for the codec, pf-vdisplay missing, capture open failed. Everything host-side funnels
-    /// here, so the cause is in the host's log, not on this device. Missing this case sent the
-    /// connect down the untyped path, where a reachable host reads as unreachable and the app
-    /// answers with Wake-on-LAN.
+    /// here, so the cause is in the host's log, not on this device. The host is reachable:
+    /// nothing here calls for Wake-on-LAN.
     case setupFailed
     /// The hello named a profile the host doesn't list. The saved pick is stale: the app drops it.
     case profileUnknown
@@ -407,12 +404,10 @@ public extension PunktfunkConnection {
 /// tasks and raw pump threads, which the Swift 6 checker will require this to state.
 public final class PunktfunkConnection: @unchecked Sendable {
     /// One-shot ABI version-equality gate (`static let` = dispatch_once), touched before the
-    /// first C call a connection makes. This enforces the guard the v27 `PunktfunkHidOutput`
-    /// widening's safety argument rests on: `punktfunk_abi_version()` mismatch has always meant
-    /// "incompatible core", and a mismatched header/library pairing must fail HERE, loudly —
-    /// not later as a 19-vs-85-byte memory write when the core poll-fills the hidout out-slot.
-    /// In-tree the xcframework bundles header + staticlib from one build, so this can only fire
-    /// on a stale or hand-assembled bundle; out-of-tree embedders keep the documented checklist.
+    /// first C call a connection makes. A header and library from different builds must fail
+    /// HERE, loudly, not later as an out-of-bounds write when the core fills an out-struct the
+    /// header sized differently. In-tree the xcframework bundles header + staticlib from one
+    /// build, so this can only fire on a stale or hand-assembled bundle.
     private static let abiVersionGate: Void = {
         let linked = punktfunk_abi_version()
         let built = UInt32(PUNKTFUNK_ABI_VERSION)
@@ -549,9 +544,9 @@ public final class PunktfunkConnection: @unchecked Sendable {
         case steamController = 5
         case steamDeck = 6
         /// DualSense Edge: the DualSense plus native back/Fn buttons. GameController exposes the
-        /// Edge as a `GCDualSenseGamepad` with its own
-        /// product category; paddle CAPTURE is still gated on G22, but the declared identity +
-        /// rich planes match the physical pad.
+        /// Edge as a `GCDualSenseGamepad` with its own product category. The capture does not
+        /// forward its paddles yet (`GamepadWire.paddle1`); the declared identity + rich planes
+        /// match the physical pad.
         case dualSenseEdge = 7
         /// Nintendo Switch Pro Controller: correct Nintendo glyphs + positional layout on the
         /// host side.
@@ -567,10 +562,8 @@ public final class PunktfunkConnection: @unchecked Sendable {
         /// kind rather than a flag on `.steamController2`.
         ///
         /// Declared ONLY by a capture that owns the physical Puck (macOS `Sc2UsbLink`); a wired
-        /// or BLE SC2 stays `.steamController2`. The practical difference on the client side is
-        /// that a Puck's wireless connect/disconnect reports are AUTHORITATIVE — see
-        /// `Sc2Capture`, where acting on a wired pad's (truthful, but irrelevant) "no radio link"
-        /// once tore the wire slot down 255 ms after it was created.
+        /// or BLE SC2 stays `.steamController2`. A Puck's wireless connect/disconnect reports are
+        /// AUTHORITATIVE; a wired pad's "no radio link" is not (`Sc2Capture`).
         case steamController2Puck = 10
         /// Xbox Elite Series 2. No picker offers it; it exists so the host's echo and the dev
         /// hook's name round-trip.
@@ -1146,7 +1139,7 @@ public final class PunktfunkConnection: @unchecked Sendable {
         return grants & bit != 0
     }
 
-    /// One forwarded host-cursor shape (the cursor channel, ABI v11): straight-alpha RGBA,
+    /// One forwarded host-cursor shape (the cursor channel): straight-alpha RGBA,
     /// `rgba.count == width * height * 4`, hotspot within the bitmap. Cache by `serial` —
     /// states reference shapes by it and a re-shown serial never resends pixels.
     public struct CursorShapeEvent: Sendable {
@@ -1200,7 +1193,7 @@ public final class PunktfunkConnection: @unchecked Sendable {
         }
     }
 
-    /// Tell the host who renders the pointer (the §8 mid-stream mouse-model flip, ABI v12):
+    /// Tell the host who renders the pointer (the §8 mid-stream mouse-model flip):
     /// `clientDraws = true` — this client draws it locally (the desktop mouse model; the host
     /// excludes the pointer from the video and forwards shape/state); `false` — the host
     /// composites it into the video (the capture model, full fidelity). Idempotent,
@@ -1887,10 +1880,9 @@ public final class PunktfunkConnection: @unchecked Sendable {
                 ? Data(bytes: base, count: count)
                 : Data(bytesNoCopy: UnsafeMutableRawPointer(mutating: base), count: count, deallocator: .none)
             let pulledNs = realtimeNowNs()
-            // Receipt = the core's reassembly-completion stamp (ABI v9); the pull instant is
-            // kept separately so the client-queue wait is its own measured term. 0 would mean a
-            // pre-v9 core — impossible here (core and Kit ship in one binary), but fall back to
-            // the pull instant rather than record a 1970 receipt.
+            // Receipt = the core's reassembly-completion stamp; the pull instant is kept
+            // separately so the client-queue wait is its own measured term. A zero stamp falls
+            // back to the pull instant rather than record a 1970 receipt.
             let receivedNs = frame.received_ns > 0 ? Int64(frame.received_ns) : pulledNs
             return AccessUnit(
                 data: data, ptsNs: frame.pts_ns,
@@ -2117,7 +2109,7 @@ public final class PunktfunkConnection: @unchecked Sendable {
                 let effect = withUnsafeBytes(of: out.effect) { Array($0.prefix(len)) }
                 return .triggerEffect(pad: out.pad, which: out.which, effect: effect)
             case PUNKTFUNK_HIDOUT_HID_RAW:
-                // Same tuple-copy idiom for the raw report body (ABI v27).
+                // Same tuple-copy idiom for the raw report body.
                 let len = Int(min(out.raw_len, UInt8(PUNKTFUNK_HID_REPORT_MAX)))
                 let data = withUnsafeBytes(of: out.raw) { Array($0.prefix(len)) }
                 return .hidRaw(pad: out.pad, kind: out.hid_kind, data: data)
@@ -2726,12 +2718,11 @@ public final class PunktfunkConnection: @unchecked Sendable {
         }
     }
 
-    /// Why a stream session ended — the Swift mirror of `PunktfunkEndReason` (ABI v17).
+    /// Why a stream session ended — the Swift mirror of `PunktfunkEndReason`.
     ///
     /// The distinction that matters to a UI is normal vs alarming, and it is not a spectrum: a
     /// player quitting their game and a host falling off the network both arrive as "the session
-    /// ended". Without this every client wrote one message for all of them, and every client chose
-    /// an error.
+    /// ended", and only this tells them apart.
     public enum SessionEndReason: UInt8, Sendable {
         /// Not ended, or ended before a reason could be observed. Also the fallback for an
         /// unrecognized value — the core may be newer than this code.
