@@ -16,8 +16,10 @@
 //! gamepad plane → a minimal `0x42` state report. The first raw report switches to as-is
 //! permanently.
 
+use super::steam_proto::RAW_STALE;
 use punktfunk_core::input::{gamepad as gs, GamepadFrame};
 use punktfunk_core::quic::RichInput;
+use std::time::Instant;
 
 /// Same as [`super::steam_proto::STEAM_VENDOR`]; repeated so this module stays self-contained.
 pub const TRITON_VENDOR: u32 = 0x28DE;
@@ -79,6 +81,9 @@ pub mod tbtn {
 pub struct TritonState {
     pub raw: [u8; TRITON_REPORT_LEN],
     pub raw_len: u8,
+    /// When the client last sent anything for this pad: a raw report or a typed frame. A host
+    /// heartbeat re-presents the state and never touches it.
+    heard: Option<Instant>,
     pub buttons: u32,
     pub lt: u16,
     pub rt: u16,
@@ -93,6 +98,7 @@ impl TritonState {
         TritonState {
             raw: [0u8; TRITON_REPORT_LEN],
             raw_len: 0,
+            heard: None,
             buttons: 0,
             lt: 0,
             rt: 0,
@@ -149,6 +155,7 @@ impl TritonState {
         TritonState {
             raw: [0u8; TRITON_REPORT_LEN],
             raw_len: 0,
+            heard: None,
             buttons: b,
             lt: trig(lt),
             rt: trig(rt),
@@ -159,12 +166,14 @@ impl TritonState {
         }
     }
 
-    /// Typed fallback over `prev`. As-is mode is sticky: a typed frame between two raw reports
-    /// must not flap the pad back to synth (the client sends both planes).
-    pub fn merge_frame(prev: &TritonState, f: &GamepadFrame) -> TritonState {
+    /// Typed fallback over `prev`, and proof the client is alive. As-is mode is sticky: a typed
+    /// frame between two raw reports must not flap the pad back to synth (the client sends
+    /// both planes).
+    pub fn merge_frame(prev: &TritonState, f: &GamepadFrame, now: Instant) -> TritonState {
         TritonState {
             raw: prev.raw,
             raw_len: prev.raw_len,
+            heard: Some(now),
             ..TritonState::from_gamepad(
                 f.buttons,
                 f.ls_x,
@@ -177,25 +186,35 @@ impl TritonState {
         }
     }
 
-    /// The input report to present and its length: the client's raw report as-is, else a
-    /// synthesized `0x42` stamped with the next `seq`. The raw path carries its own sequence.
-    pub fn report(&self, seq: &mut u8) -> ([u8; TRITON_REPORT_LEN], usize) {
+    /// The input report to present and its length: the client's raw report as-is while the
+    /// client was heard within [`RAW_STALE`], else a synthesized `0x42` stamped with the next
+    /// `seq`. A mirrored pad whose client went quiet reads neutral, never a held stick. The raw
+    /// path carries its own sequence.
+    pub fn report(&self, seq: &mut u8, now: Instant) -> ([u8; TRITON_REPORT_LEN], usize) {
         let mut r = [0u8; TRITON_REPORT_LEN];
-        if self.raw_len > 0 {
+        let alive = self
+            .heard
+            .is_some_and(|at| now.duration_since(at) < RAW_STALE);
+        if self.raw_len > 0 && alive {
             let len = (self.raw_len as usize).min(TRITON_REPORT_LEN);
             r[..len].copy_from_slice(&self.raw[..len]);
             return (r, len);
         }
+        let typed = if self.raw_len > 0 {
+            TritonState::neutral()
+        } else {
+            *self
+        };
         *seq = seq.wrapping_add(1);
         let mut state = [0u8; TRITON_STATE_LEN];
-        serialize_triton_state(&mut state, self, *seq);
+        serialize_triton_state(&mut state, &typed, *seq);
         r[..TRITON_STATE_LEN].copy_from_slice(&state);
         (r, TRITON_STATE_LEN)
     }
 
     /// A raw report from the client's physical pad becomes the state. Touchpad and motion have
     /// nothing to fold: the raw feed carries pads + IMU, and the synth fallback has no surface.
-    pub fn apply_rich(&mut self, rich: RichInput) {
+    pub fn apply_rich(&mut self, rich: RichInput, now: Instant) {
         if let RichInput::HidReport { len, data, .. } = rich {
             let len = (len as usize).min(data.len()).min(self.raw.len());
             if len == 0 {
@@ -203,6 +222,7 @@ impl TritonState {
             }
             self.raw[..len].copy_from_slice(&data[..len]);
             self.raw_len = len as u8;
+            self.heard = Some(now);
         }
     }
 }
@@ -367,17 +387,65 @@ mod tests {
     #[test]
     fn report_mirrors_raw_else_synthesizes_with_the_next_seq() {
         let mut seq = 7;
-        let (r, len) = TritonState::neutral().report(&mut seq);
+        let (r, len) = TritonState::neutral().report(&mut seq, t0());
         assert_eq!(
             (len, r[0], r[1], seq),
             (TRITON_STATE_LEN, ID_TRITON_CONTROLLER_STATE, 8, 8)
         );
 
         let mut st = TritonState::neutral();
-        st.raw[..3].copy_from_slice(&[0x45, 0x11, 0x22]);
-        st.raw_len = 3;
-        let (r, len) = st.report(&mut seq);
+        st.apply_rich(hid_report(&[0x45, 0x11, 0x22]), t0());
+        let (r, len) = st.report(&mut seq, t0());
         assert_eq!((len, &r[..3], seq), (3, &[0x45, 0x11, 0x22][..], 8));
+    }
+
+    fn t0() -> Instant {
+        static T0: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
+        *T0.get_or_init(Instant::now)
+    }
+
+    fn hid_report(bytes: &[u8]) -> RichInput {
+        let mut data = [0u8; 64];
+        data[..bytes.len()].copy_from_slice(bytes);
+        RichInput::HidReport {
+            pad: 0,
+            len: bytes.len() as u8,
+            data,
+        }
+    }
+
+    /// A host heartbeat only re-reads the state, so a client that stops sending reads neutral
+    /// after [`RAW_STALE`] however often it is re-presented; the next report revives the mirror.
+    #[test]
+    fn a_quiet_client_reads_neutral_whatever_the_heartbeat_does() {
+        let t0 = t0();
+        let mut seq = 0;
+        let mut st = TritonState::neutral();
+        let mut held = [0u8; 12];
+        held[0] = ID_TRITON_CONTROLLER_STATE;
+        held[2] = 0x01; // A held
+        held[10] = 0x7F; // stick pushed
+        st.apply_rich(hid_report(&held), t0);
+
+        let (r, len) = st.report(&mut seq, t0 + RAW_STALE / 2);
+        assert_eq!((len, &r[..12]), (12, &held[..]));
+
+        // Heartbeats only: the state is re-read every 8 ms, nothing arrives from the client.
+        let mut beat = t0;
+        while beat < t0 + RAW_STALE {
+            beat += std::time::Duration::from_millis(8);
+            let _ = st.report(&mut seq, beat);
+        }
+        let (r, len) = st.report(&mut seq, t0 + RAW_STALE * 3);
+        assert_eq!(len, TRITON_STATE_LEN);
+        let mut neutral = [0u8; TRITON_STATE_LEN];
+        serialize_triton_state(&mut neutral, &TritonState::neutral(), seq);
+        assert_eq!(r[..len], neutral[..], "no held button or stick once stale");
+
+        let later = t0 + RAW_STALE * 4;
+        st.apply_rich(hid_report(&held), later);
+        let (r, len) = st.report(&mut seq, later);
+        assert_eq!((len, &r[..12]), (12, &held[..]));
     }
 
     #[test]

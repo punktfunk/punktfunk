@@ -71,7 +71,7 @@ impl TritonPad {
 
     /// Client raw bytes verbatim, else a synthesized `0x42` state report from typed fields.
     pub fn write_state(&mut self, st: &TritonState) -> Result<()> {
-        let (r, len) = st.report(&mut self.seq);
+        let (r, len) = st.report(&mut self.seq, std::time::Instant::now());
         self.dev.write_input(&r[..len])
     }
 
@@ -235,18 +235,18 @@ impl PadProto for TritonProto {
         open_transport(idx, self.puck.as_mut())
     }
 
-    /// Typed fallback. Once `raw_len > 0`, only refresh typed fields for diagnostics;
+    /// Typed fallback. Once `raw_len > 0`, a typed frame only proves the client is alive;
     /// `write_state` keeps mirroring the raw report.
     fn merge_frame(
         &self,
         prev: &TritonState,
         f: &punktfunk_core::input::GamepadFrame,
     ) -> TritonState {
-        TritonState::merge_frame(prev, f)
+        TritonState::merge_frame(prev, f, std::time::Instant::now())
     }
 
     fn apply_rich(&self, st: &mut TritonState, rich: RichInput) {
-        st.apply_rich(rich);
+        st.apply_rich(rich, std::time::Instant::now());
     }
 
     fn write_state(&self, pad: &mut TritonTransport, st: &TritonState) {
@@ -294,8 +294,14 @@ mod tests {
         let mut pad = TritonPad::open(0).expect("open TritonPad (/dev/uhid + input group?)");
         let mut st = TritonState::neutral();
         let raw: &[u8] = &[0x42, 1, 0x01, 0, 0, 0, 0xFF, 0x7F]; // truncated fixture is enough
-        st.raw[..raw.len()].copy_from_slice(raw);
-        st.raw_len = raw.len() as u8;
+        let mut data = [0u8; 64];
+        data[..raw.len()].copy_from_slice(raw);
+        let hid = RichInput::HidReport {
+            pad: 0,
+            len: raw.len() as u8,
+            data,
+        };
+        st.apply_rich(hid, std::time::Instant::now());
         for _ in 0..50 {
             let _ = pad.service();
             pad.write_state(&st).expect("write_state");
