@@ -53,6 +53,11 @@ impl HeldInput {
         }
     }
 
+    /// Whether touch `id` is down.
+    pub fn touching(&self, id: u32) -> bool {
+        self.touch.contains(&id)
+    }
+
     /// The key codes held, in no order.
     pub fn keys(&self) -> impl Iterator<Item = u32> + '_ {
         self.keys.keys().copied()

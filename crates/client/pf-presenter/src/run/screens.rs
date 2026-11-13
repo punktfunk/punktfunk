@@ -277,10 +277,12 @@ impl ScreenWindow {
 }
 
 impl Drop for ScreenWindow {
-    /// As [`StreamState::shutdown`]: let go of the picture, join the decode, then idle.
+    /// As [`StreamState::shutdown`]: let go of the pictures, held and queued, join the
+    /// decode, then idle.
     fn drop(&mut self) {
         self.held = None;
         self.presenter.drop_video();
+        super::stream::drop_queued(&self.decode.frames);
         self.decode.close();
         self.presenter.wait_idle();
     }

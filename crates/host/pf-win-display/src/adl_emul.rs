@@ -375,6 +375,16 @@ pub fn available() -> bool {
 /// Apply `action` to every AMD adapter connector, or only `connector_filter`.
 /// [`EmulAction::Lock`] pins occupied connectors only unless the filter names one.
 pub fn run(action: EmulAction, connector_filter: Option<i32>) -> RunOutcome {
+    run_on(action, None, connector_filter)
+}
+
+/// [`run`], on the one GPU at PCI `bus_filter` when it names one. Connector indices repeat
+/// across GPUs, so a lease names the bus too.
+fn run_on(
+    action: EmulAction,
+    bus_filter: Option<i32>,
+    connector_filter: Option<i32>,
+) -> RunOutcome {
     let mut recs: Vec<OpRecord> = Vec::new();
     let mut rec = |op: &'static str, target: &str, took_ms: u128, rc: i32, extra: String| {
         recs.push(OpRecord {
@@ -456,7 +466,11 @@ pub fn run(action: EmulAction, connector_filter: Option<i32>) -> RunOutcome {
     for info in &infos {
         let present_ok =
             info.iPresent != 0 || (matches!(action, EmulAction::Probe) && info.iBusNumber >= 0);
-        if !present_ok || info.iVendorID != AMD_VENDOR_ID || seen_buses.contains(&info.iBusNumber) {
+        if !present_ok
+            || info.iVendorID != AMD_VENDOR_ID
+            || bus_filter.is_some_and(|bus| bus != info.iBusNumber)
+            || seen_buses.contains(&info.iBusNumber)
+        {
             continue;
         }
         seen_buses.push(info.iBusNumber);
@@ -515,7 +529,8 @@ pub fn run(action: EmulAction, connector_filter: Option<i32>) -> RunOutcome {
             }
             let port = ADLDevicePort::root(c.iConnectorIndex);
             let ctarget = format!(
-                "adapter{idx}.connector{}[{}]",
+                "adapter{idx}.bus{}.connector{}[{}]",
+                info.iBusNumber,
                 c.iConnectorIndex,
                 connector_type_str(c.iType)
             );
@@ -658,37 +673,74 @@ pub fn run(action: EmulAction, connector_filter: Option<i32>) -> RunOutcome {
     RunOutcome::Done(recs)
 }
 
-/// Marker that a lock was applied and not yet unlocked, plus the connector indices it pinned
-/// (the lease, immunity plan WP11). Pinned emulation outlives the process and can outlive a
-/// reboot; [`startup_recover`] clears leftovers.
+/// Marker that a lock was applied and not yet unlocked, plus the connectors it pinned (the
+/// lease, immunity plan WP11). Pinned emulation outlives the process and can outlive a reboot;
+/// [`startup_recover`] clears leftovers.
 fn journal_path() -> std::path::PathBuf {
     pf_paths::config_dir().join("edid-lock-active.json")
 }
 
-fn encode_journal(connectors: &[i32]) -> Vec<u8> {
-    serde_json::json!({ "locked": true, "connectors": connectors })
+/// A connector our lock pinned: its GPU's PCI bus (stable across reboots, unlike an ADL adapter
+/// index) and its index there. An older host's marker names the index only (`bus: None`), which
+/// matches that index on every GPU.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Lease {
+    bus: Option<i32>,
+    connector: i32,
+}
+
+fn encode_journal(leases: &[Lease]) -> Vec<u8> {
+    let leases: Vec<_> = leases
+        .iter()
+        .map(|l| serde_json::json!({ "bus": l.bus, "connector": l.connector }))
+        .collect();
+    serde_json::json!({ "locked": true, "leases": leases })
         .to_string()
         .into_bytes()
 }
 
-/// The leased connector indices in a marker. An older host's bare `{"locked":true}` (or an
-/// unreadable marker) is `None`, which unlocks every connector as it always did. An empty lease
-/// pinned nothing, so it unlocks nothing: the operator's own pins stay.
-fn decode_journal(bytes: &[u8]) -> Option<Vec<i32>> {
-    serde_json::from_slice::<serde_json::Value>(bytes)
-        .ok()
-        .and_then(|v| v.get("connectors")?.as_array().cloned())
-        .map(|arr| {
-            arr.iter()
-                .filter_map(|c| c.as_i64().and_then(|c| i32::try_from(c).ok()))
-                .collect()
-        })
+/// The leases in a marker. A bare `{"locked":true}` (or an unreadable marker) is `None`, which
+/// unlocks every connector as it always did. An empty lease pinned nothing, so it unlocks
+/// nothing: the operator's own pins stay.
+fn decode_journal(bytes: &[u8]) -> Option<Vec<Lease>> {
+    let v = serde_json::from_slice::<serde_json::Value>(bytes).ok()?;
+    let int = |n: &serde_json::Value| n.as_i64().and_then(|n| i32::try_from(n).ok());
+    if let Some(leases) = v.get("leases").and_then(|l| l.as_array()) {
+        return Some(
+            leases
+                .iter()
+                .filter_map(|l| {
+                    Some(Lease {
+                        bus: l.get("bus").and_then(int),
+                        connector: int(l.get("connector")?)?,
+                    })
+                })
+                .collect(),
+        );
+    }
+    // The older marker: connector indices, no bus.
+    let connectors = v.get("connectors")?.as_array()?;
+    Some(
+        connectors
+            .iter()
+            .filter_map(int)
+            .map(|connector| Lease {
+                bus: None,
+                connector,
+            })
+            .collect(),
+    )
 }
 
-/// The connector index a lock record names: `adapterN.connectorM[TYPE]` → `M`.
-fn connector_of(target: &str) -> Option<i32> {
-    let rest = target.split("connector").nth(1)?;
-    rest.split('[').next()?.parse().ok()
+/// The lease a lock record names: `adapterN.busB.connectorM[TYPE]` → bus `B`, connector `M`.
+fn lease_of(target: &str) -> Option<Lease> {
+    let number = |after: &str, end: char| -> Option<i32> {
+        target.split(after).nth(1)?.split(end).next()?.parse().ok()
+    };
+    Some(Lease {
+        bus: Some(number(".bus", '.')?),
+        connector: number("connector", '[')?,
+    })
 }
 
 /// Mode-off `ADL_ERR_NOT_SUPPORTED` is a documented no-op, not a failure.
@@ -740,11 +792,11 @@ pub fn lock_for_stream() -> bool {
         let _ = std::fs::remove_file(journal_path());
         return false;
     }
-    let leased: Vec<i32> = outcome
+    let leased: Vec<Lease> = outcome
         .records()
         .iter()
         .filter(|r| r.op == "adl-lock-mode-always" && r.ok())
-        .filter_map(|r| connector_of(&r.target))
+        .filter_map(|r| lease_of(&r.target))
         .collect();
     // The lease: only these connectors are ours to unlock. Written after the fact — the bare
     // marker above already covers a crash in between (it unlocks everything, as before).
@@ -752,15 +804,15 @@ pub fn lock_for_stream() -> bool {
         tracing::warn!(error = %format!("{e:#}"), "edid_lock: lease write failed");
     }
     tracing::info!(
-        connectors = ?leased,
+        leases = ?leased,
         "edid_lock: connector emulation pinned (software HPD dummy) — unlocked at stream teardown"
     );
     true
 }
 
-/// Undo [`lock_for_stream`]: mode off + remove pinned EDID on the LEASED connectors only, then
-/// clear the journal. A marker with no lease (an older host, or a crash before the lease was
-/// written) unlocks every connector. Idempotent.
+/// Undo [`lock_for_stream`]: mode off + remove pinned EDID on the LEASED connectors only, each on
+/// its own GPU, then clear the journal. A marker with no lease (an older host, or a crash before
+/// the lease was written) unlocks every connector. Idempotent.
 pub fn unlock_after_stream() {
     let leased = std::fs::read(journal_path())
         .ok()
@@ -784,8 +836,8 @@ pub fn unlock_after_stream() {
             all_ok = unlocked(&outcome);
         }
         Some(leased) => {
-            for c in leased {
-                let outcome = run(EmulAction::Unlock, Some(c));
+            for lease in leased {
+                let outcome = run_on(EmulAction::Unlock, lease.bus, Some(lease.connector));
                 tracing_log("edid_lock", &outcome);
                 all_ok &= unlocked(&outcome);
             }
@@ -817,16 +869,34 @@ pub fn startup_recover() {
 mod tests {
     use super::*;
 
-    /// The lease round-trips; an older bare marker (or garbage) means "unlock everything", the
-    /// pre-lease behaviour, and an empty lease unlocks nothing; the connector index comes out of
-    /// the lock record's target name.
+    /// The lease round-trips with its GPU, so one connector index on two GPUs stays two leases;
+    /// an older marker names indices only and matches any GPU; a bare marker (or garbage) means
+    /// "unlock everything", the pre-lease behaviour, and an empty lease unlocks nothing. The
+    /// lease comes out of the lock record's target name.
     #[test]
-    fn edid_lock_lease_round_trips_and_reads_the_bare_marker() {
-        assert_eq!(decode_journal(&encode_journal(&[2, 5])), Some(vec![2, 5]));
+    fn edid_lock_lease_round_trips_and_reads_the_older_markers() {
+        let lease = |bus, connector| Lease {
+            bus: Some(bus),
+            connector,
+        };
+        let both = [lease(3, 2), lease(12, 2)];
+        assert_eq!(decode_journal(&encode_journal(&both)), Some(both.to_vec()));
         assert_eq!(decode_journal(&encode_journal(&[])), Some(vec![]));
+        let any_gpu = |connector| Lease {
+            bus: None,
+            connector,
+        };
+        assert_eq!(
+            decode_journal(br#"{"locked":true,"connectors":[2,5]}"#),
+            Some(vec![any_gpu(2), any_gpu(5)])
+        );
         assert_eq!(decode_journal(br#"{"locked":true}"#), None);
         assert_eq!(decode_journal(b"garbage"), None);
-        assert_eq!(connector_of("adapter0.connector3[HDMI]"), Some(3));
-        assert_eq!(connector_of("adapter0"), None);
+        assert_eq!(
+            lease_of("adapter0.bus12.connector3[HDMI-A]"),
+            Some(lease(12, 3))
+        );
+        assert_eq!(lease_of("adapter0.connector3[HDMI-A]"), None);
+        assert_eq!(lease_of("adapter0"), None);
     }
 }

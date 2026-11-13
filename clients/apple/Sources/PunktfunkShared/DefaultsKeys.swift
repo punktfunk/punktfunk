@@ -25,9 +25,10 @@ public enum DefaultsKey {
     /// to render/encode at `chosen resolution × scale`, then the presenter downscales the larger
     /// decoded frame to this display in one Catmull-Rom pass. > 1 supersamples (sharper, at the cost
     /// of more bandwidth AND client decode — both grow ∝ scale²); < 1 renders below native for a
-    /// weak host GPU / constrained link (the presenter upscales). Purely client-side — the host just
-    /// sees a normal (larger/smaller) `Mode`, and Automatic bitrate scales with it. Clamped even +
-    /// to the codec's max dimension at connect. Applies to the fixed mode and the match-window path.
+    /// weak host GPU / constrained link (the presenter upscales). The host sees a larger or smaller
+    /// `Mode`, and Automatic bitrate scales with it; above 1x the connect also names the 1x view,
+    /// and a host that reads it scales down before encoding (`RenderScale`). Clamped even + to the
+    /// codec's max dimension at connect. Applies to the fixed mode and the match-window path.
     public static let renderScale = "punktfunk.renderScale"
     /// How a frame whose shape differs from the view fills it: a `VideoFit` raw value, `"fit"`
     /// (default, bars), `"crop"` or `"stretch"`. The cross-client `video_fit` key.
@@ -74,10 +75,9 @@ public enum DefaultsKey {
     /// iOS 27+ the user can hand the Home button to the app in Settings), so suppressing our
     /// send would gain nothing.
     public static let systemButtons = "punktfunk.systemButtons"
-    /// The hold-Select guide gesture: `"auto"` | `"on"` | `"off"` — the cross-client
-    /// `guide_gesture` key. Auto arms it everywhere but macOS: iOS reserves the physical Home
-    /// press for the Game Overlay (uncapturable pre-27) and tvOS never delivers it at all, so
-    /// holding Select is the controller route to the host's guide there.
+    /// The cross-client `guide_gesture` value: `"auto"` | `"on"` | `"off"`. No row sets it any
+    /// more; a stored value decides the Hold Select row of the default shortcuts
+    /// (`Shortcuts.defaults(legacyGuideGesture:)`).
     public static let guideGesture = "punktfunk.guideGesture"
     public static let bitrateKbps = "punktfunk.bitrateKbps"
     /// Requested audio channel count: 2 (stereo), 6 (5.1) or 8 (7.1). The host clamps to what it
@@ -85,12 +85,12 @@ public enum DefaultsKey {
     public static let audioChannels = "punktfunk.audioChannels"
     /// Requested audio format — `AudioFormatChoice`'s raw value: `"opus"` (the default, and every
     /// session before the lossless plane existed), or one of the lossless rows,
-    /// `"lossless44_1"` / `"lossless48"` / `"lossless88_2"` / `"lossless96"` / `"lossless176_4"`.
+    /// `"lossless441"` / `"lossless48"` / `"lossless882"` / `"lossless96"` / `"lossless1764"`.
     ///
     /// Off by default and deliberately: lossless takes 2.1–8.5 Mbps off the top of the link for
     /// stereo (three times that for 5.1, four for 7.1), OUTSIDE the ABR loop that manages the video
-    /// budget, against the ~256 kbps Opus it replaces — so a user has to pick it. Since 2026-08-17
-    /// this row is the ONLY opt-in: the host's half (`PUNKTFUNK_AUDIO_HIRES`) defaults ON and is an
+    /// budget, against the ~256 kbps Opus it replaces — so a user has to pick it. This row is the
+    /// ONLY opt-in: the host's half (`PUNKTFUNK_AUDIO_HIRES`) defaults ON and is an
     /// opt-OUT (`=0`), so picking a lossless row here is enough on any host that has not
     /// deliberately turned the plane off. A REQUEST: the host's
     /// five-condition gate may resolve the session back to Opus, and
@@ -151,21 +151,20 @@ public enum DefaultsKey {
     /// macOS: V-Sync the stream's presents — each decoded frame flips on the next display vsync
     /// (evenly paced, no tearing under direct scanout) instead of as soon as the GPU finishes
     /// (lowest latency — the default, OFF). Adaptive-refresh Macs present sparse input immediately
-    /// and dense input once per link target. PUNKTFUNK_PRESENT_MODE=immediate|vsync|slot overrides
-    /// that path for A/B. Resolved once per session; see Stage2Pipeline's header.
+    /// and dense input once per link target. PUNKTFUNK_PRESENT_MODE=immediate|vsync|slot|adaptive
+    /// overrides that path for A/B. Resolved once per session; see `PresentPolicy`.
     public static let vsync = "punktfunk.vsync"
-    /// Allow variable refresh rate: hand the display link a wide frame-rate RANGE (low floor,
-    /// preferred = stream rate) so a ProMotion / adaptive-sync display can vary its physical
-    /// refresh to match the stream. On by default; a no-op on fixed-refresh displays. On macOS,
-    /// VRR-on requests 24 Hz through the stream rate with the stream rate preferred; VRR-off
-    /// fixes the link at the stream rate. iOS keeps its proven 30 Hz floor when off.
-    /// Read per session/reconfigure by `SessionPresenter.syncFrameRate`.
+    /// Allow variable refresh rate, a Mac setting: hand the display link a wide frame-rate RANGE
+    /// (24 Hz through the stream rate, the stream rate preferred) so an adaptive-sync display can
+    /// vary its physical refresh to match the stream; off fixes the link at the stream rate. On
+    /// by default; a no-op on fixed-refresh displays. Read per session/reconfigure by
+    /// `SessionPresenter.syncFrameRate`, which other platforms' default pacing never reaches.
     public static let allowVRR = "punktfunk.allowVRR"
     /// Request a 10-bit BT.2020 PQ (HDR10) stream. On by default; only takes effect when the host
     /// has HDR content AND this display supports HDR — otherwise the stream stays 8-bit SDR.
     public static let hdrEnabled = "punktfunk.hdrEnabled"
     /// Request a full-chroma 4:4:4 stream when this device can HARDWARE-decode it (`Stage444Probe`).
-    /// On by default; only takes effect when the host also opted in to 4:4:4 (otherwise the stream
+    /// Off by default; only takes effect when the host also opted in to 4:4:4 (otherwise the stream
     /// stays 4:2:0). Sharper text/UI at the cost of more bandwidth.
     public static let enable444 = "punktfunk.enable444"
     /// Advertise 10-bit WITHOUT HDR, so an SDR desktop arrives at Main10 instead of 8-bit.
@@ -241,7 +240,8 @@ public enum DefaultsKey {
     // only ever be refused. The Rust `library_enabled` went the same way; a stored value is
     // simply ignored, on every client. Do not reintroduce the key under a new name.
     /// How the library's titles are ordered within a group — a `LibrarySortKey` stored value
-    /// (`"host"` = the host's own order, the default; `"title"` A–Z; `"platform"`; `"store"`).
+    /// (`"host"` = the host's own order, the default; `"title"` A–Z; `"platform"`; `"store"`;
+    /// `"recent"`; `"playtime"`).
     /// The cross-client `library_sort` key: the desktop console persists the same ids, and an
     /// unknown value reads as host order. Presentation only — a device preference, never part of
     /// a stream preset. Written by the library's sort/view bar and by the Collections screen.
@@ -348,7 +348,7 @@ public enum DefaultsKey {
     /// Wake-on-LAN and, if the dial fails, wait for it to come back before retrying (the "Waking…"
     /// overlay). On by default. Turn off if a host that's already on just isn't seen on mDNS (a
     /// routed/VPN host), so connects go straight through instead of waiting out the wake timeout.
-    /// The explicit "Wake Host" action stays available regardless. Read by ContentView.startSession.
+    /// The explicit "Wake Host" action stays available regardless. Read through `@AutoWake`.
     public static let autoWake = "punktfunk.autoWake"
     /// iOS/iPadOS: keep a streaming session ALIVE when the app is backgrounded (audio background
     /// mode). Off by default (today's freeze-on-background is the default). When on, backgrounding a

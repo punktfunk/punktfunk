@@ -29,7 +29,7 @@ import Foundation
 
 public enum SafeDisplay {
     /// The host rejects odd dimensions and anything under 320×200 (`validate_dimensions` in
-    /// `pf-encode`), so the computed mode is even-floored and clamped exactly like `RenderScale`.
+    /// `pf-encode-core`), so the computed mode is even-floored and clamped exactly like `RenderScale`.
     public static let minWidth = 320
     public static let minHeight = 200
 

@@ -267,20 +267,34 @@ extension ShotMock {
         ]
     }
 
-    /// A plausible burst: a quick ramp, then around 900 Mbps with one dip, polled every 200 ms.
+    /// The check's rounds as the page polls them, every 20 ms: a clean round at half of what the
+    /// link carries with one dip, then two shaped rounds, with a link's poll-to-poll jitter.
+    /// `seconds` counts test traffic.
     static func speedTrace(until seconds: Double) -> PunktfunkConnection.ProbeTrace {
-        let rates: [Double] = [
-            310, 620, 840, 905, 890, 912, 930, 870, 760, 880, 915, 925, 900, 910, 895, 920,
-            905, 890, 912, 908, 900, 915, 898, 910, 905,
-        ]
-        var trace = PunktfunkConnection.ProbeTrace()
-        var bytes: UInt64 = 0
-        for (i, mbps) in rates.enumerated() where Double(i + 1) * 0.2 <= seconds + 0.001 {
-            bytes += UInt64(mbps * 25_000) // 200 ms at `mbps`
-            let ms = UInt32((i + 1) * 200)
-            trace.add(.init(
+        func report(_ ms: Int, _ bytes: UInt64) -> PunktfunkConnection.ProbeResult {
+            .init(
                 done: false, recvBytes: bytes, recvPackets: 0, hostBytes: bytes, hostPackets: 0,
-                elapsedMs: ms, throughputKbps: UInt32(Double(bytes) * 8 / Double(ms)), lossPct: 0))
+                elapsedMs: UInt32(ms), throughputKbps: 0, lossPct: 0)
+        }
+        var trace = PunktfunkConnection.ProbeTrace()
+        var before = 0.0
+        var noise: UInt64 = 0x9E37_79B9_7F4A_7C15 // fixed seed: the same picture every run
+        for (round, length) in [2000, 1000, 1000].enumerated() {
+            var bytes: UInt64 = 0
+            trace.add(report(0, 0)) // a round's counters start from zero
+            for ms in stride(from: 20, through: length, by: 20)
+            where before + Double(ms) / 1000 <= seconds + 0.001 {
+                noise = noise &* 6_364_136_223_846_793_005 &+ 1_442_695_040_888_963_407
+                let jitter = (Double(noise >> 40) / Double(1 << 24) - 0.5) * 70
+                let drift = 10 * sin(Double(ms) / 210 + Double(round) * 2)
+                let dip = round == 0 && (880...1120).contains(ms) ? 45.0 : 0
+                // The first burst takes a moment to reach its rate.
+                let settle = round == 0 ? min(1, 0.55 + Double(ms) / 400) : 1
+                let mbps = (438 + drift - dip + jitter) * settle
+                bytes += UInt64(mbps * 2_500) // 20 ms at `mbps`
+                trace.add(report(ms, bytes))
+            }
+            before += Double(length) / 1000
         }
         return trace
     }

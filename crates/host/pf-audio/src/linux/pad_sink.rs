@@ -299,6 +299,18 @@ impl Mixer {
 struct PadUd {
     mix: Rc<RefCell<Mixer>>,
     node: PadNode,
+    /// The decoded buffer of one callback, kept so the realtime thread allocates once.
+    samples: Vec<f32>,
+}
+
+impl PadUd {
+    fn new(mix: Rc<RefCell<Mixer>>, node: PadNode) -> PadUd {
+        PadUd {
+            mix,
+            node,
+            samples: Vec::new(),
+        }
+    }
 }
 
 /// Live per-pad node graph and its capture. [`AudioCapturer`] contract: empty
@@ -441,17 +453,13 @@ macro_rules! pad_process {
                     return;
                 }
                 let region = &buf[offset..(offset + size).min(buf.len())];
-                let n = region.len() / 4;
-                let mut samples = Vec::with_capacity(n);
-                for i in 0..n {
-                    samples.push(f32::from_le_bytes([
-                        region[i * 4],
-                        region[i * 4 + 1],
-                        region[i * 4 + 2],
-                        region[i * 4 + 3],
-                    ]));
-                }
-                ud.mix.borrow_mut().add(ud.node, &samples);
+                ud.samples.clear();
+                ud.samples.extend(
+                    region
+                        .chunks_exact(4)
+                        .map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]])),
+                );
+                ud.mix.borrow_mut().add(ud.node, &ud.samples);
             }));
             if outcome.is_err() {
                 tracing::error!("panic in pipewire pad-sink callback — chunk dropped");
@@ -564,10 +572,7 @@ fn pad_sink_thread(
         let parent = pw::stream::StreamBox::new(&core, "punktfunk-pad-audio", parent_props)
             .context("pw pad-sink parent Stream")?;
         let _parent_listener = parent
-            .add_local_listener_with_user_data(PadUd {
-                mix: mix.clone(),
-                node: PadNode::Parent,
-            })
+            .add_local_listener_with_user_data(PadUd::new(mix.clone(), PadNode::Parent))
             .state_changed({
                 let mainloop = mainloop.clone();
                 move |_s, _ud, old, new| {
@@ -609,10 +614,7 @@ fn pad_sink_thread(
         let haptic = pw::stream::StreamBox::new(&core, "punktfunk-pad-audio", haptic_props)
             .context("pw pad-sink haptic Stream")?;
         let _haptic_listener = haptic
-            .add_local_listener_with_user_data(PadUd {
-                mix: mix.clone(),
-                node: PadNode::Haptic,
-            })
+            .add_local_listener_with_user_data(PadUd::new(mix.clone(), PadNode::Haptic))
             .process(pad_process!())
             .register()
             .context("register pad-sink haptic listener")?;
@@ -624,10 +626,7 @@ fn pad_sink_thread(
         let speaker = pw::stream::StreamBox::new(&core, "punktfunk-pad-audio", speaker_props)
             .context("pw pad-sink speaker Stream")?;
         let _speaker_listener = speaker
-            .add_local_listener_with_user_data(PadUd {
-                mix: mix.clone(),
-                node: PadNode::Speaker,
-            })
+            .add_local_listener_with_user_data(PadUd::new(mix.clone(), PadNode::Speaker))
             .process(pad_process!())
             .register()
             .context("register pad-sink speaker listener")?;

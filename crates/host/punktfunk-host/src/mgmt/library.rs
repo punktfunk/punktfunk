@@ -1148,9 +1148,23 @@ pub(crate) async fn reconcile_provider_entries(
     Extension(lane): Extension<AuthLane>,
     OwnedId(provider, _): OwnedId<ProviderId>,
     Query(q): Query<ReconcileQuery>,
-    ApiJson(mut inputs): ApiJson<Vec<crate::library::ProviderEntryInput>>,
+    ApiJson(inputs): ApiJson<Vec<crate::library::ProviderEntryInput>>,
 ) -> Response {
     let store = q.store.filter(|s| !s.is_empty());
+    // Validation, art checks and the catalog diff read files and the registry. A plugin's timer
+    // repeats them every tick, so they run off the async workers.
+    tokio::task::spawn_blocking(move || reconcile_provider_now(lane, provider, store, inputs))
+        .await
+        .unwrap_or_else(|e| host_error("library change refused", &e))
+}
+
+/// [`reconcile_provider_entries`] once the extractors have run. Blocking IO.
+fn reconcile_provider_now(
+    lane: AuthLane,
+    provider: String,
+    store: Option<String>,
+    mut inputs: Vec<crate::library::ProviderEntryInput>,
+) -> Response {
     if let Some(store) = &store {
         if let Err(e) = crate::library::validate_store_claim(store) {
             return api_error(StatusCode::BAD_REQUEST, &e);

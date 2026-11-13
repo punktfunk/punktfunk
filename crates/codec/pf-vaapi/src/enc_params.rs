@@ -31,6 +31,10 @@ use crate::enc_h264::VaEncSequenceParameterBufferH264;
 /// A macroblock is 16×16; every VAAPI dimension is counted in them.
 const MB: u32 = 16;
 
+/// Frames an H.264 DPB holds for the kept pair: pin, candidate, the last picture, the one
+/// in coding, and the gap placeholder.
+pub const H264_MIN_DPB_FRAMES: u64 = 5;
+
 /// What a session is. Everything below is derived from this and nothing else.
 #[derive(Clone, Copy, Debug)]
 pub struct SessionParams {
@@ -118,37 +122,42 @@ impl SessionParams {
     }
 
     /// The smallest level from 4.1 up whose frame size and macroblock rate hold
-    /// this stream (A.3.1): 4.2 for 1080p60, 5.2 for 4K60. A decoder that trusts
-    /// the level sizes its DPB and its throughput from it.
+    /// this stream and whose DPB holds [`H264_MIN_DPB_FRAMES`] (A.3.1): 5.0 for
+    /// 1080p60, 5.2 for 4K60. A decoder that trusts the level sizes its DPB and
+    /// its throughput from it.
     pub fn h264_level(&self) -> Level {
+        self.h264_row().1
+    }
+
+    /// The most slots this level's DPB holds beside the gap placeholder (A.3.1
+    /// `MaxDpbMbs`): 8 at 1080p and 1440p, 4 at 4K. The kept pair sits in this
+    /// ring, so it is the anchor's reach.
+    pub fn h264_max_slots(&self) -> u8 {
+        let frames = (self.h264_row().0 / u64::from(self.mbs_per_picture())).min(16) as u8;
+        frames.saturating_sub(1).clamp(1, 8)
+    }
+
+    /// `MaxDpbMbs` and the level [`Self::h264_level`] picks.
+    fn h264_row(&self) -> (u64, Level) {
         let mbs = u64::from(self.mbs_per_picture());
         let rate = mbs * u64::from(self.fps_num) / u64::from(self.fps_den.max(1));
+        // MaxFS, MaxMBPS, MaxDpbMbs.
         let ladder = [
-            (8_192, 245_760, Level::L4_1),
-            (8_192, 522_240, Level::L4_2),
-            (22_080, 983_040, Level::L5_1),
-            (36_864, 2_073_600, Level::L5_2),
-            (139_264, 4_177_920, Level::L6_1),
+            (8_192, 245_760, 32_768, Level::L4_1),
+            (8_192, 522_240, 34_816, Level::L4_2),
+            (22_080, 589_824, 110_400, Level::L5),
+            (22_080, 983_040, 184_320, Level::L5_1),
+            (36_864, 2_073_600, 184_320, Level::L5_2),
+            (139_264, 4_177_920, 696_320, Level::L6_1),
         ];
         ladder
             .into_iter()
-            .find(|&(max_fs, max_mbps, _)| mbs <= max_fs && rate <= max_mbps)
-            .map_or(Level::L6_2, |(_, _, level)| level)
-    }
-
-    /// The most slots this level's DPB holds beside the current picture and the
-    /// gap placeholder (A.3.1 `MaxDpbMbs`): 3 at 1080p, 4 at 4K, 8 at 1440p.
-    /// The ceiling is the anchor's reach — a ring shallower than the client's
-    /// loss report has evicted every pre-loss picture by the time it lands.
-    pub fn h264_max_slots(&self) -> u8 {
-        let max_dpb_mbs: u64 = match self.h264_level() {
-            Level::L4_1 => 32_768,
-            Level::L4_2 => 34_816,
-            Level::L5_1 | Level::L5_2 => 184_320,
-            _ => 696_320,
-        };
-        let frames = (max_dpb_mbs / u64::from(self.mbs_per_picture())).min(16) as u8;
-        frames.saturating_sub(1).clamp(1, 8)
+            .find(|&(max_fs, max_mbps, max_dpb, _)| {
+                mbs <= max_fs && rate <= max_mbps && max_dpb / mbs >= H264_MIN_DPB_FRAMES
+            })
+            .map_or((696_320, Level::L6_2), |(_, _, max_dpb, level)| {
+                (max_dpb, level)
+            })
     }
 
     /// Coded luma samples per picture: the size the level ladders are read at.
@@ -482,13 +491,14 @@ mod tests {
         }
     }
 
-    /// 1080p60 is 489 600 macroblocks a second — past level 4.1's 245 760, which
-    /// is what the SPS used to claim. 4K60 needs 5.2; the DPB there holds five.
+    /// 1080p60 is 489 600 macroblocks a second, past level 4.1's 245 760, and
+    /// 4.2's DPB holds four frames: 5.0 holds the kept pair. 4K60 needs 5.2; the
+    /// DPB there holds five.
     #[test]
     fn the_level_follows_the_picture_rate() {
         let p = params();
-        assert_eq!(p.h264_level() as u8, Level::L4_2 as u8, "1080p60");
-        assert_eq!(p.h264_max_slots(), 3);
+        assert_eq!(p.h264_level() as u8, Level::L5 as u8, "1080p60");
+        assert_eq!(p.h264_max_slots(), 8);
         let uhd = SessionParams {
             width: 3840,
             height: 2160,

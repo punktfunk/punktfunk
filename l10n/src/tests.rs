@@ -157,6 +157,9 @@ fn get_searches_only_compiled_parts() {
 fn language_override_stays_on_its_thread() {
     assert_eq!(crate::set_languages(&["ja-JP"]), "en");
     crate::with_language("de-AT", || assert_eq!(crate::language(), "de"));
+    // `locales.json` reads every other Portuguese as the one that ships.
+    crate::with_language("pt-PT", || assert_eq!(crate::language(), "pt-BR"));
+    crate::with_language("pt", || assert_eq!(crate::language(), "pt-BR"));
     #[cfg(feature = "pseudo")]
     crate::with_language("en-XA", || {
         assert_eq!(crate::language(), "en-XA");

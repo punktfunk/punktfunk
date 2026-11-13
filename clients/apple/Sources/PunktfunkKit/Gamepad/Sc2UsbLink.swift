@@ -260,11 +260,15 @@ final class Sc2UsbLink {
     /// Deallocating on the calling side would therefore race a callback already in flight and
     /// scribble on freed memory. The cancel handler is the one place IOKit guarantees no further
     /// callback can arrive, so the close and the free both live there.
+    ///
+    /// The report callback carries an UNRETAINED self, so the handler holds the link too: the
+    /// manager's cancel handler may run first and drop the last other reference.
     private func cancel(id: UInt64, device: IOHIDDevice) {
         let buf = buffers.removeValue(forKey: id)
         IOHIDDeviceSetCancelHandler(device) {
             IOHIDDeviceClose(device, IOOptionBits(kIOHIDOptionsTypeNone))
             buf?.deallocate()
+            withExtendedLifetime(self) {}
         }
         IOHIDDeviceCancel(device)
     }

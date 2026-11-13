@@ -16,5 +16,10 @@ tracing = "0.1"
 # `pf_bitstream::testing`: vendored vectors and splitters for other crates' tests.
 test-vectors = []
 
+# Imports `pf_bitstream::testing`, which only the `test-vectors` feature builds.
+[[test]]
+name = "scan_timing"
+required-features = ["test-vectors"]
+
 [lints]
 workspace = true

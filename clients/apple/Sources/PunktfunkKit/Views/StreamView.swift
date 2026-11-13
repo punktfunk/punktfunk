@@ -200,8 +200,8 @@ public final class StreamLayerView: NSView {
     public private(set) var connection: PunktfunkConnection?
     /// The session's further screens, while its connection shows them.
     private var screenWindows: ScreenWindows?
-    /// Match-window resize follower (C3) — non-nil while a session is active AND the `matchWindow`
-    /// setting is on (DEFAULT on, for pixel-exact windowed streaming); fed the view's physical-pixel
+    /// Match-window resize follower — non-nil while a session is active; it acts only while the
+    /// `matchWindow` setting is on (`SettingDefault.matchWindow`). Fed the view's physical-pixel
     /// size on every relayout so the host mode tracks the window (1:1, no presenter resample).
     private var matchFollower: MatchWindowFollower?
     /// Last decoded frame size fed into the presenter's aspect-fit. A new-mode IDR after a resize
@@ -1152,13 +1152,9 @@ public final class StreamLayerView: NSView {
                 overlayDecodedSize?(w, h)
             },
             adaptiveSync: { [weak self] in Self.isAdaptiveSync(self?.window?.screen ?? NSScreen.main) })
-        // Match-window (C3): when ON, follow the window's pixel size so a windowed session streams
-        // 1:1 (pixel-exact) instead of the presenter resampling a fixed-mode frame into a
-        // non-matching window. The first real `layout()` feeds the initial size, so the stream
-        // converges to the window even though the connect used the explicit/display mode; entering
-        // fullscreen reports the full-display px, restoring a native-res 1:1 present there too.
-        // OPT-IN — `?? false` matches the Settings toggle (which also defaults off); an unset
-        // default keeps the explicit mode.
+        // Match window, opt-in: the host mode follows the window's pixel size, so a windowed
+        // session streams 1:1 instead of resampling a fixed mode. The first `layout()` feeds the
+        // initial size; fullscreen reports the full display. Off, the explicit mode holds.
         let follower = MatchWindowFollower(
             connection: connection,
             enabled: connection.settings.matchWindow,

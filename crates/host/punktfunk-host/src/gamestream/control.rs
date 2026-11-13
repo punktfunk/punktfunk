@@ -286,9 +286,10 @@ impl rusty_enet::Socket for OwnerFilteredSocket {
         &mut self,
         buffer: &mut [u8; rusty_enet::MTU_MAX],
     ) -> Result<Option<(Self::Address, rusty_enet::PacketReceived)>, std::io::Error> {
-        // Loop so a dropped non-owner datagram does not starve a following owner one.
+        // Keep reading past a dropped non-owner datagram so it cannot starve an owner one, but
+        // yield after `MAX_DROPS_PER_RECEIVE` so ENet's ACK and timeout pass still runs.
         // Timeout is `WouldBlock` on Unix and `TimedOut` on Windows; both map to `Ok(None)`.
-        loop {
+        for _ in 0..MAX_DROPS_PER_RECEIVE {
             match rusty_enet::Socket::receive(&mut self.inner, buffer) {
                 Ok(Some((addr, received))) => {
                     // Decide before rusty_enet allocates per-peer reassembly. No live
@@ -312,8 +313,14 @@ impl rusty_enet::Socket for OwnerFilteredSocket {
                 Err(e) => return Err(e),
             }
         }
+        Ok(None)
     }
 }
+
+/// Datagrams one [`OwnerFilteredSocket::receive`] reads and drops before it reports none.
+/// ENet sends ACKs, checks timeouts and dispatches only once `receive` returns none, and a
+/// flood from another host never leaves the 2 ms read timeout to expire.
+const MAX_DROPS_PER_RECEIVE: usize = 64;
 
 /// Admit a fresh ENet connect only behind a live `/launch` (Moonlight connects after
 /// RTSP, so there is no legitimate connect without one). When both sides captured the
@@ -991,6 +998,36 @@ mod tests {
         // Address unknown on one side → launch-present only.
         assert!(super::accept_connect(launched(Some(owner)), None));
         assert!(super::accept_connect(launched(None), Some(other)));
+    }
+
+    /// A flood of non-owner datagrams makes `receive` report none after the drop cap, so ENet's
+    /// ACK and timeout pass runs; the datagrams behind the cap are read by the next call.
+    #[test]
+    fn a_non_owner_flood_does_not_hold_receive() {
+        use rusty_enet::Socket;
+        let inner = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
+        inner
+            .set_read_timeout(Some(std::time::Duration::from_millis(500)))
+            .unwrap();
+        let to = inner.local_addr().unwrap();
+        let state = super::super::test_state();
+        let mut sock = super::OwnerFilteredSocket {
+            inner,
+            state: state.clone(),
+        };
+        let sender = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
+        let other: std::net::IpAddr = "10.9.9.9".parse().unwrap();
+        *state.launch.lock().unwrap() = launched(Some(other));
+        for _ in 0..super::MAX_DROPS_PER_RECEIVE + 5 {
+            sender.send_to(&[1], to).unwrap();
+        }
+        let mut buf = [0u8; rusty_enet::MTU_MAX];
+        assert!(sock.receive(&mut buf).unwrap().is_none());
+        *state.launch.lock().unwrap() = launched(Some(sender.local_addr().unwrap().ip()));
+        assert!(
+            sock.receive(&mut buf).unwrap().is_some(),
+            "the datagrams behind the cap stay queued for the owner"
+        );
     }
 
     /// Wrong type table or reason endianness is ignored by the client (frozen stream or

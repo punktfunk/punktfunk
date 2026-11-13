@@ -168,6 +168,8 @@ pub(crate) struct Shared {
     pub(crate) set_seat: Mutex<Option<AsyncSetState<Option<profiles::SeatWait>>>>,
     /// Opens the password prompt the same way ([`unlock::before_dial`]).
     pub(crate) set_unlock: Mutex<Option<AsyncSetState<Option<unlock::UnlockAsk>>>>,
+    /// Re-renders the settings page when a device probe lands ([`settings::probe_devices`]).
+    pub(crate) set_devices: Mutex<Option<AsyncSetState<()>>>,
     pub(crate) pictures: Mutex<profiles::Pictures>,
 }
 
@@ -290,6 +292,8 @@ pub(crate) enum Msg {
     Picker(Option<profiles::PickerAsk>),
     Seat(Option<profiles::SeatWait>),
     Unlock(Option<unlock::UnlockAsk>),
+    /// The device probe finished: the settings page reads it from `AppCtx::probes`.
+    Devices,
     /// A `punktfunk://` link, from argv or a later instance.
     Link(String),
     LinkConfirm(Option<Box<orchestrate::ConnectPlan>>),
@@ -457,6 +461,8 @@ impl Component for Shell {
         *ctx.shared.set_picker.lock().unwrap() = Some(shell.set(Msg::Picker));
         *ctx.shared.set_seat.lock().unwrap() = Some(shell.set(Msg::Seat));
         *ctx.shared.set_unlock.lock().unwrap() = Some(shell.set(Msg::Unlock));
+        *ctx.shared.set_devices.lock().unwrap() = Some(shell.set(|()| Msg::Devices));
+        settings::probe_devices(&ctx);
         // Before the link poll starts: a link queued at startup is explicit intent and wins.
         open_start_screen(&shell.svc());
         poll_links(shell.set(Msg::Link));
@@ -536,6 +542,7 @@ impl Component for Shell {
             Msg::Picker(p) => self.picker = p,
             Msg::Seat(s) => self.seat = s,
             Msg::Unlock(u) => self.unlock = u,
+            Msg::Devices => self.settings_rev += 1,
             Msg::Link(url) => route_link(
                 &self.ctx,
                 &url,

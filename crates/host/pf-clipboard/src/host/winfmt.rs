@@ -148,6 +148,7 @@ fn strip_trailing_nul(b: &[u8]) -> &[u8] {
 
 /// PNG/JPEG/GIF (anything `image` sniffs) → `CF_DIB` (BITMAPINFOHEADER,
 /// 32bpp BGRA, BI_RGB, bottom-up). GIF uses frame 0. `None` = leave unrendered.
+/// An RGBA8 decode is reused as the pixels, so the peak is those pixels plus the output.
 pub fn image_to_dib(bytes: &[u8]) -> Option<Vec<u8>> {
     // Decode caps, not result caps: `image` defaults to 512 MiB and would
     // allocate a huge declared size before the check below. 32767 is the
@@ -162,7 +163,7 @@ pub fn image_to_dib(bytes: &[u8]) -> Option<Vec<u8>> {
     let mut reader = reader;
     reader.limits(limits);
     let img = reader.decode().ok()?;
-    let rgba = img.to_rgba8();
+    let rgba = img.into_rgba8();
     let (w, h) = (rgba.width() as usize, rgba.height() as usize);
     if w == 0 || h == 0 || w > 32767 || h > 32767 {
         return None;

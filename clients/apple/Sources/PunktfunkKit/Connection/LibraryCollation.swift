@@ -138,10 +138,10 @@ public struct LibraryGroup: Hashable, Sendable {
 }
 
 public enum LibraryCollation {
-    /// The desktop tile's id — the synthetic entry every shelf leads with, so Library is never a
-    /// dead end for the desktop-only user and a plugin-less host is still one press from
-    /// streaming. The `\0` prefix is the desktop console's (`pf-console-ui`'s `DESKTOP_ID`): a
-    /// host title id is a store reference, and none of them can start with a NUL.
+    /// The desktop tile's id. No shelf in the app carries the tile: the Library tab lists desktops
+    /// in their own section, and only the shot gallery builds a `desktopEntry`. The `\0` prefix
+    /// is the desktop console's (`pf-client-core`'s `DESKTOP_ID`): a host title id is a store
+    /// reference, and none of them can start with a NUL.
     ///
     /// Presentation only. It is never persisted, never fetched, and never grouped.
     public static let desktopID = "\u{0}desktop"

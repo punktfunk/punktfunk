@@ -441,6 +441,10 @@ impl PadProto for ScProto {
         st.apply_rich(rich, Instant::now());
     }
 
+    fn heard(&self, st: &mut ScState, now: Instant) {
+        st.hear(now);
+    }
+
     fn write_state(&self, pad: &mut ScTransport, st: &ScState) {
         pad.write_state(st);
     }

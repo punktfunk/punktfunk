@@ -298,23 +298,30 @@ impl Drop for VideoThread {
     }
 }
 
+/// Pops video AUs and drops them until `shutdown` is set or the session closes, so the queue
+/// never stands: no jump-to-live, no keyframe cadence, and the host keeps pacing against a
+/// client that is still reading. `pop` waits for its own timeout, which is the loop's only wait.
+pub(crate) fn drain_frames<T>(
+    shutdown: &AtomicBool,
+    mut pop: impl FnMut() -> Result<T, punktfunk_core::PunktfunkError>,
+) {
+    while !shutdown.load(Ordering::Relaxed) {
+        // `NoFrame` is the timeout: re-check the flag and poll again. Anything else is a closed
+        // session, and there is nothing left to drain.
+        match pop() {
+            Ok(_) | Err(punktfunk_core::PunktfunkError::NoFrame) => {}
+            Err(_) => break,
+        }
+    }
+}
+
 impl SessionHandle {
-    /// Run the keep-alive AU drain, replacing any already running. Pops video AUs and discards
-    /// them so the queue never stands: no jump-to-live, no keyframe cadence, and the host keeps
-    /// pacing against a client that is still reading.
+    /// Run the keep-alive AU drain ([`drain_frames`]), replacing any already running.
     pub(crate) fn start_drain(&self) {
         let client = self.client.clone();
         self.drain.replace(|| {
             let spawned = VideoThread::spawn("pf-video-drain", move |sd| {
-                while !sd.load(Ordering::Relaxed) {
-                    // `NoFrame` is the 5 ms timeout — re-check the flag and poll again.
-                    // Anything else is a closed session, and there is nothing left to drain.
-                    match client.next_frame(std::time::Duration::from_millis(5)) {
-                        Ok(_) => {}
-                        Err(punktfunk_core::PunktfunkError::NoFrame) => {}
-                        Err(_) => break,
-                    }
-                }
+                drain_frames(&sd, || client.next_frame(Duration::from_millis(5)));
             });
             match spawned {
                 Ok(thread) => Some(thread),
@@ -351,8 +358,43 @@ impl Drop for SessionHandle {
 #[cfg(test)]
 mod tests {
     use super::{
-        pack_src_crop, pack_surface_size, unpack_src_crop, unpack_surface_size, HandleTable,
+        drain_frames, pack_src_crop, pack_surface_size, unpack_src_crop, unpack_surface_size,
+        HandleTable,
     };
+    use punktfunk_core::PunktfunkError;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    /// The drain takes frames and timeouts alike, ends on a closed session at once, and never
+    /// pops once stopped.
+    #[test]
+    fn drain_pops_until_closed_or_stopped() {
+        let stop = AtomicBool::new(false);
+        let mut script = vec![
+            Ok(1),
+            Err(PunktfunkError::NoFrame),
+            Ok(2),
+            Err(PunktfunkError::Closed),
+            Ok(3),
+        ]
+        .into_iter();
+        let mut pops = 0;
+        drain_frames(&stop, || {
+            pops += 1;
+            script.next().unwrap()
+        });
+        assert_eq!(pops, 4, "the pop after Closed is never made");
+
+        let mut pops = 0;
+        drain_frames(&stop, || {
+            pops += 1;
+            stop.store(true, Ordering::Relaxed);
+            Ok(())
+        });
+        assert_eq!(pops, 1, "the flag ends the loop after the pop that saw it");
+        drain_frames(&stop, || -> Result<(), PunktfunkError> {
+            panic!("a stopped drain pops nothing")
+        });
+    }
 
     /// A key resolves in its own table only until removed, and `0` never resolves.
     #[test]

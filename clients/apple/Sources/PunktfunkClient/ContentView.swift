@@ -434,7 +434,6 @@ struct ContentView: View {
                 if let host = model.activeHost {
                     liveActivity.begin(
                         hostID: host.id, hostName: host.displayName,
-                        launchTitle: nil, // no live foreground-app title mid-session (v1)
                         modeLine: currentModeLine(), startedAt: Date())
                 }
             case .idle:

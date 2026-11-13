@@ -40,10 +40,9 @@ final class SessionActivityController {
 
     /// Start the Live Activity for a freshly-streaming session. No-op if the user disabled Live
     /// Activities for the app, or one is already up.
-    func begin(hostID: UUID, hostName: String, launchTitle: String?, modeLine: String, startedAt: Date) {
+    func begin(hostID: UUID, hostName: String, modeLine: String, startedAt: Date) {
         guard ActivityAuthorizationInfo().areActivitiesEnabled, activity == nil else { return }
-        let attributes = PunktfunkSessionAttributes(
-            hostID: hostID, hostName: hostName, launchTitle: launchTitle)
+        let attributes = PunktfunkSessionAttributes(hostID: hostID, hostName: hostName)
         let initial = PunktfunkSessionAttributes.ContentState(
             stage: .streaming, startedAt: startedAt, modeLine: modeLine)
         state = initial

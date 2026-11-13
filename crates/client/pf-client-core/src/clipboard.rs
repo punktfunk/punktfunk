@@ -89,7 +89,7 @@ struct State {
     self_written_seq: Option<u32>,
     /// Newest-wins offer id.
     offer_seq: u32,
-    /// Skip a new offer under 100 ms.
+    /// A change within [`OFFER_SPACING`] of this waits for a later pass.
     last_offer: Option<Instant>,
     remote_offer: Option<u32>,
     /// In-flight fetch id and the mime `Data` will place.
@@ -98,22 +98,36 @@ struct State {
     last_applied: Option<(String, Vec<u8>)>,
 }
 
+/// The spec floor between two offers.
+const OFFER_SPACING: Duration = Duration::from_millis(100);
+
+impl State {
+    /// Whether `seq` is a new local copy to announce at `now`. A change inside
+    /// [`OFFER_SPACING`] stays unseen, so the next pass finds it.
+    fn take_local_change(&mut self, seq: u32, now: Instant) -> bool {
+        if seq == self.last_seq {
+            return false;
+        }
+        if self
+            .last_offer
+            .is_some_and(|t| now.saturating_duration_since(t) < OFFER_SPACING)
+        {
+            return false;
+        }
+        self.last_seq = seq;
+        // Our apply — drop it or both sides re-offer forever.
+        if self.self_written_seq == Some(seq) {
+            self.self_written_seq = None;
+            return false;
+        }
+        true
+    }
+}
+
 /// Announce the local format list; never the bytes.
 fn poll_local(client: &NativeClient, state: &mut State) {
-    let seq = os::sequence_number();
-    if seq == state.last_seq {
+    if !state.take_local_change(os::sequence_number(), Instant::now()) {
         return;
-    }
-    state.last_seq = seq;
-    // Our apply — drop it or both sides re-offer forever.
-    if state.self_written_seq == Some(seq) {
-        state.self_written_seq = None;
-        return;
-    }
-    if let Some(t) = state.last_offer {
-        if t.elapsed() < Duration::from_millis(100) {
-            return;
-        }
     }
     if os::is_concealed() {
         tracing::debug!("clipboard: concealed content — not announced");
@@ -241,6 +255,38 @@ fn handle_event(client: &NativeClient, state: &mut State, ev: ClipEventCore) {
 pub fn set_text(text: &str) {
     if let Err(e) = os::set(MIME_TEXT, text.as_bytes()) {
         tracing::warn!(error = %format!("{e:#}"), "copying to the clipboard");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_change_inside_the_offer_spacing_is_taken_by_a_later_pass() {
+        let t0 = Instant::now();
+        let mut state = State {
+            last_seq: 1,
+            last_offer: Some(t0),
+            ..Default::default()
+        };
+        assert!(!state.take_local_change(2, t0 + Duration::from_millis(30)));
+        assert_eq!(state.last_seq, 1, "a skipped change is not consumed");
+        assert!(state.take_local_change(2, t0 + OFFER_SPACING));
+        assert!(!state.take_local_change(2, t0 + 2 * OFFER_SPACING));
+    }
+
+    #[test]
+    fn our_own_write_is_swallowed_once() {
+        let t0 = Instant::now();
+        let mut state = State {
+            last_seq: 1,
+            self_written_seq: Some(2),
+            ..Default::default()
+        };
+        assert!(!state.take_local_change(2, t0));
+        assert_eq!(state.self_written_seq, None);
+        assert!(state.take_local_change(3, t0));
     }
 }
 

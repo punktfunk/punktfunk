@@ -578,9 +578,12 @@ fn write_art_meta(dir: &Path, key: &str, meta: &ArtMeta) {
     }
 }
 
-/// Store one fetched cover: the blob, the meta beside it, then the size cap. The blob lands
+/// Store one fetched cover: the blob, the meta beside it, then the size cap (checked as the
+/// stored bytes pile up, so the store can pass the cap by an eighth of it). The blob lands
 /// through a rename, so a half-written cover is never served.
 fn write_art(dir: &Path, key: &str, bytes: &[u8], meta: &ArtMeta) {
+    use std::sync::atomic::{AtomicU64, Ordering::Relaxed};
+    static UNSWEPT: AtomicU64 = AtomicU64::new(u64::MAX);
     let Some(ext) = art_ext(&meta.ctype) else {
         return;
     };
@@ -595,7 +598,16 @@ fn write_art(dir: &Path, key: &str, bytes: &[u8], meta: &ArtMeta) {
         return;
     }
     write_art_meta(dir, key, meta);
-    evict_art_store(dir);
+    // The pass stats every file, so one per cover would make filling the store quadratic. It
+    // runs once an eighth of the cap has been stored since the last pass, and on the first store.
+    let added = bytes.len() as u64;
+    let before = UNSWEPT
+        .fetch_update(Relaxed, Relaxed, |n| Some(n.saturating_add(added)))
+        .unwrap_or_else(|n| n);
+    if before.saturating_add(added) >= art_store_cap() / 8 {
+        UNSWEPT.store(0, Relaxed);
+        evict_art_store(dir);
+    }
 }
 
 /// Hold the store under [`art_store_cap`], oldest file first. Dropping a blob and leaving its
@@ -980,6 +992,8 @@ mod tests {
                 // them while they change.
                 unsafe { write_env(key, value.map(|p| p.as_os_str())) };
             }
+            #[cfg(windows)]
+            plat::forget_extra_roots();
             Self { _lock, saved }
         }
     }
@@ -990,6 +1004,8 @@ mod tests {
                 // SAFETY: still under `_lock`, which outlives this loop — same argument as `set`.
                 unsafe { write_env(key, value.as_deref()) };
             }
+            #[cfg(windows)]
+            plat::forget_extra_roots();
         }
     }
 

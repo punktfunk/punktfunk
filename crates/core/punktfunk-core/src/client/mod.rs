@@ -1030,7 +1030,7 @@ impl NativeClient {
     /// default route. Re-picks the socket's source address and sends the host a copy of the
     /// last feedback, so it follows a roam within a round trip instead of a keep-alive.
     pub fn path_changed(&self) {
-        if let Some(reconnect) = self.shared.reconnect.get() {
+        if let Some(reconnect) = &*self.shared.reconnect.lock().unwrap() {
             reconnect();
         }
         let fb = self.shared.feedback.lock().unwrap().again();

@@ -125,8 +125,9 @@ impl Default for InputReport {
 const STALE: Duration = Duration::from_millis(500);
 
 /// Sparse reports (battery/RSSI/wireless) queue; `0x42`/`0x45` state is newest-wins and served
-/// once. An id the descriptor lacks (`0x47`) is dropped. A poll with nothing new waits, as on the real pad; after [`STALE`] without state
-/// the pad reads neutral once, so a stalled client does not hold a stick or a gyro rate.
+/// once. An id the descriptor lacks (`0x47`) is dropped. A poll with nothing new waits, as on
+/// the real pad; after [`STALE`] without a write the pad reads neutral once. The host
+/// heartbeat keeps writing, so a quiet client is [`TritonState::report`]'s to neutralize.
 #[derive(Debug)]
 struct InputReports {
     latest_state: InputReport,
@@ -897,7 +898,7 @@ impl TritonUsbip {
 
     /// Push one interrupt-IN report. Continuous state newest-wins; sparse reports queue.
     pub fn write_state(&mut self, st: &TritonState) {
-        let (data, len) = st.report(&mut self.seq);
+        let (data, len) = st.report(&mut self.seq, Instant::now());
         match &self.owner {
             Owner::Wired(attach) => attach.input(0, &data[..len]),
             Owner::Puck { hub, slot } => hub
@@ -1413,8 +1414,14 @@ mod tests {
         let mut pad = TritonUsbip::open(0).expect("open TritonUsbip (root + vhci_hcd?)");
         let mut st = TritonState::neutral();
         let raw: &[u8] = &[0x42, 1, 0x01, 0, 0, 0]; // A held; truncated length is accepted
-        st.raw[..raw.len()].copy_from_slice(raw);
-        st.raw_len = raw.len() as u8;
+        let mut data = [0u8; 64];
+        data[..raw.len()].copy_from_slice(raw);
+        let hid = punktfunk_core::quic::RichInput::HidReport {
+            pad: 0,
+            len: raw.len() as u8,
+            data,
+        };
+        st.apply_rich(hid, Instant::now());
         let start = std::time::Instant::now();
         let mut found = None;
         while start.elapsed() < std::time::Duration::from_millis(1500) {

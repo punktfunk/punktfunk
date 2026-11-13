@@ -4,9 +4,8 @@
 // process's ~30 MB budget).
 //
 // These files are NOT part of the SwiftPM package (Package.swift doesn't declare a PunktfunkWidgets
-// target, so `swift build` ignores the directory). They compile only in the Xcode widget-extension
-// target you add pointing at this folder — see design/apple-live-activities-and-widgets.md §M1 and
-// the GUI checklist.
+// target, so `swift build` ignores the directory). They compile only in the Xcode project's
+// widget-extension target.
 
 import SwiftUI
 import WidgetKit

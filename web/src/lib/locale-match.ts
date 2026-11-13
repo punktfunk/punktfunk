@@ -1,6 +1,12 @@
 // Which shipped language a browser's preference list asks for. The same walk as the Rust `pick`
 // in l10n/src/lib.rs, whose cases (l10n/vectors.json) the tests replay; `zh` is the one addition.
 
+/**
+ * `l10n/locales.json`'s `fallback`. The console build sees only `l10n/messages`, so the map is
+ * written out here; `locale-match.test.ts` holds the two equal.
+ */
+export const localeFallback: Readonly<Record<string, string>> = { pt: "pt-BR" };
+
 /** Regions that write Chinese in the traditional script. Every other `zh` is simplified. */
 const TRADITIONAL = new Set(["TW", "HK", "MO"]);
 

@@ -294,6 +294,12 @@ mod presenter {
             each!(self, p => p.wait_idle())
         }
 
+        /// Idle the presenter's own queue work while the pump decodes; the D3D11 backend
+        /// has no overlay to wait for.
+        pub(crate) fn quiesce_queue(&mut self) {
+            vk_or!(self, p => p.quiesce_queue(), ())
+        }
+
         pub(crate) fn drop_video(&mut self) {
             each!(self, p => p.drop_video())
         }

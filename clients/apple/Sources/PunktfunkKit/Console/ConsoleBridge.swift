@@ -108,10 +108,9 @@ public final class ConsoleBridge {
         self.handle = handle
     }
 
-    deinit {
-        // `free` belongs to this thread, and a @MainActor class is only ever released on it.
-        MainActor.assumeIsolated { punktfunk_console_free(handle) }
-    }
+    /// `free` belongs to the main thread. The deinit runs there even when another thread drops
+    /// the last reference.
+    isolated deinit { punktfunk_console_free(handle) }
 
     /// Draw into `texture` and submit. `false` = nothing drawn (idle, or the texture was
     /// refused): present nothing this tick.

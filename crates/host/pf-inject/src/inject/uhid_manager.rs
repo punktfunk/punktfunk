@@ -189,6 +189,9 @@ pub trait PadProto {
     /// arrives on the rich plane (touch / motion). Paddle remap applies here too.
     fn merge_frame(&self, prev: &Self::State, f: &GamepadFrame) -> Self::State;
     fn apply_rich(&self, st: &mut Self::State, rich: RichInput);
+    /// The client refreshed this pad and nothing in the state changed, so no frame was folded.
+    /// A state that reads neutral once its client falls quiet stamps `now` here. Never writes.
+    fn heard(&self, _st: &mut Self::State, _now: Instant) {}
     /// Write the full state to the pad (best-effort; the next frame or heartbeat re-syncs).
     fn write_state(&self, pad: &mut Self::Pad, st: &Self::State);
     /// Poll the pad's driver/kernel channel: answer any pending handshake and return the
@@ -398,6 +401,14 @@ impl<B: PadProto> UhidManager<B> {
         self.write_unpaced(idx);
     }
 
+    /// A refresh of pad `idx` (OS-slot space) that changed nothing. Writes no report: only the
+    /// state's own proof of life moves. Dropped if the pad is not present.
+    pub fn heard(&mut self, idx: usize) {
+        if idx < MAX_PADS && self.slots.get(idx).is_some() {
+            self.backend.heard(&mut self.state[idx], Instant::now());
+        }
+    }
+
     /// Re-emit each live pad's current report if silent for `max_gap` (or the backend forces a
     /// write). UHID/UMDF treat a multi-second input silence as unplug; a held stick produces no
     /// wire events. Re-sending is idempotent: a stale-but-correct frame, never a phantom input.
@@ -599,6 +610,8 @@ mod tests {
         fail_opens: RefCell<u32>,
         feedback: RefCell<Vec<PadFeedback>>,
         force_hb: bool,
+        /// How many times the manager passed a refresh to [`PadProto::heard`].
+        heard: RefCell<u32>,
     }
 
     #[derive(Clone, Copy, Default, PartialEq, Debug)]
@@ -668,6 +681,9 @@ mod tests {
                 }
                 _ => {}
             }
+        }
+        fn heard(&self, _st: &mut MockState, _now: Instant) {
+            *self.heard.borrow_mut() += 1;
         }
         fn write_state(&self, pad: &mut MockPad, st: &MockState) {
             pad.writes.borrow_mut().push(*st);
@@ -745,6 +761,22 @@ mod tests {
         fn report_period(&self) -> Option<Duration> {
             Some(Duration::from_secs(3600))
         }
+    }
+
+    /// A refresh that changed nothing reaches the backend for a live pad and writes no report;
+    /// an index with no device, or out of range, is dropped.
+    #[test]
+    fn a_heard_refresh_reaches_the_backend_and_writes_nothing() {
+        let mut m = mgr();
+        m.handle(&frame(0, 0b1, 0x10));
+        let writes = |m: &UhidManager<MockProto>| m.slots.get(0).unwrap().writes.borrow().len();
+        assert_eq!(writes(&m), 1);
+
+        m.heard(0);
+        m.heard(1);
+        m.heard(MAX_PADS);
+        assert_eq!(*m.backend.heard.borrow(), 1, "only the live pad hears");
+        assert_eq!(writes(&m), 1, "a refresh is not a report");
     }
 
     /// Input only moves a paced pad's state; the heartbeat writes it on a deadline, and a

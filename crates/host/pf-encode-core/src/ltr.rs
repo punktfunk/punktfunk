@@ -124,6 +124,10 @@ impl LtrMirror {
                     slot
                 };
                 self.mark(slot, cur_idx);
+                if forced {
+                    // The IDR is the next pin, so a late loss right after it still finds it.
+                    self.kept.candidate = Some(cur_idx);
+                }
                 step.mark_slot = Some(slot);
             }
             _ => {}
@@ -132,13 +136,22 @@ impl LtrMirror {
     }
 
     /// Whether frame `cur_idx` takes a mark outside confirmed references: as the kept
-    /// candidate while the client confirms, else every `interval` frames.
+    /// candidate while the client confirms, else every `interval` frames. A pair that starts
+    /// from nothing pins the newest mark the client confirmed.
     fn marks(&mut self, cur_idx: i64, interval: i64, confirmed: Option<&Acked>) -> bool {
         let Some(acked) = confirmed else {
             self.kept = rfi::Kept::default();
             return cur_idx % interval == 0;
         };
         let view = self.trusted_view();
+        if self.kept == rfi::Kept::default() {
+            self.kept.pin = view
+                .iter()
+                .flatten()
+                .copied()
+                .filter(|&w| acked.contains(w))
+                .max();
+        }
         self.kept
             .step(cur_idx, true, Some(acked), |w| view.contains(&Some(w)))
     }
@@ -221,6 +234,42 @@ mod tests {
         let (_, pin) = run(true).expect("the confirmed pin answers");
         assert!(pin < lost, "{pin}");
         assert_eq!(run(false), None);
+    }
+
+    /// Frame 1 is lost and reported 20 frames late; the client confirms from frame 4 on, frame 0
+    /// only. The IDR is the confirmed pin and answers.
+    #[test]
+    fn a_late_loss_after_the_opening_idr_forces_it() {
+        let mut m = LtrMirror::default();
+        let acked = Acked { last: 0, mask: 0 };
+        for cur in 0..21 {
+            let confirmed = (cur >= 4).then_some(&acked);
+            m.step(cur == 0, cur, 30, confirmed, None, false, true);
+        }
+        assert_eq!(m.invalidate(1, None), Some((0, 0)));
+    }
+
+    /// Confirmations flow, an IDR at 40, and its first P is lost; the client's confirmations
+    /// stall before the IDR. The IDR answers the late report.
+    #[test]
+    fn a_late_loss_after_a_forced_idr_forces_it() {
+        let mut m = LtrMirror::default();
+        for cur in 0..61 {
+            let acked = Acked {
+                last: (cur - 4).min(39),
+                mask: 0xffff,
+            };
+            m.step(
+                cur == 0 || cur == 40,
+                cur,
+                30,
+                Some(&acked),
+                None,
+                false,
+                true,
+            );
+        }
+        assert_eq!(m.invalidate(41, None).map(|(_, w)| w), Some(40));
     }
 
     /// An IDR empties the mirror, its taint and a queued force, and marks slot 0.

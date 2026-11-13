@@ -338,6 +338,17 @@ impl Pads {
         feed.publish(|| self.feed_frame(idx, wire));
     }
 
+    /// An unchanged refresh of built wire pad `idx`: no frame goes out, but a state that reads
+    /// neutral once its client falls quiet must still hear the client is there.
+    fn heard(&mut self, idx: usize) {
+        let Some(kind) = self.owner.get(idx).copied().flatten() else {
+            return;
+        };
+        if let Some(slot) = self.slots.slot_of(idx) {
+            self.backends.heard(kind, slot);
+        }
+    }
+
     fn handle(&mut self, ev: &punktfunk_core::input::GamepadEvent) {
         use punktfunk_core::input::GamepadEvent;
         // Present = mask bit set (create/update). Cleared bit is the `GamepadRemove` frame.
@@ -947,6 +958,18 @@ impl RumbleLeases {
     }
 }
 
+/// What a snapshot did to its wire pad ([`WirePads::snapshot`]).
+#[derive(Debug, PartialEq, Eq)]
+enum Snapshot {
+    /// Older than the seq gate, or a bad pad index.
+    Stale,
+    /// Newer, and the pad already holds this state.
+    Unchanged(usize),
+    /// Newer and different, or the pad has no device yet: its [`WirePads::frame`] must reach
+    /// the backends.
+    Moved(usize),
+}
+
 /// The session's wire pads: each one's state, the attached mask and the seq gate that
 /// snapshots and removals share. An accepted event returns the pad whose
 /// [`Self::frame`] must reach the backends.
@@ -1010,19 +1033,16 @@ impl WirePads {
     }
 
     /// A newer snapshot replaces the pad. An unchanged refresh (~100 ms) of a `built` pad
-    /// advances the gate but returns `None`: re-emitting it churns the XInput packet number.
-    /// A pad with no device yet (its arrival, identity or slot still owed) gets every refresh,
+    /// advances the gate and is [`Snapshot::Unchanged`]: re-emitting it churns the XInput packet
+    /// number, but the caller still owes the pad's state the proof of life. A pad with no device
+    /// yet (its arrival, identity or slot still owed) gets every refresh as [`Snapshot::Moved`],
     /// so its build is retried without waiting for the player to move it.
-    fn snapshot(
-        &mut self,
-        snap: punktfunk_core::input::GamepadSnapshot,
-        built: bool,
-    ) -> Option<usize> {
+    fn snapshot(&mut self, snap: punktfunk_core::input::GamepadSnapshot, built: bool) -> Snapshot {
         let idx = snap.pad as usize;
         if idx >= MAX_WIRE_PADS
             || !punktfunk_core::input::GamepadSnapshot::seq_newer(snap.seq, self.seq[idx])
         {
-            return None;
+            return Snapshot::Stale;
         }
         self.seq[idx] = Some(snap.seq);
         let state = punktfunk_core::input::GamepadSnapshot {
@@ -1031,11 +1051,11 @@ impl WirePads {
             ..snap
         };
         if built && self.mask & (1 << idx) != 0 && self.state[idx] == state {
-            return None;
+            return Snapshot::Unchanged(idx);
         }
         self.state[idx] = state;
         self.mask |= 1 << idx;
-        Some(idx)
+        Snapshot::Moved(idx)
     }
 
     /// Every attached pad back to rest, still attached. A withdrawn gamepad grant filters out
@@ -1413,9 +1433,13 @@ impl InputLoop {
             .owner
             .get(snap.pad as usize)
             .is_some_and(Option::is_some);
-        if let Some(idx) = self.wire.snapshot(snap, built) {
-            self.pad_uplink.note_change(idx);
-            self.pads.apply_wire(&self.wire, idx, &self.pad_feed);
+        match self.wire.snapshot(snap, built) {
+            Snapshot::Moved(idx) => {
+                self.pad_uplink.note_change(idx);
+                self.pads.apply_wire(&self.wire, idx, &self.pad_feed);
+            }
+            Snapshot::Unchanged(idx) => self.pads.heard(idx),
+            Snapshot::Stale => {}
         }
     }
 
@@ -2039,7 +2063,7 @@ mod tests {
             ls_y: -100,
             ..Default::default()
         };
-        assert_eq!(wire.snapshot(snap, true), Some(1));
+        assert_eq!(wire.snapshot(snap, true), Snapshot::Moved(1));
         let f = wire.frame(1);
         assert_eq!(
             (f.index, f.buttons, f.left_trigger),
@@ -2054,18 +2078,23 @@ mod tests {
         };
         assert_eq!(
             wire.snapshot(stale, true),
-            None,
+            Snapshot::Stale,
             "a reorder rolled state back"
         );
         assert_eq!(wire.frame(1).left_trigger, 255);
-        // An unchanged refresh advances the gate but emits nothing.
+        // An unchanged refresh advances the gate and emits nothing, but is not a stale one.
         assert_eq!(
             wire.snapshot(GamepadSnapshot { seq: 2, ..snap }, true),
-            None
+            Snapshot::Unchanged(1)
         );
         assert_eq!(
             wire.snapshot(GamepadSnapshot { seq: 2, ..stale }, true),
-            None
+            Snapshot::Stale,
+            "the gate moved on"
+        );
+        assert_eq!(
+            wire.snapshot(GamepadSnapshot { pad: 16, ..snap }, true),
+            Snapshot::Stale
         );
 
         assert_eq!(wire.remove(1, 2), None, "a removal older than the gate");
@@ -2078,7 +2107,7 @@ mod tests {
             seq: 5,
             ..Default::default()
         };
-        assert_eq!(wire.snapshot(replug, true), Some(1));
+        assert_eq!(wire.snapshot(replug, true), Snapshot::Moved(1));
         assert_eq!(wire.attached().collect::<Vec<_>>(), [1]);
     }
 
@@ -2093,7 +2122,7 @@ mod tests {
             seq,
             ..Default::default()
         };
-        assert_eq!(wire.snapshot(beacon(1), true), Some(0));
+        assert_eq!(wire.snapshot(beacon(1), true), Snapshot::Moved(0));
         // 20 s of 10 Hz refreshes the host never saw.
         let later = GamepadSnapshot {
             buttons: 1,
@@ -2101,11 +2130,11 @@ mod tests {
         };
         assert_eq!(
             wire.snapshot(later, true),
-            None,
+            Snapshot::Stale,
             "read as older than the gate"
         );
         wire.forget_seqs();
-        assert_eq!(wire.snapshot(later, true), Some(0));
+        assert_eq!(wire.snapshot(later, true), Snapshot::Moved(0));
     }
 
     /// A parked controller's beacon and gyro are not a person: only input that moves
@@ -2160,17 +2189,76 @@ mod tests {
             seq,
             ..Default::default()
         };
-        assert_eq!(wire.snapshot(beacon(1), false), Some(0));
+        assert_eq!(wire.snapshot(beacon(1), false), Snapshot::Moved(0));
         assert_eq!(
             wire.snapshot(beacon(2), false),
-            Some(0),
+            Snapshot::Moved(0),
             "the deferred pad is retried"
         );
         assert_eq!(
             wire.snapshot(beacon(3), true),
-            None,
+            Snapshot::Unchanged(0),
             "a built pad's refresh churns nothing"
         );
+    }
+
+    /// A mirrored Steam Controller 2 reads neutral once its client is not heard for
+    /// [`RAW_STALE`](crate::inject::steam_proto::RAW_STALE). The client's unchanged ~100 ms
+    /// refresh is swallowed ([`Snapshot::Unchanged`]) and must still count as heard, so a button
+    /// held on a pad that sends no report at rest stays held until the refreshes stop.
+    #[test]
+    fn unchanged_refreshes_keep_a_held_mirrored_pad_held() {
+        use crate::inject::steam_proto::RAW_STALE;
+        use crate::inject::triton_proto::{TritonState, TRITON_STATE_LEN};
+        use punktfunk_core::input::{gamepad, GamepadSnapshot};
+        use std::time::Duration;
+
+        let held = GamepadSnapshot {
+            pad: 0,
+            buttons: gamepad::BTN_A,
+            ..Default::default()
+        };
+        let refresh = |seq| GamepadSnapshot { seq, ..held };
+        let (t0, beat) = (std::time::Instant::now(), Duration::from_millis(8));
+
+        let mut report = [0u8; 12];
+        report[0] = 0x42; // the pad's own state report, A held
+        report[2] = 0x01;
+        let mut data = [0u8; 64];
+        data[..report.len()].copy_from_slice(&report);
+        let mut st = TritonState::neutral();
+        st.apply_rich(
+            punktfunk_core::quic::RichInput::HidReport {
+                pad: 0,
+                len: report.len() as u8,
+                data,
+            },
+            t0,
+        );
+
+        let mut wire = WirePads::default();
+        let mut seq = 0u8;
+        let mut at = t0;
+        // The pad is built and the first snapshot moved it; from then on only refreshes arrive.
+        assert_eq!(wire.snapshot(refresh(1), false), Snapshot::Moved(0));
+        for n in 2..=40u8 {
+            at += Duration::from_millis(100);
+            match wire.snapshot(refresh(n), true) {
+                Snapshot::Unchanged(_) => st.hear(at),
+                other => panic!("the refresh of a held pad moved it: {other:?}"),
+            }
+            let (r, len) = st.report(&mut seq, at + beat);
+            assert_eq!(
+                (len, &r[..12]),
+                (12, &report[..]),
+                "the held button was released under the player's finger at {n} refreshes"
+            );
+        }
+
+        // The refreshes stop: the heartbeat alone reads neutral once the window has run out.
+        let (r, len) = st.report(&mut seq, at + RAW_STALE);
+        assert_eq!(len, TRITON_STATE_LEN);
+        assert_eq!((r[0], r[2]), (0x42, 0), "no button once the client is gone");
     }
 
     /// The client's gate: accepts a seq newer than the last it applied.

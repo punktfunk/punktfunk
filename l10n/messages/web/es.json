@@ -105,9 +105,9 @@
 		"declarations": ["input count", "local n = count: plural"],
 		"selectors": ["n"],
 		"match": {
-			"n=one": "{count} fotograma de audio retrasado",
-			"n=many": "{count} fotogramas de audio retrasados",
-			"n=*": "{count} fotogramas de audio retrasados"
+			"n=one": "{count} trama de audio retrasada",
+			"n=many": "{count} tramas de audio retrasadas",
+			"n=*": "{count} tramas de audio retrasadas"
 		}
 	}],
 	"status_last_gyro": [{
@@ -937,7 +937,7 @@
 	"store_uninstall_confirm": "¿Desinstalar {title}?",
 	"store_uninstall_body": "Puedes volver a instalarlo en cualquier momento desde el catálogo.",
 	"store_uninstall_failed": "No se pudo iniciar la desinstalación",
-	"store_update_no_entry": "Ese plugin no se encuentra en ningún catálogo ahora mismo: actualiza las fuentes e inténtalo de nuevo.",
+	"store_update_no_entry": "Ese plugin no se encuentra en ningún catálogo ahora mismo: recarga las fuentes e inténtalo de nuevo.",
 	"store_update_all_count": "Actualizar todos ({count})",
 	"store_updates_pending": [{
 		"declarations": ["input count", "local n = count: plural"],
@@ -968,8 +968,8 @@
 	"store_update_all_stopped": "Se detuvo tras un fallo: {done} actualizados, {left} pendientes. Reinténtalos desde las filas inferiores.",
 	"store_sources_title": "Fuentes de catálogo",
 	"store_sources_help": "El catálogo integrado de unom siempre está presente. Cualquier otra fuente la añadiste tú.",
-	"store_refresh_all": "Actualizar todas",
-	"store_refresh_failed": "No se pudieron actualizar los catálogos",
+	"store_refresh_all": "Recargar todas",
+	"store_refresh_failed": "No se pudieron recargar los catálogos",
 	"store_source_builtin": "Integrado",
 	"store_source_signed": "Firmado",
 	"store_source_unsigned": "Sin firmar",
@@ -1094,8 +1094,8 @@
 	"display_monitor_primary": "principal",
 	"display_monitor_disabled": "apagado",
 	"display_monitor_missing": "no conectado",
-	"display_monitor_missing_hint": "Este host no tiene ninguna pantalla con este nombre, por lo que ningún cliente puede iniciar una sesión.",
-	"display_monitor_missing_warning": "La pantalla que este host debe transmitir ya no está conectada, por lo que fallarán las sesiones. Elige una abajo o usa la virtual.",
+	"display_monitor_missing_hint": "Este host no tiene ninguna pantalla con este nombre, por lo que cada dispositivo transmite su propia pantalla.",
+	"display_monitor_missing_warning": "La pantalla que este host debe transmitir ya no está conectada, por lo que cada dispositivo transmite su propia pantalla. Elige una pantalla abajo o la pantalla virtual.",
 	"update_title": "Actualizaciones",
 	"update_available_badge": "Actualización disponible",
 	"update_current": "Instalada",
