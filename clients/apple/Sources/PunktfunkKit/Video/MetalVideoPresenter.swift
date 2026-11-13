@@ -1,15 +1,14 @@
-// Stage-2 presenter, present half: draw a decoded NV12 / P010 / 4:4:4 CVPixelBuffer into a CAMetalLayer
-// drawable with a Y′CbCr→RGB shader. The hosting view's CADisplayLink still paces the pipeline once per
-// vsync, but the actual `render` runs on Stage2Pipeline's dedicated RENDER THREAD (the link tick just
-// signals it), so `nextDrawable()`'s blocking never lands on the main thread. See docs
-// apple-stage2-presenter.md.
+// Stage-2 presenter, present half: draw a decoded NV12 / P010 / 4:4:4 CVPixelBuffer, or a
+// PyroWave planar frame, into a CAMetalLayer drawable with a Y′CbCr→RGB shader. `render` runs on
+// Stage2Pipeline's dedicated RENDER THREAD, so `nextDrawable()`'s blocking never lands on main.
 //
-// Threading: created during view setup (main); `render`/`configure` run on the render thread — the
-// layer's drawable/format/colour mutations all happen there (CAMetalLayer is designed for dedicated
-// render threads; only the layer's GEOMETRY — frame/contentsScale — is touched from main, in
-// SessionPresenter.layout, which also pushes the resulting pixel size here via `setDrawableTarget`
-// so the render thread never reads layer geometry cross-thread). `setHdrMeta` (pump thread) and
-// `setDrawableTarget` (main) only write lock-guarded staging state the render thread drains.
+// Threading: created during view setup (main). `render`/`configure` and every layer format,
+// colour and size write run on the render thread, except under deadline pacing, where the
+// CAMetalDisplayLink's thread applies the queued writes between vends (`deferLayerWrites`).
+// Main touches only the layer's geometry (SessionPresenter.layout), which also pushes the
+// resulting pixel size here via `setDrawableTarget`, so the render thread never reads layer
+// geometry cross-thread. `setHdrMeta` (pump thread) and `setDrawableTarget` (main) only write
+// lock-guarded staging state the render thread drains.
 
 #if canImport(Metal) && canImport(QuartzCore)
 import CoreGraphics
@@ -653,18 +652,10 @@ public final class MetalVideoPresenter {
         layer.framebufferOnly = true
         layer.isOpaque = true
         #if os(macOS)
-        // displaySyncEnabled MUST stay false on macOS. It has flip-flopped, so the full history:
-        // sync ON was tried twice and starves the drawable pool both times — on macOS 26 a synced
-        // present only reaches glass when the WindowServer composites the window, and its FramePacing
-        // path does not treat our out-of-band image-queue presents as damage, so with a static scene
-        // the ONLY recurring damage is the 1 Hz stats HUD update: presents queue, all drawables stay
-        // held, `nextDrawable()` sleeps (sampled: ~70% of the render thread inside
-        // CAMetalLayerPrivateNextDrawableLocked → usleep), and the stream turns into a ~1 fps
-        // slideshow with normal-LOOKING stats (each rare frame is fresh, newest-wins ring). The
-        // 94fb7d1b fullscreen judder was the same starvation biting the then-main-thread render.
-        // With sync OFF the flip is immediate; the vsync alignment that sync was supposed to give
-        // (the HUD-off direct-scanout pacing fix) comes from scheduling the present at the display
-        // link's target time instead (`present(at:)` — see `render`).
+        // displaySyncEnabled must stay false: on macOS 26 a synced present reaches glass only when
+        // the window is composited, so on a static scene presents queue, every drawable stays held
+        // and `nextDrawable()` sleeps. The present is scheduled at the link's target time instead
+        // (`presentAtMediaTime` in `render`).
         layer.displaySyncEnabled = false
         #endif
         // The drawable is rendered at the LAYER's pixel size (set per-frame in `render`), so the
