@@ -11,6 +11,9 @@ abi <abi/4.0>,
 
 include <tunables/global>
 
+# A made seat's home sits under the seats tree, outside @{HOME}.
+@{PF_HOMES}=@{HOME} /var/lib/punktfunk-seats/seats/*/home/
+
 profile punktfunk-scripting flags=(attach_disconnected,mediate_deleted) {
   include <abstractions/base>
   include <abstractions/nameservice>
@@ -51,16 +54,16 @@ profile punktfunk-scripting flags=(attach_disconnected,mediate_deleted) {
   owner /** wlk,
 
   # The host's config dir: only what the unit binds.
-  deny @{HOME}/.config/punktfunk/** mrwlkx,
-  priority=1 owner @{HOME}/.config/punktfunk/ r,
-  priority=1 owner @{HOME}/.config/punktfunk/{plugin-token,mgmt-endpoint,native-cert.pem,cert.pem} r,
-  priority=1 owner @{HOME}/.config/punktfunk/{scripts,ingest,plugin-run}/{,**} r,
-  priority=1 owner @{HOME}/.config/punktfunk/{plugins,plugin-state}/{,**} mrwlkix,
+  deny @{PF_HOMES}/.config/punktfunk/** mrwlkx,
+  priority=1 owner @{PF_HOMES}/.config/punktfunk/ r,
+  priority=1 owner @{PF_HOMES}/.config/punktfunk/{plugin-token,mgmt-endpoint,native-cert.pem,cert.pem} r,
+  priority=1 owner @{PF_HOMES}/.config/punktfunk/{scripts,ingest,plugin-run}/{,**} r,
+  priority=1 owner @{PF_HOMES}/.config/punktfunk/{plugins,plugin-state}/{,**} mrwlkix,
 
   # Code written here runs outside this profile at the next login.
-  deny @{HOME}/.config/systemd/** wl,
-  deny @{HOME}/.local/share/systemd/** wl,
-  deny @{HOME}/.config/environment.d/** wl,
+  deny @{PF_HOMES}/.config/systemd/** wl,
+  deny @{PF_HOMES}/.local/share/systemd/** wl,
+  deny @{PF_HOMES}/.config/environment.d/** wl,
 
   include if exists <local/punktfunk-scripting>
 }
