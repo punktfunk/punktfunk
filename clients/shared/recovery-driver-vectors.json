@@ -29,12 +29,12 @@
       ]
     },
     {
-      "name": "a damaged chain inside the window waits for the backstop",
+      "name": "a damaged chain after the anchor's lift asks at once, then at the backstop",
       "steps": [
         {"at_ms": 0, "ev": "arrived", "index": 100, "want": {}},
         {"at_ms": 0, "ev": "arrived", "index": 102, "want": {"gap": 1, "hold": true, "ask": [101, 101]}},
         {"at_ms": 60, "ev": "decoded", "flags": ["anchor"], "want": {}},
-        {"at_ms": 70, "ev": "decoded", "evidence": "damaged", "want": {"hold": true}},
+        {"at_ms": 70, "ev": "decoded", "evidence": "damaged", "want": {"hold": true, "ask": "keyframe"}},
         {"at_ms": 569, "ev": "tick", "frames_dropped": 1, "want": {"hold": true}},
         {"at_ms": 570, "ev": "tick", "frames_dropped": 1, "want": {"hold": true, "ask": "keyframe"}}
       ]
@@ -71,7 +71,7 @@
       ]
     },
     {
-      "name": "a no-output streak inside the window is re-asked by its own backstop",
+      "name": "a no-output streak inside the window re-asks 500 ms after the ask that shut it",
       "steps": [
         {"at_ms": 0, "ev": "arrived", "index": 100, "want": {}},
         {"at_ms": 0, "ev": "arrived", "index": 102, "want": {"gap": 1, "hold": true, "ask": [101, 101]}},
@@ -79,8 +79,8 @@
         {"at_ms": 20, "ev": "no_output", "want": {"hold": true}},
         {"at_ms": 30, "ev": "no_output", "want": {"hold": true}},
         {"at_ms": 120, "ev": "tick", "frames_dropped": 1, "want": {"hold": true}},
-        {"at_ms": 529, "ev": "tick", "frames_dropped": 1, "want": {"hold": true}},
-        {"at_ms": 530, "ev": "tick", "frames_dropped": 1, "want": {"hold": true, "ask": "keyframe"}}
+        {"at_ms": 499, "ev": "tick", "frames_dropped": 1, "want": {"hold": true}},
+        {"at_ms": 500, "ev": "tick", "frames_dropped": 1, "want": {"hold": true, "ask": "keyframe"}}
       ]
     },
     {
@@ -174,12 +174,12 @@
         {"at_ms": 0, "ev": "arrived", "index": 101, "want": {"admit": false, "hold": true}},
         {"at_ms": 0, "ev": "decoded", "want": {"hold": true}},
         {"at_ms": 0, "ev": "decoded", "flags": ["anchor"], "want": {}},
-        {"at_ms": 0, "ev": "lost", "want": {"hold": true}},
+        {"at_ms": 0, "ev": "lost", "want": {"hold": true, "ask": "keyframe"}},
         {"at_ms": 0, "ev": "decoded", "want": {"hold": true}},
         {"at_ms": 0, "ev": "decoded", "flags": ["sof"], "want": {}},
         {"at_ms": 0, "ev": "no_output", "want": {}},
         {"at_ms": 0, "ev": "no_output", "want": {}},
-        {"at_ms": 0, "ev": "no_output", "want": {"hold": true}},
+        {"at_ms": 0, "ev": "no_output", "want": {"hold": true, "ask": "starved_keyframe"}},
         {"at_ms": 0, "ev": "decoded", "want": {"hold": true}},
         {"at_ms": 0, "ev": "reset"},
         {"at_ms": 0, "ev": "decoded", "want": {}},

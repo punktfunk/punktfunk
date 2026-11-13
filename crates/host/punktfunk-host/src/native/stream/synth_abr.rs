@@ -347,6 +347,7 @@ pub(crate) fn synthetic_abr_stream(ctx: SynthAbrContext) -> Result<()> {
         bringup: bringup.clone(),
         wire_sock,
         driver_dropped: Arc::new(AtomicU64::new(0)),
+        keyframe_left: Default::default(),
         counters: counters.clone(),
     };
     let send_thread = std::thread::Builder::new()

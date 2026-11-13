@@ -1062,6 +1062,7 @@ fn shared_handles(ctx: &SessionContext) -> (Shared, FecState) {
         driver_dropped: Default::default(),
         screen_wire: s.screens.clone(),
         send_spread_us: Default::default(),
+        keyframe_left: Default::default(),
         wire_rekeys: Default::default(),
         live_mode: Default::default(),
         force_idr: Default::default(),
@@ -1314,6 +1315,7 @@ fn start_send(
         bringup: facts.bringup.clone(),
         wire_sock,
         driver_dropped: shared.driver_dropped.clone(),
+        keyframe_left: shared.keyframe_left.clone(),
         counters: facts.counters.clone(),
     };
     let (session, probe_rx) = ramp.finish()?;

@@ -53,6 +53,9 @@ pub(super) struct Shared {
     pub(super) driver_dropped: Arc<AtomicU64>,
     pub(super) screen_wire: Arc<crate::native::wiring::ScreenWire>,
     pub(super) send_spread_us: Arc<AtomicU32>,
+    /// When the first screen's latest keyframe left: the send thread writes it, the keyframe
+    /// gate times an IDR's flight from it.
+    pub(super) keyframe_left: Arc<std::sync::Mutex<Option<std::time::Instant>>>,
     pub(super) wire_rekeys: Arc<AtomicU32>,
     pub(super) live_mode: Arc<AtomicU64>,
     pub(super) force_idr: Arc<AtomicBool>,
