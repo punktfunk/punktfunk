@@ -426,7 +426,7 @@ public final class MetalVideoPresenter {
     /// bgra8; tvOS without HDR headroom).
     private let pipelinePlanarHDR: MTLRenderPipelineState
     private let pipelinePlanarToneMap: MTLRenderPipelineState
-    private var textureCache: CVMetalTextureCache?
+    private let textureCache: CVMetalTextureCache
     /// Apple's Lanczos scaler for luma whenever the render target is smaller than the frame; nil
     /// without MPS or under `PUNKTFUNK_DOWNSCALE=bicubic` (the shader's Catmull-Rom scales then).
     /// Render-thread confined, like `scaledLuma`, the reused target it writes.
@@ -1228,8 +1228,7 @@ public final class MetalVideoPresenter {
         var csc = CscRows.rows(
             CscRows.signal(of: pixelBuffer), depth: tenBit ? 10 : 8, msbPacked: tenBit)
         var target = hdrTarget()
-        guard let textureCache,
-              let luma = makeTexture(
+        guard let luma = makeTexture(
                 pixelBuffer, plane: 0, format: tenBit ? .r16Unorm : .r8Unorm, cache: textureCache),
               let chroma = makeTexture(
                 pixelBuffer, plane: 1, format: tenBit ? .rg16Unorm : .rg8Unorm, cache: textureCache),
