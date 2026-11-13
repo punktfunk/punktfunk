@@ -3,13 +3,18 @@
 //! Capture/encode and send raise their own priority so a CPU-saturating game
 //! cannot deschedule them. Native, GameStream, and direct-NVENC send threads
 //! all call [`boost_thread_priority`].
+//!
+//! On Linux a thread's nice inherits to the threads it spawns, except when RealtimeKit
+//! raised it: rtkit sets `SCHED_RESET_ON_FORK`, so a child starts at nice 0. A helper
+//! thread or process on the frame path therefore calls [`boost_thread_priority`] itself.
 
 /// Raise this thread so a CPU-heavy game cannot deschedule capture/encode/send.
 ///
 /// GPU HIGH only favours commands already submitted; a descheduled
 /// normal-priority thread submits late and the GPU priority never bites.
 /// `critical` is highest non-realtime (capture+encode); otherwise above-normal
-/// (send/relay).
+/// (send/relay). On Linux the thread's timer slack also drops to 1 ns, so a timed
+/// wait ends on time rather than up to 50 µs late; its children inherit that.
 pub fn boost_thread_priority(critical: bool) {
     crate::session_tuning::on_hot_thread();
     #[cfg(target_os = "windows")]
@@ -37,6 +42,7 @@ pub fn boost_thread_priority(critical: bool) {
     }
     #[cfg(target_os = "linux")]
     {
+        tighten_timer_slack();
         // Best-effort nice of the calling thread. Linux `setpriority(PRIO_PROCESS, 0, …)`
         // is the current task. Do not use SCHED_RR/FIFO by default: realtime can preempt
         // the compositor and the game's render thread (opt-in: PUNKTFUNK_SCHED_RR).
@@ -67,6 +73,15 @@ pub fn boost_thread_priority(critical: bool) {
     {
         let _ = critical;
     }
+}
+
+/// The default 50 µs slack lets `sleep`, `poll` and `recv_timeout` end late. 1 ns is the floor.
+#[cfg(target_os = "linux")]
+fn tighten_timer_slack() {
+    // SAFETY: `PR_SET_TIMERSLACK` takes one by-value integer (nanoseconds) and no pointers, so
+    // nothing aliases or outlives the call. It sets only the calling thread's slack, needs no
+    // privilege, and touches no memory; a refusal leaves the default slack.
+    unsafe { libc::prctl(libc::PR_SET_TIMERSLACK, 1 as libc::c_ulong) };
 }
 
 /// `(policy, rt_priority, nice)` for the calling thread.
@@ -144,6 +159,19 @@ mod linux_rtkit {
 
 #[cfg(all(test, target_os = "linux"))]
 mod tests {
+    #[test]
+    fn tightened_slack_is_one_nanosecond() {
+        // A fresh thread, so the test runner's own slack stays as it was.
+        let slack = std::thread::spawn(|| {
+            super::tighten_timer_slack();
+            std::fs::read_to_string("/proc/thread-self/timerslack_ns")
+        })
+        .join()
+        .expect("slack thread")
+        .expect("read timerslack_ns");
+        assert_eq!(slack.trim(), "1");
+    }
+
     #[test]
     fn current_thread_sched_reports_a_real_policy() {
         let (policy, rt_priority, nice) = super::current_thread_sched();
