@@ -1437,47 +1437,8 @@ public final class SessionAudio: @unchecked Sendable {
             return nil
         }
 
-        // A pro interface has the mic on one of N inputs, and a converter's downmix takes
-        // channels 0 and 1. So the uplink folds to mono itself: 0 sums every channel but the
-        // device's loopback inputs, n ≥ 1 pins 1-based input channel n.
-        let inChannels = Int(inFormat.channelCount)
-        if micChannel > inChannels {
-            log.warning(
-                "mic channel \(micChannel) out of range (device has \(inChannels)) — mixing all")
-        }
-        let skipped = skip.filter { $0 < inChannels }.count
-        let mixed = skipped < inChannels ? inChannels - skipped : inChannels
-        let channelPlan = (1...inChannels).contains(micChannel)
-            ? "channel \(micChannel)/\(inChannels)"
-            : (inChannels > 1 ? "mix \(mixed)/\(inChannels)ch→mono" : "mono")
-
-        // The device being recorded, its format and the fold, once per session. A UID that
-        // fell back to the default, or a wrong channel, reads here and not as silence at the
-        // host.
-        #if os(macOS)
-        if let unit = input.audioUnit, let live = Self.currentDevice(of: unit),
-           let dev = AudioDevices.describe(live) {
-            if !micUID.isEmpty, dev.uid != micUID {
-                log.warning("""
-                    mic selection not honored — requested \(micUID) but capturing from \
-                    \(dev.name) [\(dev.uid)]; the device's UID likely changed (replug) — \
-                    reselect it in Settings
-                    """)
-            }
-            log.info("""
-                mic capture: \(dev.name) [\(dev.uid)] — \(Int(inFormat.sampleRate)) Hz, \
-                \(inChannels) ch, \(channelPlan)
-                """)
-        } else {
-            log.info("""
-                mic capture: <device unavailable> — \(Int(inFormat.sampleRate)) Hz, \
-                \(inChannels) ch, \(channelPlan)
-                """)
-        }
-        #else
-        log.info(
-            "mic capture: \(Int(inFormat.sampleRate)) Hz, \(inChannels) ch, \(channelPlan)")
-        #endif
+        let channelPlan = Self.logMicCapture(
+            input: input, format: inFormat, micUID: micUID, micChannel: micChannel, skip: skip)
 
         // Mono end to end: the resampler takes mono at the input's rate onto the encoder's
         // 48 kHz mono, and the host's decoder upmixes. The PCM buffers are allocated here; in
@@ -1504,14 +1465,8 @@ public final class SessionAudio: @unchecked Sendable {
         let flag = flag
         let node = uplink.node
 
-        // An app can be handed digital zeros (a zeroed input slider, a stale grant, the wrong
-        // channel) while everything downstream looks alive. One verdict on the first 10 s of
-        // the folded bus says which.
-        let silenceWindow = Int(inFormat.sampleRate * 10)
         let deviceLabel = micUID.isEmpty ? "default input" : micUID
-        var framesInspected = 0
-        var inputPeak: Float = 0
-        var levelReported = false
+        var level = MicLevelCheck(rate: inFormat.sampleRate)
         var firstBatch = true
 
         uplink.start { samples, frames in
@@ -1539,27 +1494,20 @@ public final class SessionAudio: @unchecked Sendable {
             dst.update(from: samples, count: frames)
             mono.frameLength = AVAudioFrameCount(frames)
 
-            if !levelReported {
-                var localPeak: Float = 0
-                for i in 0..<frames where abs(dst[i]) > localPeak { localPeak = abs(dst[i]) }
-                if localPeak > inputPeak { inputPeak = localPeak }
-                framesInspected += frames
-                if framesInspected >= silenceWindow {
-                    levelReported = true
-                    if inputPeak == 0 {
-                        log.warning("""
-                            mic uplink has been pure digital SILENCE for 10 s (\(deviceLabel), \
-                            \(channelPlan)) — check the input level (System Settings → Sound → \
-                            Input), Privacy & Security → Microphone, and the Microphone channel in \
-                            Settings; the host is receiving zeros
-                            """)
-                    } else {
-                        let dbfs = 20 * log10(inputPeak)
-                        log.info("""
-                            mic uplink OK — peak \(String(format: "%.1f", dbfs)) dBFS over first \
-                            10 s (\(deviceLabel), \(channelPlan))
-                            """)
-                    }
+            if let peak = level.note(dst, count: frames) {
+                if peak == 0 {
+                    log.warning("""
+                        mic uplink has been pure digital SILENCE for 10 s (\(deviceLabel), \
+                        \(channelPlan)) — check the input level (System Settings → Sound → \
+                        Input), Privacy & Security → Microphone, and the Microphone channel in \
+                        Settings; the host is receiving zeros
+                        """)
+                } else {
+                    let dbfs = 20 * log10(peak)
+                    log.info("""
+                        mic uplink OK — peak \(String(format: "%.1f", dbfs)) dBFS over first \
+                        10 s (\(deviceLabel), \(channelPlan))
+                        """)
                 }
             }
 
@@ -1599,6 +1547,77 @@ public final class SessionAudio: @unchecked Sendable {
             if head > 0 { fifo.removeFirst(head) } // keeps capacity — no realloc
         }
         return uplink
+    }
+
+    /// Log the device being recorded, its format and the fold, once per session: a UID that fell
+    /// back to the default, or a wrong channel, reads here and not as silence at the host.
+    /// Returns the fold, which the level verdict names too.
+    private static func logMicCapture(
+        input: AVAudioInputNode, format inFormat: AVAudioFormat, micUID: String, micChannel: Int,
+        skip: [Int]
+    ) -> String {
+        // A pro interface has the mic on one of N inputs, and a converter's downmix takes
+        // channels 0 and 1. So the uplink folds to mono itself: 0 sums every channel but the
+        // device's loopback inputs, n ≥ 1 pins 1-based input channel n.
+        let inChannels = Int(inFormat.channelCount)
+        if micChannel > inChannels {
+            log.warning(
+                "mic channel \(micChannel) out of range (device has \(inChannels)) — mixing all")
+        }
+        let skipped = skip.filter { $0 < inChannels }.count
+        let mixed = skipped < inChannels ? inChannels - skipped : inChannels
+        let channelPlan = (1...inChannels).contains(micChannel)
+            ? "channel \(micChannel)/\(inChannels)"
+            : (inChannels > 1 ? "mix \(mixed)/\(inChannels)ch→mono" : "mono")
+
+        #if os(macOS)
+        if let unit = input.audioUnit, let live = Self.currentDevice(of: unit),
+           let dev = AudioDevices.describe(live) {
+            if !micUID.isEmpty, dev.uid != micUID {
+                log.warning("""
+                    mic selection not honored — requested \(micUID) but capturing from \
+                    \(dev.name) [\(dev.uid)]; the device's UID likely changed (replug) — \
+                    reselect it in Settings
+                    """)
+            }
+            log.info("""
+                mic capture: \(dev.name) [\(dev.uid)] — \(Int(inFormat.sampleRate)) Hz, \
+                \(inChannels) ch, \(channelPlan)
+                """)
+        } else {
+            log.info("""
+                mic capture: <device unavailable> — \(Int(inFormat.sampleRate)) Hz, \
+                \(inChannels) ch, \(channelPlan)
+                """)
+        }
+        #else
+        log.info(
+            "mic capture: \(Int(inFormat.sampleRate)) Hz, \(inChannels) ch, \(channelPlan)")
+        #endif
+        return channelPlan
+    }
+
+    /// One verdict on the first 10 s of the folded mic bus. An app can be handed digital zeros
+    /// (a zeroed input slider, a stale grant, the wrong channel) while everything downstream
+    /// looks alive. `internal` for unit testing.
+    struct MicLevelCheck {
+        private let window: Int
+        private var inspected = 0
+        private var peak: Float = 0
+        private var done = false
+
+        init(rate: Double) { window = Int(rate * 10) }
+
+        /// Fold in `count` samples. Returns the peak magnitude (0 = digital silence) once, on
+        /// the call that fills the window.
+        mutating func note(_ samples: UnsafePointer<Float>, count: Int) -> Float? {
+            guard !done else { return nil }
+            for i in 0..<count where abs(samples[i]) > peak { peak = abs(samples[i]) }
+            inspected += count
+            guard inspected >= window else { return nil }
+            done = true
+            return peak
+        }
     }
 
     /// The rate-dependent half of the mic chain: a mono bus at `rate`, the resampler from it onto
