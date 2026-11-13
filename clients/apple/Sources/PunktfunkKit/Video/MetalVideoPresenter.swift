@@ -130,10 +130,10 @@ private let preA15AppleTV: Bool = {
 /// signaling). One set of coefficients honors BT.601/709/2020 × full/limited × 8/10-bit instead of
 /// the old hardcoded BT.709/BT.2020 matrices — a BT.601-signaled stream (a Linux host's RGB-input
 /// NVENC) used to render with BT.709 coefficients, a constant hue error. uv.y is flipped (1 - p.y)
-/// so the top-left-origin texture presents upright (NDC y is up). The HDR shader outputs PQ-encoded
-/// R′G′B′ as-is — the CAMetalLayer's `itur_2100_PQ` colour space + `edrMetadata` tell the system
-/// compositor the samples are PQ and how to tone-map them (no EOTF here, matching the host's
-/// BT.2020 PQ emission).
+/// so the top-left-origin texture presents upright (NDC y is up). Under `HdrMode.pq` the HDR shader
+/// outputs PQ-encoded R′G′B′ as-is — the CAMetalLayer's `itur_2100_PQ` colour space + `edrMetadata`
+/// tell the system compositor the samples are PQ and how to tone-map them (no EOTF here, matching
+/// the host's BT.2020 PQ emission). Under `.linear` the shader decodes PQ itself.
 private let shaderSource = """
 #include <metal_stdlib>
 using namespace metal;
@@ -231,8 +231,8 @@ float3 sampleRgb(texture2d<float> lumaTex, texture2d<float> chromaTex, float2 lu
                            dot(csc.r2.xyz, yuv) + csc.r2.w));
 }
 
-// SDR: 8-bit NV12 / 4:4:4 → full-range RGB, transfer left baked (shown as-is, the proven SDR
-// layer config).
+// SDR: 8-bit NV12 / 4:4:4, or 10-bit P010 into `sdr10Drawable` → full-range RGB, transfer left
+// baked (shown as-is).
 fragment float4 pf_frag(VOut in [[stage_in]],
                         texture2d<float> lumaTex [[texture(0)]],
                         texture2d<float> chromaTex [[texture(1)]],
@@ -258,7 +258,7 @@ fragment float4 pf_frag_planar(VOut in [[stage_in]],
     return float4(rgb, 1.0);
 }
 
-// HDR: 10-bit P010 / 4:4:4 (BT.2020, PQ-encoded Y′CbCr) → full-range PQ R′G′B′, output as-is —
+// HdrMode.pq: 10-bit P010 / 4:4:4 (BT.2020, PQ-encoded Y′CbCr) → full-range PQ R′G′B′, output as-is —
 // the CAMetalLayer's itur_2100_PQ colour space + edrMetadata tell the compositor the samples are
 // PQ, so it does the PQ→display tone-map. No EOTF here. The rows fold in the exact 10-bit
 // MSB-packing factor (the old hardcoded shader carried a documented ~0.1% /1024-vs-/1023 error).
@@ -500,10 +500,11 @@ public final class MetalVideoPresenter {
     /// The visible part of the frame in texture UV, staged by `setSourceRect`. The unit square
     /// except under Crop to fill (or a few-pixel snap).
     private var sourceRect = CGRect(x: 0, y: 0, width: 1, height: 1)
-    /// tvOS: the display's current EDR headroom (UIScreen.currentEDRHeadroom), pushed from the
-    /// main thread (SessionPresenter.layout + the mode-switch observers). > 1 ⇒ the display is
-    /// composited with HDR headroom, so HDR frames present as PQ passthrough; otherwise the
-    /// in-shader tone-map keeps the picture from blowing out. 1 (the default) is the safe start.
+    /// The display's current EDR headroom (UIScreen.currentEDRHeadroom), pushed from the main
+    /// thread: on tvOS by SessionPresenter.layout and the mode-switch observers, on iOS by a
+    /// timer. tvOS: > 1 ⇒ the display is composited with HDR headroom, so HDR frames present as
+    /// PQ passthrough; otherwise the in-shader tone-map. iOS: the linear HDR shaders roll
+    /// highlights onto it (`hdrTarget`). 1 (the default) is the safe start.
     private var stagedDisplayHeadroom: CGFloat = 1.0
     /// tvOS: the box switched into the HDR output mode our display criteria asked for.
     private var stagedHDROutput = false
@@ -706,7 +707,8 @@ public final class MetalVideoPresenter {
     /// (main, before the render thread exists) and again per-frame from `render` on the RENDER THREAD
     /// (idempotent — the guard makes a same-state call a no-op), so a mid-session HDR toggle (the host
     /// re-inits its encoder; the decoded `frame.isHDR` flips) reconfigures here automatically. HDR uses
-    /// `hdrDrawable` + BT.2020 PQ colour space + EDR with a 203-nit reference-white anchor;
+    /// `hdrDrawable`, with the BT.2020 PQ colour space + EDR (a 203-nit reference-white anchor) under
+    /// `HdrMode.pq` and extended-linear Display P3 without metadata under `.linear`;
     /// SDR uses the sRGB-tagged 8-bit drawable, or `sdr10Drawable` when `tenBitSDR` (a 10-bit
     /// session — HDR outranks it, an HDR frame never lands on the SDR-10 drawable).
     public func configure(hdr: Bool, tenBitSDR: Bool = false) {
