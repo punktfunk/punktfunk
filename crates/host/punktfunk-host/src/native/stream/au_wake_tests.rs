@@ -373,12 +373,16 @@ fn an_au_ready_wake_hands_a_pipelined_au_off_at_once() {
             }
             assert_eq!(today.encoded, 0, "{hz}/{encode_ms}: no wake without a ring");
             assert!(woken.encoded > 0, "{hz}/{encode_ms}: the wake ended waits");
-            let fresh = today.fresh.abs_diff(woken.fresh);
+            // A loaded box runs a different number of ticks each time: compare the ticks
+            // that had no fresh frame, not the totals.
+            let stale = |r: &Run| u64::from(r.ticks).saturating_sub(r.fresh);
             assert!(
-                fresh <= 3,
-                "{hz}/{encode_ms}: fresh {} vs {}",
+                stale(&today).abs_diff(stale(&woken)) <= 3,
+                "{hz}/{encode_ms}: fresh {} of {} ticks vs {} of {}",
                 today.fresh,
-                woken.fresh
+                today.ticks,
+                woken.fresh,
+                woken.ticks
             );
             let repeats = today.repeats.abs_diff(woken.repeats);
             assert!(repeats <= 2, "{hz}/{encode_ms}: repeats moved");
