@@ -859,15 +859,18 @@ public final class PunktfunkConnection: @unchecked Sendable {
         let opened = AudioFormat(
             channels: resolvedAudioChannels, rateHz: resolvedAudioRateHz,
             frameUs: resolvedAudioFrameUs)
-        return withLiveHandle(or: opened) { h in
-            var channels = opened.channels, rate = opened.rateHz, frameUs = opened.frameUs
-            _ = punktfunk_connection_audio_channels(h, &channels)
-            _ = punktfunk_connection_audio_sample_rate(h, &rate)
-            _ = punktfunk_connection_audio_frame_us(h, &frameUs)
-            return AudioFormat(
-                channels: channels, rateHz: rate,
-                frameUs: frameUs == 0 ? opened.frameUs : frameUs)
-        }
+        return withLiveHandle(or: opened) { Self.readAudioFormat($0, or: opened) }
+    }
+
+    /// The audio format the core reports. A field it does not fill keeps `fallback`'s, and so does
+    /// a zero frame length, which means the host stated none: the protocol's default frame.
+    private static func readAudioFormat(_ h: OpaquePointer, or fallback: AudioFormat) -> AudioFormat {
+        var channels = fallback.channels, rate = fallback.rateHz, frameUs = fallback.frameUs
+        _ = punktfunk_connection_audio_channels(h, &channels)
+        _ = punktfunk_connection_audio_sample_rate(h, &rate)
+        _ = punktfunk_connection_audio_frame_us(h, &frameUs)
+        return AudioFormat(
+            channels: channels, rateHz: rate, frameUs: frameUs == 0 ? fallback.frameUs : frameUs)
     }
 
     /// The video codec the host encodes now (`PUNKTFUNK_CODEC_*`): `2` = HEVC (default / older
@@ -1397,27 +1400,16 @@ public final class PunktfunkConnection: @unchecked Sendable {
         _ = punktfunk_connection_bitrate(opened, &br)
         resolvedBitrateKbps = br
         openedFormat = Self.readFormat(opened)
-        var ac: UInt8 = 2
-        _ = punktfunk_connection_audio_channels(opened, &ac)
-        resolvedAudioChannels = ac
         // The format the host RESOLVED, which may be below what `audioRateHz`/`audioBits` asked
         // for — the five-condition gate declines to Opus 48 kHz rather than failing the connect.
-        // The defaults survive a status the accessors never fill (an older core), which is the
-        // right answer: every session such a core can run IS 48 kHz/16-bit.
-        var rate: UInt32 = 48_000
-        _ = punktfunk_connection_audio_sample_rate(opened, &rate)
-        resolvedAudioRateHz = rate
+        let audio = Self.readAudioFormat(opened, or: AudioFormat(
+            channels: 2, rateHz: 48_000, frameUs: UInt16(PUNKTFUNK_AUDIO_FRAME_MS * 1000)))
+        resolvedAudioChannels = audio.channels
+        resolvedAudioRateHz = audio.rateHz
+        resolvedAudioFrameUs = audio.frameUs
         var bits: UInt8 = 16
         _ = punktfunk_connection_audio_bits(opened, &bits)
         resolvedAudioBits = bits
-        // `0` is the accessor's "the host stated nothing" — an older host, or an Opus session that
-        // never needed to say. Both mean the protocol's default frame, so map it here rather than
-        // letting a zero reach the ring, where it would be a zero-length shed unit.
-        var frameUs: UInt16 = 0
-        _ = punktfunk_connection_audio_frame_us(opened, &frameUs)
-        resolvedAudioFrameUs = frameUs == 0
-            ? UInt16(PUNKTFUNK_AUDIO_FRAME_MS * 1000)
-            : frameUs
         _ = punktfunk_connection_codec(opened, &openedCodec)
         var shard: UInt32 = 1408
         _ = punktfunk_connection_shard_payload(opened, &shard)
