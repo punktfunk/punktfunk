@@ -91,14 +91,14 @@
       "outcome": "refused", "said": "That profile is gone from this host. Pick another one."
     },
     {
-      "name": "a sentence with no code, or a code this build doesn't know, stands as the host wrote it",
+      "name": "a sentence with no code is the operator's line, never shown: the client words the failure",
       "profile": "a1b2c3d4e5f6", "id": "steam:99", "hidden": true,
       "path": "/api/v1/library/hidden/steam:99?as=a1b2c3d4e5f6", "body": {"hidden": true},
       "reply": {"status": 404, "body": {"error": "this profile's library lists no such title"}},
-      "outcome": "refused", "said": "this profile's library lists no such title"
+      "outcome": "failed", "said": null
     },
     {
-      "name": "a newer host's code",
+      "name": "a newer host's code: its English stands",
       "profile": "a1b2c3d4e5f6", "id": "steam:570", "hidden": false,
       "path": "/api/v1/library/hidden/steam:570?as=a1b2c3d4e5f6", "body": {"hidden": false},
       "reply": {"status": 409, "body": {"error": "A newer host says no.", "code": "something_new"}},
@@ -112,7 +112,7 @@
       "outcome": "failed", "said": null
     }
   ],
-  "$set_hidden": "One PUT per hide or show: path and JSON body exactly as written (the profile in as=, percent-encoded like the library fetch's). reply.body null is an empty body. outcome done: the title leaves the shelf (or joins it) at once and the cached catalog for that host and profile follows, with no new fetch. refused: show `said`, the host's sentence (worded by apierr_<code> where the client has that message, else the host's English), nothing changes. failed: the client's lib_hide_failed / lib_show_failed with the cause; nothing changes.",
+  "$set_hidden": "One PUT per hide or show: path and JSON body exactly as written (the profile in as=, percent-encoded like the library fetch's). reply.body null is an empty body. outcome done: the title leaves the shelf (or joins it) at once and the cached catalog for that host and profile follows, with no new fetch. refused, only for a body with a code: show `said`, the host's sentence (worded by apierr_<code> where the client has that message, else the host's English), nothing changes. An error with no code is an operator's line and counts as failed. failed: the client's lib_hide_failed / lib_show_failed with the cause; nothing changes.",
   "hidden_list": [
     {
       "name": "one page",
