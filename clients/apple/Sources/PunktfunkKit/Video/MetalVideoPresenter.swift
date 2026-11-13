@@ -126,7 +126,7 @@ private let preA15AppleTV: Bool = {
 
 /// Runtime-compiled (no metallib build step needed in SwiftPM): a fullscreen triangle and Y′CbCr→RGB
 /// fragment shaders whose conversion arrives as three constant rows computed per frame on the CPU
-/// (`CscRows` — the Swift port of pf-client-core's `csc_rows`, from the decoded buffer's actual
+/// (`CscRows` — the Swift port of pf-client-video's `csc_rows`, from the decoded buffer's actual
 /// signaling). One set of coefficients honors BT.601/709/2020 × full/limited × 8/10-bit instead of
 /// the old hardcoded BT.709/BT.2020 matrices — a BT.601-signaled stream (a Linux host's RGB-input
 /// NVENC) used to render with BT.709 coefficients, a constant hue error. uv.y is flipped (1 - p.y)
@@ -241,7 +241,7 @@ fragment float4 pf_frag(VOut in [[stage_in]],
 }
 
 // PyroWave planar SDR: three separate R8 planes (Y full-res, Cb/Cr half-res 4:2:0) from the
-// Metal wavelet decoder — the Metal twin of pf-presenter's planar_csc.frag. Same bicubic luma
+// Metal wavelet decoder — the Metal twin of pf-client-video's planar_csc.frag. Same bicubic luma
 // and left-cosited chroma correction as the biplanar path (chromaUV self-disables at 4:4:4).
 fragment float4 pf_frag_planar(VOut in [[stage_in]],
                                texture2d<float> lumaTex [[texture(0)]],
@@ -270,7 +270,7 @@ fragment float4 pf_frag_hdr(VOut in [[stage_in]],
 }
 
 // tvOS without HDR headroom has no EDR API and composites a PQ tag untone-mapped, so PQ becomes
-// SDR in-shader for the sRGB-tagged layer. Same curve as pf-client-core's tonemap.glsl and the
+// SDR in-shader for the sRGB-tagged layer. Same curve as pf-client-video's tonemap.glsl and the
 // host's gamescope capture: BT.2390 EETF in PQ from a 1000-nit source onto 203-nit white, on
 // max(R,G,B) in linear BT.709, then the sRGB OETF.
 static inline float pqEotf(float e) {
