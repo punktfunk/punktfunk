@@ -10,7 +10,8 @@
 //!
 //! The task runs as `NT AUTHORITY\LocalService`, not SYSTEM. `enable` converges the
 //! principal and grants LocalService read on `plugin-token` plus the TLS-pin cert
-//! (`native-cert.pem` or legacy `cert.pem`) — never `mgmt-token`.
+//! (`native-cert.pem` or legacy `cert.pem`) — never `mgmt-token`. A Windows seat's runner is no
+//! task: its host starts it as the seat's account ([`seat_runner`]).
 //!
 //! Runner discovery is pinned in this module's tests.
 
@@ -113,7 +114,7 @@ fn plugins_dir_of(args: &[String]) -> std::path::PathBuf {
 }
 
 /// Run `plugins <args…>`. `delete_titles` clears a removed plugin's library titles. On a person's
-/// own Linux account it only reads: their own console changes their plugins.
+/// own account it only reads: their own console changes their plugins.
 pub fn main(args: &[String], delete_titles: super::DeleteTitles) -> Result<()> {
     let action = parse(args)?;
     if person_runner() && changes(&action) {
@@ -334,7 +335,8 @@ fn access_list(flags: &[String]) -> Result<()> {
 
 /// `plugins spawn --package <id> -- <exe> [args…]`: the runner's way into a plugin's
 /// AppContainer. Runs as the runner's account, which owns the profile; exits with the
-/// plugin's own code. The capabilities come from the installed manifest, never from argv.
+/// plugin's own code. The capabilities come from the manifest of a plugin that runner runs,
+/// never from argv.
 #[cfg(windows)]
 fn spawn(args: &[String]) -> Result<()> {
     let (id, rest) = match args {
@@ -345,7 +347,7 @@ fn spawn(args: &[String]) -> Result<()> {
     let Some((exe, exe_args)) = rest.split_first() else {
         bail!("usage: punktfunk-host plugins spawn --package <id> -- <exe> [args…]");
     };
-    let Some(manifest) = manifest::installed().remove(id) else {
+    let Some(manifest) = manifest::runner_plugins().remove(id) else {
         bail!("{id} is not an installed plugin with a manifest");
     };
     let code = crate::windows::app_container::spawn(
@@ -493,11 +495,37 @@ pub(crate) struct RuntimeStatus {
     pub detail: String,
 }
 
-/// Whether this host's runner is a person's own: a seat on their own Linux account, whose runner
-/// is that seat's instance of their user manager's `punktfunk-scripting-seat@`. Only their own
-/// lane switches it, installs into it or reads its state.
+/// Whether this host's runner is a person's own: a seat on their own account. On Linux that is
+/// the seat's instance of their user manager's `punktfunk-scripting-seat@`, on Windows
+/// [`seat_runner`]'s. Only their own lane switches it, installs into it or reads its state.
 pub(crate) fn person_runner() -> bool {
-    cfg!(target_os = "linux") && pf_paths::seat::own_account()
+    pf_paths::seat::own_account()
+}
+
+/// Whether this host starts its runner itself, at each start it is on, and its seat's stop ends
+/// it: a person's own seat, or any Windows seat. A Windows seat's runner runs as the seat's
+/// account, which the host (SYSTEM) launches into the seat's session.
+pub(crate) fn seat_runner() -> bool {
+    person_runner() || (cfg!(windows) && pf_paths::seat::role().is_seat_host())
+}
+
+/// The runner's account as a SID string: LocalService, or a Windows seat's account once it has
+/// signed in to the seat's session.
+#[cfg(windows)]
+pub(crate) fn runner_sid() -> Option<String> {
+    plat::runner_sid()
+}
+
+/// `f` with the seat account's rights alone. A Windows seat host is SYSTEM, so it runs `f` as
+/// the account signed in to the seat's session; any other host already is the account it acts
+/// for. An error is a seat account this host couldn't act as.
+pub(crate) fn as_seat_account<R>(f: impl FnOnce() -> R) -> std::io::Result<R> {
+    #[cfg(windows)]
+    if seat_runner() && crate::hooks::running_as_system() {
+        return crate::windows::interactive::as_session_user(f)
+            .map_err(|e| std::io::Error::other(format!("{e:#}")));
+    }
+    Ok(f())
 }
 
 /// The runner's state, which tokens, roots and restarts follow.
@@ -558,8 +586,9 @@ pub(crate) fn set_runtime_enabled(enabled: bool) -> Result<()> {
 }
 
 /// The ACL half of a grant, as `io::Error` for [`access::AccessStore`]: the runner's account,
-/// and `plugin`'s files capability when it is named, in one walk of the folder. POSIX needs
-/// none: the runner is the operator's own user unit.
+/// and `plugin`'s files capability when it is named, in one walk of the folder. A Windows seat's
+/// account already reaches what it may, so there only the capability's ACE lands, placed as that
+/// account. POSIX needs none: the runner is the operator's own user unit.
 pub(crate) fn grant_acl(
     plugin: Option<&str>,
     dir: &std::path::Path,
@@ -685,10 +714,12 @@ pub(crate) fn recheck_runner_roots() {
     plat::recheck_next();
 }
 
-/// The minute's converge, which also reads every folder ACE off its folder. It sits out a store
-/// job: while `bun` rewrites the tree an installed plugin reads as gone, and its ACEs go with it.
+/// The minute's converge, which also reads every folder ACE off its folder, and starts a
+/// Windows seat's runner again when it failed. The converge sits out a store job: while `bun`
+/// rewrites the tree an installed plugin reads as gone, and its ACEs go with it.
 #[cfg(windows)]
 pub(crate) fn heal_runner_roots() {
+    plat::restart_failed_seat_runner();
     if crate::store::jobs::busy() {
         return;
     }

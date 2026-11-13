@@ -205,8 +205,13 @@ pub(super) fn expand_env_prefix(p: &str) -> PathBuf {
 }
 
 /// The homes a manifest's `~` names. The Windows host is a service whose own profile is
-/// `systemprofile`, where no launcher is ever installed, so there it is every real user profile.
+/// `systemprofile`, where no launcher is ever installed, so there it is every real user profile;
+/// on a Windows seat host, the seat account's alone.
 fn plugin_homes() -> Vec<PathBuf> {
+    #[cfg(windows)]
+    if pf_paths::seat::role().is_seat_host() {
+        return seat_home().into_iter().collect();
+    }
     #[cfg(windows)]
     {
         // `C:` joined with `Users` is drive-relative, so the separator is spelled out.
@@ -231,6 +236,18 @@ fn plugin_homes() -> Vec<PathBuf> {
     }
     #[cfg(not(windows))]
     home_dir().into_iter().collect()
+}
+
+/// The profile folder of the account signed in to this seat host's session, which stays the
+/// same for the host's life.
+#[cfg(windows)]
+fn seat_home() -> Option<PathBuf> {
+    static HOME: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+    if let Some(home) = HOME.get() {
+        return Some(home.clone());
+    }
+    let home = crate::windows::interactive::session_user_var("USERPROFILE")?;
+    Some(HOME.get_or_init(|| PathBuf::from(home)).clone())
 }
 
 pub(crate) fn home_dir() -> Option<PathBuf> {
@@ -285,7 +302,7 @@ pub(crate) fn granted_roots_in(id: &str, config_dir: PathBuf) -> Vec<PathBuf> {
 }
 
 /// Extra roots granted a plugin, by id: `plugin-run/plugin-grants.json` under [`home_of`] `id`,
-/// via [`crate::plugins::access::AccessStore`]. A Windows seat host reads the box's.
+/// via [`crate::plugins::access::AccessStore`].
 ///
 /// Written by `punktfunk-host plugins grant` or an `allow` decision, never by a plugin — the
 /// file is the answer to "this package may also reach here", so nothing in the plugin lane may
@@ -294,19 +311,17 @@ pub fn granted_roots(id: &str) -> Vec<PathBuf> {
     granted_roots_in(id, home_of(id))
 }
 
-/// Whether `id` is a plugin of this Linux seat's own runner, installed in its own `plugins/`
+/// Whether `id` is a plugin of this seat's own runner, installed in its own `plugins/`
 /// ([`runner_plugins`]): its manifest and grants are the seat's, never the box's copy of a
 /// plugin of that id.
 pub fn seat_owns(id: &str) -> bool {
     seat_runs_its_own() && runner_plugins().contains_key(id)
 }
 
-/// Whether this is a Linux seat host reading the box's library: its runner is the seat
-/// account's own, and what its plugins publish is the seat's. A Windows seat runs none.
+/// Whether this is a seat host reading the box's library: its runner runs as the seat's account,
+/// and what its plugins publish is the seat's.
 pub fn seat_runs_its_own() -> bool {
-    cfg!(target_os = "linux")
-        && pf_paths::seat::role().is_seat_host()
-        && pf_paths::seat::box_library_dir().is_some()
+    pf_paths::seat::role().is_seat_host() && pf_paths::seat::box_library_dir().is_some()
 }
 
 /// Where plugin `id`'s manifest and grants live: this seat's own config dir for [`seat_owns`],
@@ -319,20 +334,14 @@ pub fn home_of(id: &str) -> PathBuf {
     }
 }
 
-/// Every installed plugin's manifest, keyed by the id it declares.
+/// The plugins this host's runner starts, each manifest keyed by the id it declares. A seat's are
+/// its own, never the box's. On a person's own account only those their own lane installed
+/// ([`person_plugins`]).
 ///
 /// Installed means what the runner discovers: the dependencies of `<config>/plugins/package.json`,
 /// not every package under `node_modules`, where a plugin's own libraries live too. Without that
 /// file the tree is scanned. An id is one lowercase path component, and an id two packages claim
-/// is refused for both. Read fresh: installs and updates land between launches. A seat host reads
-/// the box's plugins dir; a plugin's own lookup goes through [`for_provider`].
-#[cfg(windows)]
-pub fn installed() -> BTreeMap<String, PluginManifest> {
-    installed_in(&pf_paths::seat::library_dir().join("plugins"), None)
-}
-
-/// The plugins this account's runner starts. A seat's are its own, not the box's [`installed`].
-/// On a person's own account only those their own lane installed ([`person_plugins`]).
+/// is refused for both. Read fresh: installs and updates land between launches.
 pub fn runner_plugins() -> BTreeMap<String, PluginManifest> {
     let config = pf_paths::config_dir();
     let theirs = pf_paths::seat::own_account().then(|| person_plugins(&config));

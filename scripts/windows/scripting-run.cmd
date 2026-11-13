@@ -35,7 +35,9 @@ rem `plugins enable` makes writable for LocalService; the file inherits Users-re
 rem dir, so `type` it from any prompt. One previous run is kept as runner.log.1. If the dir isn't
 rem writable (task started before `plugins enable` ever ran), start unlogged rather than not at all.
 rem ponytail: no size cap within one run - rotate on size if a chatty plugin ever fills a disk.
+rem A seat's runner logs into its seat's config dir, the one the runner itself reads.
 set "LOG=%ProgramData%\punktfunk\plugin-state\runner.log"
+if defined PUNKTFUNK_CONFIG_DIR set "LOG=%PUNKTFUNK_CONFIG_DIR%\plugin-state\runner.log"
 set "LOGGED="
 if exist "%LOG%" move /y "%LOG%" "%LOG%.1" >nul 2>&1
 copy /y nul "%LOG%" >nul 2>&1 && set "LOGGED=1"

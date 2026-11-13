@@ -230,8 +230,9 @@ fn path_facts(canonical: &Path) -> PathFacts {
 }
 
 /// Why a seat host refuses to grant `path`: its runner runs as the seat's account, so a folder
-/// that account can't list would promise more than the system gives. Only a seat host asks.
-/// A pattern grant is judged by its base, the part before `*`.
+/// that account can't list would promise more than the system gives. Only a seat host asks, and
+/// it lists as that account ([`super::as_seat_account`]). A pattern grant is judged by its
+/// base, the part before `*`.
 fn seat_refusal(path: &Path) -> Option<io::Error> {
     if !pf_paths::seat::role().is_seat_host() {
         return None;
@@ -240,8 +241,10 @@ fn seat_refusal(path: &Path) -> Option<io::Error> {
         .components()
         .take_while(|c| c.as_os_str() != "*")
         .collect();
-    let listed = std::fs::read_dir(&base).is_ok() && std::fs::metadata(base.join(".")).is_ok();
-    (!listed).then(|| {
+    let listed = super::as_seat_account(|| {
+        std::fs::read_dir(&base).is_ok() && std::fs::metadata(base.join(".")).is_ok()
+    });
+    (!listed.unwrap_or(false)).then(|| {
         io::Error::new(
             io::ErrorKind::InvalidInput,
             format!("'{}' can't be granted (not_readable)", base.display()),
@@ -1438,6 +1441,12 @@ impl AccessStore {
         )
     }
 
+    /// What `manifest` declares, resolved as [`Self::plugin_roots`] resolves it, without grants.
+    #[cfg(windows)]
+    pub fn declared_roots(&self, manifest: &PluginManifest) -> Vec<RunnerRoot> {
+        self.resolve_roots(declared_entries(manifest), std::iter::empty())
+    }
+
     /// May the runner see `real`, asked for as `spelled`? A missing root is the drop-in's `-`
     /// prefix's business, and a root may be a file.
     fn may_bind(&self, spelled: &Path, real: &Path, write: bool, operator: bool) -> bool {
@@ -1621,6 +1630,10 @@ impl AccessStore {
         by: &str,
         form: Option<&str>,
     ) -> io::Result<Vec<Grant>> {
+        // First, so a seat host says nothing of a folder its account can't see.
+        if let Some(refused) = seat_refusal(dir) {
+            return Err(refused);
+        }
         if !dir.is_dir() {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,

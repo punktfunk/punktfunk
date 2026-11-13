@@ -6775,7 +6775,7 @@
           "plugin-access"
         ],
         "summary": "Grant, deny, or forget an access request",
-        "description": "`allow` turns a pending request into a grant (the platform ACL lands first, so a failed\ngrant stores nothing), or with `write` set grants a path the operator handed over, on\nbehalf of `form` when named; `deny` remembers the no; `forget` removes a grant or denial.\nA folder that takes longer answers 202 and lists its walk until the record lands. On a seat\nhost the grant is for its own runner: a folder the seat's account can't list is refused. On a\nperson's own account only that person decides, and an emulator or core install is refused.",
+        "description": "`allow` turns a pending request into a grant (the platform ACL lands first, so a failed\ngrant stores nothing), or with `write` set grants a path the operator handed over, on\nbehalf of `form` when named; `deny` remembers the no; `forget` removes a grant or denial.\nA folder that takes longer answers 202 and lists its walk until the record lands. On a seat\nhost the grant is for its own runner: a folder the seat's account can't list is refused, and\non Windows that account places the folder's access. On a person's own account only that person\ndecides, and an emulator or core install is refused, as it is to a Windows seat's person.",
         "operationId": "decidePluginAccess",
         "parameters": [
           {
@@ -10282,7 +10282,7 @@
           "store"
         ],
         "summary": "Install a plugin",
-        "description": "`{source, id}` installs the catalog pin after re-checking integrity, or `{spec,\naccept_unverified: true}` installs unreviewed code the operator owns. `202` + job id; watch at\n`GET /store/jobs/{id}`. A Windows seat host installs none: the box's runner, which it shares,\nnever reads them. A seat host on a person's own account installs for that person's own\nsession, from the built-in source alone: what it installs runs as them.\n\nOne package operation at a time (`409` otherwise): `bun` shares a lockfile and `node_modules`.",
+        "description": "`{source, id}` installs the catalog pin after re-checking integrity, or `{spec,\naccept_unverified: true}` installs unreviewed code the operator owns. `202` + job id; watch at\n`GET /store/jobs/{id}`. A seat host installs into the seat's own plugins, which its own runner\nruns as the seat's account. On a person's own account it installs for that person's own\nsession, from the built-in source alone: what it installs runs as them. A Windows seat's\nperson installs from the built-in source alone too.\n\nOne package operation at a time (`409` otherwise): `bun` shares a lockfile and `node_modules`.",
         "operationId": "installPlugin",
         "requestBody": {
           "content": {
@@ -10326,7 +10326,7 @@
             }
           },
           "403": {
-            "description": "Not authorized for the plugin token, or a plugin from outside the built-in source on a seat host on a person's own account",
+            "description": "Not authorized for the plugin token, or a plugin from outside the built-in source on a seat host on a person's own account or for a Windows seat's person",
             "content": {
               "application/json": {
                 "schema": {
@@ -10336,7 +10336,7 @@
             }
           },
           "409": {
-            "description": "Another package operation is in flight, or a Windows seat host",
+            "description": "Another package operation is in flight",
             "content": {
               "application/json": {
                 "schema": {

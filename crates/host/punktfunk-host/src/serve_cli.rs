@@ -238,8 +238,8 @@ pub(crate) fn prepare_serve(args: ServeArgs) -> Result<(mgmt::Options, native::N
     let runner = crate::plugins::runtime_status();
     let (mints, may_restart) = runner_token(pf_paths::seat::role());
     if runner.installed && mints {
-        // A person's own seat runner is started by its host alone, at each start it is on.
-        opts.restart_runner = crate::plugins::person_runner()
+        // A seat's own runner is started by its host alone, at each start it is on.
+        opts.restart_runner = crate::plugins::seat_runner()
             || (may_restart
                 && !pf_paths::config_dir()
                     .join(crate::mgmt_token::PLUGIN_FILE)
@@ -347,13 +347,12 @@ fn mints_tray_token(role: HostRole) -> bool {
 }
 
 /// Whether this host mints the plugin runner's token, and whether a first mint restarts the
-/// runner. The runner is the owner's, so the door has none to hand a token to. A Windows seat
-/// host shares the box's runner and must not bounce it.
+/// runner. The runner is the owner's, so the door has none to hand a token to; a seat's runner
+/// is the seat's own.
 fn runner_token(role: HostRole) -> (bool, bool) {
     match role {
         HostRole::Door => (false, false),
-        HostRole::Seat(_) => (true, !cfg!(windows)),
-        HostRole::Plain => (true, true),
+        HostRole::Seat(_) | HostRole::Plain => (true, true),
     }
 }
 
@@ -388,13 +387,16 @@ mod tests {
         }
     }
 
+    /// Only the door has no runner; every other host's runner is its own to restart.
     #[test]
-    fn the_door_mints_no_runner_token_and_a_windows_seat_restarts_no_runner() {
+    fn the_door_mints_no_runner_token() {
         for role in HostRole::ALL {
             let (mints, may_restart) = runner_token(role);
-            assert_eq!(mints, !role.is_door(), "{role:?}");
-            let shares_the_runner = cfg!(windows) && role.is_seat_host();
-            assert!(!mints || may_restart != shares_the_runner, "{role:?}");
+            assert_eq!(
+                (mints, may_restart),
+                (!role.is_door(), !role.is_door()),
+                "{role:?}"
+            );
         }
     }
 

@@ -5022,8 +5022,9 @@ readonly "requestPluginAccess": {
 * grant stores nothing), or with `write` set grants a path the operator handed over, on
 * behalf of `form` when named; `deny` remembers the no; `forget` removes a grant or denial.
 * A folder that takes longer answers 202 and lists its walk until the record lands. On a seat
-* host the grant is for its own runner: a folder the seat's account can't list is refused. On a
-* person's own account only that person decides, and an emulator or core install is refused.
+* host the grant is for its own runner: a folder the seat's account can't list is refused, and
+* on Windows that account places the folder's access. On a person's own account only that person
+* decides, and an emulator or core install is refused, as it is to a Windows seat's person.
 */
 readonly "decidePluginAccess": {
     <Config extends OperationConfig | undefined = undefined>(plugin: string, options: { readonly payload: typeof DecidePluginAccessRequestJson.Encoded; readonly config: Config }): Effect.Effect<WithOptionalResponse<typeof DecidePluginAccess200.Type | typeof DecidePluginAccess202.Type, Config>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"DecidePluginAccess400", typeof DecidePluginAccess400.Type> | PunktfunkError<"DecidePluginAccess401", typeof DecidePluginAccess401.Type> | PunktfunkError<"DecidePluginAccess403", typeof DecidePluginAccess403.Type> | PunktfunkError<"DecidePluginAccess404", typeof DecidePluginAccess404.Type> | PunktfunkError<"DecidePluginAccess500", typeof DecidePluginAccess500.Type>>;
@@ -5524,9 +5525,10 @@ readonly "getPluginCatalog": {
   /**
 * `{source, id}` installs the catalog pin after re-checking integrity, or `{spec,
 * accept_unverified: true}` installs unreviewed code the operator owns. `202` + job id; watch at
-* `GET /store/jobs/{id}`. A Windows seat host installs none: the box's runner, which it shares,
-* never reads them. A seat host on a person's own account installs for that person's own
-* session, from the built-in source alone: what it installs runs as them.
+* `GET /store/jobs/{id}`. A seat host installs into the seat's own plugins, which its own runner
+* runs as the seat's account. On a person's own account it installs for that person's own
+* session, from the built-in source alone: what it installs runs as them. A Windows seat's
+* person installs from the built-in source alone too.
 * 
 * One package operation at a time (`409` otherwise): `bun` shares a lockfile and `node_modules`.
 */
