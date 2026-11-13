@@ -2173,6 +2173,12 @@ public final class Stage2Pipeline {
                     debugStats?.flushIfDue(ring: ring, gate: nil)
                     return
                 }
+                // A pass parked for a vend the link has since replaced holds its drawable.
+                if let p = parked, p.drawable !== vended.drawable {
+                    presenter.skip(p)
+                    parked = nil
+                    latchGate.note(shown: false)
+                }
                 // A vend is not glass: a wedged layer still vends its pool once. Only a frame
                 // the system showed re-arms the watchdog.
                 if watchdog.rearm(glass: { glassSeen.take() == true }) {
