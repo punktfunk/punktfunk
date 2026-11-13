@@ -622,6 +622,13 @@ public enum LibraryClient {
             withAllowedCharacters: CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "-._~")))
     }
 
+    /// `s` as one path segment: unreserved characters and `:` stay, the rest is percent-encoded.
+    static func pathSegment(_ s: String) -> String {
+        s.addingPercentEncoding(
+            withAllowedCharacters: CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "-._~:")))
+            ?? s
+    }
+
     /// The whole catalog, a page at a time, so no answer grows with the library. `get` takes
     /// the cursor of the page before and answers one page's body. Any page failing fails the
     /// walk: half a catalog is not one.
@@ -726,9 +733,8 @@ public enum LibraryClient {
     /// Start profile `id`'s stopped seat: `POST /api/v1/profiles/{id}/wake`. The host answers the
     /// row, `starting` until the seat is up; the caller reads progress from the list.
     public static func wakeProfile(id: String, on target: MgmtTarget) async throws {
-        let escaped = id.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? id
         let response = try await send(
-            "/api/v1/profiles/\(escaped)/wake", to: target, method: "POST",
+            "/api/v1/profiles/\(pathSegment(id))/wake", to: target, method: "POST",
             body: (Data(), "application/json"))
         try expectWoken(response)
     }
@@ -738,11 +744,8 @@ public enum LibraryClient {
     public static func unlockChallenge(id: String, on target: MgmtTarget) async throws
         -> UnlockChallenge
     {
-        var allowed = CharacterSet.urlPathAllowed
-        allowed.remove("/")
-        let escaped = id.addingPercentEncoding(withAllowedCharacters: allowed) ?? id
         let response = try await send(
-            "/api/v1/profiles/\(escaped)/unlock-challenge", to: target, method: "POST",
+            "/api/v1/profiles/\(pathSegment(id))/unlock-challenge", to: target, method: "POST",
             body: (Data(), "application/json"))
         try expectOK(response)
         guard let challenge = UnlockChallenge(json: response.body) else {
@@ -807,10 +810,7 @@ public enum LibraryClient {
     public static func changeInstall(
         appID: String, action: InstallAction, on target: MgmtTarget
     ) async -> InstallOutcome {
-        var allowed = CharacterSet.urlPathAllowed
-        allowed.remove("/")
-        let id = appID.addingPercentEncoding(withAllowedCharacters: allowed) ?? appID
-        let path = "/api/v1/library/install/\(id)"
+        let path = "/api/v1/library/install/\(pathSegment(appID))"
         let empty = (data: Data(), contentType: "application/json")
         do {
             let response: HTTPResponse
@@ -873,9 +873,8 @@ public enum LibraryClient {
     /// with the host's own sentence ("another device is streaming from this host right now").
     /// The body stays empty: the id is the whole request.
     public static func invokeAction(id: String, on target: MgmtTarget) async throws {
-        let escaped = id.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? id
         let response = try await send(
-            "/api/v1/actions/\(escaped)", to: target, method: "POST",
+            "/api/v1/actions/\(pathSegment(id))", to: target, method: "POST",
             body: (Data(), "application/json"))
         try expectAccepted(response)
     }

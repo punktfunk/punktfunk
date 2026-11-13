@@ -19,10 +19,9 @@ public enum HideForMe {
     }
 
     /// The path and JSON body of the `PUT` that hides (`hidden`) or shows title `id` for
-    /// `profile`. The id is one path segment: unreserved characters and `:` stay.
+    /// `profile`. The id is one path segment (``LibraryClient/pathSegment(_:)``).
     static func request(profile: String, id: String, hidden: Bool) -> (path: String, body: Data) {
-        let segment = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "-._~:"))
-        let escaped = id.addingPercentEncoding(withAllowedCharacters: segment) ?? id
+        let escaped = LibraryClient.pathSegment(id)
         let profile = LibraryClient.queryValue(profile) ?? profile
         return ("/api/v1/library/hidden/\(escaped)?as=\(profile)", Data(#"{"hidden":\#(hidden)}"#.utf8))
     }

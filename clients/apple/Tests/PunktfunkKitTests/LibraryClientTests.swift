@@ -136,6 +136,12 @@ final class LibraryClientTests: XCTestCase {
             LibraryClient.pagePath(cursor: "a+b="), "/api/v1/library/page?limit=200&cursor=a%2Bb%3D")
     }
 
+    /// An id stays one segment: a `/` or `?` in it can't reach another route.
+    func testAnIdIsOnePathSegment() {
+        XCTAssertEqual(LibraryClient.pathSegment("steam:570"), "steam:570")
+        XCTAssertEqual(LibraryClient.pathSegment("../a b/c?d"), "..%2Fa%20b%2Fc%3Fd")
+    }
+
     func testPosterCandidatesPreferPortraitThenHeader() {
         let full = Artwork(
             portrait: "https://x/p.jpg", hero: "https://x/hero.jpg", header: "https://x/h.jpg")
