@@ -268,14 +268,16 @@ public final class HostDiscovery: ObservableObject {
         let browser = NWBrowser(
             for: .bonjourWithTXTRecord(type: "_punktfunk._udp", domain: nil),
             using: NWParameters())
-        browser.browseResultsChangedHandler = { results, _ in
-            MainActor.assumeIsolated { [weak self] in
+        // `[weak self]` sits on the handler itself: on the inner closure it would make the handler
+        // hold `self` strongly, and the running browser keeps its handlers.
+        browser.browseResultsChangedHandler = { [weak self] results, _ in
+            MainActor.assumeIsolated {
                 guard let self, generation == self.generation else { return }
                 self.reconcile(results)
             }
         }
-        browser.stateUpdateHandler = { state in
-            MainActor.assumeIsolated { [weak self] in
+        browser.stateUpdateHandler = { [weak self] state in
+            MainActor.assumeIsolated {
                 guard let self, generation == self.generation else { return }
                 self.browserStateChanged(state)
             }
@@ -366,8 +368,8 @@ public final class HostDiscovery: ObservableObject {
         connections[key] = conn
         deadlines[key] = Date().addingTimeInterval(Self.resolveTimeout)
         let generation = self.generation
-        conn.stateUpdateHandler = { state in
-            MainActor.assumeIsolated { [weak self] in
+        conn.stateUpdateHandler = { [weak self] state in
+            MainActor.assumeIsolated {
                 // Look the connection back up rather than capturing it — capturing it here would
                 // retain the connection through its own handler.
                 guard let self, generation == self.generation,
