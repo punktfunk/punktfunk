@@ -117,7 +117,7 @@ public final class GamepadMenuInput {
     /// screen. Unset ⇒ the shoulders do nothing.
     public var onShoulder: ((Bool) -> Void)?
 
-    /// Stick magnitude below this reads as neutral (dead zone).
+    /// Dead zone, per stick axis: an axis at or below this in size reads as neutral.
     private let deadzone: Float = 0.5
     static let initialRepeatDelay: TimeInterval = 0.38
     static let repeatInterval: TimeInterval = 0.16
