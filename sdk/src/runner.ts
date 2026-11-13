@@ -61,6 +61,11 @@ export interface RunnerOptions {
 	sandboxFetch?: typeof globalThis.fetch;
 	/** Config root holding plugin grants, tokens, and state. Default `configDir()`. */
 	configDir?: string;
+	/**
+	 * A person's own account: run only the plugins their own lane installed, and no loose script.
+	 * Default: `PUNKTFUNK_PERSON_PLUGINS=1`, which their seat's runner unit sets.
+	 */
+	personOnly?: boolean;
 	/** Grants poll period. Default 2 seconds; tests shorten it. */
 	grantPollInterval?: Duration.Input;
 	/** How long a plugin runs before it holds a lease ([`holdLease`]). Default 5 s; tests shorten it. */

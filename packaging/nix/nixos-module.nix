@@ -767,6 +767,8 @@ in
         # Each plugin runs inside its own `bwrap` sandbox, built by the runner.
         path = [ pkgs.bubblewrap ];
       };
+      # A seat on a person's own account: its host starts this as that person.
+      systemd.user.services."punktfunk-scripting-seat@".path = [ pkgs.bubblewrap ];
     })
 
     # --- seat supervisor -----------------------------------------------------------------------

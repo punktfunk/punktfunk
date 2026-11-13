@@ -106,6 +106,7 @@ on:
       - 'scripts/punktfunk-kde-session.service'
       - 'scripts/punktfunk-modules.conf'
       - 'scripts/punktfunk-scripting.service'
+      - 'scripts/punktfunk-scripting-seat@.service'
       - 'scripts/punktfunk-web-init.service'
       - 'scripts/punktfunk-web.service'
       - 'scripts/web-init.sh'
