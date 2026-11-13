@@ -98,6 +98,10 @@ const RING_DEFAULT: usize = 2;
 /// `reset()`; an unbounded wait deadlocks recovery. Matches the Windows NVENC retrieve-thread budget.
 const ENCODE_FENCE_TIMEOUT_NS: u64 = 5_000_000_000;
 
+/// One slice of the fence waiter's wait: how long a settle or `Drop` waits out a fence
+/// that never signals.
+const FENCE_WAITER_SLICE_NS: u64 = 50_000_000;
+
 /// One frame's phases, as [`PhaseStats`] indexes them.
 const PHASE_IMPORT: usize = 0;
 const PHASE_SUBMIT: usize = 1;
@@ -1180,8 +1184,13 @@ pub struct VulkanVideoEncoder {
     /// Which slot records next and which slots the GPU still owes.
     ring: Ring,
     /// Pipelined retrieve (`set_pipelined`): `poll` probes the oldest fence instead of
-    /// waiting on it, so an AU may ride a loop tick behind its submit under contention.
+    /// waiting on it, and `fence_waiter` tells the loop when it signals.
     pipelined: bool,
+    /// The loop's AU wake ([`Encoder::set_au_wake`]), carried across a reopen.
+    au_wake: crate::AuWake,
+    /// Waits each pipelined slot's fence and rings `au_wake`. Spawned by the first pipelined
+    /// submit; `Drop` joins it before the device goes.
+    fence_waiter: Option<crate::DoneWaiter<vk::Fence>>,
     bs_size: u64,
     /// `nonCoherentAtomSize`: `read_slot` rounds a non-coherent invalidate up to it.
     bs_atom: u64,
@@ -1390,6 +1399,7 @@ impl VulkanVideoEncoder {
         next.auto_wire = self.auto_wire;
         next.hdr_meta = self.hdr_meta.take();
         next.pipelined = self.pipelined;
+        next.au_wake = self.au_wake.clone();
         next.cursor_switch = true;
         tracing::info!(
             efc = rgb,
@@ -1992,6 +2002,8 @@ impl VulkanVideoEncoder {
             rgb_capable: rgb_probe.is_ok(),
             cursorless_since: None,
             pipelined: false,
+            au_wake: Default::default(),
+            fence_waiter: None,
         })
     }
 }
@@ -2508,6 +2520,7 @@ impl VulkanVideoEncoder {
 
     /// Records `frame` into the ring's next slot and submits it without waiting: the `submit`
     /// phase, import included. A full ring first reads its oldest slot into `pending`.
+    /// Pipelined, the slot's fence goes to the fence waiter.
     unsafe fn enqueue(&mut self, frame: &CapturedFrame, wire: i64) -> Result<()> {
         self.switch_for_cursor(frame)?;
         let slot = 'acquire: loop {
@@ -2546,7 +2559,29 @@ impl VulkanVideoEncoder {
                 other => unreachable!("vulkan-encode ring: {other:?} after a record"),
             }
         }
+        if recorded.is_ok() && self.pipelined {
+            self.arm_fence(slot);
+        }
         recorded
+    }
+
+    /// Ring the loop's AU wake once `slot`'s fence signals, from the fence waiter. Without
+    /// the thread the AU waits for the loop's next tick, as a probe alone left it.
+    fn arm_fence(&mut self, slot: usize) {
+        if self.fence_waiter.is_none() {
+            let device = self.device.clone();
+            // SAFETY: the waiter only waits; `submit` settles a fence before resetting it and
+            // `Drop` joins the waiter before the device or any fence is destroyed.
+            let wait = move |fence: vk::Fence| unsafe {
+                device.wait_for_fences(&[fence], true, FENCE_WAITER_SLICE_NS)
+                    != Err(vk::Result::TIMEOUT)
+            };
+            self.fence_waiter =
+                crate::DoneWaiter::spawn("pf-vk-enc-done", wait, self.au_wake.clone());
+        }
+        if let Some(waiter) = &self.fence_waiter {
+            waiter.arm(self.frames[slot].fence);
+        }
     }
 }
 
@@ -2666,10 +2701,9 @@ impl Encoder for VulkanVideoEncoder {
     }
 
     fn poll(&mut self) -> Result<Option<EncodedFrame>> {
-        // Blocking at depth-1 sync: a non-blocking probe would defer every AU a full
-        // frame period. `pipelined` flips that — an unready oldest defers one tick, so
-        // encode latency stops bounding the loop's cadence. `None` = nothing submitted,
-        // or (pipelined) the oldest AU is still on the GPU.
+        // Blocking at depth-1 sync. `pipelined` probes: the fence waiter's ring brings the
+        // loop back for an unready oldest, so encode latency stops bounding its cadence.
+        // `None` = nothing submitted, or (pipelined) the oldest AU is still on the GPU.
         if !self.pending.is_empty() {
             return Ok(self.pending.pop_front());
         }
@@ -2747,6 +2781,11 @@ impl Encoder for VulkanVideoEncoder {
     fn set_pipelined(&mut self, on: bool) -> bool {
         self.pipelined = on;
         self.pipelined
+    }
+
+    /// The fence waiter rings it once a pipelined slot's fence signals.
+    fn set_au_wake(&mut self, wake: Option<std::sync::Arc<dyn Fn() + Send + Sync>>) {
+        self.au_wake.set(wake);
     }
 
     fn reconfigure_bitrate(&mut self, bps: u64) -> bool {
@@ -2951,6 +2990,8 @@ impl Drop for VkTeardown {
 
 impl Drop for VulkanVideoEncoder {
     fn drop(&mut self) {
+        // Joined first: its wait must not outlive the fences or the device.
+        drop(self.fence_waiter.take());
         if let Some(mut stage) = self.reframe.take() {
             // SAFETY: the device is live until VkTeardown below; waiting out every submission
             // first means no queued command still reads the stage's images.

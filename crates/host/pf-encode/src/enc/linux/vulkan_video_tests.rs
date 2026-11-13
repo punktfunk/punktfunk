@@ -1242,3 +1242,88 @@ fn vulkan_csc_reads_a_linear_source_at_its_stride() {
     }
     assert_edge_is_straight(&stream, "vulkan-csc-linear.h265", ODD_W, ODD_H);
 }
+
+/// Hardware: pipelined, a slot's fence rings the loop's AU wake and rings alone bring back
+/// every AU still on the GPU; a sync submit never rings; a drop with fences armed joins the
+/// waiter first. Under the validation layer this is the check that the waiter and the encode
+/// thread never hold a fence together.
+#[test]
+#[ignore = "needs a real VK_KHR_video_encode_h265 device (run on the RADV host, not the build box)"]
+fn vulkan_pipelined_fence_rings_the_au_wake() {
+    use std::sync::mpsc;
+    use std::time::{Duration, Instant};
+    const FRAMES: u32 = 240;
+    const W: u32 = 1920;
+    const H: u32 = 1080;
+    fn drain(enc: &mut VulkanVideoEncoder) -> u32 {
+        let mut aus = 0;
+        while enc.poll().expect("poll").is_some() {
+            aus += 1;
+        }
+        aus
+    }
+    let period = Duration::from_secs(1) / 120;
+    let frame = |i: u32| cpu_frame_scroll(W, H, u64::from(i) * 8_333_333, i);
+    let mut enc =
+        VulkanVideoEncoder::open_opts(Codec::H265, W, H, 120, 20_000_000, false).expect("open");
+    let (ring, rung) = mpsc::channel();
+    enc.set_au_wake(Some(std::sync::Arc::new(move || {
+        let _ = ring.send(());
+    })));
+
+    for i in 0..3 {
+        enc.submit_indexed(&frame(i), i).expect("sync submit");
+        assert_eq!(drain(&mut enc), 1, "sync: the AU follows its submit");
+    }
+    assert!(rung.try_recv().is_err(), "a sync submit rang the wake");
+
+    assert!(enc.set_pipelined(true), "pipelined retrieve refused");
+    let (mut aus, mut rings, mut by_ring) = (0u32, 0u32, 0u32);
+    for i in 3..3 + FRAMES {
+        let next = frame(i);
+        let tick = Instant::now();
+        enc.submit_indexed(&next, i).expect("pipelined submit");
+        // The loop polls after its submit, then waits out the tick: a ring ends that early.
+        aus += drain(&mut enc);
+        while rung
+            .recv_timeout(period.saturating_sub(tick.elapsed()))
+            .is_ok()
+        {
+            rings += 1;
+            let got = drain(&mut enc);
+            by_ring += got;
+            aus += got;
+        }
+    }
+    // Nothing submits any more, so only a ring can bring an AU back.
+    while aus < FRAMES {
+        rung.recv_timeout(Duration::from_secs(2))
+            .expect("a ring for an AU still on the GPU");
+        rings += 1;
+        let got = drain(&mut enc);
+        by_ring += got;
+        aus += got;
+    }
+    println!("vulkan pipelined wake: {FRAMES} AUs, {rings} rings, {by_ring} AUs taken on a ring");
+    assert_eq!(aus, FRAMES, "one AU per pipelined frame");
+    assert!(rings <= FRAMES, "{rings} rings for {FRAMES} fences");
+
+    // Back to sync: nothing arms a fence, so nothing rings.
+    assert!(!enc.set_pipelined(false));
+    std::thread::sleep(Duration::from_millis(100));
+    while rung.try_recv().is_ok() {}
+    for i in 3 + FRAMES..6 + FRAMES {
+        enc.submit_indexed(&frame(i), i).expect("sync submit");
+        assert_eq!(drain(&mut enc), 1, "sync: the AU follows its submit");
+    }
+    assert!(
+        rung.recv_timeout(Duration::from_millis(100)).is_err(),
+        "a sync submit rang the wake"
+    );
+
+    assert!(enc.set_pipelined(true));
+    for i in 6 + FRAMES..8 + FRAMES {
+        enc.submit_indexed(&frame(i), i).expect("pipelined submit");
+    }
+    drop(enc);
+}

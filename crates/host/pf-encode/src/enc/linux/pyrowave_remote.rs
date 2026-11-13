@@ -666,6 +666,10 @@ impl Encoder for RemotePyroWave {
         false
     }
 
+    fn set_au_wake(&mut self, _wake: Option<std::sync::Arc<dyn Fn() + Send + Sync>>) {
+        // Synchronous: no AU finishes off the loop.
+    }
+
     fn poll(&mut self) -> Result<Option<EncodedFrame>> {
         self.stream.check_whole_poll()?;
         self.poll_whole()

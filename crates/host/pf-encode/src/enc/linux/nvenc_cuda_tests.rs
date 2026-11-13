@@ -2563,6 +2563,98 @@ fn nvenc_cuda_pipelined_escalation() {
     assert!(first_key, "first post-escalation AU is the re-open IDR");
 }
 
+/// Hardware: pipelined, the retrieve thread rings the loop's AU wake once per AU and rings
+/// alone bring back every AU still in flight; a sync submit never rings.
+#[test]
+#[ignore = "requires an NVIDIA GPU + driver — run manually on the RTX box (.21)"]
+fn nvenc_cuda_pipelined_retrieve_rings_the_au_wake() {
+    use std::sync::mpsc;
+    use std::time::{Duration, Instant};
+    const W: u32 = 1920;
+    const H: u32 = 1080;
+    const FRAMES: u32 = 240;
+    fn drain(enc: &mut NvencCudaEncoder) -> u32 {
+        let mut aus = 0;
+        while enc.poll().expect("poll").is_some() {
+            aus += 1;
+        }
+        aus
+    }
+    pf_zerocopy::cuda::make_current().expect("shared CUDA context current");
+    if async_retrieve_vetoed() {
+        println!("skipped: PUNKTFUNK_NVENC_ASYNC=0 vetoes the escalation");
+        return;
+    }
+    let period = Duration::from_secs(1) / 120;
+    let mut enc = NvencCudaEncoder::open(
+        Codec::H265,
+        PixelFormat::Nv12,
+        W,
+        H,
+        120,
+        20_000_000,
+        true,
+        8,
+        false,
+        ChromaFormat::Yuv420,
+        false,
+        4,
+        true,
+        &Knobs::from_env(),
+    )
+    .expect("open NVENC CUDA session");
+    let (ring, rung) = mpsc::channel();
+    enc.set_au_wake(Some(std::sync::Arc::new(move || {
+        let _ = ring.send(());
+    })));
+
+    for i in 0..3u32 {
+        let frame = nv12_frame(W, H, i);
+        enc.submit_indexed(&frame, i).expect("sync submit");
+        assert_eq!(drain(&mut enc), 1, "sync: the AU follows its submit");
+    }
+    assert!(rung.try_recv().is_err(), "a sync submit rang the wake");
+
+    assert!(enc.set_pipelined(true), "escalation must be accepted");
+    let (mut aus, mut rings, mut by_ring) = (0u32, 0u32, 0u32);
+    for i in 3..3 + FRAMES {
+        let frame = nv12_frame(W, H, i);
+        let tick = Instant::now();
+        enc.submit_indexed(&frame, i).expect("pipelined submit");
+        // The loop polls after its submit, then waits out the tick: a ring ends that early.
+        aus += drain(&mut enc);
+        while rung
+            .recv_timeout(period.saturating_sub(tick.elapsed()))
+            .is_ok()
+        {
+            rings += 1;
+            let got = drain(&mut enc);
+            by_ring += got;
+            aus += got;
+        }
+    }
+    // Nothing submits any more, so only a ring can bring an AU back.
+    while aus < FRAMES {
+        rung.recv_timeout(Duration::from_secs(2))
+            .expect("a ring for an AU still in flight");
+        rings += 1;
+        let got = drain(&mut enc);
+        by_ring += got;
+        aus += got;
+    }
+    // A poll can take the last AU before its ring lands.
+    let deadline = Instant::now() + Duration::from_millis(500);
+    while rings < FRAMES && Instant::now() < deadline {
+        if rung.recv_timeout(Duration::from_millis(20)).is_ok() {
+            rings += 1;
+        }
+    }
+    println!("nvenc pipelined wake: {FRAMES} AUs, {rings} rings, {by_ring} AUs taken on a ring");
+    assert!(enc.s.retrieving(), "retrieve thread must be live");
+    assert_eq!(aus, FRAMES, "one AU per pipelined frame");
+    assert_eq!(rings, FRAMES, "the retrieve thread rings once per AU");
+}
+
 /// Hardware: do slices become readable mid-encode? Prints a doNotWait timeline; asserts
 /// only that 4 slices materialize. `--test-threads=1`.
 #[test]

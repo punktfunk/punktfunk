@@ -27,7 +27,8 @@
 use super::nvenc_core::{CreateInstance, EncodeApi, GetMaxSupportedVersion, NvStatusExt};
 use super::nvenc_session::{
     async_inflight_cap, async_retrieve_requested, async_retrieve_vetoed, full_chroma_input,
-    lock_copy, open_session, EncodeInput, NvSession, OpenTarget, RetrieveDone, RetrieveJob, POOL,
+    lock_copy, open_session, DoneTx, EncodeInput, NvSession, OpenTarget, RetrieveDone, RetrieveJob,
+    POOL,
 };
 use super::nvenc_status;
 use super::{AuChunk, ChromaFormat, Codec, EncodedFrame, Encoder, EncoderCaps};
@@ -299,14 +300,10 @@ fn chroma_plane(captured: &CapturedFrame, d: &DmabufFrame) -> Option<(u32, u32)>
     })
 }
 
-/// Retrieve thread: blocking-lock, copy, unlock, send. Exits when the job channel closes.
-/// Teardown drops the sender and joins before destroy, or leaks the session with a thread it
-/// cannot join, so `enc`/`bs` outlive uses here.
-fn retrieve_loop(
-    enc: usize,
-    work_rx: mpsc::Receiver<RetrieveJob>,
-    done_tx: mpsc::Sender<RetrieveDone>,
-) {
+/// Retrieve thread: blocking-lock, copy, unlock, send, which rings the loop's AU wake. Exits
+/// when the job channel closes. Teardown drops the sender and joins before destroy, or leaks
+/// the session with a thread it cannot join, so `enc`/`bs` outlive uses here.
+fn retrieve_loop(enc: usize, work_rx: mpsc::Receiver<RetrieveJob>, done_tx: DoneTx) {
     pf_frame::thread_qos::boost_thread_priority(false);
     // Shared process-wide CUDA context — same `cuCtxSetCurrent` the encode thread does.
     if let Err(e) = cuda::make_current() {
@@ -2013,6 +2010,11 @@ impl Encoder for NvencCudaEncoder {
         } else {
             self.lane.retrieve == Retrieve::Pipelined || self.s.retrieving()
         }
+    }
+
+    /// Every retrieve thread, this session's and a rebuild's, rings it after each AU.
+    fn set_au_wake(&mut self, wake: Option<std::sync::Arc<dyn Fn() + Send + Sync>>) {
+        self.s.au_wake.set(wake);
     }
 
     fn caps(&self) -> EncoderCaps {

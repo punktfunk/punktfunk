@@ -208,18 +208,25 @@ pub trait Feed {
     /// consumes the frame; an error surfaces at the following `try_latest`.
     fn wait_arrival(&mut self, deadline: Instant);
 
-    /// [`Self::wait_arrival`] that no frame ends before `not_before` and a poke ends at any
-    /// point: `true` when the poke did, which it takes. The loop's credit gate runs here, so a
-    /// recovery ask need not wait it out. Default: sleep to `not_before`, then wait.
-    fn wait_paced(&mut self, not_before: Instant, deadline: Instant) -> bool {
+    /// [`Self::wait_arrival`] that no frame ends before `not_before`, and a poke or a finished
+    /// access unit ends at any point; the wait takes the one it returns. The loop's credit gate
+    /// runs here, so neither waits it out. Default: sleep to `not_before`, then wait.
+    fn wait_paced(&mut self, not_before: Instant, deadline: Instant) -> Paced {
         std::thread::sleep(not_before.saturating_duration_since(Instant::now()));
         self.wait_arrival(deadline);
-        false
+        Paced::Due
     }
 
-    /// A handle that ends a running [`Self::wait_paced`] now, with no frame, so a recovery
-    /// ask from the control task goes out at once. `None`: the ask waits for the next tick.
+    /// A handle that ends a running [`Self::wait_paced`] now with [`Paced::Poked`], so a
+    /// recovery ask from the control task goes out at once. `None`: the ask waits for the
+    /// next tick.
     fn arrival_poke(&self) -> Option<Arc<dyn Fn() + Send + Sync>> {
+        None
+    }
+
+    /// A handle that ends a running [`Self::wait_paced`] now with [`Paced::Encoded`], for an
+    /// encoder that finishes access units off the loop. `None`: they wait for the next tick.
+    fn au_wake(&self) -> Option<Arc<dyn Fn() + Send + Sync>> {
         None
     }
 
@@ -239,6 +246,17 @@ pub trait Feed {
     fn pool_use(&self) -> Option<PoolUse> {
         None
     }
+}
+
+/// What ended a [`Feed::wait_paced`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Paced {
+    /// A frame is ready, `deadline` passed, or the producer is gone: the tick is due.
+    Due,
+    /// [`Feed::arrival_poke`]: the loop ticks with no frame.
+    Poked,
+    /// [`Feed::au_wake`]: the loop collects the access unit and waits on.
+    Encoded,
 }
 
 /// A producer pool's spend since the last [`Feed::pool_use`]. A peak at the depth left the

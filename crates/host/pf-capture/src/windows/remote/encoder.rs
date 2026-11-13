@@ -530,6 +530,10 @@ impl Encoder for EncoderProxy {
         false
     }
 
+    fn set_au_wake(&mut self, _wake: Option<Arc<dyn Fn() + Send + Sync>>) {
+        // `ready_aus` waits on the section's own event.
+    }
+
     fn ready_event(&self) -> Option<isize> {
         // `ready_aus` waits on the section's own event.
         None
