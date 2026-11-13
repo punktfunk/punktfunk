@@ -1,8 +1,7 @@
-// The platform-independent heart of the presenters: one thread pulling AUs from the
-// connection into an AVSampleBufferDisplayLayer, with the format description refreshed
-// on every IDR (the host opens with an IDR carrying in-band parameter sets; recovery
-// keyframes re-send them — there is no out-of-band extradata, ever). Shared by the
-// macOS StreamLayerView and the iOS/iPadOS stream view.
+// Stage-1's pump: one thread pulling AUs from the connection into an
+// AVSampleBufferDisplayLayer, with the format description refreshed on every IDR (the host
+// opens with an IDR carrying in-band parameter sets; recovery keyframes re-send them — there
+// is no out-of-band extradata). `SessionPresenter.start` runs it when stage-1 is chosen.
 
 import AVFoundation
 import Foundation
