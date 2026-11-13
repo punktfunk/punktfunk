@@ -106,5 +106,13 @@ extension ClipboardPasteboard {
         guard !ClipboardFormats.isConcealed(types) else { return nil }
         return ClipboardFormats.offerKinds(forTypes: types)
     }
+
+    /// `read(wire:)`, or nil when the pasteboard is no longer at `count` once the read returns.
+    /// The read can wait on a user decision (iOS's paste alert), and what it then returns is
+    /// whatever is on the pasteboard by that time: a newer copy, even a concealed one.
+    func read(wire: String, unchangedSince count: Int) -> Data? {
+        guard let data = read(wire: wire), changeCount == count else { return nil }
+        return data
+    }
 }
 #endif

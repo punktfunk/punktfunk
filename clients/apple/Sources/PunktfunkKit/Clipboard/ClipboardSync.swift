@@ -425,17 +425,20 @@ public final class ClipboardSync: NSObject {
     /// clipboard changed since that announce) is cancelled — never serve mismatched bytes.
     ///
     /// Runs on `serves`, not the drain thread: reading the pasteboard can block on a user decision
-    /// (iOS's paste permission alert), and the drain thread has to stay live throughout.
+    /// (iOS's paste permission alert), and the drain thread has to stay live throughout. The
+    /// pasteboard and the session can both change under that wait, so both are checked again
+    /// once the read returns.
     private func serveFetch(reqId: UInt32, seq: UInt32, mime: String) {
         stateLock.lock()
+        let count = pasteboard.changeCount
         // `installedRemote == nil` matters: installing the HOST's offer on our own pasteboard
         // updates the change count too, so without it a fetch for our promise would be served by
         // reading that promise — which fetches back from the host and blocks this queue on it.
-        let fresh = seq == offerSeq && pasteboard.changeCount == lastSeenChangeCount
-            && installedRemote == nil
+        let fresh = seq == offerSeq && count == lastSeenChangeCount && installedRemote == nil
         stateLock.unlock()
-        guard fresh, !stopped.isRaised, let data = pasteboard.read(wire: mime),
-              data.count <= Self.maxTransferBytes
+        guard fresh, !stopped.isRaised,
+              let data = pasteboard.read(wire: mime, unchangedSince: count),
+              !stopped.isRaised, data.count <= Self.maxTransferBytes
         else {
             connection.clipCancel(id: reqId)
             return
