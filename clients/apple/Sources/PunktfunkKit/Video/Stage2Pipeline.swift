@@ -50,7 +50,7 @@ private let pumpLog = ClientLog(category: "pump")
 /// user's presentation intent (design/apple-presentation-rebuild.md — the 2026-07 rebuild that
 /// replaced the visible stage picker):
 ///
-/// - `.newestWins` (Prioritize lowest latency, the default): a 1-slot ring — the decoder
+/// - `.newestWins` (Prioritize lowest latency, off deadline pacing): a 1-slot ring — the decoder
 ///   overwrites (drops the older undisplayed frame), the render thread takes-and-clears. Zero
 ///   store by construction: any deeper app-held buffer ahead of a latch-paced display becomes a
 ///   STANDING queue costing one full refresh per slot, forever (the depth-2 gate post-mortem —
@@ -64,9 +64,9 @@ private let pumpLog = ClientLog(category: "pump")
 ///   a repeat by omission, while headroom rebuilds). Each buffered frame ≈ one refresh interval
 ///   of jitter absorbed for one interval of added display latency, which the metrics SHOW —
 ///   only the OS present floor is shaved from the HUD, never the user's chosen buffer.
-///
-/// - `.newestTwo` (lowest latency under deadline pacing): keeps the newest two, so the render
-///   thread sees a collision and `Carry` decides which shows. `take` hands back the oldest.
+/// - `.newestTwo` (lowest latency under deadline pacing, which `Stage2Pipeline.init` swaps it
+///   in for): keeps the newest two, so the render thread sees a collision and `Carry` decides
+///   which shows. `take` hands back the oldest.
 ///
 /// Sendable; lock-guarded — decoder callbacks and the render thread cross here.
 public enum FrameStorePolicy: Sendable, Equatable {
