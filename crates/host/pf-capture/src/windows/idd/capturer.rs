@@ -314,6 +314,10 @@ impl crate::RemoteEncoder for IddPushCapturer {
     fn open(&self, params: &crate::DriverEncodeParams) -> Result<Box<dyn pf_encode_core::Encoder>> {
         self.remote.open(params)
     }
+
+    fn arrival_poke(&self) -> Option<std::sync::Arc<dyn Fn() + Send + Sync>> {
+        self.remote.arrival_poke()
+    }
 }
 
 impl Drop for IddPushCapturer {

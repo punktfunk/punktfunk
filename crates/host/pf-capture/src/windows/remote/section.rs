@@ -7,6 +7,7 @@
 
 use std::os::windows::io::{AsHandle, AsRawHandle, FromRawHandle, OwnedHandle};
 use std::sync::atomic::AtomicU32;
+use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use pf_driver_proto::section::SectionView;
@@ -17,7 +18,7 @@ use windows::Win32::System::Memory::{
     CreateFileMappingW, MapViewOfFile, UnmapViewOfFile, FILE_MAP_ALL_ACCESS,
     MEMORY_MAPPED_VIEW_ADDRESS, PAGE_READWRITE,
 };
-use windows::Win32::System::Threading::{CreateEventW, WaitForSingleObject};
+use windows::Win32::System::Threading::{CreateEventW, SetEvent, WaitForSingleObject};
 
 use super::broker::RemoteProcess;
 use super::transport::{AuMemory, Planted};
@@ -113,10 +114,11 @@ impl Drop for MappedSection {
 }
 
 /// The mapped AU section and its ready event, alive for the encoder's life. The far side holds
-/// its own duplicates; dropping this unmaps and closes only the host's handles.
+/// its own duplicates; dropping this unmaps and closes only the host's handles. A
+/// [`AuMemory::signal`] holds the event past that.
 struct AuSection {
     section: MappedSection,
-    event: OwnedHandle,
+    event: Arc<OwnedHandle>,
 }
 
 impl AuSection {
@@ -130,7 +132,10 @@ impl AuSection {
                 .context("CreateEvent(AU section)")?;
             OwnedHandle::from_raw_handle(event.0 as _)
         };
-        Ok(Self { section, event })
+        Ok(Self {
+            section,
+            event: Arc::new(event),
+        })
     }
 }
 
@@ -145,6 +150,17 @@ impl AuMemory for AuSection {
     fn wait(&self, timeout_ms: u32) {
         // SAFETY: `event` is this section's live handle; the bounded wait only reads it.
         let _ = unsafe { WaitForSingleObject(HANDLE(self.event.as_raw_handle()), timeout_ms) };
+    }
+
+    /// The host's own `SetEvent` on its full-access handle: the wait returns, finds the
+    /// header unchanged, and the caller decides.
+    fn signal(&self) -> Box<dyn Fn() + Send + Sync> {
+        let event = self.event.clone();
+        Box::new(move || {
+            // SAFETY: `event` holds the handle open for this closure's life; SetEvent only sets
+            // the event's state.
+            let _ = unsafe { SetEvent(HANDLE(event.as_raw_handle())) };
+        })
     }
 }
 

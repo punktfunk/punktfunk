@@ -306,6 +306,12 @@ pub trait RemoteEncoder {
     /// Open the encoder for `params` and hand back the loop's proxy. No fallback follows: a
     /// refused open ends the session (the driver's own refusal is `DriverEncodeOpenError`).
     fn open(&self, params: &DriverEncodeParams) -> Result<Box<dyn pf_encode_core::Encoder>>;
+
+    /// A handle that ends the proxy's running `ready_aus` wait now with nothing owed, so a
+    /// recovery ask from the control task goes out at once. It reaches each proxy opened after.
+    fn arrival_poke(&self) -> Option<Arc<dyn Fn() + Send + Sync>> {
+        None
+    }
 }
 
 /// The process a [`RemoteEncoder`] encodes in.

@@ -308,6 +308,10 @@ impl AuMemory for FakeMemory {
     }
 
     fn wait(&self, _timeout_ms: u32) {}
+
+    fn signal(&self) -> Box<dyn Fn() + Send + Sync> {
+        Box::new(|| {})
+    }
 }
 
 /// What the loop asks a fake encoder to open: HEVC at `width`×`height`, 60 fps.
