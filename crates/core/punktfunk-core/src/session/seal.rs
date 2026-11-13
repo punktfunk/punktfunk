@@ -1,10 +1,15 @@
-//! Persistent worker that AES-GCM-seals the back half of a large frame while the
-//! send thread seals the front. This module owns the lane, the split
-//! ([`seal_staged`]) and [`seal_wire_slice`]. Byte-identical to a sequential
-//! pass; pinned by `zero_copy_seal_matches_one_by_one_path`.
+//! Persistent workers beside the send thread. The seal lane AES-GCM-seals the back half of
+//! a large frame, or each chunk of a pipelined one, while the send thread seals the front;
+//! the parity lane computes a pipelined frame's parity while its data streams. This module
+//! owns both lanes, the split ([`seal_staged`]) and [`seal_wire_slice`]. Byte-identical to
+//! a sequential pass; pinned by `zero_copy_seal_matches_one_by_one_path` and
+//! `chunk_pipeline_matches_the_whole_frame_seal`.
 
+use super::perf::TimedCoder;
 use crate::crypto::SessionCrypto;
 use crate::error::Result;
+use crate::fec::ErasureCoder;
+use crate::packet::Geometry;
 
 /// Rendezvous is ~µs; AES-GCM is ~1 µs/packet. At 256 packets the halved span
 /// (≥ ~125 µs) dwarfs the hand-off. ≈300 KB of wire, ≥150 Mbps at 60 fps.
@@ -19,37 +24,130 @@ pub(super) struct SealJob {
     pub(super) result: Result<()>,
 }
 
-/// Bound-1 rendezvous, not a per-frame spawn. Drop closes the channel and the
-/// worker exits.
-pub(super) struct SealLane {
-    pub(super) to_worker: std::sync::mpsc::SyncSender<SealJob>,
-    pub(super) from_worker: std::sync::mpsc::Receiver<SealJob>,
+/// A persistent worker behind a bound-1 rendezvous, not a per-frame spawn. Drop closes
+/// the channel and the worker exits.
+pub(super) struct Lane<J> {
+    pub(super) to_worker: std::sync::mpsc::SyncSender<J>,
+    pub(super) from_worker: std::sync::mpsc::Receiver<J>,
 }
 
-impl SealLane {
-    pub(super) fn spawn(crypto: std::sync::Arc<SessionCrypto>) -> Option<SealLane> {
-        let (to_worker, jobs) = std::sync::mpsc::sync_channel::<SealJob>(1);
-        let (done_tx, from_worker) = std::sync::mpsc::sync_channel::<SealJob>(1);
+/// Seals a chunk, or the back half of a frame.
+pub(super) type SealLane = Lane<SealJob>;
+
+/// Computes a pipelined frame's parity ([`parity_beside`]).
+pub(super) type ParityLane = Lane<ParityJob>;
+
+static LANE_BOOST: std::sync::OnceLock<fn()> = std::sync::OnceLock::new();
+
+/// Install the call every seal and parity lane makes first, to raise its own priority: the
+/// send thread waits on them. First caller wins; later calls are ignored.
+pub fn set_lane_boost(boost: fn()) {
+    let _ = LANE_BOOST.set(boost);
+}
+
+impl<J: Send + 'static> Lane<J> {
+    /// Thread `name` runs the [`set_lane_boost`] hook, then `work` on each job, handing it
+    /// back, until the lane drops. `None` if the thread can't start.
+    fn start(name: &str, mut work: impl FnMut(&mut J) + Send + 'static) -> Option<Self> {
+        let (to_worker, jobs) = std::sync::mpsc::sync_channel::<J>(1);
+        let (done_tx, from_worker) = std::sync::mpsc::sync_channel::<J>(1);
         std::thread::Builder::new()
-            .name("punktfunk-seal2".into())
+            .name(name.into())
             .spawn(move || {
+                if let Some(boost) = LANE_BOOST.get() {
+                    boost();
+                }
                 while let Ok(mut job) = jobs.recv() {
-                    let t0 = job.timed.then(std::time::Instant::now);
-                    job.result = seal_wire_slice(&crypto, &mut job.bufs, job.seq_base);
-                    if let Some(t0) = t0 {
-                        job.ns = t0.elapsed().as_nanos() as u64;
-                    }
+                    work(&mut job);
                     if done_tx.send(job).is_err() {
-                        break; // session gone mid-frame — nothing left to seal for
+                        break; // session gone mid-frame — nothing left to work for
                     }
                 }
             })
             .ok()?;
-        Some(SealLane {
+        Some(Lane {
             to_worker,
             from_worker,
         })
     }
+}
+
+impl SealLane {
+    pub(super) fn spawn(crypto: std::sync::Arc<SessionCrypto>) -> Option<SealLane> {
+        Lane::start("punktfunk-seal2", move |job: &mut SealJob| {
+            let t0 = job.timed.then(std::time::Instant::now);
+            job.result = seal_wire_slice(&crypto, &mut job.bufs, job.seq_base);
+            if let Some(t0) = t0 {
+                job.ns = t0.elapsed().as_nanos() as u64;
+            }
+        })
+    }
+}
+
+/// One frame's parity on the [`ParityLane`]. Round-trips so `recovery` returns to the
+/// packetizer's pool.
+pub(super) struct ParityJob {
+    geo: Geometry,
+    /// The caller's frame, valid only while [`parity_beside`] has the job out.
+    frame: &'static [u8],
+    recovery: Vec<Vec<Vec<u8>>>,
+    timed: bool,
+    ns: u64,
+    result: Result<()>,
+}
+
+impl ParityLane {
+    /// Shares the session's coder: one frame at a time uses its work buffers.
+    pub(super) fn spawn(coder: std::sync::Arc<dyn ErasureCoder>) -> Option<ParityLane> {
+        Lane::start("punktfunk-fec", move |job: &mut ParityJob| {
+            let ns = std::sync::atomic::AtomicU64::new(0);
+            let timed = TimedCoder {
+                inner: coder.as_ref(),
+                ns: &ns,
+            };
+            let c: &dyn ErasureCoder = if job.timed { &timed } else { coder.as_ref() };
+            job.result = crate::packet::parity(&job.geo, job.frame, c, &mut job.recovery);
+            job.ns = ns.into_inner();
+        })
+    }
+}
+
+/// Runs `data_pass` here while the lane computes `frame`'s parity into `recovery`, and
+/// returns its result beside the lane's `(ns, result)`. `None`: the worker is gone, and
+/// `recovery` with it. The nanoseconds are the coder's, counted only when `timed`.
+#[allow(unsafe_code)]
+pub(super) fn parity_beside<R>(
+    lane: &ParityLane,
+    geo: Geometry,
+    frame: &[u8],
+    recovery: &mut Vec<Vec<Vec<u8>>>,
+    timed: bool,
+    data_pass: impl FnOnce() -> R,
+) -> (R, Option<(u64, Result<()>)>) {
+    // SAFETY: the worker reads `frame` only while it holds the job, and the job is back
+    // before this returns or unwinds: `catch_unwind` holds a panic in `data_pass` until the
+    // `recv`, which returns once the worker has handed the job back or has exited.
+    let frame = unsafe { std::mem::transmute::<&[u8], &'static [u8]>(frame) };
+    let job = ParityJob {
+        geo,
+        frame,
+        recovery: std::mem::take(recovery),
+        timed,
+        ns: 0,
+        result: Ok(()),
+    };
+    if let Err(std::sync::mpsc::SendError(job)) = lane.to_worker.send(job) {
+        *recovery = job.recovery;
+        return (data_pass(), None);
+    }
+    let data = std::panic::catch_unwind(std::panic::AssertUnwindSafe(data_pass));
+    let back = lane.from_worker.recv();
+    let data = data.unwrap_or_else(|panic| std::panic::resume_unwind(panic));
+    let Ok(job) = back else {
+        return (data, None);
+    };
+    *recovery = job.recovery;
+    (data, Some((job.ns, job.result)))
 }
 
 /// Data shards per pipeline step: ~180 KB of wire, 0.15 ms at 10 GbE and ~0.12 ms of

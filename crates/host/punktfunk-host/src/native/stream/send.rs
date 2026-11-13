@@ -393,6 +393,8 @@ pub(super) fn send_loop(
     probe_seq: bool,
 ) {
     pf_frame::thread_qos::boost_thread_priority(false);
+    // A large frame waits on the session's seal and parity lanes: they run at this priority.
+    punktfunk_core::session::set_lane_boost(|| pf_frame::thread_qos::boost_thread_priority(false));
     let wire = WireLine::new(stats.wire_sock.take());
     let mut session = session;
     session.tap_plaintext(true);

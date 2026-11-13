@@ -97,7 +97,8 @@ pub struct Session {
     stamp: V2Stamp,
     /// Host: the session clock video pts leave in. `None` when pts are already wire time.
     clock: Option<std::sync::Arc<crate::quic::v2::clock::SessionClock>>,
-    coder: Box<dyn ErasureCoder>,
+    /// `Arc` so the parity lane can share it; one frame at a time uses it.
+    coder: std::sync::Arc<dyn ErasureCoder>,
     /// `Arc` so the second seal lane can share the cipher; uncontended otherwise.
     crypto: Option<std::sync::Arc<SessionCrypto>>,
     /// Receive-side anti-replay over the peer's authenticated sequence. `Some` exactly when
@@ -128,6 +129,9 @@ pub struct Session {
     /// Second seal lane, spawned by the first frame that crosses [`TWO_LANE_MIN_PACKETS`].
     /// Host only — client sessions never seal frames.
     seal_lane: Option<SealLane>,
+    /// Parity worker of the chunk pipeline, spawned with the seal lane by the first
+    /// pipelined frame. Host only.
+    parity_lane: Option<ParityLane>,
     /// Two-lane sealing enabled (default). `PUNKTFUNK_SEAL_LANES=1` forces single-lane.
     seal_two_lane: bool,
     /// Reused Vecs for the lane hand-off. The worker's half round-trips here, so
@@ -206,8 +210,11 @@ pub use perf::{PumpPerf, SealPerf};
 
 use perf::TimedCoder;
 use replay::ReplayWindow;
-use seal::{hand_chunk, seal_staged, seal_wire_slice, SealLane, SEAL_CHUNK_SHARDS};
-pub use seal::{SealSink, SendFn};
+use seal::{
+    hand_chunk, parity_beside, seal_staged, seal_wire_slice, ParityLane, SealLane,
+    SEAL_CHUNK_SHARDS,
+};
+pub use seal::{set_lane_boost, SealSink, SendFn};
 
 /// Batches [`Session::flush_backlog`] discards at most: a line-rate sender cannot pin it.
 const FLUSH_BATCHES: usize = 128 * 1024;
@@ -225,7 +232,7 @@ impl Session {
     /// them.
     pub fn new(config: Config, media: MediaV2, transport: Box<dyn Transport>) -> Result<Session> {
         config.validate()?;
-        let coder = coder_for(config.fec.scheme);
+        let coder = coder_for(config.fec.scheme).into();
         let crypto = media.keys.as_ref().map(|keys| {
             std::sync::Arc::new(SessionCrypto::media(
                 keys,
@@ -264,6 +271,7 @@ impl Session {
             perf: (crate::env_on("PUNKTFUNK_PERF") == Some(true)).then(PumpPerf::default),
             seal_perf: (crate::env_on("PUNKTFUNK_PERF") == Some(true)).then(SealPerf::default),
             seal_lane: None,
+            parity_lane: None,
             // Default two-lane; `PUNKTFUNK_SEAL_LANES=1` is single-lane. Byte-identical;
             // only who seals changes.
             seal_two_lane: std::env::var("PUNKTFUNK_SEAL_LANES")
@@ -405,9 +413,9 @@ impl Session {
     /// order as it is sealed — [`SEAL_CHUNK_SHARDS`] data shards at a time, the parity
     /// last — so the first packet leaves after one chunk instead of the whole frame. The
     /// seal lane seals chunk k+1 while `sink` sends chunk k through the `send` it is
-    /// given, and a third thread computes the parity meanwhile. Byte-identical to
-    /// `seal_frame_at`. A small or unencrypted frame reaches `sink` whole. The buffers
-    /// return to the pool when this returns.
+    /// given, and the parity lane computes the parity meanwhile. Byte-identical to
+    /// `seal_frame_at`. A small or unencrypted frame, or one with a lane that can't
+    /// start, reaches `sink` whole. The buffers return to the pool when this returns.
     pub fn seal_frame_chunks_at(
         &mut self,
         data: &[u8],
@@ -427,7 +435,10 @@ impl Session {
         if pipelined && self.seal_lane.is_none() {
             self.seal_lane = SealLane::spawn(self.crypto.clone().expect("checked above"));
         }
-        if !pipelined || self.seal_lane.is_none() {
+        if pipelined && self.parity_lane.is_none() {
+            self.parity_lane = ParityLane::spawn(self.coder.clone());
+        }
+        if !pipelined || self.seal_lane.is_none() || self.parity_lane.is_none() {
             let wires = self.seal_frame_inner(data, pts_ns, user_flags, Some(frame_index))?;
             let r = sink(&wires, &mut |p| self.send_sealed(p));
             self.reclaim_wires(wires);
@@ -438,9 +449,10 @@ impl Session {
 
     /// The encrypted, multi-chunk half of [`seal_frame_chunks_at`](Self::seal_frame_chunks_at).
     /// `emit` writes plaintext into pooled wires; every [`SEAL_CHUNK_SHARDS`] data wires
-    /// go to the lane and the chunk before them comes back sealed for `sink`. The parity
-    /// is computed on a scoped thread while the data streams and is sealed here last.
+    /// go to the seal lane and the chunk before them comes back sealed for `sink`. The
+    /// parity lane computes the parity while the data streams; it is sealed here last.
     /// An error counts nothing in the stats; the packet numbers already staged stay spent.
+    /// A lane that dies is dropped, and the next pipelined frame starts a fresh one.
     fn seal_chunks_pipelined(
         &mut self,
         geo: crate::packet::Geometry,
@@ -452,15 +464,14 @@ impl Session {
     ) -> Result<()> {
         geo.check()?;
         let perf_armed = self.seal_perf.is_some();
-        let fec_ns = std::sync::atomic::AtomicU64::new(0);
         let (stamp, clock) = (self.stamp, self.clock.clone());
         let Session {
             packetizer,
-            coder,
             crypto,
             next_seq,
             wire_pool,
             seal_lane,
+            parity_lane,
             lane_scratch,
             transport,
             stats,
@@ -470,16 +481,9 @@ impl Session {
         } = self;
         let c = crypto.as_ref().expect("pipelined seal needs crypto");
         let lane = seal_lane.take().expect("pipelined seal needs the lane");
-        let timed_coder;
-        let coder_ref: &dyn ErasureCoder = if perf_armed {
-            timed_coder = TimedCoder {
-                inner: coder.as_ref(),
-                ns: &fec_ns,
-            };
-            &timed_coder
-        } else {
-            coder.as_ref()
-        };
+        let fec_lane = parity_lane
+            .take()
+            .expect("pipelined seal needs the parity lane");
         let mut send = |p: &[&[u8]]| -> Result<usize> {
             let sent = transport.send_gso(p)?;
             if sent < p.len() {
@@ -548,16 +552,15 @@ impl Session {
             }
             Ok(())
         };
-        // The data streams out while the parity is computed beside it.
-        let mut result = std::thread::scope(|s| {
-            let fec = s.spawn(|| crate::packet::parity(&geo, data, coder_ref, &mut recovery));
-            let emitted =
-                packetizer.emit_data(&geo, data, pts_ns, user_flags, frame_index, &mut emit);
-            let parity = fec
-                .join()
-                .unwrap_or(Err(PunktfunkError::Unsupported("parity thread panicked")));
-            emitted.and(parity)
-        });
+        // The data streams out while the parity lane computes the parity beside it.
+        let (emitted, parity) =
+            parity_beside(&fec_lane, geo, data, &mut recovery, perf_armed, || {
+                packetizer.emit_data(&geo, data, pts_ns, user_flags, frame_index, &mut emit)
+            });
+        let fec_lane_ok = parity.is_some();
+        let (fec_ns, parity) =
+            parity.unwrap_or((0, Err(PunktfunkError::Unsupported("parity lane died"))));
+        let mut result = emitted.and(parity);
         packetizer.put_recovery(recovery);
         if result.is_ok() {
             result = packetizer.emit_parity(&geo, pts_ns, user_flags, frame_index, &mut emit);
@@ -598,8 +601,11 @@ impl Session {
         if lane_ok {
             *seal_lane = Some(lane);
         }
+        if fec_lane_ok {
+            *parity_lane = Some(fec_lane);
+        }
         if let Some(p) = seal_perf.as_mut() {
-            p.fec_ns += fec_ns.load(std::sync::atomic::Ordering::Relaxed);
+            p.fec_ns += fec_ns;
             p.seal_ns += seal_ns;
             p.frames += 1;
             p.packets += packets;
@@ -1372,8 +1378,8 @@ mod wire_equivalence_tests {
         }
     }
 
-    /// Time to the first and the last packet of a sealed frame at the wire shard size, the
-    /// chunk pipeline against the whole-frame seal. A timing, not a check:
+    /// Time to the first and the last packet of a sealed frame at the wire shard size: the
+    /// chunk pipeline, the whole-frame seal on two lanes, and on one. A timing, not a check:
     /// `cargo test -p punktfunk-core --release --features quic --lib -- --ignored seal_latency --nocapture`
     /// Each chunk hand-off parks and wakes a thread: below the [`SEAL_CHUNK_SHARDS`] floor
     /// the pipeline's last packet leaves later than the whole seal's, not earlier.
@@ -1391,40 +1397,53 @@ mod wire_equivalence_tests {
             max_frame_bytes: 8 * 1024 * 1024,
             loopback_drop_period: 0,
         };
-        let frame = pattern(512 * 1024);
         let n = 500u32;
-        let mut chunked = host_session(cfg.clone(), true);
-        let (mut first, mut last) = (0u128, 0u128);
-        for i in 0..n {
-            let t0 = std::time::Instant::now();
-            let mut t_first = None;
-            chunked
-                .seal_frame_chunks_at(&frame, u64::from(i), 0, i, &mut |chunk, send| {
-                    t_first.get_or_insert_with(|| t0.elapsed());
-                    let refs: Vec<&[u8]> = chunk.iter().map(|b| b.as_slice()).collect();
-                    send(&refs).map(|_| ())
-                })
-                .unwrap();
-            last += t0.elapsed().as_nanos();
-            first += t_first.expect("the sink ran").as_nanos();
+        // The median in µs: a busy box skews the mean.
+        let p50 = |mut ns: Vec<u128>| {
+            ns.sort_unstable();
+            ns[ns.len() / 2] as f64 / 1000.0
+        };
+        for kb in [300, 400, 512, 700, 1024, 2048] {
+            let frame = pattern(kb * 1024);
+            let mut chunked = host_session(cfg.clone(), true);
+            let (mut first, mut last) = (Vec::new(), Vec::new());
+            for i in 0..n {
+                let t0 = std::time::Instant::now();
+                let mut t_first = None;
+                chunked
+                    .seal_frame_chunks_at(&frame, u64::from(i), 0, i, &mut |chunk, send| {
+                        t_first.get_or_insert_with(|| t0.elapsed());
+                        let refs: Vec<&[u8]> = chunk.iter().map(|b| b.as_slice()).collect();
+                        send(&refs).map(|_| ())
+                    })
+                    .unwrap();
+                last.push(t0.elapsed().as_nanos());
+                first.push(t_first.expect("the sink ran").as_nanos());
+            }
+            let mut whole_us = [0f64; 2];
+            for (slot, lanes) in whole_us.iter_mut().zip([true, false]) {
+                let mut whole = host_session(cfg.clone(), true);
+                whole.seal_two_lane = lanes;
+                let mut took = Vec::new();
+                for i in 0..n {
+                    let t0 = std::time::Instant::now();
+                    let wires = whole.seal_frame_at(&frame, u64::from(i), 0, i).unwrap();
+                    let refs: Vec<&[u8]> = wires.iter().map(|b| b.as_slice()).collect();
+                    whole.send_sealed(&refs).unwrap();
+                    took.push(t0.elapsed().as_nanos());
+                    whole.reclaim_wires(wires);
+                }
+                *slot = p50(took);
+            }
+            println!(
+                "{kb} KB, {} wires, p50: chunked first {:.1} us, last {:.1} us | whole two-lane {:.1} us, one lane {:.1} us",
+                chunked.frame_wire_len(&frame, 0) / (1408 + crate::packet::WIRE_OVERHEAD),
+                p50(first),
+                p50(last),
+                whole_us[0],
+                whole_us[1]
+            );
         }
-        let per = |ns: u128| ns as f64 / 1000.0 / f64::from(n);
-        println!(
-            "chunked: first packet {:.1} us, last {:.1} us",
-            per(first),
-            per(last)
-        );
-        let mut whole = host_session(cfg, true);
-        let mut total = 0u128;
-        for i in 0..n {
-            let t0 = std::time::Instant::now();
-            let wires = whole.seal_frame_at(&frame, u64::from(i), 0, i).unwrap();
-            let refs: Vec<&[u8]> = wires.iter().map(|b| b.as_slice()).collect();
-            whole.send_sealed(&refs).unwrap();
-            total += t0.elapsed().as_nanos();
-            whole.reclaim_wires(wires);
-        }
-        println!("whole: first and last packet {:.1} us", per(total));
     }
 
     /// A windowed PyroWave AU seals as a head block with all the parity and tail blocks with
@@ -2508,6 +2527,184 @@ mod wire_equivalence_tests {
         let s = host.stats();
         assert_eq!(s.frames_submitted, 1);
         assert_eq!(s.packets_sent, host.next_seq - before);
+    }
+
+    /// Every wire `seal_frame_chunks_at` hands its sink, in order.
+    fn chunked(sess: &mut Session, frame: &[u8], i: u32) -> Result<Vec<Vec<u8>>> {
+        let mut got = Vec::new();
+        sess.seal_frame_chunks_at(frame, u64::from(i), 0, i, &mut |chunk, send| {
+            let refs: Vec<&[u8]> = chunk.iter().map(|b| b.as_slice()).collect();
+            send(&refs)?;
+            got.extend(chunk.iter().cloned());
+            Ok(())
+        })?;
+        Ok(got)
+    }
+
+    /// The Gf16 coder, counting each block's parity it computes. `fail` refuses the parity,
+    /// `panic` panics, and `slow` takes a millisecond per block.
+    #[derive(Default)]
+    struct ScriptedCoder {
+        inner: crate::fec::Gf16Coder,
+        encodes: std::sync::atomic::AtomicUsize,
+        fail: std::sync::atomic::AtomicBool,
+        panic: bool,
+        slow: bool,
+    }
+
+    impl ErasureCoder for ScriptedCoder {
+        fn scheme(&self) -> FecScheme {
+            FecScheme::Gf16
+        }
+        fn encode(
+            &self,
+            data: &[&[u8]],
+            recovery_count: usize,
+        ) -> std::result::Result<Vec<Vec<u8>>, crate::fec::FecError> {
+            self.inner.encode(data, recovery_count)
+        }
+        fn encode_into(
+            &self,
+            data: &[&[u8]],
+            recovery_count: usize,
+            out: &mut Vec<Vec<u8>>,
+        ) -> std::result::Result<(), crate::fec::FecError> {
+            use std::sync::atomic::Ordering::Relaxed;
+            assert!(!self.panic, "scripted coder panic");
+            if self.fail.load(Relaxed) {
+                return Err(crate::fec::FecError::Backend("scripted refusal"));
+            }
+            if self.slow {
+                std::thread::sleep(std::time::Duration::from_millis(1));
+            }
+            self.encodes.fetch_add(1, Relaxed);
+            self.inner.encode_into(data, recovery_count, out)
+        }
+        fn reconstruct(
+            &self,
+            data_count: usize,
+            recovery_count: usize,
+            received: &mut [Option<Vec<u8>>],
+        ) -> std::result::Result<Vec<Vec<u8>>, crate::fec::FecError> {
+            self.inner.reconstruct(data_count, recovery_count, received)
+        }
+        fn reconstruct_into(
+            &self,
+            recovery_count: usize,
+            data: &mut [&mut [u8]],
+            have: &[bool],
+            recovery: &[(usize, &[u8])],
+        ) -> std::result::Result<(), crate::fec::FecError> {
+            self.inner
+                .reconstruct_into(recovery_count, data, have, recovery)
+        }
+    }
+
+    /// One parity lane serves every pipelined frame, byte-identical to the whole-frame seal.
+    /// A coder error fails only its frame: the lane stays and the next frame is whole.
+    #[test]
+    fn the_parity_lane_serves_every_frame_and_outlives_an_error() {
+        use std::sync::atomic::Ordering::Relaxed;
+        let mut piped = host_session(host_cfg(FecScheme::Gf16, 20), true);
+        let mut whole = host_session(host_cfg(FecScheme::Gf16, 20), true);
+        let coder = std::sync::Arc::new(ScriptedCoder::default());
+        piped.parity_lane = ParityLane::spawn(coder.clone());
+        let frame = pattern(20000); // 313 data shards at shard 64: pipelined
+        let mut per_frame = 0;
+        for i in 0..64u32 {
+            coder.fail.store(i == 20, Relaxed);
+            let got = chunked(&mut piped, &frame, i);
+            assert!(piped.parity_lane.is_some(), "frame {i}");
+            if i == 20 {
+                assert!(matches!(got, Err(PunktfunkError::Fec(_))), "frame {i}");
+                whole.next_seq = piped.next_seq;
+                continue;
+            }
+            let want = whole.seal_frame_at(&frame, u64::from(i), 0, i).unwrap();
+            assert_eq!(got.unwrap(), want, "frame {i}");
+            whole.reclaim_wires(want);
+            if i == 0 {
+                per_frame = coder.encodes.load(Relaxed);
+            }
+        }
+        assert!(per_frame > 0);
+        assert_eq!(
+            coder.encodes.load(Relaxed),
+            63 * per_frame,
+            "every frame's parity came from the one lane"
+        );
+        assert_eq!(piped.stats().frames_submitted, 63);
+    }
+
+    /// A parity worker that dies mid-frame fails the frame instead of hanging it. The corpse
+    /// is dropped and the next pipelined frame starts a fresh lane on the session's coder.
+    #[test]
+    fn a_parity_lane_that_dies_mid_frame_fails_it() {
+        let mut piped = host_session(host_cfg(FecScheme::Gf16, 20), true);
+        let mut whole = host_session(host_cfg(FecScheme::Gf16, 20), true);
+        let dying = ScriptedCoder {
+            panic: true,
+            ..Default::default()
+        };
+        piped.parity_lane = ParityLane::spawn(std::sync::Arc::new(dying));
+        let frame = pattern(20000);
+        let r = chunked(&mut piped, &frame, 0);
+        assert!(matches!(
+            r,
+            Err(PunktfunkError::Unsupported("parity lane died"))
+        ));
+        assert!(piped.parity_lane.is_none());
+        assert_eq!(piped.stats().frames_submitted, 0);
+        whole.next_seq = piped.next_seq;
+        let want = whole.seal_frame_at(&frame, 1, 0, 1).unwrap();
+        assert_eq!(chunked(&mut piped, &frame, 1).unwrap(), want);
+        assert!(
+            piped.parity_lane.is_some(),
+            "the next pipelined frame respawns the lane"
+        );
+    }
+
+    /// A panic in the sink leaves the call only after the parity lane has finished with the
+    /// frame. The session then seals the next frame on fresh lanes.
+    #[test]
+    fn a_panicking_sink_waits_for_the_parity_lane() {
+        use std::sync::atomic::Ordering::Relaxed;
+        let mut piped = host_session(host_cfg(FecScheme::Gf16, 20), true);
+        let mut whole = host_session(host_cfg(FecScheme::Gf16, 20), true);
+        let slow = std::sync::Arc::new(ScriptedCoder {
+            slow: true,
+            ..Default::default()
+        });
+        piped.parity_lane = ParityLane::spawn(slow.clone());
+        let frame = pattern(20000);
+        let geo = piped.packetizer.geometry(frame.len());
+        let blocks = (0..geo.block_count)
+            .filter(|&b| geo.parity_of(b) > 0)
+            .count();
+        let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            piped.seal_frame_chunks_at(&frame, 0, 0, 0, &mut |_, _| panic!("sink"))
+        }));
+        assert!(panicked.is_err());
+        assert_eq!(slow.encodes.load(Relaxed), blocks);
+        whole.next_seq = piped.next_seq;
+        let want = whole.seal_frame_at(&frame, 1, 0, 1).unwrap();
+        assert_eq!(chunked(&mut piped, &frame, 1).unwrap(), want);
+    }
+
+    /// Each lane runs the embedder's boost on its own thread before its first job.
+    #[test]
+    fn both_lanes_run_the_boost_hook() {
+        static BOOSTED: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+        set_lane_boost(|| {
+            let name = std::thread::current().name().unwrap_or_default().to_owned();
+            BOOSTED.lock().unwrap().push(name);
+        });
+        let mut host = host_session(host_cfg(FecScheme::Gf16, 20), true);
+        chunked(&mut host, &pattern(20000), 0).unwrap();
+        let boosted = BOOSTED.lock().unwrap();
+        for lane in ["punktfunk-seal2", "punktfunk-fec"] {
+            assert!(boosted.iter().any(|n| n == lane), "{lane} in {boosted:?}");
+        }
     }
 
     /// A packetizer refusal leaves the counters, the packet number and the frame index alone.
