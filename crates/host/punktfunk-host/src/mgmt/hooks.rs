@@ -12,12 +12,26 @@ fn theirs(lane: AuthLane) -> bool {
     !pf_paths::seat::own_account() || lane == AuthLane::Person
 }
 
+/// Whether `cfg`, written on `lane` of a `windows` seat host or a Linux one, names a secret file
+/// its host would read for the person: on Windows the host is SYSTEM.
+fn refuses_secret_file(windows: bool, lane: AuthLane, cfg: &crate::hooks::HooksConfig) -> bool {
+    windows && lane == AuthLane::Person && cfg.hooks.iter().any(|h| h.hmac_secret_file.is_some())
+}
+
 /// What any other lane reads where the person's lane is open: the code of its host message
 /// `apierr_<code>`, and its English. Where it is closed, [`crate::hooks::own_account_refusal`].
 const SET_BY_PERSON: (&str, &str) = (
     "hooks_own_account_person",
     "Hooks on a profile that uses an existing account are set by that person, from their own \
      desktop.",
+);
+
+/// What a person on a Windows seat reads for a hook that names a secret file: their seat host is
+/// SYSTEM, and would read any file as the key of a webhook they direct.
+const PERSON_SECRET_FILE: (&str, &str) = (
+    "hooks_secret_file_person",
+    "Hooks you set yourself can't sign a webhook with a secret file on this PC. Remove the \
+     secret file, then save again.",
 );
 
 /// Get the hook configuration
@@ -49,7 +63,7 @@ pub(crate) async fn get_hooks(
 /// user (the interactive session on Windows). An `elevated` hook is refused until an
 /// administrator turns elevated commands on at the host (`HostInfo.elevated_commands`). A
 /// seat host on a person's own account takes hooks from that person's own session alone, and
-/// runs only those.
+/// runs only those. On a Windows seat that session names no `hmac_secret_file`.
 #[utoipa::path(
     put,
     path = "/hooks",
@@ -58,7 +72,7 @@ pub(crate) async fn get_hooks(
     request_body = crate::hooks::HooksConfig,
     responses(
         (status = OK, description = "Configuration stored; the new state", body = crate::hooks::HooksConfig),
-        (status = BAD_REQUEST, description = "Structurally invalid configuration, or an `elevated` hook this host won't run", body = ApiError),
+        (status = BAD_REQUEST, description = "Structurally invalid configuration, an `elevated` hook this host won't run, or a person's secret file on Windows", body = ApiError),
         (status = UNAUTHORIZED, description = "Missing or invalid bearer token", body = ApiError),
         (status = FORBIDDEN, description = "A seat host on a person's own account, from any lane but that person's", body = ApiError),
         (status = INTERNAL_SERVER_ERROR, description = "Configuration could not be persisted", body = ApiError),
@@ -81,6 +95,10 @@ pub(crate) async fn set_hooks(
     if let Err(e) = cfg.validate() {
         return api_error(StatusCode::BAD_REQUEST, &e);
     }
+    if refuses_secret_file(cfg!(windows), lane, &cfg) {
+        let (code, why) = PERSON_SECRET_FILE;
+        return api_error_coded(StatusCode::BAD_REQUEST, code, why);
+    }
     if let Some(why) = cfg
         .hooks
         .iter()
@@ -101,5 +119,26 @@ pub(crate) async fn set_hooks(
             "Couldn't save the hooks",
             &format!("{e:#}"),
         ),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A person on a Windows seat names no secret file; the operator there, and anyone on a
+    /// Linux seat, whose host runs as the account, may.
+    #[test]
+    fn a_windows_person_names_no_secret_file() {
+        let with = |file: Option<&str>| -> crate::hooks::HooksConfig {
+            let hook = serde_json::json!({"on": "game.*", "webhook": "https://x.example/h",
+                "hmac_secret_file": file});
+            serde_json::from_value(serde_json::json!({ "hooks": [hook] })).unwrap()
+        };
+        let secret = with(Some(r"C:\ProgramData\punktfunk\mgmt-token"));
+        assert!(refuses_secret_file(true, AuthLane::Person, &secret));
+        assert!(!refuses_secret_file(true, AuthLane::Admin, &secret));
+        assert!(!refuses_secret_file(false, AuthLane::Person, &secret));
+        assert!(!refuses_secret_file(true, AuthLane::Person, &with(None)));
     }
 }

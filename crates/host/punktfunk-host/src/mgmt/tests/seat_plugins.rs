@@ -115,6 +115,10 @@ async fn seat_half() {
         match (publishes, own && lane == "admin") {
             (true, true) => assert_eq!((status, code), (theirs.0, &theirs.1), "{lane}"),
             (true, false) => assert_eq!(status, StatusCode::OK, "{lane}: {why}"),
+            // A Windows seat's person reaches no provider route.
+            (false, _) if cfg!(windows) && lane == "person" => {
+                assert_eq!(status, StatusCode::FORBIDDEN, "{lane}")
+            }
             (false, _) => assert_eq!((status, code), (refused.0, &refused.1), "{lane}"),
         }
     }
@@ -190,8 +194,12 @@ async fn a_seat_s_plugin_ui_stays_on_its_seat_host() {
         assert_eq!(status, StatusCode::OK, "admin");
     }
     let (status, body) = send(&app, with_bearer(credential(), &person)).await;
-    assert_eq!(status, StatusCode::OK, "person");
-    assert_eq!(body["port"], 49321);
+    if cfg!(windows) {
+        assert_eq!(status, StatusCode::FORBIDDEN, "a Windows seat's person");
+    } else {
+        assert_eq!(status, StatusCode::OK, "person");
+        assert_eq!(body["port"], 49321);
+    }
     let device = send_cert(&app, credential(), DEVICE).await;
     assert_eq!(device, StatusCode::UNAUTHORIZED);
 }
@@ -287,7 +295,11 @@ async fn a_seat_s_own_plugin_reads_its_own_grants() {
         assert_eq!(status, StatusCode::OK, "admin: {why}");
     }
     let (status, why) = send(&app, with_bearer(allow(), &person)).await;
-    assert_eq!(status, StatusCode::OK, "person: {why}");
+    let person_may = match cfg!(windows) {
+        true => StatusCode::FORBIDDEN,
+        false => StatusCode::OK,
+    };
+    assert_eq!(status, person_may, "person: {why}");
     let (status, _) = send(&app, with_bearer(allow(), "demo-secret")).await;
     assert_eq!(status, StatusCode::FORBIDDEN, "plugin");
     assert_eq!(
@@ -340,6 +352,14 @@ async fn a_person_adopts_and_prepares_their_own_emulators() {
         } else {
             assert_ne!(status, StatusCode::FORBIDDEN, "operator {what}: {why}");
         }
+    }
+    // A Windows seat's emulators are the box's: its person reaches none of them there.
+    if cfg!(windows) {
+        for req in [adopt(), prepare()] {
+            let status = send(&app, with_bearer(req, &person)).await.0;
+            assert_eq!(status, StatusCode::FORBIDDEN, "a Windows seat's person");
+        }
+        return;
     }
     let (status, copy) = send(&app, with_bearer(adopt(), &person)).await;
     assert_eq!(status, StatusCode::OK, "person adopt: {copy}");
@@ -397,8 +417,9 @@ async fn a_person_s_own_store_answers_their_lane_alone() {
             );
         }
         let (status, why) = send(&app, with_bearer(req(), &person)).await;
+        // A Windows seat's person reaches no store route.
         assert!(
-            status.is_client_error() && status != StatusCode::FORBIDDEN,
+            status.is_client_error() && (status == StatusCode::FORBIDDEN) == cfg!(windows),
             "person {path}: {status} {why}"
         );
         for token in ["plugin-secret", "demo-secret"] {

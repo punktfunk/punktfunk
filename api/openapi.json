@@ -3094,7 +3094,7 @@
           "hooks"
         ],
         "summary": "Replace the hook configuration",
-        "description": "Whole-document PUT, not a patch. Applies from the next event. Commands run as the host\nuser (the interactive session on Windows). An `elevated` hook is refused until an\nadministrator turns elevated commands on at the host (`HostInfo.elevated_commands`). A\nseat host on a person's own account takes hooks from that person's own session alone, and\nruns only those.",
+        "description": "Whole-document PUT, not a patch. Applies from the next event. Commands run as the host\nuser (the interactive session on Windows). An `elevated` hook is refused until an\nadministrator turns elevated commands on at the host (`HostInfo.elevated_commands`). A\nseat host on a person's own account takes hooks from that person's own session alone, and\nruns only those. On a Windows seat that session names no `hmac_secret_file`.",
         "operationId": "setHooks",
         "requestBody": {
           "content": {
@@ -3118,7 +3118,7 @@
             }
           },
           "400": {
-            "description": "Structurally invalid configuration, or an `elevated` hook this host won't run",
+            "description": "Structurally invalid configuration, an `elevated` hook this host won't run, or a person's secret file on Windows",
             "content": {
               "application/json": {
                 "schema": {
