@@ -1087,8 +1087,9 @@ struct DeadlineSelector {
         case present(at: CFTimeInterval, switched: Bool)
     }
 
-    /// The host's rate is re-measured over this long.
-    static let rateWindow: CFTimeInterval = 2
+    /// The host's rate is re-measured over this long: one frame of count noise is 0.125 Hz, under
+    /// `Carry`'s 0.3 Hz slow threshold.
+    static let rateWindow: CFTimeInterval = 8
 
     let latePick: Bool
     private var phase = PhaseTracker()
