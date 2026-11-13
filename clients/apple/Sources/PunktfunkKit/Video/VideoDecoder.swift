@@ -4,8 +4,8 @@
 // Stage-1 hands compressed samples to AVSampleBufferDisplayLayer, which decodes AND presents
 // internally with no per-frame callback — so neither decode-completion nor present can be
 // stamped, and frames can't be hand-paced. Here we drive VTDecompressionSession ourselves: the
-// output callback delivers a decoded CVPixelBuffer, we stamp decode-completion, and push it into
-// a ready ring the presenter's display link drains. See docs apple-stage2-presenter.md.
+// output callback delivers a decoded CVPixelBuffer, we stamp decode-completion and hand the frame
+// to `onDecoded`. Stage2Pipeline's header describes where it goes from there.
 
 import CoreMedia
 import CoreVideo
