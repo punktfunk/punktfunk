@@ -47,8 +47,7 @@ private let presentLog = ClientLog(category: "present")
 private let pumpLog = ClientLog(category: "pump")
 
 /// Decoded-frame hand-off between the decode half and the render thread. The POLICY is the
-/// user's presentation intent (design/apple-presentation-rebuild.md — the 2026-07 rebuild that
-/// replaced the visible stage picker):
+/// user's presentation intent:
 ///
 /// - `.newestWins` (Prioritize lowest latency, off deadline pacing): a 1-slot ring — the decoder
 ///   overwrites (drops the older undisplayed frame), the render thread takes-and-clears. Zero
@@ -175,9 +174,8 @@ public final class FrameStore<Frame>: @unchecked Sendable {
 
     /// Cadence-driven take: hand back the oldest frame only once its DUE time has arrived, so the
     /// store's job becomes "hold what is not due yet" instead of "release one per present
-    /// opportunity" (design/presenter-cadence-rework.md §4.3). `due` projects the frame's due
-    /// instant on the same clock as `now`; nil (no cadence estimate for that frame) means due
-    /// immediately.
+    /// opportunity". `due` projects the frame's due instant on the same clock as `now`; nil (no
+    /// cadence estimate for that frame) means due immediately.
     ///
     /// The preroll gate does not apply here. It exists only to build headroom for a per-slot
     /// drain, and under cadence targeting the cushion IS the headroom — prerolling on top would
@@ -1549,12 +1547,9 @@ public final class Stage2Pipeline {
     private let decodeReport = DecodeReport()
     private let frameHDR = FrameHDRReporter()
     private var token = StopFlag()
-    /// LIVE host↔client clock offset, read AT EACH RECORD — never cached per session. Until
-    /// 2026-08-13 this was a `let` snapshot of the connect-time handshake, and on a host whose
-    /// wall clock steps (a VM under NTP) the frozen value silently shifted every host-anchored
-    /// stat — field evidence: hostnet 17–21 ms one session, a physically impossible 4.4 ms the
-    /// next, same wired host. The core re-syncs the estimate mid-stream (60 s + step detection);
-    /// each call is an atomic load behind the FFI.
+    /// Live host↔client clock offset, read at each record and never cached: the core re-syncs it
+    /// mid-stream (60 s + step detection), as a host's wall clock can step. Each call is an
+    /// atomic load behind the FFI.
     private var clockOffset: () -> Int64 = { 0 }
     /// Signalled when the pump thread exits, so `stop()` can join it (bounded) before `decoder.reset()`
     /// — otherwise a pump iteration already past its `token.isStopped` check can rebuild a decode session
@@ -1742,9 +1737,8 @@ public final class Stage2Pipeline {
 
         // PyroWave rides a different decode half: no CMFormatDescription/VideoToolbox machinery
         // (a wavelet AU has no parameter sets), no keyframe recovery or re-anchor freeze (the
-        // stream is all-intra and Phase 4's partial delivery WANTS lossy frames on glass as
-        // localized blur, not a freeze). The ready ring, render thread, pacing and meters are
-        // shared unchanged.
+        // stream is all-intra, and partial delivery puts a lossy frame on glass as localized
+        // blur, not a freeze). The ready ring, render thread, pacing and meters are shared.
         let presenter = presenter
         let thread =
             connection.videoCodec == .pyrowave
@@ -1841,7 +1835,7 @@ public final class Stage2Pipeline {
                 debugStats?.gatedWake()
                 debugStats?.flushIfDue(ring: ring, gate: gate)
             }
-            // Every iteration drains its own autorelease pool (`return` = the old `continue`):
+            // Every iteration drains its own autorelease pool (`return` ends the iteration):
             // this thread has no runloop, and `nextDrawable()` AUTORELEASES each CAMetalDrawable —
             // without a per-iteration pool every presented frame's drawable object (plus its
             // texture-descriptor/array retinue, ~2 MB/min at 120 fps) piles up until session end.

@@ -190,13 +190,10 @@ final class SessionPresenter {
 
     /// The glass gate's in-flight present budget (`PresentGate` capacity): 1 everywhere.
     ///
-    /// Depth 1 is the only depth that works. The 2026-07 depth-2 experiment (one flip scanning
-    /// out + one queued, predicted ~5–8 ms at 120 Hz) REGRESSED the iPad Pro's display stage to
-    /// 22–28 ms vs depth 1's 14: any second gate slot becomes a STANDING queue — a burst fills
-    /// it, and with presents and latches then running at the same rate the occupancy never
-    /// returns to zero, so every frame permanently rides one extra refresh per slot. A bounded
-    /// FIFO can cap the queue but nothing ever drains it. Low latency needs a path that cannot
-    /// build that queue—deadline pacing or tvOS's decoded video plane—not a deeper gate.
+    /// Any second gate slot becomes a STANDING queue: a burst fills it, presents and latches
+    /// then run at the same rate, so the occupancy never returns to zero and every frame rides
+    /// one extra refresh per slot. Low latency needs a path that cannot build that queue
+    /// (deadline pacing, the decoded video plane), not a deeper gate.
     ///
     /// `PUNKTFUNK_GATE_DEPTH` (1…3) still overrides on iOS/tvOS so the standing-queue ladder
     /// stays reproducible on-device; macOS is pinned to 1, env ignored. Internal (not private)
