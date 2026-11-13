@@ -1,9 +1,5 @@
-// SwiftUI presentation: AVSampleBufferDisplayLayer fed straight from the punktfunk/1 connection.
-//
-// Stage-1 presenter (see README): the layer accepts *compressed* HEVC sample buffers and
-// does hardware decode + display itself — fastest path to pixels, IOSurface-backed
-// zero-copy on Apple silicon. Stage 2 (explicit VTDecompressionSession + CAMetalLayer)
-// replaces this when we start tuning frame pacing / measuring glass-to-glass.
+// The macOS stream view: SwiftUI hosts an NSView that SessionPresenter draws the punktfunk/1
+// stream into (stage-2 Metal, with the AVSampleBufferDisplayLayer as its fallback).
 //
 // The view also owns the input-capture state machine (Moonlight-style): capture is a
 // deliberate, reversible state — engaged when the stream starts and when the user clicks
@@ -13,8 +9,7 @@
 // this design removes). While released, nothing is forwarded to the host and the local
 // cursor is free.
 //
-// macOS-first (NSViewRepresentable); the iOS variant is the same layer under
-// UIViewRepresentable.
+// StreamViewIOS.swift is the twin for the touch platforms, a UIViewControllerRepresentable.
 
 #if os(macOS)
 import AppKit
