@@ -1102,12 +1102,11 @@ public final class LibraryArtLoader: LibraryArtSource, @unchecked Sendable {
     /// address it happened to have at fetch time: a re-addressed host must keep its cache, and a
     /// different machine answering the same address must not inherit it. Anything else is keyed
     /// by its URL, which already names its origin.
-    static func cacheKey(for url: URL, hostAddress: String, hostPort: UInt16, pin: Data?) -> String {
+    static func cacheKey(for url: URL, hostAddress: String, hostPort: UInt16, pin: Data) -> String {
         guard isHostOrigin(url, address: hostAddress, port: hostPort) else {
             return url.absoluteString
         }
-        if let pin { return "\(MgmtTransport.hex(pin))|\(requestPath(url))" }
-        return "tofu|\(MgmtTransport.unbracketed(hostAddress)):\(hostPort)|\(requestPath(url))"
+        return "\(MgmtTransport.hex(pin))|\(requestPath(url))"
     }
 
     /// The request path exactly as it goes on the wire — the ENCODED components. `url.path` and
@@ -1123,11 +1122,10 @@ public final class LibraryArtLoader: LibraryArtSource, @unchecked Sendable {
 
     private func fetch(_ url: URL) async throws -> Data {
         guard Self.isHostOrigin(url, address: target.address, port: target.port) else {
-            // A library entry names its own art URL, so this is host-supplied. Web schemes and
-            // inline `data:` only — a `file:` URL would make the client read its own container and
-            // cache the result as a poster — and the same ceiling the pinned path enforces, since
-            // nothing else bounds a CDN body.
-            if url.scheme?.lowercased() == "data" { return try Self.inlineBytes(url) }
+            // A library entry names its own art URL, so this is host-supplied. Web schemes only
+            // (`data:` never gets here) — a `file:` URL would make the client read its own
+            // container and cache it as a poster — and the pinned path's ceiling, since nothing
+            // else bounds a CDN body.
             guard let scheme = url.scheme?.lowercased(), scheme == "https" || scheme == "http"
             else { throw LibraryError.badArtURL }
             let (bytes, response) = try await Self.cdn.bytes(from: url)

@@ -398,12 +398,6 @@ final class LibraryClientTests: XCTestCase {
                 pin: Data([0xBE, 0xEF])),
             key)
 
-        // Unpinned has no machine to key by — the address stands in (TOFU semantics).
-        XCTAssertEqual(
-            LibraryArtLoader.cacheKey(
-                for: art, hostAddress: "192.168.1.70", hostPort: 47990, pin: nil),
-            "tofu|192.168.1.70:47990|/api/v1/library/art/steam:570/portrait")
-
         // A query is part of the path — art endpoints that take one don't collide.
         let queried = URL(
             string: "https://192.168.1.70:47990/api/v1/library/art/steam:570/portrait?v=2")!
