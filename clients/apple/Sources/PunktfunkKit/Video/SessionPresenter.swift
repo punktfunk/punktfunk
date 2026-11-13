@@ -64,25 +64,20 @@ enum PresenterChoice: Equatable {
     case stage4
     case decoded
 
-    /// Resolve from the `PUNKTFUNK_PRESENTER` env override (A/B without touching settings) first,
-    /// then the persisted `DefaultsKey.presenter` setting; anything unknown (or an empty env var)
-    /// falls back to the platform default. `allowStage1` is false in release builds, where a
-    /// leftover DEBUG "stage1" value silently maps to the default rather than reviving the
-    /// freeze-prone fallback.
-    static func resolve(setting: String?, env: String?, allowStage1: Bool) -> PresenterChoice {
-        explicit(setting: setting, env: env, allowStage1: allowStage1) ?? platformDefault
+    /// Resolve from the `PUNKTFUNK_PRESENTER` env override (an A/B lever, no setting); anything
+    /// unknown, or an empty env var, falls back to the platform default.
+    static func resolve(env: String?) -> PresenterChoice {
+        explicit(env: env) ?? platformDefault
     }
 
     /// Resolve an explicit diagnostic override, or nil for no supported selection.
     ///
     /// Stage-2 remains a faithful arrival-pacing A/B. Stage-4 is refused on macOS, whose
     /// path has separate synchronization constraints. `decoded` (the video-plane A/B) needs
-    /// iOS/tvOS 17.4 for its displayed-IOSurface metering. Stage-1 additionally requires the
-    /// caller's release-build gate.
-    static func explicit(setting: String?, env: String?, allowStage1: Bool) -> PresenterChoice? {
-        let raw = env.flatMap { $0.isEmpty ? nil : $0 } ?? setting
-        switch raw {
-        case "stage1": return allowStage1 ? .stage1 : nil
+    /// iOS/tvOS 17.4 for its displayed-IOSurface metering.
+    static func explicit(env: String?) -> PresenterChoice? {
+        switch env {
+        case "stage1": return .stage1
         case "stage2": return .stage2
         case "stage3": return .stage3
         case "stage4":
@@ -325,19 +320,8 @@ final class SessionPresenter {
         // comes from `PresenterChoice.platformDefault`; PUNKTFUNK_PRESENTER overrides it for A/B.
         // The latency/smoothness intent selects zero buffering or an explicit FIFO. Stage-1 is
         // the Metal-missing fallback.
-        #if DEBUG
-        let allowStage1 = true
-        #else
-        // Release accepts stage-1 only from an explicit process environment. A stale persisted
-        // choice cannot revive its internal decoder, while device builds retain the video-plane A/B.
-        let allowStage1 =
-            ProcessInfo.processInfo.environment["PUNKTFUNK_PRESENTER"] == "stage1"
-        #endif
-        let explicit = PresenterChoice.explicit(
-            setting: nil, // the legacy DefaultsKey.presenter picker value is no longer read
-            env: ProcessInfo.processInfo.environment["PUNKTFUNK_PRESENTER"],
-            allowStage1: allowStage1)
-        let choice = explicit ?? PresenterChoice.platformDefault
+        let choice = PresenterChoice.resolve(
+            env: ProcessInfo.processInfo.environment["PUNKTFUNK_PRESENTER"])
         let selectedPacing = Self.pacing(for: choice, codec: connection.videoCodec)
         let priority = PresentPriority.resolve(
             setting: connection.settings.presentPriority,
