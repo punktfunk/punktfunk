@@ -105,7 +105,6 @@ private final class CursorCapture {
 public struct StreamView: NSViewRepresentable {
     private let connection: PunktfunkConnection
     private let captureEnabled: Bool
-    private let overlayShown: Bool
     private let onCaptureChange: ((Bool) -> Void)?
     private let onDisconnectRequest: (() -> Void)?
     private let onShortcut: ((Shortcuts.Action, Shortcuts.Phase) -> Void)?
@@ -123,13 +122,10 @@ public struct StreamView: NSViewRepresentable {
     /// "click to capture" / "⌃⌥⇧Q releases" hint with it. `onDisconnectRequest` (main
     /// thread) fires on the reserved ⌃⌥⇧D combo while captured — the owner ends the
     /// session (released, the same combo reaches the Stream menu instead).
-    /// `endToEndMeter` records capture→on-glass for the A/V sync loop. `overlayShown` says the
-    /// owner draws over the video (the stats HUD): the window server blends then, so the
-    /// presenter stops probing for Direct scanout.
+    /// `endToEndMeter` records capture→on-glass for the A/V sync loop.
     public init(
         connection: PunktfunkConnection,
         captureEnabled: Bool = true,
-        overlayShown: Bool = false,
         onCaptureChange: ((Bool) -> Void)? = nil,
         onDisconnectRequest: (() -> Void)? = nil,
         onShortcut: ((Shortcuts.Action, Shortcuts.Phase) -> Void)? = nil,
@@ -144,7 +140,6 @@ public struct StreamView: NSViewRepresentable {
     ) {
         self.connection = connection
         self.captureEnabled = captureEnabled
-        self.overlayShown = overlayShown
         self.onCaptureChange = onCaptureChange
         self.onDisconnectRequest = onDisconnectRequest
         self.onShortcut = onShortcut
@@ -161,7 +156,6 @@ public struct StreamView: NSViewRepresentable {
         view.onDisconnectRequest = onDisconnectRequest
         view.onShortcut = onShortcut
         view.captureEnabled = captureEnabled
-        view.overlayShown = overlayShown
         view.endToEndMeter = endToEndMeter
         view.onResizeTarget = onResizeTarget
         view.onDecodedSize = onDecodedSize
@@ -174,7 +168,6 @@ public struct StreamView: NSViewRepresentable {
         view.onDisconnectRequest = onDisconnectRequest
         view.onShortcut = onShortcut
         view.captureEnabled = captureEnabled
-        view.overlayShown = overlayShown
         view.endToEndMeter = endToEndMeter
         view.onResizeTarget = onResizeTarget
         view.onDecodedSize = onDecodedSize
@@ -214,11 +207,7 @@ public final class StreamLayerView: NSView {
     private var screenValuesStale = true
     /// The view's screen in panel pixels per point (`NSScreen.panelScale`). Main-thread only.
     private var panelScale: Double = 1
-    /// The owner draws over the video (the stats HUD). Main-thread only.
-    var overlayShown = false {
-        didSet { if overlayShown != oldValue { pushDirectPossible() } }
-    }
-    /// Fullscreen with no overlay, as last told to the presenter. Main-thread only.
+    /// Whether the window is fullscreen, as last told to the presenter. Main-thread only.
     private var directPossible: Bool?
     private let cursorCapture = CursorCapture()
     private var inputCapture: InputCapture?
@@ -1187,10 +1176,10 @@ public final class StreamLayerView: NSView {
         screenWindows = screens
     }
 
-    /// Tell the presenter, on a change, whether the window can scan out Direct: real fullscreen
-    /// (the notch panel window is titled, so never) with nothing of the app's own over the video.
+    /// Tell the presenter, on a change, whether the window can scan out Direct: while it is real
+    /// fullscreen (the notch panel window is titled, so never). The stats HUD does not matter.
     private func pushDirectPossible() {
-        let possible = (window?.styleMask.contains(.fullScreen) ?? false) && !overlayShown
+        let possible = window?.styleMask.contains(.fullScreen) ?? false
         guard possible != directPossible else { return }
         directPossible = possible
         presenter.setDirectPossible(possible)

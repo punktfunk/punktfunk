@@ -16,12 +16,11 @@ import QuartzCore
 ///
 /// So a present's hold (issue → callback) against the content interval decides: a median of the
 /// last `window` above `blendedHold` intervals switches to `composited`, whose booked presents may
-/// keep the window composited themselves. While the app's own window state allows Direct
-/// (`setDirectPossible`: fullscreen, nothing of its own over the video), `composited` probes
-/// `direct` again after `backoff`; a probe that fails within `probeSpan` doubles the backoff, up
-/// to `maxBackoff`. A window the app knows cannot be Direct is probed once per state change,
-/// since each failed probe costs `window` frames. Lock-guarded: the render thread issues, Metal
-/// callback threads report. Internal for tests.
+/// keep the window composited themselves. While the window is fullscreen (`setDirectPossible`),
+/// `composited` probes `direct` again after `backoff`; a probe that fails within `probeSpan`
+/// doubles the backoff, up to `maxBackoff`. A window that is not fullscreen is probed once per
+/// state change, since each failed probe costs `window` frames. Lock-guarded: the render thread
+/// issues, Metal callback threads report. Internal for tests.
 final class ScanoutPacer: @unchecked Sendable {
     enum Mode: Equatable { case direct, composited }
 
@@ -46,7 +45,7 @@ final class ScanoutPacer: @unchecked Sendable {
     private var switchedAt: CFTimeInterval
     private var backoff = ScanoutPacer.baseBackoff
     private var switches = 0
-    /// The app's window state allows Direct scanout; `setDirectPossible` keeps it.
+    /// The window is fullscreen; `setDirectPossible` keeps it.
     private var directPossible = true
 
     init(now: CFTimeInterval = CACurrentMediaTime()) {
@@ -104,9 +103,9 @@ final class ScanoutPacer: @unchecked Sendable {
         switchLocked(to: .composited, now: now)
     }
 
-    /// Whether the app's own window state allows Direct scanout: fullscreen, with nothing of its
-    /// own over the video. A change to possible probes at once; impossible stops the timed
-    /// probes and leaves the mode to the holds, since a slow stream shows every frame blended.
+    /// Whether the window is fullscreen, the one state that scans out Direct. A change to
+    /// possible probes at once; impossible stops the timed probes and leaves the mode to the
+    /// holds, since a slow stream shows every frame blended.
     func setDirectPossible(_ possible: Bool, now: CFTimeInterval = CACurrentMediaTime()) {
         lock.lock()
         defer { lock.unlock() }

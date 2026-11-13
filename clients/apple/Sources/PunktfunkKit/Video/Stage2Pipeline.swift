@@ -2359,8 +2359,8 @@ public final class Stage2Pipeline {
         frameRateHint.stage(hz: hz)
     }
 
-    /// Whether the window can scan out Direct — fullscreen, nothing of the app's own over the
-    /// video; the Direct gate probes only then (MAIN).
+    /// Whether the window is fullscreen, so can scan out Direct; the Direct gate probes only
+    /// then (MAIN).
     public func setDirectPossible(_ possible: Bool) {
         scanout.setDirectPossible(possible)
     }

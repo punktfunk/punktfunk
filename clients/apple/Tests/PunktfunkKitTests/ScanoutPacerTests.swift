@@ -121,5 +121,43 @@ final class ScanoutPacerTests: XCTestCase {
         q.setDirectPossible(true, now: 5.04)
         XCTAssertEqual(q.mode(now: 5.05), .direct, "a change to possible probes at once")
     }
+
+    /// 120 fps on a 120 Hz panel whose first 0.5 s composites (presents hold 1.6 refreshes, as
+    /// during the fullscreen animation), then scans out Direct (2 ms). The pacer is never told
+    /// "impossible" in fullscreen, so it falls to the slot and probes back to Direct for good.
+    func testSessionOpeningCompositedReturnsToDirect() {
+        let p = ScanoutPacer(now: 0)
+        let settled = 0.5
+        var callbacks: [(at: Double, issued: Double, direct: Bool)] = []
+        var mode = ScanoutPacer.Mode.direct
+        var fell: Double?
+        var directAgain: Double?
+        var t = 0.0
+        while t < 10 {
+            callbacks.sort { $0.at < $1.at }
+            while let c = callbacks.first, c.at <= t {
+                callbacks.removeFirst()
+                p.landed(issuedAt: c.issued)
+                if c.direct { p.noteDirect(hold: c.at - c.issued, interval: refresh, now: c.at) }
+            }
+            let now = p.mode(now: t)
+            if now != mode {
+                mode = now
+                if now == .composited { fell = fell ?? t } else { directAgain = t }
+            }
+            if now == .composited {
+                p.issued(at: t, direct: false)
+                callbacks.append((t + refresh, t, false))
+            } else if p.mayIssue(now: t, minInterval: refresh) {
+                p.issued(at: t, direct: true)
+                callbacks.append((t + (t < settled ? 1.6 * refresh : 0.002), t, true))
+            }
+            t += refresh
+        }
+        XCTAssertLessThan(try XCTUnwrap(fell), settled, "the opening holds fall to the slot")
+        XCTAssertNotNil(directAgain, "the gate probes Direct again once the window can")
+        XCTAssertEqual(mode, .direct)
+        XCTAssertEqual(p.drainSwitches(), 2, "one fall, one probe that holds")
+    }
 }
 #endif
