@@ -246,6 +246,23 @@ enum ShotScenes {
             AnyView(ShotTVCustomizeMoved())
         })
         #endif
+        #if os(iOS) || os(tvOS)
+        // Hide for me: a title's menu with its entry, the sort menu's way to the hidden titles,
+        // and those titles.
+        scenes.append(ShotScene(name: "15g-library-hide-menu", orientation: .natural, colorScheme: .dark) {
+            AnyView(ShotHideForMe(opens: .title))
+        })
+        scenes.append(ShotScene(name: "15h-library-hidden-entry", orientation: .natural, colorScheme: .dark) {
+            AnyView(ShotHideForMe(opens: .sortMenu))
+        })
+        scenes.append(ShotScene(name: "15i-library-hidden", orientation: .natural, colorScheme: .dark) {
+            AnyView(NavigationStack {
+                HiddenTitlesView(
+                    host: ShotMock.host, profile: ShotHideForMe.kid, artLoader: ShotPosterArt.source,
+                    onShown: { _ in }, shotHidden: Array(ShotMock.games.prefix(3)))
+            })
+        })
+        #endif
         return scenes
     }
 }
