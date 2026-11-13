@@ -13,16 +13,11 @@
 //    host's virtual pad never keeps integrating an angular velocity this device stopped
 //    producing (the gyro-sweep "stale angular velocity re-sent forever" failure mode).
 //
-// Samples are CMDeviceMotion (sensor-fused: bias-corrected rotation rate, gravity split from
-// user acceleration) at the ~100 Hz CoreMotion ceiling — below a DualSense's 250 Hz, but the
-// host's motion plane is event-driven, not cadence-locked, so a slower producer just means
-// fewer samples. Units and axis semantics match `GamepadCapture.forwardMotion` exactly (the
-// `GamepadWire` constants; accel = gravity + user acceleration — the same convention, so a
-// future sign/scale correction lands in one place for both sources). The one thing the phone
-// adds is a frame remap: CoreMotion reports in the device's portrait frame, while the wire
-// wants the controller frame the player sees (x right, y up, z out of the screen), so each
-// sample is rotated by the current interface orientation — a phone clipped landscape must yaw
-// when the player yaws, not roll.
+// Samples are CMDeviceMotion (bias-corrected rotation, gravity split from user acceleration)
+// at CoreMotion's ~100 Hz ceiling; the host's motion plane is event-driven, so fewer is fine.
+// Units match `GamepadCapture.forwardMotion` (the `GamepadWire` scales, accel negated); the
+// frame does not. CoreMotion's portrait frame, turned by the interface orientation, is (right,
+// up, out of the screen): the wire's frame already, so `appleMotionToWire` is not applied.
 
 import Foundation
 
@@ -179,11 +174,8 @@ public final class DeviceGyro {
         state.lock.unlock()
         let rot = r.apply(
             x: Float(m.rotationRate.x), y: Float(m.rotationRate.y), z: Float(m.rotationRate.z))
-        // Total acceleration, NEGATED — the same convention as GamepadCapture.forwardMotion, which
-        // this file's header promises to track. Apple reports the gravity VECTOR (pointing down);
-        // an accelerometer measures proper acceleration (pointing up at rest), and the wire carries
-        // the latter. Without the minus a still phone told the host it was accelerating downward at
-        // 1 g.
+        // Total acceleration, NEGATED: Apple reports the gravity vector (down), the wire carries
+        // proper acceleration (up at rest), as `GamepadCapture.forwardMotion` does.
         let acc = r.apply(
             x: -Float(m.gravity.x + m.userAcceleration.x),
             y: -Float(m.gravity.y + m.userAcceleration.y),
