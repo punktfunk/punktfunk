@@ -28,8 +28,10 @@ pub mod session;
 #[cfg(target_os = "linux")]
 use std::io::Write as _;
 #[cfg(target_os = "linux")]
-use std::os::fd::OwnedFd;
+use std::os::fd::{AsFd, AsRawFd, BorrowedFd, OwnedFd};
 use std::sync::Arc;
+#[cfg(target_os = "linux")]
+use std::time::Duration;
 
 #[cfg(target_os = "linux")]
 use punktfunk_core::clipboard::CLIP_FETCH_CAP;
@@ -89,13 +91,56 @@ fn fulfill_paste(fd: OwnedFd, bytes: &[u8]) -> std::io::Result<()> {
     Ok(())
 }
 
-/// Blocking; reads a host selection transfer to EOF. A selection over [`CLIP_FETCH_CAP`] fails
-/// the read: its first 64 MiB is a broken file, not a smaller one.
+/// A local owner answers a read at once; a source silent this long is gone or broken.
 #[cfg(target_os = "linux")]
-fn read_capped(r: impl std::io::Read) -> anyhow::Result<Vec<u8>> {
+const READ_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Blocks until `fd` has data, EOF or an error, up to `timeout`; `TimedOut` when it stays silent.
+#[cfg(target_os = "linux")]
+fn wait_readable(fd: BorrowedFd<'_>, timeout: Duration) -> std::io::Result<()> {
+    let mut pfd = libc::pollfd {
+        fd: fd.as_raw_fd(),
+        events: libc::POLLIN,
+        revents: 0,
+    };
+    let ms = timeout.as_millis().min(i32::MAX as u128) as i32;
+    loop {
+        // SAFETY: `pfd` is one valid pollfd that outlives the call, which reads and writes only it.
+        match unsafe { libc::poll(&mut pfd, 1, ms) } {
+            0 => return Err(std::io::ErrorKind::TimedOut.into()),
+            n if n > 0 => return Ok(()),
+            _ => {
+                let err = std::io::Error::last_os_error();
+                if err.kind() != std::io::ErrorKind::Interrupted {
+                    return Err(err);
+                }
+            }
+        }
+    }
+}
+
+/// Reads from `R` only once it has data, so a source that never writes fails the read.
+#[cfg(target_os = "linux")]
+struct Patient<R>(R);
+
+#[cfg(target_os = "linux")]
+impl<R: std::io::Read + AsFd> std::io::Read for Patient<R> {
+    fn read(&mut self, out: &mut [u8]) -> std::io::Result<usize> {
+        wait_readable(self.0.as_fd(), READ_TIMEOUT)?;
+        self.0.read(out)
+    }
+}
+
+/// Blocking; reads a host selection transfer to EOF. A selection over [`CLIP_FETCH_CAP`] fails
+/// the read: its first 64 MiB is a broken file, not a smaller one. A source silent for
+/// [`READ_TIMEOUT`] fails it too.
+#[cfg(target_os = "linux")]
+fn read_capped(r: impl std::io::Read + AsFd) -> anyhow::Result<Vec<u8>> {
     use std::io::Read as _;
     let mut buf = Vec::new();
-    r.take(CLIP_FETCH_CAP as u64 + 1).read_to_end(&mut buf)?;
+    Patient(r)
+        .take(CLIP_FETCH_CAP as u64 + 1)
+        .read_to_end(&mut buf)?;
     anyhow::ensure!(
         buf.len() <= CLIP_FETCH_CAP,
         "clipboard selection exceeds the {CLIP_FETCH_CAP}-byte transfer cap"
@@ -367,15 +412,32 @@ pub fn wayland_offers_for(wire_mimes: &[String]) -> Vec<String> {
 mod tests {
     use super::*;
 
+    /// Streams `len` bytes through a pipe, then closes it.
+    fn pipe_of(len: usize) -> std::io::PipeReader {
+        use std::io::Write as _;
+        let (r, mut w) = std::io::pipe().unwrap();
+        std::thread::spawn(move || {
+            let _ = w.write_all(&vec![7u8; len]);
+        });
+        r
+    }
+
     #[test]
     fn a_selection_over_the_cap_fails_instead_of_truncating() {
-        use std::io::Read as _;
-        let cap = CLIP_FETCH_CAP as u64;
         assert_eq!(
-            read_capped(std::io::repeat(7).take(cap)).unwrap().len(),
+            read_capped(pipe_of(CLIP_FETCH_CAP)).unwrap().len(),
             CLIP_FETCH_CAP
         );
-        assert!(read_capped(std::io::repeat(7).take(cap + 1)).is_err());
+        assert!(read_capped(pipe_of(CLIP_FETCH_CAP + 1)).is_err());
+    }
+
+    #[test]
+    fn a_silent_source_times_out_and_a_closed_one_is_ready() {
+        let (r, w) = std::io::pipe().unwrap();
+        let err = wait_readable(r.as_fd(), Duration::from_millis(20)).unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::TimedOut);
+        drop(w);
+        wait_readable(r.as_fd(), Duration::from_millis(20)).unwrap();
     }
 
     #[test]
