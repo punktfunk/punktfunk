@@ -853,20 +853,6 @@ public enum LibraryClient {
         return json?["id"] as? String ?? ""
     }
 
-    /// What this host lets THIS device do to it — sleep, restart, shut it down
-    /// (`design/host-actions.md` §7) — from `GET /api/v1/actions`.
-    ///
-    /// Only the PERMITTED rows come back: the host is the only judge of whether this device's
-    /// access carries the Host-power grant. Best-effort, like ``status(_:)``: a missing menu row
-    /// costs a menu row; a thrown error would cost the screen.
-    public static func actions(_ target: MgmtTarget) async -> [HostAction] {
-        guard let response = try? await send("/api/v1/actions", to: target),
-              response.status == 200,
-              let list = try? JSONDecoder().decode(HostActionList.self, from: response.body)
-        else { return [] }
-        return list.actions.filter(\.permitted)
-    }
-
     /// End one title on the host, live session included (`POST /api/v1/game/end`). The host ends
     /// it only if this device launched it. Never throws: every outcome is something to tell the
     /// player.
@@ -912,10 +898,6 @@ public enum LibraryClient {
         var downloads: [HostDownload]?
         /// This device's live grants; absent from a host that predates the field.
         var grants: UInt32?
-    }
-
-    private struct HostActionList: Decodable {
-        var actions: [HostAction]
     }
 
     /// `https://addr:port`, IPv6 literals bracketed — the mirror of the Rust client's `base_url`.

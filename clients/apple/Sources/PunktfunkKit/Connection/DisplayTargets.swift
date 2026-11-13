@@ -466,15 +466,6 @@ public struct HostScreenChoice: Hashable, Sendable {
 }
 
 extension LibraryClient {
-    /// `GET /api/v1/display/targets`. nil on any miss, like ``actions(_:)`` is empty: a host
-    /// without the route has no Screen section.
-    public static func targets(_ target: MgmtTarget) async -> DisplayTargets? {
-        guard let response = try? await send("/api/v1/display/targets", to: target),
-              response.status == 200
-        else { return nil }
-        return try? JSONDecoder().decode(DisplayTargets.self, from: response.body)
-    }
-
     /// `PUT /api/v1/display/clients/{this device's fingerprint}` with a row's ``ScreenPick``. The
     /// caller fetches the rows again: the host's answer is the pick.
     public static func setScreen(_ pick: ScreenPick, on target: MgmtTarget) async throws {
