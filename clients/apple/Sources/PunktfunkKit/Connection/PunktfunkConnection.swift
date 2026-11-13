@@ -2719,8 +2719,7 @@ public final class PunktfunkConnection: @unchecked Sendable {
         /// How long to wait before redial `attempt` (0-based) of a session that ended this way,
         /// on the schedule every client shares; nil means stay ended. Only `.lost` redials.
         public func redialDelay(attempt: UInt32) -> Duration? {
-            let ms = punktfunk_redial_delay_ms(rawValue, attempt)
-            return ms < 0 ? nil : .milliseconds(ms)
+            PunktfunkConnection.delay(ms: punktfunk_redial_delay_ms(rawValue, attempt))
         }
     }
 
@@ -2775,8 +2774,7 @@ public final class PunktfunkConnection: @unchecked Sendable {
         after error: Error, autoWake: Bool, sinceFirst: Duration?
     ) -> Duration? {
         guard case .rejected(let rejection, _)? = error as? PunktfunkClientError else { return nil }
-        return redialDelay(
-            ms: punktfunk_wake_redial_delay_ms(autoWake, rejection.status, ms(sinceFirst)))
+        return delay(ms: punktfunk_wake_redial_delay_ms(autoWake, rejection.status, ms(sinceFirst)))
     }
 
     /// The same for how this session ended: its typed close counts only before any frame. Same
@@ -2786,7 +2784,7 @@ public final class PunktfunkConnection: @unchecked Sendable {
             var out: Int64 = -1
             guard punktfunk_connection_wake_redial_delay_ms(h, autoWake, Self.ms(sinceFirst), &out)
                     == statusOK else { return nil }
-            return Self.redialDelay(ms: out)
+            return Self.delay(ms: out)
         }
     }
 
@@ -2795,7 +2793,8 @@ public final class PunktfunkConnection: @unchecked Sendable {
             ?? -1
     }
 
-    private static func redialDelay(ms: Int64) -> Duration? { ms < 0 ? nil : .milliseconds(ms) }
+    /// A core redial answer in ms as a wait; negative means stay ended.
+    private static func delay(ms: Int64) -> Duration? { ms < 0 ? nil : .milliseconds(ms) }
 
     /// The host's sentence when this session's launch did not give the player their game:
     /// refused, died on the spot, or picked up without the host seeing it. In the app's language
