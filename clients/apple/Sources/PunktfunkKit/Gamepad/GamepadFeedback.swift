@@ -235,7 +235,7 @@ public final class GamepadFeedback {
     ) {
         guard let renderer = withRouting({ silenced ? nil : rumbleByPad[pad] }) else { return }
         // Controller rumble off plays every command as a stop, so a motor already running halts.
-        if UserDefaults.standard.object(forKey: DefaultsKey.padRumble) as? Bool == false {
+        if Self.rumbleOff {
             renderer.apply(low: 0, high: 0, leftTrigger: 0, rightTrigger: 0)
             if pad == 0 { deviceRumble?.apply(low: 0, high: 0) }
             return
@@ -257,6 +257,11 @@ public final class GamepadFeedback {
         }
         for renderer in playing { renderer.apply(low: 0, high: 0, leftTrigger: 0, rightTrigger: 0) }
         if !on { for (pad, slot) in slots { replay(pad, slot) } }
+    }
+
+    /// Controller rumble is switched off in Settings; an unset key is on.
+    private static var rumbleOff: Bool {
+        UserDefaults.standard.object(forKey: DefaultsKey.padRumble) as? Bool == false
     }
 
     private func withRouting<R>(_ body: () -> R) -> R {
@@ -283,8 +288,7 @@ public final class GamepadFeedback {
         if case let .hidRaw(pad, kind, data) = ev {
             let sink = withRouting { hidRawSink }
             // Controller rumble off plays Steam's rumble report as a stop, like every pad's.
-            let rumbleOff = UserDefaults.standard.object(forKey: DefaultsKey.padRumble) as? Bool == false
-            let muted = rumbleOff && kind == 0 && data.first == 0x80
+            let muted = Self.rumbleOff && kind == 0 && data.first == 0x80
             sink?(pad, kind, muted ? [0x80] + [UInt8](repeating: 0, count: 9) : data)
             return
         }
