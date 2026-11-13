@@ -31,4 +31,33 @@ final class GamepadShortcutElementsTests: XCTestCase {
         XCTAssertEqual(events.map(\.down), [true, true, false, false])
         XCTAssertEqual(events.map(\.after), [0, 0.05, 0.1, 0.1])
     }
+
+    /// Quick access held on a pad without that button is Guide, then A `tapPress` later. Let go
+    /// inside that window, the releases wait behind A's press: A must not go down last.
+    func testAHoldReleasedEarlyLiftsBehindItsOwedPress() {
+        var owed = OwedPresses()
+        let t0 = ContinuousClock.now
+        let down = owed.push(
+            [(GamepadWire.guide, true, 0), (GamepadWire.a, true, 0.05)], pad: 1, now: t0)
+        XCTAssertEqual(down.map(\.bit), [GamepadWire.guide])
+        let up = owed.push(
+            [(GamepadWire.a, false, 0), (GamepadWire.guide, false, 0)], pad: 1,
+            now: t0 + .milliseconds(10))
+        XCTAssertTrue(up.isEmpty, "A's press is still owed")
+        XCTAssertTrue(owed.take(dueBy: t0 + .milliseconds(40)).isEmpty)
+        let sent = owed.take(dueBy: t0 + .milliseconds(50))
+        XCTAssertEqual(sent.map(\.bit), [GamepadWire.a, GamepadWire.a, GamepadWire.guide])
+        XCTAssertEqual(sent.map(\.down), [true, false, false])
+        XCTAssertNil(owed.nextDue)
+    }
+
+    /// A flushed or closed slot is owed nothing: no press lands on a pad the host removed.
+    func testAFlushDropsWhatItsPadIsOwed() {
+        var owed = OwedPresses()
+        let t0 = ContinuousClock.now
+        _ = owed.push(GamepadCapture.tapEvents([GamepadWire.guide, GamepadWire.a]), pad: 0, now: t0)
+        _ = owed.push(GamepadCapture.tapEvents([GamepadWire.guide]), pad: 1, now: t0)
+        owed.drop(pad: 0)
+        XCTAssertEqual(owed.take(dueBy: t0 + .seconds(1)).map(\.pad), [1])
+    }
 }

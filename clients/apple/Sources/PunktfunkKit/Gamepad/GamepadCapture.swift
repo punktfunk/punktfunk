@@ -131,8 +131,11 @@ public final class GamepadCapture {
     /// pf-client-core's `TAP_PRESS`: a synthetic tap's presses and release this far apart, or
     /// back-to-back transitions fold into nothing in the host's per-pad input fold.
     nonisolated private static let tapPress: TimeInterval = 0.05
-    /// Wakes the engines when a hold or an owed tap release comes due.
+    /// Wakes the engines when a hold or an owed tap release comes due, and sends what `owed`
+    /// holds.
     private var shortcutTimer: Timer?
+    /// Synthetic presses and releases the wire is still owed.
+    private var owed = OwedPresses()
     /// The pad's End stream shortcut fired (by default L1+R1+Start+Select held 1 s). On tvOS
     /// this and the Siri Remote's hold-Back are the only ways out of a stream: B and Menu are
     /// swallowed during a session (see ContentView's tvOS session branch).
@@ -330,15 +333,11 @@ public final class GamepadCapture {
     public func holdButton(_ bit: UInt32, down: Bool, pad: UInt32? = nil) {
         let pad = pad ?? slots.first?.pad ?? 0
         let presses = systemPresses(bit, pad: pad)
-        let mask = presses.reduce(0, |)
-        let slot = slots.first { $0.pad == pad }
         if down {
             send(presses.enumerated().map { (bit: $0.element, down: true, after: Double($0.offset) * Self.tapPress) },
                  pad: pad)
-            slot?.synthetic |= mask
         } else {
             send(presses.reversed().map { (bit: $0, down: false, after: 0) }, pad: pad)
-            slot?.synthetic &= ~mask
         }
     }
 
@@ -349,23 +348,20 @@ public final class GamepadCapture {
         return GamepadWire.quickAccessPresses(hasButton: connection.hasQuickAccess(declared: pref))
     }
 
-    /// Send timed wire events on `pad`: the ones due now at once, the rest from main-loop timers.
+    /// Send timed synthetic events on `pad`: the ones due now at once, the rest through `owed`,
+    /// behind whatever the pad still owes.
     private func send(_ events: [(bit: UInt32, down: Bool, after: TimeInterval)], pad: UInt32) {
-        guard let wire else { return }
-        // One timer per moment: two timers due together fire in no promised order.
-        for delay in Set(events.map(\.after)).sorted() {
-            let due = events.filter { $0.after == delay }
-            guard delay > 0 else {
-                for e in due { wire.send(.gamepadButton(e.bit, down: e.down, pad: pad)) }
-                continue
-            }
-            let timer = Timer(timeInterval: delay, repeats: false) { [weak self] _ in
-                MainActor.assumeIsolated {
-                    for e in due { self?.wire?.send(.gamepadButton(e.bit, down: e.down, pad: pad)) }
-                }
-            }
-            RunLoop.main.add(timer, forMode: .common)
-        }
+        guard wire != nil else { return }
+        for e in owed.push(events, pad: pad, now: .now) { emit(e.bit, down: e.down, pad: pad) }
+        scheduleShortcutTick()
+    }
+
+    /// One synthetic transition on `pad`'s wire, tracked in its slot's `synthetic` so `flush`
+    /// lifts what is down.
+    private func emit(_ bit: UInt32, down: Bool, pad: UInt32) {
+        wire?.send(.gamepadButton(bit, down: down, pad: pad))
+        guard let slot = slots.first(where: { $0.pad == pad }) else { return }
+        slot.synthetic = down ? slot.synthetic | bit : slot.synthetic & ~bit
     }
 
     /// A synthetic tap's wire events (pf-client-core's `tap_events`): each press `tapPress`
@@ -552,6 +548,7 @@ public final class GamepadCapture {
 
     private func closeAllSlots() {
         while let slot = slots.first { closeSlot(slot) }
+        owed = OwedPresses() // a tap on a pad that had no slot
         scheduleShortcutTick()
     }
 
@@ -672,12 +669,13 @@ public final class GamepadCapture {
     /// The bindings a pad engine runs; the dial only while the session opens it.
     private var padBindings: [Shortcuts.Binding] { shortcuts.runnable(dial: onShortcut != nil) }
 
-    /// Wake the engines when a hold or a tap's release comes due: GameController reports changes
-    /// only, and a held chord changes nothing.
+    /// Wake the engines when a hold or a tap's release comes due, or a synthetic press is owed:
+    /// GameController reports changes only, and a held chord changes nothing.
     private func scheduleShortcutTick() {
         shortcutTimer?.invalidate()
         shortcutTimer = nil
-        guard let due = slots.compactMap(\.engine.nextDue).min() else { return }
+        guard let due = (slots.compactMap(\.engine.nextDue) + [owed.nextDue].compactMap { $0 }).min()
+        else { return }
         let wait = due - ContinuousClock.now
         let seconds = max(0, Double(wait.components.seconds) + Double(wait.components.attoseconds) / 1e18)
         let timer = Timer(timeInterval: seconds, repeats: false) { [weak self] _ in
@@ -685,6 +683,7 @@ public final class GamepadCapture {
                 guard let self else { return }
                 self.shortcutTimer = nil
                 let now = ContinuousClock.now
+                for e in self.owed.take(dueBy: now) { self.emit(e.bit, down: e.down, pad: e.pad) }
                 for slot in self.slots { self.apply(slot, slot.engine.tick(now)) }
                 self.scheduleShortcutTick()
             }
@@ -898,10 +897,12 @@ public final class GamepadCapture {
     }
 
     /// Unwind everything a slot holds on the wire: button-ups, neutral axes, lifted fingers. The
-    /// host's virtual pad returns to rest instead of running with the last state. Wire events only
-    /// (no GC calls) — safe against an already-removed device. Does NOT close the slot or send
-    /// GamepadRemove (that's `closeSlot`).
+    /// host's virtual pad returns to rest instead of running with the last state. Synthetic
+    /// presses still owed are dropped, so none lands after this. Wire events only (no GC calls)
+    /// — safe against an already-removed device. Does NOT close the slot or send GamepadRemove
+    /// (that's `closeSlot`).
     private func flush(_ slot: Slot) {
+        owed.drop(pad: slot.pad)
         for bit in GamepadWire.allButtons where (slot.buttons | slot.synthetic) & bit != 0 {
             wire?.send(.gamepadButton(bit, down: false, pad: slot.pad))
         }
@@ -934,5 +935,47 @@ public final class GamepadCapture {
             flush(slot)
         }
         scheduleShortcutTick()
+    }
+}
+
+/// Synthetic pad presses and releases not yet sent, in send order (pf-client-core's
+/// `synthetic` queue). A pad's new events queue behind what it still owes, so a release never
+/// overtakes the press it lifts: a hold let go inside `tapPress` must not leave its second
+/// button down on the host.
+struct OwedPresses {
+    typealias Instant = ContinuousClock.Instant
+    private(set) var events: [(pad: UInt32, bit: UInt32, down: Bool, due: Instant)] = []
+
+    /// When the next event comes due, or nil while nothing is owed.
+    var nextDue: Instant? { events.map(\.due).min() }
+
+    /// Queue `new` on `pad`, each `after` seconds past the pad's last owed event (or `now`).
+    /// Returns what goes out at once: the events due now on a pad that owes nothing.
+    mutating func push(
+        _ new: [(bit: UInt32, down: Bool, after: TimeInterval)], pad: UInt32, now: Instant
+    ) -> [(bit: UInt32, down: Bool)] {
+        let behind = events.last { $0.pad == pad }?.due
+        let start = max(now, behind ?? now)
+        var atOnce: [(bit: UInt32, down: Bool)] = []
+        for e in new {
+            if behind == nil, e.after <= 0 {
+                atOnce.append((e.bit, e.down))
+            } else {
+                events.append((pad, e.bit, e.down, start + .seconds(e.after)))
+            }
+        }
+        return atOnce
+    }
+
+    /// Remove and return the events due by `now`, in send order.
+    mutating func take(dueBy now: Instant) -> [(pad: UInt32, bit: UInt32, down: Bool)] {
+        let due = events.filter { $0.due <= now }
+        events.removeAll { $0.due <= now }
+        return due.map { ($0.pad, $0.bit, $0.down) }
+    }
+
+    /// Forget what `pad` is owed: its slot was flushed or closed.
+    mutating func drop(pad: UInt32) {
+        events.removeAll { $0.pad == pad }
     }
 }
