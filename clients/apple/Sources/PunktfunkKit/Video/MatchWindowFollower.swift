@@ -63,8 +63,11 @@ public typealias ResizeTarget = (
 @MainActor
 public final class MatchWindowFollower {
     private weak var connection: PunktfunkConnection?
-    private let debounce: TimeInterval
-    private let minSpacing: TimeInterval
+    /// Quiet time after the last size event before requesting (Win32 gets `WM_EXITSIZEMOVE` for
+    /// free; we debounce). The other clients use the same two numbers.
+    private let debounce: TimeInterval = 0.4
+    /// Floor between accepted requests (a full host pipeline rebuild each).
+    private let minSpacing: TimeInterval = 1.0
     /// Render-scale multiplier applied to the live window size before it's requested, so the
     /// match-window path supersamples/undersamples exactly like the fixed-mode connect. 1.0 = the
     /// window's native pixels. `maxDimension` is the codec's per-axis ceiling.
@@ -95,24 +98,17 @@ public final class MatchWindowFollower {
     /// can run at different rates, and a session streaming the native rate follows the screen.
     public var refreshHz: (() -> UInt32?)?
 
-    /// `debounce` = quiet time after the last size event before requesting (Win32 gets
-    /// `WM_EXITSIZEMOVE` for free; we debounce). `minSpacing` = floor between accepted requests
-    /// (a full host pipeline rebuild each). Defaults match the other clients.
     public init(
         connection: PunktfunkConnection,
         enabled: Bool,
         renderScale: Double = 1.0,
-        maxDimension: Int = 8192,
-        debounce: TimeInterval = 0.4,
-        minSpacing: TimeInterval = 1.0
+        maxDimension: Int = 8192
     ) {
         self.connection = connection
         self.liveView = connection.connectView
         self.enabled = enabled
         self.renderScale = RenderScale.sanitize(renderScale)
         self.maxDimension = maxDimension
-        self.debounce = debounce
-        self.minSpacing = minSpacing
     }
 
     /// The host-valid mode for a live window size: the window's physical pixels × the render scale,
