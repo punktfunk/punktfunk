@@ -481,23 +481,10 @@ public final class GamepadCapture {
                 MainActor.assumeIsolated { if let self, let slot { self.touch(slot, finger: 1, x: x, y: y) } }
             }
         }
-        // Motion is wire-only — `forwardMotion` has nothing to do with forwarding off, and no
-        // local feature reads it. Powering the IMU anyway costs the pad real battery (it streams
-        // gyro + accel continuously over Bluetooth, which is why `closeSlot` is careful to power
-        // it back down), so with nothing to forward we simply never turn it on.
-        //
-        // A host that built this pad a backend WITHOUT a motion plane is the same situation: every
-        // sample would be decoded and dropped, so there is equally nothing to forward. Asked per
-        // pad off what this slot declared, not off the session echo — under "Automatic" a couch
-        // with an X-Box pad on 0 and a DualSense on 1 echoes X-Box 360 while the host builds pad 1
-        // a DualSense whose gyro works.
-        //
-        // Gated on `hasRotationRate`, not on `motion != nil`. An X-Box controller exposes a
-        // `GCMotion` that reports gravity and NOTHING else — attaching to it streamed a
-        // permanently-zero `rotationRate` to the host as authoritative gyro, under a declaration
-        // that says this pad has one. A game reading it sees a controller being held perfectly
-        // still forever, which is worse than seeing no motion plane at all: there is nothing to
-        // fall back to and nothing to notice.
+        // Motion is wire-only and a powered IMU costs the pad battery, so it is switched on
+        // only when its samples reach the game: asked per pad, off what this slot declared.
+        // Gated on `hasRotationRate`: a pad that reports gravity alone (an Xbox pad) would
+        // send a rotation rate of zero as real gyro.
         if forwarding, let motion = c.motion, motion.hasRotationRate,
            connection.motionReaches(declared: slot.pref) {
             if motion.sensorsRequireManualActivation { motion.sensorsActive = true }
@@ -744,14 +731,9 @@ public final class GamepadCapture {
         if g.dpad.right.isPressed { b |= GamepadWire.dpadRight }
         if g.buttonMenu.isPressed { b |= GamepadWire.start }
         if g.buttonOptions?.isPressed == true { b |= GamepadWire.back }
-        // The dedicated share/create/capture element (Xbox-Series Share, DualSense Create, a clone
-        // pad's screenshot button — e.g. the GameSir G8's, below its d-pad) → the wire's capture
-        // bit, matching the Rust client's `Button::Misc1 => wire::BTN_MISC1`. On an Xbox-Series pad
-        // this is a button physically DISTINCT from View (buttonOptions, above), so it must not
-        // collapse onto back — the host reads MISC1 as its own control (DualSense mute / Steam
-        // quick-access). Caveat: a pad that surfaces ONE physical button as both buttonOptions and
-        // this share element now emits back+misc1 for it — harmless on a plain xpad session (no
-        // misc button) and rare otherwise. NOTE: on-glass verify on a real Xbox-Series pad.
+        // The share/create/capture element is the wire's misc1 (the Rust client's
+        // `Button::Misc1`), a button apart from View above: the host reads it as its own
+        // control. A pad that reports one physical button as both sends back + misc1.
         if g.buttons[GCInputButtonShare]?.isPressed == true { b |= GamepadWire.misc1 }
         if g.leftThumbstickButton?.isPressed == true { b |= GamepadWire.leftStickClick }
         if g.rightThumbstickButton?.isPressed == true { b |= GamepadWire.rightStickClick }
@@ -817,36 +799,12 @@ public final class GamepadCapture {
         // would keep stomping the mirror's gyro with zeros.
         if slot.pad == 0, deviceGyro?.isRunning == true { return }
         #endif
-        // Every sample goes out. There used to be a 4 ms floor here, and it was a DROP: a sample
-        // arriving 3.9 ms after the last one was discarded outright.
-        //
-        // That is the wrong shape for this signal. Buttons and sticks are absolute state, so a
-        // dropped frame costs nothing — the next one says everything it would have. Angular
-        // velocity is a RATE, and a consumer integrates it into an angle; a dropped sample is
-        // rotation that happened and can never be recovered. GameController's delivery is jittery
-        // around the pad's own ~250 Hz, so a floor set AT that rate does not shed a rare extra
-        // sample, it sheds a steady fraction of every turn — and the error is one-signed, so it
-        // accumulates into aim drifting short rather than into noise.
-        //
-        // Nothing needed the ceiling: GC delivers at the sensor's rate rather than faster, the SDL
-        // client has always forwarded every sample, and the host's own idle watchdog runs on a
-        // 100 ms timeout this cannot outpace. The throttle's `lastMotionNs`/`motionIntervalNs` went
-        // with it rather than being left set-but-unread — nothing else consumed either.
-        // Total acceleration in g: gravity + user when split, else the raw vector — then NEGATED
-        // into the wire's convention.
-        //
-        // Apple reports acceleration as the gravity VECTOR: a device lying flat face-up reads
-        // z = −1, because gravity points down. An accelerometer physically measures proper
-        // acceleration, which at rest is the +1 g normal force pushing UP, and that is what a
-        // DualSense's report — the wire's convention — carries. The two are exact negatives, so
-        // every sample we sent was upside down, on both branches (`m.acceleration` follows the
-        // same Apple convention as the gravity/user split).
-        //
-        // Measured on glass 2026-08-07 (G16): a DualSense flat and face-up, streamed from an
-        // iPhone to a Linux host, arrived at hid-playstation as z = −0.99 g where +1.00 was owed.
-        // Magnitude was 1.006 g, so the SCALE was already right — this is purely direction.
-        // `rotationRate` is a true angular rate and needs no flip; the same session confirmed yaw
-        // came through with the correct sign.
+        // Every sample goes out, with no rate floor. Angular velocity is a rate the consumer
+        // integrates: a dropped sample is rotation lost for good, and the loss is one-signed.
+
+        // Total acceleration in g (gravity + user when split, else the raw vector), negated.
+        // Apple reports the gravity vector (flat and face-up reads z = −1); the wire carries
+        // proper acceleration like a DualSense report (+1). `rotationRate` needs no flip.
         let ax: Float
         let ay: Float
         let az: Float
@@ -861,10 +819,9 @@ public final class GamepadCapture {
         }
         let gs = GamepadWire.gyroLSBPerRadS
         let as_ = GamepadWire.accelLSBPerG
-        // Into the DualSense report frame. GameController and the pad's own report do not agree
-        // about which slot is which axis — measured, both from the same controller, on 2026-08-07
-        // — so forwarding GC's x/y/z straight through sent yaw where the game reads roll. See
-        // `GamepadWire.appleMotionToWire`. One change of basis, applied to both planes.
+        // Into the DualSense report frame: GameController and the pad's own report disagree
+        // about which slot is which axis, so GC's x/y/z sent as is would put yaw where the game
+        // reads roll. One change of basis (`GamepadWire.appleMotionToWire`) for both planes.
         let g = GamepadWire.appleMotionToWire(
             (Float(m.rotationRate.x), Float(m.rotationRate.y), Float(m.rotationRate.z)))
         let a = GamepadWire.appleMotionToWire((ax, ay, az))
