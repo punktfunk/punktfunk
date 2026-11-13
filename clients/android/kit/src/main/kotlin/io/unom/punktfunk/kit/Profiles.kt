@@ -111,6 +111,8 @@ data class ListedProfile(
     val avatar: String? = null,
     /** What this device must send to play as it, as the host judged for this device. */
     val unlock: UnlockNeed = UnlockNeed.NONE,
+    /** This device may hide titles for this profile now ([io.unom.punktfunk.kit.library.Hide]). An old host omits it. */
+    val person: Boolean = false,
 ) {
     fun pick() = ProfilePick(id, displayName, avatar = avatar)
 
@@ -148,6 +150,7 @@ data class ListedProfile(
             },
             legacySeat = j.optBoolean("legacy_seat", false),
             unlock = UnlockNeed.of(str(j, "unlock")),
+            person = j.optBoolean("person", false),
         )
 
         /** The body of `enumerate`, or `null` when it isn't a JSON array. */
