@@ -171,8 +171,8 @@ final class Sc2UsbLink {
     /// Begin acquisition. Idempotent; safe from any thread. Devices attached later are picked up
     /// by the manager's matching callback, so a pad plugged in mid-session simply joins — and a
     /// re-`start()` on a running link retries any opens the Input Monitoring gate refused, which
-    /// is how returning from System Settings recovers the pads without a relaunch (the app's
-    /// did-become-active path re-runs `startTransport`).
+    /// is how returning from System Settings recovers the pads without a relaunch (`Sc2Capture`
+    /// calls it each time the app becomes active).
     func start() {
         queue.async { [self] in
             guard manager == nil else {

@@ -17,7 +17,9 @@
 // slot is claimed. Reports arrive on the link queue, host writes on the feedback thread, lifecycle
 // on the main actor; all mutable state sits behind `lock`.
 
-#if !os(macOS)
+#if os(macOS)
+import AppKit
+#else
 import UIKit
 #endif
 import Foundation
@@ -221,7 +223,8 @@ public final class Sc2Capture {
 
     /// Begin acquisition. Wire slots are claimed later, on each source's first state report.
     /// A Mac app keeps its HID and Bluetooth access while inactive, so focus changes leave the
-    /// capture and its host slots alone. iOS and tvOS release BLE while inactive.
+    /// capture and its host slots alone; becoming active retries the USB opens Input Monitoring
+    /// refused. iOS and tvOS release BLE while inactive.
     @MainActor
     public func start() {
         guard Self.running == nil || Self.running === self else {
@@ -238,10 +241,17 @@ public final class Sc2Capture {
         lock.unlock()
         // Take the hardware off the menu-nav reader (iOS): one peripheral, one central.
         manager.holdSc2Hardware(true)
-        #if !os(macOS)
-        // Both observers run on main, where `start` put this object; the weak reference crosses
+        // The observers run on main, where `start` put this object; the weak reference crosses
         // no thread.
         nonisolated(unsafe) weak let weakSelf = self
+        #if os(macOS)
+        observers.append(NotificationCenter.default.addObserver(
+            forName: NSApplication.didBecomeActiveNotification, object: nil, queue: .main
+        ) { _ in
+            guard let self = weakSelf, self.currentTransport == .usb else { return }
+            self.usbLink.start()
+        })
+        #else
         observers.append(NotificationCenter.default.addObserver(
             forName: UIApplication.willResignActiveNotification, object: nil, queue: .main
         ) { _ in
