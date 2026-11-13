@@ -1,12 +1,12 @@
-// mTLS for the management REST API. The host now serves the API over HTTPS and authorizes a
-// request whose client certificate is in its paired store (host commit b4a85a8) — the SAME
-// identity + trust the QUIC data plane uses — so a paired client needs no bearer token.
+// mTLS for the management REST API. The host serves the API over HTTPS and authorizes a request
+// whose client certificate is in its paired store — the SAME identity + trust the QUIC data
+// plane uses — so a paired client needs no bearer token.
 //
-// To present that identity, URLSession needs a SecIdentity (cert + private key pair). The client
-// stores its identity as PEM (rcgen ECDSA P-256, PKCS#8 key). We rebuild a SecIdentity natively:
-// CryptoKit parses the key → its X9.63 form → a SecKey, the cert PEM → a SecCertificate. From
-// there the two platform families diverge because `SecIdentityCreateWithCertificate` — the
-// straight-line "pair these two" API — is macOS-only:
+// To present that identity, `MgmtConnection` (Network.framework) needs a SecIdentity (cert +
+// private key pair). The client stores its identity as PEM (rcgen ECDSA P-256, PKCS#8 key). We
+// rebuild a SecIdentity natively: CryptoKit parses the key → its X9.63 form → a SecKey, the cert
+// PEM → a SecCertificate. From there the two platform families diverge because
+// `SecIdentityCreateWithCertificate` — the straight-line "pair these two" API — is macOS-only:
 //   - macOS: SecIdentityCreateWithCertificate does the pairing directly once the key is in the
 //     Keychain (a plain `SecItemAdd`).
 //   - iOS/tvOS: that API is unavailable. Instead, add BOTH the key and the certificate to the
@@ -159,9 +159,3 @@ enum ClientTLS {
         #endif
     }
 }
-
-// The URLSession pinning delegate that used to live here is gone: the management API now speaks
-// over `MgmtTransport` (Network.framework), which states the same trust rule in a
-// `sec_protocol_options_set_verify_block` and — unlike the URL loading system — is not subject to
-// App Transport Security. That is what lets ATS stay ON for the cover-art CDN fetches, which are
-// the only URLSession traffic left in the app. See MgmtTransport.swift for the full rationale.
