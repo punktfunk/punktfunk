@@ -135,6 +135,16 @@ final class AnnexBTests: XCTestCase {
         XCTAssertEqual(packed, expected)
     }
 
+    /// The host sets the pts: one past `Int64.max` clamps instead of trapping.
+    func testSampleBufferClampsAPtsPastInt64() throws {
+        let format = try XCTUnwrap(Self.anyFormat())
+        let au = Data(start4) + nal(type: 1, payload: [0x10])
+        let sample = try XCTUnwrap(AnnexB.sampleBuffer(
+            au: AccessUnit(data: au, ptsNs: .max, frameIndex: 0, flags: 0, receivedNs: 0),
+            format: format, codec: .hevc))
+        XCTAssertEqual(CMSampleBufferGetPresentationTimeStamp(sample).value, .max)
+    }
+
     /// `au` as the core would leave it: written into a slot the pool lent.
     private func placed(_ au: Data, in pool: AccessUnitSlotPool) throws
         -> (unit: AccessUnit, base: UnsafeMutableRawPointer, token: UInt64)
