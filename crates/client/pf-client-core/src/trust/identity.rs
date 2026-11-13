@@ -13,25 +13,34 @@ use punktfunk_core::quic::endpoint;
 /// The private key is owner-only wherever the directory is. Unix uses mode 0600.
 /// Windows drops inherited ACEs and grants the owner, including when
 /// `PUNKTFUNK_CONFIG_DIR` points outside `%APPDATA%`.
+///
+/// A pair whose cert does not parse or whose key PEM has no END line (a write cut short
+/// by a crash or a full disk) is replaced: it could never have connected.
 pub fn load_or_create_identity() -> Result<(String, String)> {
-    let dir = config_dir()?;
+    identity_in(&config_dir()?)
+}
+
+fn identity_in(dir: &std::path::Path) -> Result<(String, String)> {
     let (cp, kp) = (dir.join("client-cert.pem"), dir.join("client-key.pem"));
     if let (Ok(c), Ok(k)) = (std::fs::read_to_string(&cp), std::fs::read_to_string(&kp)) {
-        // Older Unix builds left the key world-readable. Re-lock on load. Best-effort:
-        // a read-only store still returns the key it already has. Windows keys only
-        // ever lived in the per-user `%APPDATA%`, so nothing there needs a re-lock.
-        #[cfg(unix)]
-        lock_identity_perms(&dir, &kp);
-        return Ok((c, k));
+        if endpoint::fingerprint_of_pem(&c).is_ok() && k.contains("-----END ") {
+            // Older Unix builds left the key world-readable. Re-lock on load. Best-effort:
+            // a read-only store still returns the key it already has. Windows keys only
+            // ever lived in the per-user `%APPDATA%`, so nothing there needs a re-lock.
+            #[cfg(unix)]
+            lock_identity_perms(dir, &kp);
+            return Ok((c, k));
+        }
+        tracing::warn!(cert = %cp.display(), "client identity is incomplete — generating a new one");
     }
     let (c, k) = endpoint::generate_identity().map_err(|e| anyhow!("generate identity: {e}"))?;
-    std::fs::create_dir_all(&dir)?;
+    std::fs::create_dir_all(dir)?;
     // Unix: the directory is 0700 before the key is written. Windows locks the key
     // file alone in `write_private_key`; the directory keeps the ACL it came with.
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700))?;
+        std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))?;
     }
     std::fs::write(&cp, &c)?;
     write_private_key(&kp, k.as_bytes())?;
@@ -188,6 +197,25 @@ pub fn request_access_to_host(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// An identity is generated once and kept. A key cut short by a crash is replaced by
+    /// a whole pair instead of being returned for every connect to fail on.
+    #[test]
+    fn a_torn_key_is_replaced_not_returned() {
+        let dir = std::env::temp_dir().join(format!("pf-client-identity-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let first = identity_in(&dir).unwrap();
+        assert_eq!(identity_in(&dir).unwrap(), first, "a whole pair is kept");
+        std::fs::write(dir.join("client-key.pem"), "").unwrap();
+        let second = identity_in(&dir).unwrap();
+        assert_ne!(second, first);
+        assert_eq!(
+            identity_in(&dir).unwrap(),
+            second,
+            "and the new pair is whole"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     /// The key file is owner-only on create. Unix is mode 0600. Windows is an
     /// owner ACE with inherited access removed.
