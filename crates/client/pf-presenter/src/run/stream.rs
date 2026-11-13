@@ -103,11 +103,15 @@ impl StreamState {
     /// Stop the pump and join its thread before any device-wide idle: the pump submits
     /// decode work to the shared device. The presenter lets go of the decoder's frame
     /// first, so the decoder's teardown gets it back instead of freeing it under a redraw.
-    /// The pump notices `stop` within its 20 ms receive timeout.
+    /// The queued frames go before the join too: the pump's decoder waits for their tokens
+    /// while this thread joins it. The pump notices `stop` within its 20 ms receive timeout.
     pub(super) fn shutdown(mut self, presenter: &mut Presenter) {
         self.screens = Default::default();
         self.handle.stop.store(true, Ordering::SeqCst);
         presenter.drop_video();
+        self.store.clear();
+        drop_queued(&self.frames);
+        drop_queued(&self.handle.frames);
         if let Some(t) = self.handle.thread.take() {
             let _ = t.join();
         }
@@ -124,6 +128,14 @@ impl StreamState {
         }
         self.handle.stop.store(true, Ordering::SeqCst);
     }
+}
+
+/// Close a frame channel and drop what it still holds. A frame's release guard returns its
+/// decoder slot as it drops, so the decoder's teardown never waits on a queue nobody reads;
+/// a producer that sends after this gets its frame back and drops it.
+pub(super) fn drop_queued<T>(frames: &async_channel::Receiver<T>) {
+    frames.close();
+    while frames.try_recv().is_ok() {}
 }
 
 /// Replace the params' requested w/h with the window's physical pixel size × the render
@@ -1330,5 +1342,30 @@ mod tests {
             ind.decoded(frame.0, frame.1);
             assert!(!ind.active(), "{frame:?} lifts the scrim");
         }
+    }
+
+    /// A queued frame holds its decoder slot until it drops, and a producer that sends after
+    /// the close gets its frame back at once.
+    #[test]
+    fn drop_queued_releases_the_queue_and_refuses_more() {
+        let slot = std::sync::Arc::new(());
+        let (tx, rx) = async_channel::bounded(2);
+        tx.try_send(slot.clone()).unwrap();
+        tx.try_send(slot.clone()).unwrap();
+        assert_eq!(std::sync::Arc::strong_count(&slot), 3);
+        drop_queued(&rx);
+        assert_eq!(
+            std::sync::Arc::strong_count(&slot),
+            1,
+            "both frames dropped"
+        );
+        let late = tx.force_send(slot.clone());
+        assert!(matches!(late, Err(async_channel::SendError(_))));
+        drop(late);
+        assert_eq!(
+            std::sync::Arc::strong_count(&slot),
+            1,
+            "the late frame is back"
+        );
     }
 }

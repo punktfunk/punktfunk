@@ -145,6 +145,12 @@ impl<T> FrameStore<T> {
         }
     }
 
+    /// Drop every held frame without counting it: the stream is over, and each frame's
+    /// release guard hands its decoder slot back as it drops.
+    pub(crate) fn clear(&mut self) {
+        self.frames.clear();
+    }
+
     pub(crate) fn take_counters(&mut self) -> (u32, u32) {
         let c = (self.replaced, self.overflow_drops);
         self.replaced = 0;
@@ -702,6 +708,23 @@ mod tests {
         assert_eq!(s.take(|_| true), Some(6));
         assert_eq!(s.take(|_| true), Some(7));
         assert_eq!(s.take_counters(), (0, 2), "6 evicted 4, 7 evicted 5");
+    }
+
+    #[test]
+    fn clear_drops_every_held_frame() {
+        use std::rc::Rc;
+        let alive = Rc::new(());
+        for capacity in [0, 2] {
+            let mut s: FrameStore<Rc<()>> = FrameStore::new(capacity);
+            s.set_paced(true);
+            s.submit(alive.clone());
+            s.submit(alive.clone());
+            assert!(Rc::strong_count(&alive) > 1);
+            s.clear();
+            assert_eq!(Rc::strong_count(&alive), 1, "capacity {capacity}");
+            assert!(s.front().is_none());
+            assert_eq!(s.take_counters(), (0, 0), "a clear is not a displacement");
+        }
     }
 
     #[test]
