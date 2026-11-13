@@ -9,11 +9,12 @@
 // change (the first new-mode AU is an IDR with fresh parameter sets).
 //
 // The trigger discipline is the shared cross-client one (mirrors the session binary's
-// `resize_decision`): physical pixels rounded DOWN to even (the host rejects odd dimensions) and
-// clamped ≥ 320×200; debounce to resize-end; ≥ 1 s between requests; skip a size and view equal to
-// the live ones; and request each distinct one at most once — which both stops re-asking a rejected
+// `resize_decision`): debounce to resize-end; ≥ 1 s between requests; skip a size and view equal to
+// the live ones; and skip an ask equal to the last one sent — which both stops re-asking a rejected
 // size and keeps a host-side rollback (accepted, rebuild failed, corrective ack restored the old
-// mode) from looping request → rollback → request. A clamped mode still moves its view.
+// mode) from looping request → rollback → request. The size is `RenderScale.apply`'s: rounded
+// DOWN to even (the host rejects odd dimensions), ≥ 320×200, within the codec ceiling. A clamped
+// mode still moves its view.
 
 import Foundation
 import PunktfunkShared
@@ -32,7 +33,7 @@ public enum MatchWindow {
     }
 
     /// Whether to request `target` now (the debounce has already settled; spacing is the caller's
-    /// timer): `nil` to skip — equal to the live mode and view, or already requested once (a
+    /// timer): `nil` to skip — equal to the live mode and view, or to the last ask sent (a
     /// rejected size / a host rollback must not loop). `target` is expected already-[normalize]d.
     public static func request(
         target: Ask, current: Ask, lastRequested: Ask?
