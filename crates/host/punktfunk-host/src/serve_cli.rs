@@ -217,14 +217,21 @@ pub(crate) fn prepare_serve(args: ServeArgs) -> Result<(mgmt::Options, native::N
         // Every seat account can reach the door's directory: no bearer stays there.
         let _ = std::fs::remove_file(pf_paths::config_dir().join(crate::mgmt_token::TRAY_FILE));
     }
-    // A seat host of its own: a fresh person token each start, in its own config folder. A
-    // folder or file that isn't the account's alone keeps the person lane closed.
+    // A seat host of its own: a fresh person token each start. Linux writes it into its own
+    // config folder, and a folder or file that isn't the account's alone keeps the lane closed.
+    // Windows keeps it in memory and signs tickets through the seat's person pipe.
     #[cfg(unix)]
     if crate::person_token::mints(role) {
         match crate::person_token::mint_in(&pf_paths::config_dir()) {
             Ok(token) => opts.person_token = Some(token),
             Err(reason) => tracing::warn!(%reason, "person lane closed"),
         }
+    }
+    #[cfg(windows)]
+    if crate::person_token::mints(role) {
+        let token = crate::mgmt_token::random_token();
+        crate::windows::person_pipe::serve(token.clone());
+        opts.person_token = Some(token);
     }
     // Mint only if the runner is installed — otherwise a second admin-adjacent credential sits
     // on disk for a subsystem that is not running. Scope: `plugin_may_access`, not pairing/hooks.

@@ -125,7 +125,7 @@ async fn a_session_is_its_host_s_its_loopback_s_and_its_profile_s() {
 /// closed until it has a scope, and one with a profile scope changes this list.
 #[test]
 fn the_person_lane_reaches_what_is_pinned() {
-    use crate::mgmt::person_session::{box_may_reach, may_reach};
+    use crate::mgmt::person_session::{box_may_reach, may_reach, reaches};
     use std::collections::BTreeSet;
     const SEAT_REACH: &[(&str, &str)] = &[
         ("GET", "/api/v1/host"),
@@ -224,8 +224,22 @@ fn the_person_lane_reaches_what_is_pinned() {
         ("PUT", "/api/v1/session/settings"),
         ("DELETE", "/api/v1/session/settings"),
     ];
+    // A Windows seat host is SYSTEM: its hooks and own titles, which run as the person.
+    const WINDOWS_REACH: &[(&str, &str)] = &[
+        ("GET", "/api/v1/host"),
+        ("GET", "/api/v1/status"),
+        ("GET", "/api/v1/auth/person/profile"),
+        ("GET", "/api/v1/auth/person/profile/avatar"),
+        ("GET", "/api/v1/hooks"),
+        ("PUT", "/api/v1/hooks"),
+        ("POST", "/api/v1/library/custom"),
+        ("GET", "/api/v1/library/custom/{id}"),
+        ("PUT", "/api/v1/library/custom/{id}"),
+        ("DELETE", "/api/v1/library/custom/{id}"),
+        ("GET", "/api/v1/library/art/{id}/{kind}"),
+    ];
     let doc: serde_json::Value = serde_json::from_str(&openapi_json()).unwrap();
-    let (mut seat, mut boxed) = (BTreeSet::new(), BTreeSet::new());
+    let (mut seat, mut windows, mut boxed) = (BTreeSet::new(), BTreeSet::new(), BTreeSet::new());
     for (path, ops) in doc["paths"].as_object().unwrap() {
         for method in ops.as_object().unwrap().keys() {
             let m = Method::from_bytes(method.to_uppercase().as_bytes()).unwrap();
@@ -235,8 +249,11 @@ fn the_person_lane_reaches_what_is_pinned() {
                 .collect::<Vec<_>>()
                 .join("/");
             let row = (m.to_string(), path.clone());
-            if may_reach(&m, &concrete) {
+            if reaches(false, &m, &concrete) {
                 seat.insert(row.clone());
+            }
+            if reaches(true, &m, &concrete) {
+                windows.insert(row.clone());
             }
             if box_may_reach(&m, &concrete) {
                 boxed.insert(row);
@@ -249,6 +266,11 @@ fn the_person_lane_reaches_what_is_pinned() {
             .collect()
     };
     assert_eq!(seat, rows(SEAT_REACH), "the seat host's person lane");
+    assert_eq!(
+        windows,
+        rows(WINDOWS_REACH),
+        "a Windows seat host's person lane"
+    );
     assert_eq!(boxed, rows(BOX_REACH), "a person session on the box");
     assert!(!may_reach(&Method::GET, "/api/v1/library/../profiles"));
     assert!(!may_reach(&Method::GET, "/api/v1/profiles/x/proxy/hooks"));

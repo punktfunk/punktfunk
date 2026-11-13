@@ -190,12 +190,17 @@ export const seat = Bun.serve({
 	},
 });
 
+/** The profile list the box answers in place of a door's, when a test sets one. */
+export const boxSays: { profiles: unknown[] | null } = { profiles: null };
+
 /** The box: its profile list names the seat above; every other call answers with its path. */
 export const box = Bun.serve({
 	port: 0,
 	hostname: "127.0.0.1",
 	fetch: async (req) => {
 		const call = await record(req, boxCalls);
+		if (call.path === "/api/v1/profiles" && boxSays.profiles)
+			return Response.json(boxSays.profiles);
 		if (call.path === "/api/v1/profiles")
 			return Response.json([
 				{ id: OWNER, display_name: "Enrico", owner: true },

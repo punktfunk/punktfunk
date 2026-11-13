@@ -109,6 +109,7 @@
 	"apierr_hooks_not_saved": "Couldn't save the hooks",
 	"apierr_hooks_own_account": "Hooks can't run on a profile that uses an existing account, because they would run as that person.",
 	"apierr_hooks_own_account_person": "Hooks on a profile that uses an existing account are set by that person, from their own desktop.",
+	"apierr_hooks_secret_file_person": "Hooks you set yourself can't sign a webhook with a secret file on this PC. Remove the secret file, then save again.",
 	"apierr_host_action_in_flight": "Another host action is already under way",
 	"apierr_host_error": "The host hit an error",
 	"apierr_host_power_busy_other_device": "Another device is streaming from this host, or a seat that isn't answering might be. Try again in a moment.",

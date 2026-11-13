@@ -100,7 +100,7 @@ punktfunk-host ctl approve 3
 | `stats` | Mode, codec and bitrate of the live stream; frame timings and drops while a capture records. |
 | `stats record start\|stop` | Arm or stop the performance capture. `stop` writes it to disk. The console shares the one slot. |
 | `watch` | Host events as line-JSON. `--kinds pairing.pending,stream.*` filters; `--since <seq>` resumes. |
-| `console-url` | Print a `file://` link that opens the console already logged in. Linux only. |
+| `console-url` | Print a `file://` link that opens the console already logged in. Linux, and inside a Windows seat, where it prints the person's own link and `--open` opens it. |
 
 In `stats`, **Target** is the encoder's bitrate; **Sent** is what left the box and exists only while
 a capture records. A still screen sends little, so read **new** fps beside **repeated** fps.

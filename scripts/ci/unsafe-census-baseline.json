@@ -31,7 +31,7 @@
     "crates/host/pf-win-display": 18,
     "crates/host/pf-zerocopy": 52,
     "crates/host/punktfunk-capture-worker": 3,
-    "crates/host/punktfunk-host": 63,
+    "crates/host/punktfunk-host": 67,
     "crates/install/punktfunk-tray": 7,
     "packaging/windows/drivers": 55,
     "packaging/windows/pf-vkhdr-layer": 41

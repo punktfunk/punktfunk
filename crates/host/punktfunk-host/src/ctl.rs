@@ -128,6 +128,19 @@ fn run(args: &[&str], json: bool) -> Result<()> {
             out(json, &json!({ "url": url }), move |_| println!("{url}"));
             Ok(())
         }
+        #[cfg(windows)]
+        "console-url" => {
+            let url = person_console_url();
+            if rest.contains(&"--open") {
+                let page = url.as_deref().unwrap_or(PERSON_REFUSED);
+                if let Err(e) = crate::windows::person_pipe::open_in_browser(page) {
+                    return Err(Failure::api(format!("open the browser: {e}")));
+                }
+            }
+            let url = url?;
+            out(json, &json!({ "url": url }), move |_| println!("{url}"));
+            Ok(())
+        }
         "clients" => {
             let c = Client::one_shot()?;
             // Both planes, labelled. A one-plane list is how "I unpaired it and it still connects" happens.
@@ -713,6 +726,22 @@ fn console_stub() -> Result<String> {
     write_stub(&std::path::Path::new(&runtime).join("punktfunk"), &target)
 }
 
+/// Where the browser lands when no ticket came: the console's sentence for a refused one.
+#[cfg(windows)]
+const PERSON_REFUSED: &str = "https://127.0.0.1:47992/closed?why=refused";
+
+/// Inside a Windows seat: the person's own Punktfunk, with a ticket this session's seat host
+/// signed for this account (`windows::person_pipe`). The URL itself carries it: a Windows
+/// process's command line is its own account's, SYSTEM's and administrators' to read.
+#[cfg(windows)]
+fn person_console_url() -> Result<String> {
+    let ticket = crate::windows::person_pipe::ticket()
+        .map_err(|why| Failure::unreachable(format!("no ticket from this seat's host: {why}")))?;
+    Ok(format!(
+        "https://127.0.0.1:47992/_auth/person?ticket={ticket}"
+    ))
+}
+
 /// Inside a seat: a ticket for the seat's own profile, signed with the person token its host
 /// wrote into `dir` (`crate::person_token`). The seat host redeems it; the console cannot.
 #[cfg(unix)]
@@ -1056,6 +1085,7 @@ CONSOLE
                                  file:// URL, so a browser opened at it lands already logged in.
                                  The ticket stays out of argv, where every local user can read it.
                                  Inside a seat it opens that person's own Punktfunk instead.
+                                 Windows: inside a seat only; prints the URL. --open opens it.
 
 DISPLAYS
     display                      the virtual-display policy, every preset, and the live displays.
