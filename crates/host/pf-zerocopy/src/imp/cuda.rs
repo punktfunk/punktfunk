@@ -1024,16 +1024,23 @@ unsafe impl Send for ExternalDmabuf {}
 
 impl ExternalDmabuf {
     /// Import an `OPAQUE_FD` (an exported memory object) as `size` bytes of mapped device
-    /// memory. The driver owns `fd` from the call on, and closes it on failure too. Context
-    /// must be current.
+    /// memory. Context must be current.
+    ///
+    /// The driver owns `fd` once it looks at it, and closes it when the import fails too. A
+    /// call it rejects before that (a zero `size`, no current context) leaves the fd open, so
+    /// a zero size is refused here while the fd is still ours. The semaphore import is the
+    /// other way round ([`ExternalSemaphore::import_timeline_fd`]).
     pub fn import_owned_fd(fd: OwnedFd, size: u64) -> Result<ExternalDmabuf> {
+        if size == 0 {
+            bail!("import a zero-size memory object");
+        }
         let mut desc = CUDA_EXTERNAL_MEMORY_HANDLE_DESC {
             type_: CU_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_FD,
             size,
             ..Default::default()
         };
         desc.handle[0] = fd.as_raw_fd() as u32 as u64; // union member `int fd` (LE low bytes)
-        let _ = fd.into_raw_fd(); // libcuda closes it, on success and on failure alike
+        let _ = fd.into_raw_fd(); // the driver closes it, on success and on failure alike
         let mut ext: CUexternalMemory = std::ptr::null_mut();
         // SAFETY: `&desc` outlives the call (`OPAQUE_FD`, fd in union `int fd` low bytes, `size`
         // set). `&mut ext` is a live out-param. Context current.
@@ -1092,8 +1099,9 @@ pub struct ExternalSemaphore {
 unsafe impl Send for ExternalSemaphore {}
 
 impl ExternalSemaphore {
-    /// Import a Vulkan timeline semaphore (`vkGetSemaphoreFdKHR` OPAQUE_FD). The driver owns
-    /// `fd` on success; a failed import drops (closes) it. Context must be current.
+    /// Import a Vulkan timeline semaphore (`vkGetSemaphoreFdKHR` OPAQUE_FD). Context must be
+    /// current. The driver owns `fd` on success only: a failed import leaves it open, unlike
+    /// the memory import, and it is closed here.
     pub fn import_timeline_fd(fd: OwnedFd) -> Result<ExternalSemaphore> {
         let mut desc = CUDA_EXTERNAL_SEMAPHORE_HANDLE_DESC {
             type_: CU_EXTERNAL_SEMAPHORE_HANDLE_TYPE_TIMELINE_SEMAPHORE_FD,
@@ -1232,9 +1240,105 @@ pub unsafe fn copy_pitched_nv12_to_buffer(
 
 #[cfg(test)]
 mod tests {
-    use super::{DeviceBuffer, PlaneLayout, PoolInner};
+    use super::*;
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::{Arc, Mutex};
+
+    /// Whether fd number `raw` is closed. A high number, so nothing else in the process takes
+    /// it between the driver's close and this look.
+    fn closed(raw: std::os::fd::RawFd) -> bool {
+        // SAFETY: only `fcntl(F_GETFD)` is run on the number, which is sound for a closed one.
+        let fd = unsafe { std::os::fd::BorrowedFd::borrow_raw(raw) };
+        rustix::io::fcntl_getfd(fd).is_err()
+    }
+
+    /// A memfd the driver cannot import, at the first free fd number from `base` up. Each test
+    /// takes its own `base`: tests run side by side and must not see each other's numbers.
+    fn high_memfd(base: std::os::fd::RawFd) -> OwnedFd {
+        let fd = rustix::fs::memfd_create("pf-import-probe", rustix::fs::MemfdFlags::CLOEXEC)
+            .expect("memfd");
+        rustix::fs::ftruncate(&fd, 1 << 20).expect("size the memfd");
+        rustix::io::fcntl_dupfd_cloexec(&fd, base).expect("dup high")
+    }
+
+    /// What the driver does with the fd of an import it refuses. The two import functions are
+    /// written to this, so a driver that changes it shows here before it leaks or double-closes.
+    #[test]
+    #[ignore = "requires an NVIDIA GPU + driver — run on the RTX box (.21)"]
+    fn the_driver_keeps_a_failed_memory_fd_and_returns_a_semaphore_one() {
+        super::make_current().expect("CUDA context");
+
+        // Memory, refused by the driver: the fd is the driver's, and it has closed it.
+        let fd = high_memfd(400);
+        let raw = fd.as_raw_fd();
+        let mut desc = CUDA_EXTERNAL_MEMORY_HANDLE_DESC {
+            type_: CU_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_FD,
+            size: 1 << 20,
+            ..Default::default()
+        };
+        desc.handle[0] = raw as u32 as u64;
+        let _ = fd.into_raw_fd();
+        let mut ext: CUexternalMemory = std::ptr::null_mut();
+        // SAFETY: `desc` and `ext` are live locals for the synchronous call; context current.
+        let r = unsafe { cuImportExternalMemory(&mut ext, &desc) };
+        assert_ne!(r, 0, "a memfd is no memory object");
+        assert!(
+            closed(raw),
+            "the driver closes the fd of a failed memory import"
+        );
+
+        // Memory, zero size: refused before the driver takes the fd, which stays open.
+        let fd = high_memfd(400);
+        let raw = fd.as_raw_fd();
+        desc.size = 0;
+        desc.handle[0] = raw as u32 as u64;
+        // SAFETY: as above.
+        let r = unsafe { cuImportExternalMemory(&mut ext, &desc) };
+        assert_ne!(r, 0);
+        assert!(!closed(raw), "a zero size is refused with the fd left open");
+        drop(fd);
+
+        // Semaphore, refused: the fd stays the caller's.
+        let fd = high_memfd(400);
+        let raw = fd.as_raw_fd();
+        let mut desc = CUDA_EXTERNAL_SEMAPHORE_HANDLE_DESC {
+            type_: CU_EXTERNAL_SEMAPHORE_HANDLE_TYPE_TIMELINE_SEMAPHORE_FD,
+            ..Default::default()
+        };
+        desc.handle[0] = raw as u32 as u64;
+        let mut sem: CUexternalSemaphore = std::ptr::null_mut();
+        // SAFETY: `desc` and `sem` are live locals for the synchronous call; context current.
+        let r = unsafe { cuImportExternalSemaphore(&mut sem, &desc) };
+        assert_ne!(r, 0, "a memfd is no semaphore");
+        assert!(!closed(raw), "a failed semaphore import leaves the fd open");
+        drop(fd);
+
+        // The functions built on those rules leave nothing open, and close nothing twice.
+        let fd = high_memfd(400);
+        let raw = fd.as_raw_fd();
+        assert!(ExternalDmabuf::import_owned_fd(fd, 1 << 20).is_err());
+        assert!(closed(raw));
+        let fd = high_memfd(400);
+        let raw = fd.as_raw_fd();
+        assert!(ExternalDmabuf::import_owned_fd(fd, 0).is_err());
+        assert!(closed(raw));
+        let fd = high_memfd(400);
+        let raw = fd.as_raw_fd();
+        assert!(ExternalSemaphore::import_timeline_fd(fd).is_err());
+        assert!(closed(raw));
+    }
+
+    /// A zero size is refused while the fd is still the caller's: it needs no driver.
+    #[test]
+    fn a_zero_size_import_closes_its_fd_without_the_driver() {
+        let fd = high_memfd(500);
+        let raw = fd.as_raw_fd();
+        let err = ExternalDmabuf::import_owned_fd(fd, 0)
+            .err()
+            .expect("a zero size is refused");
+        assert!(err.to_string().contains("zero-size"));
+        assert!(closed(raw));
+    }
 
     /// A pooled buffer recycles, and an imported one releases, only once its last hold drops.
     /// Fake pointers: the pool is drained before it drops, so nothing reaches `cuMemFree`.
