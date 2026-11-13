@@ -174,14 +174,11 @@ extern "C" fn evt_device_add(_driver: WDFDRIVER, mut device_init: PWDFDEVICE_INI
 
     // Default parallel queue: all the XUSB IOCTLs land here.
     // SAFETY: `device` is the live device just created.
-    let queue = match unsafe { skeleton::create_default_queue(device, Some(evt_io_device_control)) }
+    if let Err(st) = unsafe { skeleton::create_default_queue(device, Some(evt_io_device_control)) }
     {
-        Ok(q) => q,
-        Err(st) => {
-            dbglog!("[pf-xusb] WdfIoQueueCreate failed 0x{:08x}", st as u32);
-            return st;
-        }
-    };
+        dbglog!("[pf-xusb] WdfIoQueueCreate failed 0x{:08x}", st as u32);
+        return st;
+    }
 
     // Manual queue for the ASYNC input wait (`IOCTL_XUSB_WAIT_FOR_INPUT`), completed by the timer.
     // Classic XInput falls back to GET_STATE polling when it is declined; WGI/GameInput poll
@@ -196,11 +193,11 @@ extern "C" fn evt_device_add(_driver: WDFDRIVER, mut device_init: PWDFDEVICE_INI
     };
     WAIT_QUEUE.store(wait_queue, Ordering::SeqCst);
 
-    // Periodic sealed-channel tick, parented to the default queue. It is the only mailbox pump
-    // (adoption, re-delivery, host-gone), so the XInput IOCTL path never re-opens the mailbox and
-    // nothing outlives the device to stamp a later session's mailbox.
-    // SAFETY: `queue` is the live default queue just created.
-    let timer = unsafe { skeleton::create_periodic_timer(queue.cast(), Some(evt_timer), 8) };
+    // Periodic sealed-channel tick, parented to the manual queue it drains: WDF deletes the timer
+    // before that queue. The only mailbox pump (adoption, re-delivery, host-gone), so the IOCTL
+    // path never re-opens the mailbox and nothing outlives the device to stamp a later mailbox.
+    // SAFETY: `wait_queue` is the live manual queue just created.
+    let timer = unsafe { skeleton::create_periodic_timer(wait_queue.cast(), Some(evt_timer), 8) };
     if let Err(st) = timer {
         dbglog!("[pf-xusb] WdfTimerCreate failed 0x{:08x}", st as u32);
         return st;
