@@ -8,9 +8,9 @@ import Foundation
 import PunktfunkKit
 import SwiftUI
 
-/// How often the page reads the check's counters while it runs: twenty points a second, each
-/// smoothed over `ProbeTrace.windowMs`.
-private let pollInterval: Duration = .milliseconds(50)
+/// How often the page reads the check's counters while it runs: fifty points a second, which
+/// `ProbeTrace` smooths into the curve.
+private let pollInterval: Duration = .milliseconds(20)
 
 struct SpeedTestView: View {
     let host: StoredHost
@@ -92,18 +92,28 @@ struct SpeedTestView: View {
             Text(headline)
                 .font(.system(.largeTitle, design: .rounded).weight(.semibold))
                 .monospacedDigit()
-                .contentTransition(.numericText())
+                .contentTransition(.numericText(value: headlineValue))
+                .animation(.snappy(duration: 0.3), value: headline)
             Text(caption)
                 .font(.geist(15, relativeTo: .subheadline))
                 .foregroundStyle(isFailed ? Color.red : Color.secondary)
         }
     }
 
+    /// What the headline counts, so its digits roll up or down with it.
+    private var headlineValue: Double {
+        switch phase {
+        case .done(let result): Double(result.throughputKbps) / 1000
+        case .probing: trace.live() ?? 0
+        case .idle, .connecting, .failed: 0
+        }
+    }
+
     private var headline: String {
         switch phase {
         case .done(let result): Self.mbpsLabel(kbps: Int(result.throughputKbps))
-        // The rounds run below what the link carries, so their live rate is not the answer.
-        case .probing: "…"
+        case .probing:
+            trace.live().map { Self.mbpsLabel(kbps: Int($0.rounded()) * 1_000) } ?? "…"
         case .idle, .connecting, .failed: "—"
         }
     }
@@ -137,13 +147,13 @@ struct SpeedTestView: View {
                         .linearGradient(
                             colors: [Color.brand.opacity(0.35), Color.brand.opacity(0.02)],
                             startPoint: .top, endPoint: .bottom))
-                    .interpolationMethod(.monotone)
+                    .interpolationMethod(.catmullRom)
                 LineMark(
                     x: .value(String(localized: L10n.appleSpeedtestChartTimeA11y), point.seconds),
                     y: .value(String(localized: L10n.appleSpeedtestChartGoodputA11y), point.mbps))
                     .foregroundStyle(Color.brand)
                     .lineStyle(StrokeStyle(lineWidth: 2, lineCap: .round, lineJoin: .round))
-                    .interpolationMethod(.monotone)
+                    .interpolationMethod(.catmullRom)
             }
             if case .done(let result) = phase {
                 rule(
