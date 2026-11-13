@@ -140,6 +140,8 @@ public enum LibraryShelf {
         /// Play, Resume (the host has the title up), or the desktop tile's Connect.
         case play, resume, desktop
         case favorite, unfavorite
+        /// Takes the title off the shelf of the profile this device plays as, by its name.
+        case hide(String)
         case details
         case copyLink
         /// The one change to the title's files this device may ask for.
@@ -164,6 +166,7 @@ public enum LibraryShelf {
             case .desktop: String(localized: L10n.libDesktopAction)
             case .favorite: String(localized: L10n.libFavoriteAdd)
             case .unfavorite: String(localized: L10n.libFavoriteRemove)
+            case .hide(let name): L10n.libHideFor(name: name)
             case .details: String(localized: L10n.libTitleDetails)
             case .copyLink: String(localized: L10n.hostcardCopyLink)
             case .files(let action): action.label(install)
@@ -177,6 +180,7 @@ public enum LibraryShelf {
             case .play, .resume, .desktop: "play.fill"
             case .favorite: "heart"
             case .unfavorite: "heart.slash"
+            case .hide: "eye.slash"
             case .details: "info.circle"
             case .copyLink: "link"
             case .files(.install), .files(.resume): "arrow.down.circle"
@@ -188,15 +192,17 @@ public enum LibraryShelf {
     }
 
     /// A title's acts in menu order: Play or Resume leads, then what a tap can't do.
-    /// `favorite` is nil where favorites aren't offered, else whether the title is one.
+    /// `favorite` is nil where favorites aren't offered, else whether the title is one. `hides`
+    /// names the profile this device may hide titles for (`HideForMe.offer`); nil offers none.
     public static func acts(
         _ game: GameEntry, running: RunningGame?, download: HostDownload?, grants: UInt32?,
-        canLaunch: Bool, favorite: Bool?, canCopyLink: Bool
+        canLaunch: Bool, favorite: Bool?, canCopyLink: Bool, hides: String? = nil
     ) -> [Act] {
         let desktop = game.id == LibraryCollation.desktopID
         var acts: [Act] = []
         if canLaunch { acts.append(desktop ? .desktop : running != nil ? .resume : .play) }
         if let favorite, !desktop { acts.append(favorite ? .unfavorite : .favorite) }
+        if let hides, !desktop { acts.append(.hide(hides)) }
         if !desktop { acts.append(.details) }
         if canCopyLink { acts.append(.copyLink) }
         if let files = InstallAction.forTitle(game.install, download: download, grants: grants) {
@@ -204,6 +210,25 @@ public enum LibraryShelf {
         }
         if !desktop, running?.endable == true { acts.append(.endGame) }
         return acts
+    }
+
+    /// The tile that takes focus when `key` leaves `lists` (each row or section in order), with
+    /// every key in `leaving`: the next in its row, else the one before, else the first of a row
+    /// below, else the last of a row above. nil when nothing stays.
+    public static func neighbour(
+        of key: String, in lists: [[String]], leaving: Set<String> = []
+    ) -> String? {
+        let gone = leaving.union([key])
+        guard let row = lists.firstIndex(where: { $0.contains(key) }),
+              let at = lists[row].firstIndex(of: key)
+        else { return nil }
+        let stays = { (k: String) in !gone.contains(k) }
+        if let next = lists[row][(at + 1)...].first(where: stays) { return next }
+        if let before = lists[row][..<at].last(where: stays) { return before }
+        if let below = lists[(row + 1)...].lazy.compactMap({ $0.first(where: stays) }).first {
+            return below
+        }
+        return lists[..<row].reversed().lazy.compactMap { $0.last(where: stays) }.first
     }
 }
 

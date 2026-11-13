@@ -76,9 +76,25 @@ public actor LibraryCache {
         // An empty catalog is not worth remembering: it is indistinguishable from "never fetched"
         // when read back, and caching it would pin a blank library over a host that has titles.
         guard !games.isEmpty else { return }
-        let snapshot = CachedLibrary(games: games, fetchedAt: Date())
-        guard let data = try? JSONEncoder().encode(snapshot) else { return }
+        write(CachedLibrary(games: games, fetchedAt: Date()), to: path(for: hostID, profile: profile))
+    }
+
+    /// The catalog cached for `profile` once title `id` left it (`back` nil) or came back as
+    /// `back`, keeping its age. No cache, nothing written; the last title gone, no cache.
+    public func noteHidden(_ id: String, back: GameEntry?, hostID: String, profile: String?) {
+        guard var cached = load(hostID: hostID, profile: profile) else { return }
+        cached.games.removeAll { $0.id == id }
+        if let back { cached.games.append(back) }
         let file = path(for: hostID, profile: profile)
+        guard !cached.games.isEmpty else {
+            try? fileManager.removeItem(at: file)
+            return
+        }
+        write(cached, to: file)
+    }
+
+    private func write(_ snapshot: CachedLibrary, to file: URL) {
+        guard let data = try? JSONEncoder().encode(snapshot) else { return }
         do {
             try fileManager.createDirectory(
                 at: file.deletingLastPathComponent(), withIntermediateDirectories: true)

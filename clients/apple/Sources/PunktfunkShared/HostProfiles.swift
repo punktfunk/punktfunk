@@ -133,9 +133,11 @@ public struct ListedProfile: Codable, Hashable, Sendable, Identifiable {
     /// This device's old seat became this profile.
     public var legacySeat: Bool = false
     public var unlock: UnlockNeed = .none
+    /// This device may hide titles for this profile now (`HideForMe`). An old host omits it.
+    public var person: Bool = false
 
     private enum CodingKeys: String, CodingKey {
-        case id, accent, avatar, owner, seat, unlock
+        case id, accent, avatar, owner, seat, unlock, person
         case displayName = "display_name"
         case legacySeat = "legacy_seat"
     }
@@ -151,11 +153,27 @@ public struct ListedProfile: Codable, Hashable, Sendable, Identifiable {
         legacySeat = try c.decodeIfPresent(Bool.self, forKey: .legacySeat) ?? false
         let word = try c.decodeIfPresent(String.self, forKey: .unlock)
         unlock = word.map { UnlockNeed(rawValue: $0) ?? .password } ?? .none
+        person = try c.decodeIfPresent(Bool.self, forKey: .person) ?? false
+    }
+
+    /// `person` only when true, as the host writes it: an old host's row crosses the console
+    /// bridge as it did before.
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(id, forKey: .id)
+        try c.encode(displayName, forKey: .displayName)
+        try c.encodeIfPresent(accent, forKey: .accent)
+        try c.encodeIfPresent(avatar, forKey: .avatar)
+        try c.encode(owner, forKey: .owner)
+        try c.encodeIfPresent(seat, forKey: .seat)
+        try c.encode(legacySeat, forKey: .legacySeat)
+        try c.encode(unlock, forKey: .unlock)
+        if person { try c.encode(true, forKey: .person) }
     }
 
     public init(id: String, displayName: String, accent: String? = nil, avatar: String? = nil,
                 owner: Bool = false, seat: ProfileSeat? = nil, legacySeat: Bool = false,
-                unlock: UnlockNeed = .none) {
+                unlock: UnlockNeed = .none, person: Bool = false) {
         self.id = id
         self.displayName = displayName
         self.accent = accent
@@ -164,6 +182,7 @@ public struct ListedProfile: Codable, Hashable, Sendable, Identifiable {
         self.seat = seat
         self.legacySeat = legacySeat
         self.unlock = unlock
+        self.person = person
     }
 
     public var pick: ProfilePick { ProfilePick(id: id, displayName: displayName, avatar: avatar) }
