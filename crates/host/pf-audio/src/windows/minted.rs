@@ -41,6 +41,8 @@ const RETRY_COOLDOWN: Duration = Duration::from_secs(60);
 const MAX_UNLATCHED_ATTEMPTS: u32 = 5;
 /// Wait for an in-flight pass. A cold mint worst-cases around two [`ENDPOINT_WAIT`]s plus stamp settles.
 const BLOCKING_WAIT: Duration = Duration::from_secs(90);
+/// Adapter half of both endpoints' names, and the devnodes' FriendlyName it is rebuilt from.
+const DEVICE_NAME: &str = "Punktfunk";
 
 /// Persisted marker (`value`) and the INF/hwid needles for [`discover_driver`].
 #[derive(Clone, Copy, PartialEq)]
@@ -455,13 +457,15 @@ fn same_pcm_shape(served: &[u8], want: &[u8; 40]) -> bool {
         .all(|r| field(served, r.clone()).is_some() && field(served, r.clone()) == field(want, r))
 }
 
-/// Reuses this identity's healthy marker pair or creates it, then restores changed defaults.
+/// Reuses this identity's healthy marker pair or creates it, names its devnode, then restores
+/// changed defaults.
 fn ensure_role(
     identity: &'static AudioIdentity,
     role: Role,
 ) -> Result<(String, String, Option<String>)> {
     // A healthy endpoint skips the PnP rebind, whose broadcast makes games rebuild audio graphs.
     if let Some((devnode, render, capture)) = find_healthy_role(identity, role)? {
+        da::name_devnode(&devnode, DEVICE_NAME);
         stamp_identity(&render, identity, role, false);
         if let Some(cap) = capture.as_ref() {
             stamp_identity(cap, identity, role, true);
@@ -523,6 +527,8 @@ fn ensure_role(
             ),
             Role::Speakers => None,
         };
+        // After the bind: the INF install writes the driver's DeviceDesc.
+        da::name_devnode(&devnode, DEVICE_NAME);
         stamp_identity(&render, identity, role, false);
         if let Some(cap) = capture.as_ref() {
             stamp_identity(cap, identity, role, true);
@@ -640,7 +646,7 @@ fn stamp_identity(endpoint_id: &str, identity: &'static AudioIdentity, role: Rol
         pe::Stamp {
             label: "device-name",
             key: pe::PKEY_ENDPOINT_DEVICE_NAME,
-            value: pe::StampValue::Str("Punktfunk"),
+            value: pe::StampValue::Str(DEVICE_NAME),
         },
     ];
     // Both mic pins are stereo 48 kHz, and every mix-format copy a pin carries must agree with
