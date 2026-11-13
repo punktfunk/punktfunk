@@ -214,6 +214,19 @@ final class LibraryClientTests: XCTestCase {
         XCTAssertTrue(response.body.isEmpty)
     }
 
+    /// A 204 has no framing header and no body: it ends at its header block. Read as framed by
+    /// close, a kept-alive connection waits out the request timeout for a hang-up.
+    func testANoContentResponseEndsAtItsHeaders() throws {
+        let answer = raw("HTTP/1.1 204 No Content\r\ndate: Fri, 13 Nov 2026 10:00:00 GMT\r\n\r\n")
+        XCTAssertEqual(try HTTPResponseParser.messageLength(in: answer), answer.count)
+        let response = try HTTPResponseParser.parse(answer)
+        XCTAssertEqual(response.status, 204)
+        XCTAssertTrue(response.body.isEmpty)
+        // What follows is the next response's.
+        XCTAssertEqual(
+            try HTTPResponseParser.messageLength(in: answer + raw("HTTP/1.1 200")), answer.count)
+    }
+
     func testBodyRunsToEOFWithoutFramingHeaders() throws {
         let response = try HTTPResponseParser.parse(raw("HTTP/1.1 200 OK\r\n\r\nraw-to-eof"))
         XCTAssertEqual(String(decoding: response.body, as: UTF8.self), "raw-to-eof")
