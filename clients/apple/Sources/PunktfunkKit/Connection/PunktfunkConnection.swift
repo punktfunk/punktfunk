@@ -2369,6 +2369,19 @@ public final class PunktfunkConnection: @unchecked Sendable {
     public func setAccessUnitMemory(_ memory: AccessUnitMemory?) {
         pumpLock.lock()
         defer { pumpLock.unlock() }
+        installAccessUnitMemory(memory)
+    }
+
+    /// `setAccessUnitMemory(nil)`, unless a later call replaced `memory`: a pump that exits after
+    /// its successor started must not take the successor's lender away.
+    public func releaseAccessUnitMemory(_ memory: AccessUnitMemory) {
+        pumpLock.lock()
+        defer { pumpLock.unlock() }
+        if accessUnitMemory === memory { installAccessUnitMemory(nil) }
+    }
+
+    /// Under `pumpLock`.
+    private func installAccessUnitMemory(_ memory: AccessUnitMemory?) {
         let installed = withLiveHandle(or: false) { h -> Bool in
             guard let memory else { return punktfunk_connection_set_au_memory(h, nil) == statusOK }
             return accessUnitLenders.lend(memory) {

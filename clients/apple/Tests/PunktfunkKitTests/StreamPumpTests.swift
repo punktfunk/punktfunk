@@ -1,4 +1,5 @@
-// Stage-1's pump against the demo host: a restart's pump must never run beside the old one.
+// Pump restarts against the demo host: the old pump neither runs beside its successor nor takes
+// the successor's access-unit lender away.
 
 import AVFoundation
 import XCTest
@@ -37,5 +38,23 @@ final class StreamPumpTests: XCTestCase {
         XCTAssertEqual(
             frameDone.wait(timeout: .now()), .success,
             "stop returned while the pump thread was still in its iteration")
+    }
+
+    /// A pump that exits after its successor started leaves the successor's lender in place.
+    func testAStaleReleaseKeepsTheNewerLender() throws {
+        let host = try XCTUnwrap(DemoHost(titles: ["custom:aurora": "Aurora Drift"]))
+        defer { host.stop() }
+        let connection = try connect(host)
+        defer { connection.close() }
+        let old = AccessUnitSlotPool(capacity: AccessUnitSlotPool.defaultCapacity)
+        let new = AccessUnitSlotPool(capacity: AccessUnitSlotPool.defaultCapacity)
+        connection.setAccessUnitMemory(old)
+        connection.setAccessUnitMemory(new)
+        connection.releaseAccessUnitMemory(old)
+        var placed = false
+        for _ in 0..<50 where !placed {
+            placed = try connection.nextAU(timeoutMs: 100)?.inPlace != nil
+        }
+        XCTAssertTrue(placed, "no access unit arrived in the newer lender")
     }
 }

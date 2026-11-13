@@ -2446,7 +2446,7 @@ public final class Stage2Pipeline {
                 decoder.accessUnitMemory = pool
                 connection.setAccessUnitMemory(pool)
             }
-            defer { if lends { connection.setAccessUnitMemory(nil) } }
+            defer { if lends { connection.releaseAccessUnitMemory(pool) } }
             // Hardware-only backstop (4:4:4, AV1): 3 s in which every decode fails means this device
             // can't decode the mode at all, e.g. past a resolution ceiling. End instead of looping on
             // black. Timed, not counted: after a failure only IDRs reach the decoder.
@@ -2563,7 +2563,7 @@ public final class Stage2Pipeline {
             }
             var pool = firstPool
             if lends { connection.setAccessUnitMemory(pool) }
-            defer { if lends { connection.setAccessUnitMemory(nil) } }
+            defer { if lends { connection.releaseAccessUnitMemory(pool) } }
             // Newest decoded frame index — a late partial (the reassembler's 30 ms fuse can
             // deliver one behind a newer complete frame) must not travel back in time.
             var newestIndex: UInt32?

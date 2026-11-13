@@ -48,7 +48,7 @@ final class StreamPump {
             // The core assembles each AU in a pool slot, and the sample is that slot.
             var pool = AccessUnitSlotPool(capacity: AccessUnitSlotPool.defaultCapacity)
             connection.setAccessUnitMemory(pool)
-            defer { connection.setAccessUnitMemory(nil) }
+            defer { connection.releaseAccessUnitMemory(pool) }
             var wasFailed = false
             // Every iteration drains its own autorelease pool: this thread has no runloop, so
             // autoreleased CM/layer temporaries would otherwise accumulate until session end.
