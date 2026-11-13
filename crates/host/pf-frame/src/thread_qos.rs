@@ -164,12 +164,13 @@ mod tests {
         // A fresh thread, so the test runner's own slack stays as it was.
         let slack = std::thread::spawn(|| {
             super::tighten_timer_slack();
-            std::fs::read_to_string("/proc/thread-self/timerslack_ns")
+            // SAFETY: `PR_GET_TIMERSLACK` takes no pointer and returns the calling thread's
+            // slack in nanoseconds; the three trailing arguments are unused zeros.
+            unsafe { libc::prctl(libc::PR_GET_TIMERSLACK, 0, 0, 0, 0) }
         })
         .join()
-        .expect("slack thread")
-        .expect("read timerslack_ns");
-        assert_eq!(slack.trim(), "1");
+        .expect("slack thread");
+        assert_eq!(slack, 1);
     }
 
     #[test]
