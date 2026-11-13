@@ -264,8 +264,8 @@ fragment float4 pf_frag_hdr(VOut in [[stage_in]],
     return float4(sampleRgb(lumaTex, chromaTex, in.luv, in.uv, in.upscale, csc), 1.0);
 }
 
-// tvOS without HDR headroom has no EDR API and composites a PQ tag untone-mapped, so PQ becomes
-// SDR in-shader for the sRGB-tagged layer. Same curve as pf-client-video's tonemap.glsl and the
+// tvOS outside an HDR output mode composites a PQ tag untone-mapped (see `configureColor`), so
+// PQ becomes SDR in-shader for the sRGB-tagged layer. Same curve as pf-client-video's tonemap.glsl and the
 // host's gamescope capture: BT.2390 EETF in PQ from a 1000-nit source onto 203-nit white, on
 // max(R,G,B) in linear BT.709, then the sRGB OETF.
 static inline float pqEotf(float e) {
@@ -703,7 +703,7 @@ public final class MetalVideoPresenter {
     /// Configure the layer + active pipeline for an SDR or HDR session. Called once at session start
     /// (main, before the render thread exists) and again per-frame from `render` on the RENDER THREAD
     /// (idempotent — the guard makes a same-state call a no-op), so a mid-session HDR toggle (the host
-    /// re-inits its encoder; the decoded `frame.isHDR` flips) reconfigures here automatically. HDR uses
+    /// re-inits its encoder; the decoded frame's HDR flag flips) reconfigures here automatically. HDR uses
     /// `hdrDrawable`, with the BT.2020 PQ colour space + EDR (a 203-nit reference-white anchor) under
     /// `HdrMode.pq` and extended-linear Display P3 without metadata under `.linear`;
     /// SDR uses the sRGB-tagged 8-bit drawable, or `sdr10Drawable` when `tenBitSDR` (a 10-bit

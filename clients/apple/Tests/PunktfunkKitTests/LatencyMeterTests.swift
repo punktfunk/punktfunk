@@ -75,8 +75,7 @@ final class LatencyMeterTests: XCTestCase {
         XCTAssertEqual(m.latestSample(asOfNs: atNs, maxAgeMs: 500), 20_000_000)
     }
 
-    /// No frame yet ⇒ no reference. This is what keeps the sync loop inert at session start and
-    /// under the stage-1 presenter, which stamps no present at all.
+    /// No frame yet ⇒ no reference. This is what keeps the sync loop inert at session start.
     func testLatestSampleIsNilBeforeAnyFrame() {
         XCTAssertNil(LatencyMeter().latestSample(asOfNs: 1_000_000_000_000, maxAgeMs: 500))
     }

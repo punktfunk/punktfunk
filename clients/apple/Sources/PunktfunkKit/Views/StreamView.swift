@@ -302,10 +302,9 @@ public final class StreamLayerView: NSView {
         ) { [weak self] _ in
             self?.releaseCapture()
         })
-        // The Stream menu's "Release Mouse" item (⌃⌥⇧Q's discoverable menu-bar surface). Only
-        // the key window's stream may act — same ownership rule as the ⌘⎋ toggle. (While
-        // captured the combo never reaches the menu — InputCapture's monitor handles it — so
-        // in practice this fires only as a not-captured no-op; wired for honesty.)
+        // The Stream menu's Release Mouse posts this, and so does the session once the grants
+        // lose both pointer and keyboard (`AccessWarning.releasesCapture`). Only the key
+        // window's stream may act, the same ownership rule as the ⌘⎋ toggle.
         appObservers.append(NotificationCenter.default.addObserver(
             forName: .punktfunkReleaseCapture, object: nil, queue: .main
         ) { [weak self] _ in
