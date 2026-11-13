@@ -677,6 +677,13 @@ fn keepalive_wait(interval: Duration, src_period_ns: Option<u64>, idle_repeats: 
     }
 }
 
+/// How long past `next` the arrival wait runs while the encoder owes an access unit that
+/// rings the loop: the idle keep-alive, or two source periods when those are longer. Only a
+/// ring that never comes gets this far.
+fn owed_wait(interval: Duration, period: Duration) -> Duration {
+    (interval * 3).max(period * 2)
+}
+
 /// The access units `enc` owes for a pixel-less `frame`, waited for until `deadline`. `None`
 /// for a frame with pixels, and from an encoder that owes none: the loop submits the frame.
 pub(crate) fn owed_aus(
@@ -713,9 +720,10 @@ pub(crate) fn wait_next_tick(
         fresh,
         interval,
         src_period_ns,
+        false,
     );
     while let Waited::AuReady(gate) = waited {
-        waited = gate.resume(capturer, credit, next);
+        waited = gate.resume(capturer, credit, next, false);
     }
 }
 
@@ -733,6 +741,9 @@ pub(crate) enum Waited {
 pub(crate) struct TickGate {
     not_before: Instant,
     deadline: Instant,
+    /// The deadline while the encoder owes an access unit that ends this wait itself. It
+    /// bounds a ring that never comes: the tick after it runs the stall watch.
+    held: Instant,
     period: Duration,
 }
 
@@ -744,6 +755,10 @@ pub(crate) struct TickGate {
 /// at `next`. A poke (a recovery ask) ends a feed's wait, the credit gate included, unless
 /// the next fresh frame carries the ask sooner ([`CaptureCredit::ask_waits`]). An encoder's
 /// finished access unit ends it too, as [`Waited::AuReady`].
+///
+/// `owed`: the encoder still holds an access unit whose completion ends this wait. No repeat
+/// goes out ahead of it: a repeat then costs a busy encoder one frame's work, and a late
+/// source frame behind a full encoder is not a stalled source.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn wait_tick_or_au(
     capturer: &mut dyn crate::capture::Capturer,
@@ -754,6 +769,7 @@ pub(crate) fn wait_tick_or_au(
     fresh: Option<Instant>,
     interval: Duration,
     src_period_ns: Option<u64>,
+    owed: bool,
 ) -> Waited {
     if !frame_driven_enabled() {
         sleep_to_grid(next);
@@ -770,12 +786,14 @@ pub(crate) fn wait_tick_or_au(
                 Instant::now()
             }
         };
+        let period = src_period_ns.map_or(interval, Duration::from_nanos);
         let gate = TickGate {
             not_before,
             deadline: *next + keepalive_wait(interval, src_period_ns, credit.idle),
-            period: src_period_ns.map_or(interval, Duration::from_nanos),
+            held: *next + owed_wait(interval, period),
+            period,
         };
-        return gate.resume(capturer, credit, next);
+        return gate.resume(capturer, credit, next, owed);
     }
     if owed_aus(frame, enc, *next).is_none() {
         sleep_to_grid(next);
@@ -787,20 +805,30 @@ pub(crate) fn wait_tick_or_au(
 
 impl TickGate {
     /// The feed wait under this gate, until the tick is due or an access unit is ready.
+    /// `owed` as [`wait_tick_or_au`] takes it, read again on every resume.
     pub(crate) fn resume(
         mut self,
         capturer: &mut dyn crate::capture::Capturer,
         credit: &CaptureCredit,
         next: &mut Instant,
+        owed: bool,
     ) -> Waited {
         if let Some(feed) = capturer.feed() {
             loop {
-                match feed.wait_paced(self.not_before, self.deadline) {
+                let deadline = if owed {
+                    self.deadline.max(self.held)
+                } else {
+                    self.deadline
+                };
+                match feed.wait_paced(self.not_before, deadline) {
                     pf_capture::Paced::Due => break,
                     pf_capture::Paced::Encoded => return Waited::AuReady(self),
                     pf_capture::Paced::Poked => {
                         match credit.ask_waits(Instant::now(), self.not_before, self.period) {
-                            Some(latest) => self.deadline = self.deadline.min(latest),
+                            Some(latest) => {
+                                self.deadline = self.deadline.min(latest);
+                                self.held = self.held.min(latest);
+                            }
                             None => break,
                         }
                     }

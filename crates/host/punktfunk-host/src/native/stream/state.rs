@@ -280,6 +280,9 @@ pub(super) struct StreamState {
     pub(super) encode_chain_ns: u64,
     /// The last submit's stamps, for the AUs the wait after it collects.
     pub(super) tick_stamps: Option<super::encode::Stamps>,
+    /// This encoder has ended a tick wait with a finished access unit. Until it has, a wait
+    /// counts on no ring.
+    pub(super) au_rings: bool,
     pub(super) last_real_cap: Option<std::time::Instant>,
 
     // ---- teardown order, which is field order: the send thread first, so the summary the
@@ -706,6 +709,7 @@ impl StreamState {
             src_period_ns: None,
             encode_chain_ns: 0,
             tick_stamps: None,
+            au_rings: false,
             last_real_cap: None,
             live_session,
             _watcher: None,

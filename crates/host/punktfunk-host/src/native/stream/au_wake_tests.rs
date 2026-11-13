@@ -29,6 +29,8 @@ fn frame() -> CapturedFrame {
 #[derive(Default)]
 struct FeedState {
     frame: Option<CapturedFrame>,
+    /// The loop took a frame its next submit holds a buffer for.
+    took: bool,
     encoded: bool,
     waits: Vec<(Instant, Instant, Paced)>,
 }
@@ -55,6 +57,45 @@ impl Feed {
                 std::thread::sleep(at.saturating_duration_since(Instant::now()));
                 s.0.lock().unwrap().frame = Some(frame());
                 s.1.notify_all();
+            }
+        });
+        Feed {
+            st,
+            stop,
+            producer: Some(producer),
+        }
+    }
+}
+
+impl Feed {
+    /// A source that needs a buffer back before its next frame, as a screencast pool does:
+    /// each frame takes one from `free` and lands a compositor phase later, the phases in
+    /// turn. The encoder returns the buffer when the frame's access unit is collected.
+    fn start_on_return(free: Shared<usize>, phases: Vec<Duration>) -> Feed {
+        let st: Shared<FeedState> = Arc::default();
+        let stop = Arc::new(AtomicBool::new(false));
+        let (s, quit) = (st.clone(), stop.clone());
+        let producer = std::thread::spawn(move || {
+            for phase in phases.iter().cycle() {
+                let (lock, cv) = &*free;
+                let mut n = lock.lock().unwrap();
+                while *n == 0 {
+                    if quit.load(Ordering::Relaxed) {
+                        return;
+                    }
+                    n = cv.wait_timeout(n, Duration::from_millis(2)).unwrap().0;
+                }
+                *n -= 1;
+                drop(n);
+                std::thread::sleep(*phase);
+                // A frame the loop never took gives its buffer back.
+                if s.0.lock().unwrap().frame.replace(frame()).is_some() {
+                    *lock.lock().unwrap() += 1;
+                }
+                s.1.notify_all();
+                if quit.load(Ordering::Relaxed) {
+                    return;
+                }
             }
         });
         Feed {
@@ -116,7 +157,10 @@ impl crate::capture::Capturer for Feed {
     }
 
     fn try_latest(&mut self) -> anyhow::Result<Option<CapturedFrame>> {
-        Ok(self.st.0.lock().unwrap().frame.take())
+        let mut s = self.st.0.lock().unwrap();
+        let frame = s.frame.take();
+        s.took |= frame.is_some();
+        Ok(frame)
     }
 
     fn feed(&mut self) -> Option<&mut dyn pf_capture::Feed> {
@@ -145,6 +189,12 @@ struct Pipelined {
     pipelined: bool,
     seq: u32,
     submits: Arc<AtomicU32>,
+    /// The source's free buffers and its mailbox, when it waits for buffers
+    /// ([`Feed::start_on_return`]), and whether each submit not yet polled holds one.
+    pool: Option<(Shared<usize>, Shared<FeedState>)>,
+    holds: VecDeque<bool>,
+    /// Repeats submitted while an earlier encode was still running.
+    busy_repeats: Arc<AtomicU32>,
 }
 
 impl Pipelined {
@@ -184,6 +234,9 @@ impl Pipelined {
             pipelined,
             seq: 0,
             submits: Arc::default(),
+            pool: None,
+            holds: VecDeque::new(),
+            busy_repeats: Arc::default(),
         }
     }
 }
@@ -201,6 +254,13 @@ impl Drop for Pipelined {
 impl crate::encode::Encoder for Pipelined {
     fn submit(&mut self, _frame: &CapturedFrame) -> anyhow::Result<()> {
         self.submits.fetch_add(1, Ordering::Relaxed);
+        if let Some((_, feed)) = &self.pool {
+            let fresh = std::mem::take(&mut feed.0.lock().unwrap().took);
+            self.holds.push_back(fresh);
+            if !fresh && !self.gpu.0.lock().unwrap().running.is_empty() {
+                self.busy_repeats.fetch_add(1, Ordering::Relaxed);
+            }
+        }
         let (lock, cv) = &*self.gpu;
         let mut s = lock.lock().unwrap();
         while s.running.len() >= 2 {
@@ -220,7 +280,15 @@ impl crate::encode::Encoder for Pipelined {
         while !self.pipelined && s.done.is_empty() && !s.running.is_empty() {
             s = cv.wait(s).unwrap();
         }
-        Ok(s.done.pop_front().map(|seq| crate::encode::EncodedFrame {
+        let done = s.done.pop_front();
+        drop(s);
+        if done.is_some() && self.holds.pop_front() == Some(true) {
+            if let Some((free, _)) = &self.pool {
+                *free.0.lock().unwrap() += 1;
+                free.1.notify_all();
+            }
+        }
+        Ok(done.map(|seq| crate::encode::EncodedFrame {
             data: seq.to_le_bytes().to_vec(),
             pts_ns: 0,
             keyframe: false,
@@ -250,13 +318,28 @@ struct Run {
     repeats: u64,
     /// Waits the encoder's wake ended.
     encoded: usize,
-    /// A wait after an AU-ready wake that asked a different gate or deadline than the one it
-    /// resumed.
+    /// Ticks whose waits, resumed after AU-ready wakes, asked more than one gate, or more
+    /// deadlines than the two a tick has: the keep-alive and the one held for an owed AU.
     moved_gates: usize,
+    /// Repeats the encoder was handed while still encoding ([`Feed::start_on_return`] runs).
+    busy_repeats: u32,
 }
 
-/// The loop for `run_for` at `hz`, each encode taking `encode`.
+/// The loop for `run_for` at `hz`, each encode taking `encode`, fed at the stream rate.
 fn run(hz: u32, encode: Duration, pipelined: bool, rings: bool, run_for: Duration) -> Run {
+    run_fed(hz, encode, pipelined, rings, run_for, None)
+}
+
+/// [`run`], or with `phases` a source that waits for a buffer back
+/// ([`Feed::start_on_return`]) out of a pool of two: the encoder's slots hold them all.
+fn run_fed(
+    hz: u32,
+    encode: Duration,
+    pipelined: bool,
+    rings: bool,
+    run_for: Duration,
+    phases: Option<&[Duration]>,
+) -> Run {
     let period = Duration::from_secs(1) / hz;
     let mut f = fake();
     let (tx, rx) = std::sync::mpsc::sync_channel::<SendMsg>(256);
@@ -271,9 +354,18 @@ fn run(hz: u32, encode: Duration, pipelined: bool, rings: bool, run_for: Duratio
         }
     });
     f.st.send = SendThread::new(Arc::new(tx), consumer);
-    let enc = Pipelined::new(encode, pipelined, rings);
+    let mut enc = Pipelined::new(encode, pipelined, rings);
     let (gpu, submits) = (enc.gpu.clone(), enc.submits.clone());
-    let feed = Feed::start(period);
+    let busy_repeats = enc.busy_repeats.clone();
+    let feed = match phases {
+        None => Feed::start(period),
+        Some(phases) => {
+            let free: Shared<usize> = Arc::new((Mutex::new(2), Condvar::new()));
+            let feed = Feed::start_on_return(free.clone(), phases.to_vec());
+            enc.pool = Some((free, feed.st.clone()));
+            feed
+        }
+    };
     let feed_st = feed.st.clone();
     f.st.live.capturer = Box::new(feed);
     f.st.live.enc = Box::new(enc);
@@ -311,9 +403,14 @@ fn run(hz: u32, encode: Duration, pipelined: bool, rings: bool, run_for: Duratio
         .collect();
     let waits = &feed_st.0.lock().unwrap().waits;
     let encoded = waits.iter().filter(|w| w.2 == Paced::Encoded).count();
+    // One tick's waits: each but the last ended on an AU-ready wake.
     let moved_gates = waits
-        .windows(2)
-        .filter(|w| w[0].2 == Paced::Encoded && (w[0].0, w[0].1) != (w[1].0, w[1].1))
+        .chunk_by(|a, _| a.2 == Paced::Encoded)
+        .filter(|tick| {
+            let gates: std::collections::BTreeSet<_> = tick.iter().map(|w| w.0).collect();
+            let deadlines: std::collections::BTreeSet<_> = tick.iter().map(|w| w.1).collect();
+            gates.len() > 1 || deadlines.len() > 2
+        })
         .count();
     Run {
         ages,
@@ -323,6 +420,7 @@ fn run(hz: u32, encode: Duration, pipelined: bool, rings: bool, run_for: Duratio
         repeats,
         encoded,
         moved_gates,
+        busy_repeats: busy_repeats.load(Ordering::Relaxed),
     }
 }
 
@@ -409,6 +507,47 @@ fn an_au_ready_wake_hands_a_pipelined_au_off_at_once() {
 
 fn mean(v: &[f64]) -> f64 {
     v.iter().sum::<f64>() / v.len() as f64
+}
+
+/// A screencast source behind a saturated encoder: 120 Hz, 12 ms encodes, the next frame only
+/// once a buffer is back and then a compositor phase later, every fourth one late. A late
+/// frame finds the encoder still on the one before it. No repeat goes out ahead of an access
+/// unit the encoder still owes, so the loop that collects on the wake hands a busy encoder
+/// no repeat and sends as many fresh frames as today's.
+#[test]
+fn a_late_frame_behind_a_busy_encoder_gets_no_repeat() {
+    let ms = |x: f64| Duration::from_secs_f64(x / 1e3);
+    let phases = [ms(0.8), ms(0.8), ms(0.8), ms(7.8)];
+    let run_for = Duration::from_millis(2000);
+    let today = run_fed(120, ms(12.0), true, false, run_for, Some(&phases));
+    let woken = run_fed(120, ms(12.0), true, true, run_for, Some(&phases));
+    for (name, r) in [("today", &today), ("au wake", &woken)] {
+        println!(
+            "buffer-return source, {name}: ticks {} fresh {} repeats {} ({} on a busy encoder) \
+             AU wakes {} AU age p50 {:.2} ms",
+            r.ticks,
+            r.fresh,
+            r.repeats,
+            r.busy_repeats,
+            r.encoded,
+            pct(&r.ages, 0.5)
+        );
+    }
+    assert!(woken.encoded > 0, "the wake ended waits");
+    assert_eq!(
+        woken.busy_repeats, 0,
+        "repeats handed to a busy encoder with the wake ({} repeats, {} today)",
+        woken.repeats, today.repeats
+    );
+    assert_eq!(woken.moved_gates, 0, "a resumed wait moved");
+    assert!(
+        woken.fresh * 100 >= today.fresh * 97,
+        "fresh frames {} with the wake, {} today",
+        woken.fresh,
+        today.fresh
+    );
+    let age = pct(&woken.ages, 0.5);
+    assert!(age < 1.5, "AU age p50 {age:.2} ms with the wake");
 }
 
 /// Sync retrieve (not escalated): the encoder rings nothing, so the loop waits once a tick,

@@ -229,6 +229,7 @@ impl StreamState {
     fn hand_au_wake(&mut self) {
         let wake = self.live.capturer.feed().and_then(|f| f.au_wake());
         self.live.enc.set_au_wake(wake);
+        self.au_rings = false;
     }
 
     /// A fresh encoder retrieves synchronously, and gets the feed's AU wake. The session's
@@ -550,6 +551,7 @@ pub(super) mod tests {
             src_period_ns: None,
             encode_chain_ns: 0,
             tick_stamps: None,
+            au_rings: false,
             last_real_cap: None,
             _watcher: None,
             #[cfg(target_os = "linux")]
