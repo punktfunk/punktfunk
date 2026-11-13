@@ -35,6 +35,37 @@ fn raw_source_hold_is_cloned_for_the_pending_encode() {
     assert_eq!(std::sync::Arc::strong_count(&hold), 2);
 }
 
+/// A producer NV12 buffer with a zero stride is left to the worker, not divided by.
+#[test]
+fn a_zero_stride_nv12_buffer_is_not_read_in_place() {
+    let frame = |stride| CapturedFrame {
+        provenance: Default::default(),
+        width: 64,
+        height: 64,
+        pts_ns: 0,
+        format: PixelFormat::Nv12,
+        payload: FramePayload::Dmabuf(pf_frame::DmabufFrame {
+            fd: std::fs::File::open("/dev/null").unwrap().into(),
+            fourcc: u32::from_le_bytes(*b"NV12"),
+            modifier: 0,
+            plane1: None,
+            offset: 0,
+            stride,
+            hold: None,
+            health: pf_zerocopy::zero_copy_health(0x5001),
+            rebuild: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        }),
+        cursor: None,
+    };
+    for (stride, in_place) in [(0, false), (64, true)] {
+        let f = frame(stride);
+        let FramePayload::Dmabuf(d) = &f.payload else {
+            unreachable!()
+        };
+        assert_eq!(direct_span(&f, d).is_some(), in_place, "stride {stride}");
+    }
+}
+
 /// Env helper for ignored hardware tests. Run `--test-threads=1` — they mutate process env.
 fn set_env(key: &str, val: impl AsRef<std::ffi::OsStr>) {
     // SAFETY: `--test-threads=1` hardware tests only — no concurrent env access.

@@ -56,12 +56,12 @@ mod imp {
         None
     }
 
-    pub(crate) fn hevc_444(_: &Resolved) -> bool {
-        false
+    pub(crate) fn hevc_444(_: &Resolved) -> Option<bool> {
+        Some(false)
     }
 
-    pub(crate) fn ten_bit(_: &Resolved, _codec: Codec) -> bool {
-        false
+    pub(crate) fn ten_bit(_: &Resolved, _codec: Codec) -> Option<bool> {
+        Some(false)
     }
 
     pub(crate) fn sdr10(_: &Resolved, _codec: Codec) -> bool {
@@ -221,17 +221,22 @@ impl Resolved {
     }
 
     /// Whether the backend can emit 4:4:4 for `codec`, asked before Welcome. 4:4:4 is HEVC and
-    /// PyroWave only; VAAPI/AMF/QSV must be probed, never assumed.
+    /// PyroWave only; VAAPI/AMF/QSV must be probed, never assumed. A verdict whose probe could
+    /// not ask is `false` for this call and asked again next time.
     pub fn can_encode_444(&self, codec: Codec) -> bool {
         match codec {
             // Own RGB→YCbCr CSC from a full-chroma source — no GPU encode probe.
             // See `design/pyrowave-444-hdr.md`.
             Codec::PyroWave => cfg!(any(target_os = "linux", target_os = "windows")),
             Codec::H265 if cfg!(any(target_os = "linux", target_os = "windows")) => {
-                *self.hevc_444.get_or_init(|| {
-                    let supported = imp::hevc_444(self);
-                    tracing::info!(supported, "HEVC 4:4:4 encode capability probed");
-                    supported
+                if let Some(v) = self.hevc_444.get() {
+                    return *v;
+                }
+                imp::hevc_444(self).is_some_and(|supported| {
+                    *self.hevc_444.get_or_init(|| {
+                        tracing::info!(supported, "HEVC 4:4:4 encode capability probed");
+                        supported
+                    })
                 })
             }
             _ => false,
@@ -240,7 +245,8 @@ impl Resolved {
 
     /// Whether the backend can emit 10-bit for `codec` (HEVC Main10 / AV1), asked before
     /// Welcome. Without this gate `PUNKTFUNK_10BIT` would negotiate 10-bit and then emit 8-bit
-    /// (label HDR / stream SDR).
+    /// (label HDR / stream SDR). A verdict whose probe could not ask is `false` for this call
+    /// and asked again next time.
     pub fn can_encode_10bit(&self, codec: Codec) -> bool {
         if !codec.supports_10bit() || !cfg!(any(target_os = "linux", target_os = "windows")) {
             return false;
@@ -254,10 +260,14 @@ impl Resolved {
         let Some(slot) = codec_slot(codec) else {
             return false;
         };
-        *self.ten_bit[slot].get_or_init(|| {
-            let supported = imp::ten_bit(self, codec);
-            tracing::info!(codec = ?codec, supported, "10-bit encode capability probed");
-            supported
+        if let Some(v) = self.ten_bit[slot].get() {
+            return *v;
+        }
+        imp::ten_bit(self, codec).is_some_and(|supported| {
+            *self.ten_bit[slot].get_or_init(|| {
+                tracing::info!(codec = ?codec, supported, "10-bit encode capability probed");
+                supported
+            })
         })
     }
 

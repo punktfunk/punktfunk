@@ -67,21 +67,23 @@ pub(crate) fn advertised(r: &Resolved) -> Option<CodecSupport> {
 }
 
 /// HEVC 4:4:4 on the resolved backend. Only NVENC probes: VCN has no 4:4:4 encode
-/// (`design/native-amf-encoder.md`), VPL has no 4:4:4 query wired, and no MFT encodes it.
-pub(crate) fn hevc_444(r: &Resolved) -> bool {
-    match r.backend() {
+/// (`design/native-amf-encoder.md`), VPL has no 4:4:4 query wired, and no MFT encodes it. A
+/// probe that could not run reads `false`, same as a refusal, so every answer is kept.
+pub(crate) fn hevc_444(r: &Resolved) -> Option<bool> {
+    Some(match r.backend() {
         #[cfg(feature = "nvenc")]
         WindowsBackend::Nvenc => {
             nvenc::probe_can_encode_444(Codec::H265, pf_gpu::resolve_render_adapter_luid())
         }
         _ => false,
-    }
+    })
 }
 
 /// 10-bit `codec` on the resolved backend. A backend compiled out of this build answers
-/// `false`, and Media Foundation is 8-bit 4:2:0 only: it rejects P010 at open.
-pub(crate) fn ten_bit(r: &Resolved, codec: Codec) -> bool {
-    match r.backend() {
+/// `false`, and Media Foundation is 8-bit 4:2:0 only: it rejects P010 at open. A probe that
+/// could not run reads `false`, same as a refusal, so every answer is kept.
+pub(crate) fn ten_bit(r: &Resolved, codec: Codec) -> Option<bool> {
+    Some(match r.backend() {
         #[cfg(feature = "nvenc")]
         WindowsBackend::Nvenc => {
             nvenc::probe_can_encode_10bit(codec, pf_gpu::resolve_render_adapter_luid())
@@ -94,7 +96,7 @@ pub(crate) fn ten_bit(r: &Resolved, codec: Codec) -> bool {
             qsv::probe_can_encode_10bit(codec, pf_gpu::resolve_render_adapter_luid())
         }
         _ => false,
-    }
+    })
 }
 
 /// [`Resolved::is_gpu`] on Windows.
