@@ -190,8 +190,9 @@ public final class StreamViewController: StreamViewControllerBase {
     /// Capture state at the last resign, restored on the next foreground — otherwise the
     /// mouse/keyboard stay released after navigating out and nothing re-grabs them.
     private var wasCapturedOnResign = false
-    /// Match window's follower, non-nil while a session is active and enabled by the `matchWindow`
-    /// setting. `viewDidLayoutSubviews` feeds it the view's pixel size, so a scene resize, a
+    /// Match window's follower, non-nil while a session is active. It acts only while the
+    /// `matchWindow` setting is on and the picture is not on a monitor (`routeVideo`).
+    /// `viewDidLayoutSubviews` feeds it the view's pixel size, so a scene resize, a
     /// rotation, a fold or the upright half of a half-open one renegotiates the host mode 1:1.
     /// tvOS drives display modes through AVDisplayManager instead.
     private var matchFollower: MatchWindowFollower?
