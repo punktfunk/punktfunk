@@ -121,6 +121,11 @@ pub(super) fn share_cover(fp: &str, id: &str, k: f64, img: &Image, held: usize) 
 type ArtJob = (String, Arc<[u8]>, f64);
 type ArtDone = (String, Option<crate::library::DecodedPoster>);
 
+/// Covers one decoder holds at once. It decodes in arrival order and cannot drop a job, so a
+/// longer queue strands covers a scroll has left, and the ones now on screen wait behind them.
+/// Twice the covers a frame asks for, so a decoder that keeps up never reaches it.
+pub(super) const DECODE_QUEUE: usize = 16;
+
 /// A screen's covers decoded off the thread that draws: one worker, started on first use and
 /// stopped with the screen. A TV spends 15–90 ms on one cover, a dropped frame each on the
 /// render thread, and a screen that only has a cover's bytes must decode it itself.
@@ -169,6 +174,11 @@ impl ArtDecoder {
 
     pub(super) fn pending(&self, id: &str) -> bool {
         self.pending.contains(id)
+    }
+
+    /// How many more covers [`DECODE_QUEUE`] takes now.
+    pub(super) fn room(&self) -> usize {
+        DECODE_QUEUE.saturating_sub(self.pending.len())
     }
 
     /// Decodes finished since the last call; `None` for a cover that would not decode.
