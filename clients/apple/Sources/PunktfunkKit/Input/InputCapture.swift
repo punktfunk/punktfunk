@@ -112,8 +112,8 @@ public final class InputCapture {
     /// LOCKED, so this is true then and the GCMouse handlers forward. When the scene can't
     /// lock (Stage Manager, not frontmost, iPhone) the iPad routes the mouse through UIKit's
     /// pointer path as ABSOLUTE moves (`sendMouseAbs`) instead — so this goes false, gating
-    /// GCMouse off and enabling the absolute path, the two never double-sending. Moot on
-    /// macOS (no GCMouse handlers installed; `sendMouseAbs` is never called there). Main-queue.
+    /// GCMouse off and enabling the absolute path, the two never double-sending. macOS installs
+    /// no GCMouse handlers and leaves this false. Main-queue.
     public var gcMouseForwarding = false
 
     /// Fired on ⌘⎋ (the capture toggle — detected here so it works in both states; the
@@ -871,12 +871,11 @@ public final class InputCapture {
         }
     }
 
-    /// Forward an ABSOLUTE cursor position (iPad pointer fallback). Fed by the iOS stream
-    /// view's hover / indirect-pointer path when the scene can't pointer-lock: the host
-    /// places its cursor at this client-surface pixel — the same letterbox mapping the touch
-    /// path uses. Gated by `forwarding` AND `!gcMouseForwarding` (the relative GCMouse path
-    /// owns motion while locked), so absolute and relative motion never both fire. No residual
-    /// accumulation — the value is absolute, not a delta.
+    /// Forward an ABSOLUTE cursor position: the iPad pointer when the scene can't pointer-lock,
+    /// and the Mac's desktop mouse model (the stream view and each further screen's window).
+    /// The host places its cursor at this client-surface pixel. Gated by `forwarding` AND
+    /// `!gcMouseForwarding` (the relative GCMouse path owns motion while locked), so absolute
+    /// and relative motion never both fire. No residual: the value is absolute, not a delta.
     public func sendMouseAbs(
         x: Int32, y: Int32, surfaceWidth: UInt32, surfaceHeight: UInt32, screen: UInt8 = 0
     ) {
