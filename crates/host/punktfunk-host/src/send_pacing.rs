@@ -692,6 +692,7 @@ pub(crate) fn owed_aus(
 
 /// [`wait_tick_or_au`] for a loop that collects no access unit between ticks: an AU-ready
 /// wake only resumes the wait.
+#[cfg(any(test, feature = "gamestream"))]
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn wait_next_tick(
     capturer: &mut dyn crate::capture::Capturer,
