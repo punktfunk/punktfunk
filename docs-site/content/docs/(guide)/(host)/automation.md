@@ -155,6 +155,8 @@ console's Library form keeps prep steps but can't edit them.
 Every step gets the session's mode: `PF_STREAM_WIDTH`, `PF_STREAM_HEIGHT`, `PF_STREAM_REFRESH`,
 `PF_STREAM_HDR` (`1` / `0`), plus `PF_APP_ID` (a Punktfunk client's launch) or `PF_APP_TITLE`
 (Moonlight), and `PF_PRESET_ID` / `PF_PRESET_NAME` when the device streamed with a preset. `undo` sees the same values as its `do`, so one entry serves every device.
+A device names its own presets, so `PF_PRESET_ID` and `PF_PRESET_NAME` hold its text: quote them,
+and never build a command line from them.
 On Windows, `"elevated": true` on a step runs its `do` and `undo` as administrator, once it is
 [turned on](#run-as-administrator).
 

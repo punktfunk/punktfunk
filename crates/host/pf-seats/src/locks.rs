@@ -9,9 +9,12 @@
 //! file that can't be read locks every profile. A seat's copy carries no PIN: a seat host never
 //! takes a proof.
 //!
-//! A profile takes [`PIN_FAILURES`] wrong PINs in any [`PIN_WINDOW`], over all devices, counted
-//! in the file so a restart forgets none. A try counts before its hash runs and is taken back
-//! when right, so neither a crash nor tries at once get past the cap.
+//! A profile takes [`PIN_FAILURES`] wrong PINs in a window, over all devices, counted in the
+//! file so a restart forgets none. The window starts at [`PIN_WINDOW`], and every ten wrong PINs
+//! after the first ten double it, up to [`PIN_WINDOW_MAX`], until a right PIN or a new one: a
+//! flat window would let a paired device try every 4-digit PIN in ten days. A try counts before
+//! its hash runs and is taken back when right, so neither a crash nor tries at once get past
+//! the cap.
 
 use crate::ipc::{Device, UnlockKey};
 use crate::unlock::{lower_hex, DeviceList, MAX_KEYS};
@@ -24,10 +27,12 @@ use std::num::NonZeroU32;
 pub const FILE: &str = "profile-locks.json";
 /// A PIN is 4 to 8 ASCII digits: a gamepad and a TV remote type it.
 pub const PIN_LEN: std::ops::RangeInclusive<usize> = 4..=8;
-/// Wrong PINs a profile takes in any [`PIN_WINDOW`]: about 960 tries a day.
+/// Wrong PINs a profile takes in one window.
 pub const PIN_FAILURES: usize = 10;
-/// Seconds.
+/// The first window, seconds.
 pub const PIN_WINDOW: i64 = 15 * 60;
+/// The longest window, seconds: ten tries a day take 10,000 PINs almost three years.
+pub const PIN_WINDOW_MAX: i64 = 24 * 60 * 60;
 /// OWASP's PBKDF2-HMAC-SHA256 floor in 2023. The lockout, not this, guards a short PIN.
 const ITERATIONS: u32 = 600_000;
 /// Rounds a stored hash may name: under this is no slow hash, over it a check that never ends.
@@ -54,11 +59,19 @@ pub struct Lock {
     pub locked: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pin: Option<PinHash>,
-    /// When each wrong PIN, or try in flight, of the last [`PIN_WINDOW`] came, unix seconds.
+    /// When each wrong PIN, or try in flight, of the current window came, unix seconds.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub wrong_pins: Vec<i64>,
+    /// Wrong PINs since the last right one or the PIN's last change, tries in flight
+    /// included. They set the window ([`Lock::pin_window`]).
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub pin_misses: u32,
     #[serde(flatten)]
     pub list: DeviceList,
+}
+
+fn is_zero(n: &u32) -> bool {
+    *n == 0
 }
 
 /// What a device needs to open a profile.
@@ -134,6 +147,7 @@ impl Locks {
             let bare = Lock {
                 pin: None,
                 wrong_pins: Vec::new(),
+                pin_misses: 0,
                 ..lock.clone()
             };
             Some((id.clone(), bare))
@@ -221,11 +235,26 @@ impl Lock {
         true
     }
 
+    /// The window wrong PINs are counted over now: [`PIN_WINDOW`] for the first twenty misses,
+    /// then twice as long for every ten more, up to [`PIN_WINDOW_MAX`].
+    pub fn pin_window(&self) -> i64 {
+        let rounds = self.pin_misses / PIN_FAILURES as u32;
+        (PIN_WINDOW << rounds.saturating_sub(1).min(7)).min(PIN_WINDOW_MAX)
+    }
+
     /// Wrong PINs, and tries in flight, counted at `now`.
     pub fn wrong_pins(&mut self, now: i64) -> usize {
+        let window = self.pin_window();
         self.wrong_pins
-            .retain(|at| now.saturating_sub(*at) < PIN_WINDOW);
+            .retain(|at| now.saturating_sub(*at) < window);
         self.wrong_pins.len()
+    }
+
+    /// Wrong PINs, and tries in flight, of the last [`PIN_WINDOW`] at `now`, however long the
+    /// window counts them.
+    pub fn recent_wrong_pins(&self, now: i64) -> usize {
+        let recent = |at: &&i64| now.saturating_sub(**at) < PIN_WINDOW;
+        self.wrong_pins.iter().filter(recent).count()
     }
 
     /// Counts a PIN try at `now` before its hash runs, or answers the seconds until one would
@@ -233,19 +262,29 @@ impl Lock {
     pub fn charge_pin(&mut self, now: i64) -> Result<(), i64> {
         if self.wrong_pins(now) < PIN_FAILURES {
             self.wrong_pins.push(now);
+            self.pin_misses = self.pin_misses.saturating_add(1);
             return Ok(());
         }
         let mut counted = self.wrong_pins.clone();
         counted.sort_unstable();
-        let frees = counted[counted.len() - PIN_FAILURES] + PIN_WINDOW;
+        let frees = counted[counted.len() - PIN_FAILURES] + self.pin_window();
         Err(frees.saturating_sub(now).max(1))
     }
 
-    /// Takes back the try [`Self::charge_pin`] counted at `at`: its PIN was right.
+    /// Takes back the try [`Self::charge_pin`] counted at `at`: its PIN was right, which also
+    /// puts the window back to [`PIN_WINDOW`].
     pub fn refund_pin(&mut self, at: i64) {
         if let Some(i) = self.wrong_pins.iter().position(|t| *t == at) {
             self.wrong_pins.swap_remove(i);
         }
+        self.pin_misses = 0;
+    }
+
+    /// Sets or removes the PIN. The tries counted against the old one no longer count.
+    pub fn set_pin(&mut self, pin: Option<PinHash>) {
+        self.pin = pin;
+        self.wrong_pins.clear();
+        self.pin_misses = 0;
     }
 }
 
@@ -597,6 +636,47 @@ mod tests {
         );
         assert_eq!(lock.charge_pin(NOW + PIN_WINDOW), Ok(()), "the oldest left");
         assert_eq!(lock.wrong_pins(NOW + 2 * PIN_WINDOW), 0);
+    }
+
+    /// Every ten wrong PINs after the first ten double the window, up to a day, so guessing
+    /// slows to ten a day. A right PIN or a new PIN starts over.
+    #[test]
+    fn every_further_ten_wrong_pins_double_the_window() {
+        let fill = |lock: &mut Lock, now: i64| {
+            for _ in 0..PIN_FAILURES {
+                assert_eq!(lock.charge_pin(now), Ok(()));
+            }
+        };
+        let mut lock = Lock::default();
+        let mut now = NOW;
+        fill(&mut lock, now);
+        assert_eq!(lock.charge_pin(now), Err(PIN_WINDOW), "the first wait");
+        for doublings in 1..=7 {
+            now += lock.pin_window();
+            fill(&mut lock, now);
+            let window = (PIN_WINDOW << doublings).min(PIN_WINDOW_MAX);
+            assert_eq!(lock.charge_pin(now), Err(window), "after {doublings}");
+        }
+        assert_eq!(lock.pin_window(), PIN_WINDOW_MAX);
+        now += PIN_WINDOW_MAX;
+        fill(&mut lock, now);
+        assert_eq!(lock.charge_pin(now), Err(PIN_WINDOW_MAX), "a day at most");
+        assert_eq!(lock.recent_wrong_pins(now + PIN_WINDOW), 0);
+        assert_eq!(lock.wrong_pins(now + PIN_WINDOW), PIN_FAILURES);
+
+        // A right PIN puts the window back.
+        let mut lock = Lock::default();
+        fill(&mut lock, NOW);
+        fill(&mut lock, NOW + PIN_WINDOW);
+        assert_eq!(lock.pin_window(), 2 * PIN_WINDOW);
+        lock.refund_pin(NOW + PIN_WINDOW);
+        assert_eq!((lock.pin_misses, lock.pin_window()), (0, PIN_WINDOW));
+        // A new PIN forgets the tries against the old one.
+        fill(&mut lock, NOW + 3 * PIN_WINDOW);
+        assert!(lock.charge_pin(NOW + 3 * PIN_WINDOW).is_err());
+        lock.set_pin(PinHash::new("135790"));
+        assert_eq!(lock.charge_pin(NOW + 3 * PIN_WINDOW), Ok(()));
+        assert_eq!(lock.pin_misses, 1);
     }
 
     /// The operator's add reads as `added` through a later PIN, and as `key` once a key is

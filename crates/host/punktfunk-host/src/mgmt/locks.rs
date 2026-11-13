@@ -333,7 +333,9 @@ pub(crate) async fn lock_profile(
         if !devices.iter().all(|d| next.add(d, now)) {
             return Err(StatusCode::UNPROCESSABLE_ENTITY);
         }
-        next.pin = hash.or(next.pin);
+        if hash.is_some() {
+            next.set_pin(hash);
+        }
         *lock = next;
         Ok(())
     });
@@ -409,7 +411,7 @@ pub(crate) async fn set_profile_pin(
         return pin_invalid();
     }
     match hashed(body.pin).await {
-        Ok(hash) => change(&st, &id, |lock| lock.pin = Some(hash)).await,
+        Ok(hash) => change(&st, &id, |lock| lock.set_pin(Some(hash))).await,
         Err(resp) => resp,
     }
 }
@@ -453,7 +455,7 @@ pub(crate) async fn clear_profile_pin(
     State(st): State<Arc<MgmtState>>,
     Path(id): Path<String>,
 ) -> Response {
-    change(&st, &id, |lock| lock.pin = None).await
+    change(&st, &id, |lock| lock.set_pin(None)).await
 }
 
 /// Let a paired device open a profile

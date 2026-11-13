@@ -511,6 +511,15 @@ pub(crate) async fn set_display_client(
     Json(display_settings_state()).into_response()
 }
 
+/// What a device without `GRANT_DISPLAY` is told when it picks a screen.
+pub(super) fn screen_choice_refused() -> Response {
+    api_error_coded(
+        StatusCode::FORBIDDEN,
+        "screen_choice_not_granted",
+        "This host decides the screen for this device.",
+    )
+}
+
 /// A paired device `me` writes the pick of its row `key` ([`device_pick`]), while its live
 /// access holds `GRANT_DISPLAY`. The answer carries no settings: the state names every other
 /// device.
@@ -520,11 +529,7 @@ fn set_own_pick(st: &MgmtState, me: &str, key: &str, body: serde_json::Value) ->
         Err((status, why)) => return api_error(status, &why),
     };
     if !super::downloads::granted(st, Some(me), GRANT_DISPLAY) {
-        return api_error_coded(
-            StatusCode::FORBIDDEN,
-            "screen_choice_not_granted",
-            "This host decides the screen for this device.",
-        );
+        return screen_choice_refused();
     }
     if let Some(refused) = refused_on_seat() {
         return refused;

@@ -77,13 +77,68 @@ pub fn set_aside_if_planted(path: &Path) -> Result<bool> {
 /// never entered, an admin-owned directory is walked. Lock `dir` first, or what lands during
 /// the walk is missed. `Err` names the entry that stayed; harden nothing it could not move.
 pub fn quarantine_planted_tree(dir: &Path) -> Result<()> {
+    set_aside_tree(dir, false, None)
+}
+
+/// [`quarantine_planted_tree`] that also sets aside every file, whoever owns it, but `keep`
+/// directly in `dir`. For a tree whose ACL let others modify, rename or hold open what admins
+/// own: there an owner proves nothing about a file, and a handle opened before the lock follows
+/// its file aside.
+pub fn clear_open_tree(dir: &Path, keep: &Path) -> Result<()> {
+    set_aside_tree(dir, true, Some(keep))
+}
+
+/// The file a folder holds from its lock until what it held is proven. A pass that finds
+/// anything at this name has that work to do, whatever the folder's ACL says by then.
+pub const UNPROVEN: &str = ".pf-unproven";
+
+/// Leave this process's marker at `path`, in a folder locked just before: a plain file an admin
+/// owns stays, anything else there goes aside first. On `Err` what was at `path` is still
+/// there, so the next pass finds it.
+pub fn mark_unproven(path: &Path) -> Result<()> {
+    use std::os::windows::fs::MetadataExt;
+    const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
+    match std::fs::symlink_metadata(path) {
+        Ok(md)
+            if md.is_file()
+                && md.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT == 0
+                && is_admin_owned(path) == Some(true) =>
+        {
+            return Ok(());
+        }
+        Ok(_) => {
+            rename_aside(path)
+                .map_err(|e| other(format!("rename {} aside: {e}", path.display())))?;
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => return Err(other(format!("read {}: {e}", path.display()))),
+    }
+    std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)
+        .map(drop)
+        .map_err(|e| other(format!("create {}: {e}", path.display())))
+}
+
+fn set_aside_tree(dir: &Path, files: bool, keep: Option<&Path>) -> Result<()> {
     // Listed in full first: a listing still open could hand back the name just renamed.
     let entries = std::fs::read_dir(dir)
         .and_then(|it| it.map(|e| e.map(|e| e.path())).collect::<Result<Vec<_>>>())
         .map_err(|e| other(format!("list {}: {e}", dir.display())))?;
     for entry in entries {
-        if !set_aside_if_planted(&entry)? && entry.is_dir() {
-            quarantine_planted_tree(&entry)?;
+        if keep == Some(entry.as_path()) {
+            continue;
+        }
+        let gone = if files && entry.is_file() {
+            rename_aside(&entry)
+                .map_err(|e| other(format!("rename {} aside: {e}", entry.display())))?;
+            true
+        } else {
+            set_aside_if_planted(&entry)?
+        };
+        if !gone && entry.is_dir() {
+            set_aside_tree(&entry, files, None)?;
         }
     }
     Ok(())
@@ -638,6 +693,55 @@ mod planted_tree_tests {
             planted
         );
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// An open tree keeps its marker and its folders, those only when an admin owns them: every
+    /// other file goes aside whoever owns it, and a junction without its target being entered.
+    #[test]
+    fn an_open_tree_keeps_no_file_and_never_follows_a_junction() {
+        let tag = format!("pf-open-tree-{}", std::process::id());
+        let (root, target) = (
+            std::env::temp_dir().join(&tag),
+            std::env::temp_dir().join(format!("{tag}-target")),
+        );
+        let _ = std::fs::remove_dir_all(&root);
+        let _ = std::fs::remove_dir_all(&target);
+        std::fs::create_dir_all(root.join("sub")).unwrap();
+        std::fs::create_dir_all(&target).unwrap();
+        std::fs::write(root.join("version.dll"), "x").unwrap();
+        std::fs::write(root.join("sub").join("layer.dll"), "x").unwrap();
+        std::fs::write(target.join("kept.dll"), "x").unwrap();
+        let link = std::process::Command::new("cmd")
+            .args(["/C", "mklink", "/J"])
+            .arg(root.join("link"))
+            .arg(&target)
+            .stdout(std::process::Stdio::null())
+            .status()
+            .unwrap();
+        assert!(link.success(), "mklink /J must work for a standard user");
+        let admin = super::is_admin_owned(&root.join("sub")) == Some(true);
+        let marker = root.join(super::UNPROVEN);
+        super::mark_unproven(&marker).unwrap();
+
+        super::clear_open_tree(&root, &marker).unwrap();
+        assert!(marker.is_file(), "the marker went aside");
+        assert!(!root.join("version.dll").exists());
+        assert!(root.join("version.dll.untrusted").exists());
+        assert!(!root.join("link").exists());
+        assert!(
+            target.join("kept.dll").exists(),
+            "the walk entered the junction"
+        );
+        assert_eq!(root.join("sub").is_dir(), admin);
+        let layer = if admin {
+            root.join("sub").join("layer.dll.untrusted")
+        } else {
+            root.join("sub.untrusted").join("layer.dll")
+        };
+        assert!(layer.exists(), "{}", layer.display());
+        std::fs::remove_dir(root.join("link.untrusted")).unwrap();
+        let _ = std::fs::remove_dir_all(&root);
+        let _ = std::fs::remove_dir_all(&target);
     }
 }
 

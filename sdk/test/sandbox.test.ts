@@ -104,14 +104,22 @@ describe("refusedRoot", () => {
 			"/home/u/.pam_environment",
 			"/home/u/.xprofile",
 			"/home/u/.xinitrc",
+			"/home/u/.xsession",
+			"/home/u/.config/hypr",
+			"/home/u/.local/share/gnome-shell/extensions",
+			"/home/u/.local/share/dbus-1/services",
+			"/home/u/.local/share/kwin/scripts",
 			// A parent binds its child with it.
-			"/home/u/.local",
-			"/home/u/.local/share",
 			"/home/u/.config/plasma-workspace",
 			"/home/u/.config/autostart/../systemd/user",
 		]) {
 			for (const config of [paths.configDir, "/var/lib/punktfunk"]) {
-				expect([p, config, refusedRoot(p, "/home/u", config, true)]).toEqual([p, config, true]);
+				// Even through the owner's grant.
+				expect([p, config, refusedRoot(p, "/home/u", config, true, true)]).toEqual([
+					p,
+					config,
+					true,
+				]);
 				// A launcher reads them (the desktop-entry plugin scans `~/.local/share/applications`).
 				expect([p, config, refusedRoot(p, "/home/u", config, false)]).toEqual([
 					p,
@@ -120,6 +128,85 @@ describe("refusedRoot", () => {
 				]);
 			}
 		}
+	});
+
+	test("keeps browser profiles, keyrings and cloud credentials, and their parents, out of every bind", () => {
+		for (const p of [
+			"/home/u/.mozilla/firefox",
+			"/home/u/.config/google-chrome/Default",
+			"/home/u/.var/app/org.mozilla.firefox",
+			"/home/u/snap/firefox/common",
+			"/home/u/.local/share/keyrings",
+			"/home/u/.aws",
+			"/home/u/.config/gh",
+			// A parent binds its child with it.
+			"/home/u/.local",
+			"/home/u/.local/share",
+			"/home/u/.var/app",
+			"/home/u/snap",
+		]) {
+			for (const write of [false, true]) {
+				for (const operator of [false, true]) {
+					expect([p, write, operator, refusedRoot(p, "/home/u", paths.configDir, write, operator)])
+						.toEqual([p, write, operator, true]);
+				}
+			}
+		}
+	});
+
+	test("a write binds only through the owner's grant, except under /tmp", () => {
+		for (const p of [
+			"/home/u/Emu",
+			"/home/u/.local/share/punktfunk/emulators/ryujinx/app",
+			"/mnt/games",
+			"/run/media/u/SD",
+			"/tmpx/games",
+		]) {
+			expect([p, refusedRoot(p, "/home/u", paths.configDir, true)]).toEqual([p, true]);
+			expect([p, refusedRoot(p, "/home/u", paths.configDir, true, true)]).toEqual([p, false]);
+			expect([p, refusedRoot(p, "/home/u", paths.configDir, false)]).toEqual([p, false]);
+		}
+		expect(refusedRoot("/tmp/vhclient", "/home/u", paths.configDir, true)).toBe(false);
+		const declared = manifest({ writes: ["~/Emu", "/mnt/games", "/tmp/vhclient"] });
+		const vh: [string, string] = ["/tmp/vhclient", "/tmp/vhclient"];
+		expect(binds(bwrapArgv(declared, paths), "--bind-try")).toEqual([vh]);
+		const granted = bwrapArgv(declared, paths, [
+			{ path: "/home/u/Emu", write: true },
+			{ path: "/mnt/games", write: true },
+		]);
+		expect(binds(granted, "--bind-try")).toEqual([
+			vh,
+			["/home/u/Emu", "/home/u/Emu"],
+			["/mnt/games", "/mnt/games"],
+		]);
+	});
+
+	test("binds nothing spelled with `..`, which the kernel resolves past a planted link", () => {
+		const argv = bwrapArgv(
+			manifest({
+				reads: ["/home/u/Games/l/..", "~/Games/../Emu"],
+				writes: ["/home/u/Games/l/..", "~/x/.."],
+			}),
+			paths,
+			[
+				{ path: "/mnt/games/l/..", write: true },
+				{
+					path: "/mnt/ssd",
+					write: false,
+					links: [{ path: "/home/u/Games/SteamLibrary", target: "/mnt/ssd/../../home/u/.ssh" }],
+				},
+			],
+		);
+		const placed = [
+			...binds(argv, "--bind-try"),
+			...binds(argv, "--ro-bind-try"),
+			...binds(argv, "--symlink"),
+		].flat();
+		expect(placed.filter((p) => p.split("/").includes(".."))).toEqual([]);
+		expect(binds(argv, "--bind-try")).toEqual([]);
+		const ro = binds(argv, "--ro-bind-try").map(([src]) => src);
+		expect(ro).toContain("/mnt/ssd");
+		expect(ro.filter((p) => p.startsWith("/home/"))).toEqual([]);
 	});
 
 	test("lets launcher, media and temp paths through", () => {
@@ -139,7 +226,8 @@ describe("refusedRoot", () => {
 			"/usr/share/applications",
 		]) {
 			for (const write of [false, true]) {
-				expect([p, write, refusedRoot(p, "/home/u", paths.configDir, write)]).toEqual([
+				// A write under the home binds through the owner's grant.
+				expect([p, write, refusedRoot(p, "/home/u", paths.configDir, write, true)]).toEqual([
 					p,
 					write,
 					false,
@@ -168,7 +256,7 @@ describe("refusedRoot", () => {
 		}
 	});
 
-	test("refuses what the host's refusal_rule refuses, wherever the config dir is", () => {
+	test("refuses what the host's bind_refusal refuses, wherever the config dir is", () => {
 		const file = path.join(
 			import.meta.dir,
 			"../../crates/host/punktfunk-host/testdata/path-refusal-vectors.json",
@@ -179,19 +267,20 @@ describe("refusedRoot", () => {
 				home: string;
 				config_dir: string;
 				write: boolean;
+				operator: boolean;
 				refused: boolean;
 			}[];
 		};
 		expect(vectors.some((v) => v.config_dir !== paths.configDir)).toBe(true);
 		expect(vectors.some((v) => v.write)).toBe(true);
-		// No read row has `~/.config` under a non-default config dir: the host binds it there, the
-		// sandbox still refuses it. Stricter on purpose, as defense in depth.
+		expect(vectors.some((v) => v.operator)).toBe(true);
 		for (const v of vectors) {
-			const got = refusedRoot(v.path, v.home, v.config_dir, v.write);
-			expect([v.path, v.config_dir, v.write, got]).toEqual([
+			const got = refusedRoot(v.path, v.home, v.config_dir, v.write, v.operator);
+			expect([v.path, v.config_dir, v.write, v.operator, got]).toEqual([
 				v.path,
 				v.config_dir,
 				v.write,
+				v.operator,
 				v.refused,
 			]);
 		}

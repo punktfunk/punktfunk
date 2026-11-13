@@ -231,7 +231,14 @@ fn slug(name: &str) -> String {
     }
 }
 
-/// Store values go through JSON escaping — a host may be named `"};evil`.
+/// One argument for the shell the menu runs an action in: inside single quotes only `'` is
+/// special, so each one closes the quote, writes `\'` and opens it again.
+fn sh_quote(s: &str) -> String {
+    format!("'{}'", s.replace('\'', r"'\''"))
+}
+
+/// Store values go through JSON escaping, and an address in an action through [`sh_quote`]:
+/// a host may be named `"};evil` or addressed `x';evil`.
 fn rows_for(known: &KnownHosts) -> String {
     let j = |s: &str| serde_json::to_string(s).unwrap_or_else(|_| "\"\"".into());
     let mut out = String::new();
@@ -260,14 +267,17 @@ fn rows_for(known: &KnownHosts) -> String {
             "  \"punktfunk.connect-{id}\": {{\"icon\":\"\u{f0318}\",\"label\":{},\"description\":{},\"aliases\":[\"connect\"],\"action\":{}}},\n",
             j(label),
             j(&format!("Connect and stream — {target}")),
-            j(&format!("uwsm-app -- punktfunk-client --connect '{target}'")),
+            j(&format!(
+                "uwsm-app -- punktfunk-client --connect {}",
+                sh_quote(&target)
+            )),
         ));
         // Wake row only when a MAC is known: a row that cannot work is worse than none.
         if !h.mac.is_empty() {
             out.push_str(&format!(
                 "  \"punktfunk.wake-{id}\": {{\"icon\":\"\u{f0425}\",\"label\":{},\"description\":\"Send Wake-on-LAN\",\"action\":{}}},\n",
                 j(&format!("Wake {label}")),
-                j(&format!("punktfunk-client --wake '{target}'")),
+                j(&format!("punktfunk-client --wake {}", sh_quote(&target))),
             ));
         }
     }
@@ -353,6 +363,24 @@ mod tests {
         .unwrap();
         let v = jsonc_parse(&doc).expect("a URL-ish name still parses");
         assert_eq!(v["punktfunk.connect-x-y"]["label"].as_str(), Some(commenty));
+    }
+
+    /// The shell reads a hostile address back as the one argument it is.
+    #[test]
+    fn a_hostile_address_stays_one_shell_argument() {
+        let addr = "x';echo pwned;'";
+        let doc =
+            insert_block("{\n}\n", &rows_for(&known(vec![host("Desk", addr, true)]))).unwrap();
+        let v = jsonc_parse(&doc).expect("parses");
+        for (row, flag) in [("connect-desk", "--connect "), ("wake-desk", "--wake ")] {
+            let action = v[format!("punktfunk.{row}")]["action"].as_str().unwrap();
+            let arg = action.split_once(flag).unwrap().1;
+            let out = std::process::Command::new("sh")
+                .args(["-c", &format!("printf %s {arg}")])
+                .output()
+                .unwrap();
+            assert_eq!(String::from_utf8_lossy(&out.stdout), format!("{addr}:9777"));
+        }
     }
 
     #[test]

@@ -158,18 +158,12 @@ where
     Ok(())
 }
 
-/// Snapshot access, then prove this is still the PIN we started with, then disarm.
-/// Reverse order fails open: [`NativePairing::add_with_access`] treats a missing
-/// choice as full/permanent. `Err` if the window lapsed or was re-armed — leave
-/// the live window untouched so a stalling client cannot wipe the next one.
+/// Take the window this ceremony's PIN belongs to, with its access choice. `Err` if it
+/// lapsed, was re-armed, or another ceremony took it first: the live window stays armed, so a
+/// stalling client can't wipe the next one, and one PIN buys one guess.
 fn consume_window(np: &NativePairing, pin: &str) -> Result<Option<crate::native_pairing::Access>> {
-    let access = np.armed_access();
-    anyhow::ensure!(
-        np.current_pin().as_deref() == Some(pin),
-        "the pairing window lapsed while the ceremony was running"
-    );
-    np.disarm();
-    Ok(access)
+    np.take_window(pin)
+        .context("the pairing window lapsed while the ceremony was running")
 }
 
 #[cfg(test)]
@@ -201,6 +195,7 @@ mod tests {
         let pin = np.arm_for(Duration::from_secs(60), None, Some(controller_4h()));
         assert_eq!(consume_window(&np, &pin).unwrap(), Some(controller_4h()));
         assert!(np.current_pin().is_none(), "single-use: window consumed");
+        assert!(consume_window(&np, &pin).is_err(), "one PIN, one ceremony");
 
         // Duration::ZERO is already past when read: refuse, do not mint full/permanent.
         let pin = np.arm_for(Duration::ZERO, None, Some(controller_4h()));
