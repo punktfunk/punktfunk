@@ -891,15 +891,17 @@ public final class GamepadCapture {
     /// Engage or stand down the phone-gyro mirror: it speaks for pad 0 exactly while a
     /// forwarded controller holds that index but can't rotate for itself — no `GCMotion`,
     /// or a motion object without a rotation rate (gravity-only pads, e.g. an Xbox pad on
-    /// iOS). It stands down while the ring owns the pad. Re-evaluated on every reconcile, on
-    /// suspend/resume and as the ring opens or closes; `DeviceGyro.stop` parks the host pad's
-    /// rotation at zero, so standing down never strands a spin.
+    /// iOS), and the host built that pad a backend with a motion plane. It stands down while
+    /// the ring owns the pad. Re-evaluated on every reconcile, on suspend/resume and as the ring
+    /// opens or closes; `DeviceGyro.stop` parks the host pad's rotation at zero, so standing
+    /// down never strands a spin.
     private func updateDeviceGyro() {
         #if os(iOS)
         guard let gyro = deviceGyro else { return }
         let pad0 = slots.first { $0.pad == 0 }
         let wants = live && !ringOpen && pad0 != nil
             && pad0!.controller.motion?.hasRotationRate != true
+            && connection.motionReaches(declared: pad0!.pref)
         if wants { gyro.start() } else { gyro.stop() }
         #endif
     }
