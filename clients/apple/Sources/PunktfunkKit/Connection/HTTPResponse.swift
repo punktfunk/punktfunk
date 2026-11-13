@@ -2,9 +2,8 @@
 //
 // We speak HTTP ourselves because the management API has to be reached OUTSIDE the URL loading
 // system: App Transport Security applies to URLSession and cannot be relaxed for the arbitrary,
-// user-supplied addresses a punktfunk host lives at (see MgmtTransport for the full story). What
-// we need is GETs against one host, so this covers exactly that and nothing more — no redirects,
-// no request bodies, no content negotiation.
+// user-supplied addresses a punktfunk host lives at (see MgmtTransport). It parses what one
+// host's management API answers and nothing more: no redirects, no content negotiation.
 //
 // It does need to find where a response ENDS without waiting for the peer to hang up, because the
 // connection is reused across a grid's worth of poster fetches (`messageLength`). Both framings
