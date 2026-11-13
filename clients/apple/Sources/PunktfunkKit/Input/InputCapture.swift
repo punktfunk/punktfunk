@@ -2,9 +2,9 @@
 //
 // macOS takes mouse motion and buttons from StreamLayerView's NSEvent monitor under cursor
 // disassociation, as the mouse's own counts before macOS acceleration: the host applies its
-// pointer curve once. GCMouse there can stay silent and never sees a trackpad, so its motion
-// and button handlers are not installed. iOS keeps GCMouse, raw under pointer lock.
-// GCKeyboard gives HID keycodes, mapped to the Windows VK space the host's tables consume.
+// pointer curve once. Its keys come from NSEvent too. GCMouse there can stay silent and never
+// sees a trackpad, so macOS installs no GameController handlers. iOS and tvOS keep GCMouse (raw
+// under pointer lock) and GCKeyboard, whose HID keycodes map to the host's Windows VKs.
 // Fractional motion carries per axis so slow, sub-pixel moves survive the integer wire.
 //
 // GC delivers only while the app is active, so everything held is released on
@@ -41,8 +41,10 @@ public final class InputCapture {
 
     private let connection: PunktfunkConnection
     private var observers: [NSObjectProtocol] = []
+    #if !os(macOS)
     private var mice: [GCMouse] = []
     private var keyboards: [GCKeyboard] = []
+    #endif
     #if os(macOS)
     private var keyEventMonitor: Any?
     /// This capture holds `SystemHotKeys` off (see `holdSystemShortcuts`).
@@ -235,14 +237,17 @@ public final class InputCapture {
         if let previous = Self.activeCapture, previous !== self {
             // Drop the previous owner's device lists first: its stop() must not be able
             // to nil out the handler slots this capture is about to claim.
+            #if !os(macOS)
             previous.mice.removeAll()
             previous.keyboards.removeAll()
+            #endif
             previous.onPreempted?()
         }
         Self.activeCapture = self
         keyEngine = Shortcuts.Engine(
             connection.settings.resolvedShortcuts.runnable(dial: onShortcut != nil), device: .keyboard)
         forgetShortcutKeys()
+        #if !os(macOS)
         // Every connected mouse, not just `GCMouse.current`: each delivers through its own
         // handler, and only one is current at a time. New ones arrive via GCMouseDidConnect.
         for mouse in GCMouse.mice() { attach(mouse: mouse) }
@@ -269,7 +274,6 @@ public final class InputCapture {
                 MainActor.assumeIsolated { self?.attach(keyboard: k) }
             }
         })
-        #if !os(macOS)
         // A device that drops mid-press never sends its releases, and the repeat ticker would
         // keep typing a held key.
         observers.append(NotificationCenter.default.addObserver(
@@ -391,6 +395,7 @@ public final class InputCapture {
         #endif
         // Don't clobber the handlers if a newer capture has taken the global devices.
         if Self.activeCapture === self || Self.activeCapture == nil {
+            #if !os(macOS)
             for mouse in mice {
                 guard let input = mouse.mouseInput else { continue }
                 input.mouseMovedHandler = nil
@@ -403,11 +408,12 @@ public final class InputCapture {
             for keyboard in keyboards {
                 keyboard.keyboardInput?.keyChangedHandler = nil
             }
+            #endif
             Self.activeCapture = nil
         }
+        #if !os(macOS)
         mice.removeAll()
         keyboards.removeAll()
-        #if !os(macOS)
         stopAutoRepeat()
         #endif
     }
@@ -763,6 +769,7 @@ public final class InputCapture {
     }
     #endif
 
+    #if !os(macOS)
     /// A preempted capture keeps its connect observers; the guard stops a reconnect there from
     /// taking the global handler slots back from the live one.
     private func attach(mouse: GCMouse) {
@@ -771,11 +778,6 @@ public final class InputCapture {
               !mice.contains(where: { $0 === mouse }) // re-delivered on wake — attach once
         else { return }
         mice.append(mouse)
-        // macOS drives motion + buttons from NSEvent (StreamLayerView's local monitor →
-        // sendMotion/sendMouseButton) because GCMouse's handlers proved unreliable there;
-        // installing them too would double-send. iOS keeps GCMouse (raw deltas under
-        // pointer lock). See the file header.
-        #if !os(macOS)
         input.mouseMovedHandler = { [weak self] _, dx, dy in
             guard let self, self.forwarding, self.gcMouseForwarding else { return }
             // GC gives +y up; the host expects screen-space (+y down).
@@ -835,8 +837,8 @@ public final class InputCapture {
                 source: PUNKTFUNK_SCROLL_SOURCE_WHEEL, phase: PUNKTFUNK_SCROLL_PHASE_NONE)
         }
         #endif
-        #endif
     }
+    #endif
 
     /// Forward relative mouse motion (macOS), fed by StreamLayerView's NSEvent monitor while
     /// the cursor is disassociated: the mouse's own counts, +y down as the host expects, so
@@ -895,18 +897,11 @@ public final class InputCapture {
         }
     }
 
+    #if !os(macOS)
     private func attach(keyboard: GCKeyboard) {
         guard Self.activeCapture === self, !keyboards.contains(where: { $0 === keyboard })
         else { return }
         keyboards.append(keyboard)
-        // macOS sends keys from NSEvent (StreamLayerView's keyDown/keyUp/flagsChanged →
-        // sendKey/handleFlagsChanged) because GCKeyboard delivery proved unreliable there —
-        // the same GameController quirk that killed GCMouse motion (fixed in e414ec0).
-        // Installing this handler too would double-send, so on macOS we leave the keyboard
-        // tracked (for stop()'s cleanup) but attach no send handler: NSEvent is the only
-        // key path. iOS keeps the GCKeyboard path (and detects the ⌘⎋ toggle from the HID
-        // stream, since there's no NSEvent monitor there). See the file header.
-        #if !os(macOS)
         keyboard.keyboardInput?.keyChangedHandler = { [weak self] _, _, keyCode, pressed in
             guard let self, let vk = Self.hidToVK[keyCode.rawValue] else { return }
             if vk == 0x5B || vk == 0x5C { // physical ⌘ state, tracked in both states
@@ -955,8 +950,8 @@ public final class InputCapture {
                 self.stopAutoRepeat()
             }
         }
-        #endif
     }
+    #endif
 }
 
 #if os(macOS)
