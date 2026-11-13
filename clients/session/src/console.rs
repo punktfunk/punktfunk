@@ -265,12 +265,12 @@ pub fn run(target: Option<&str>) -> u8 {
     }
     // The desktop's reduce-motion switch, followed while it answers. A desktop that says
     // nothing starts no thread and keeps the console's own row.
-    if let Some(reduce) = pf_client_core::os_prefs::reduce_motion() {
+    let mut reduce_motion = pf_client_core::os_prefs::reduce_motion_reader();
+    if let Some(reduce) = reduce_motion() {
         pf_console_ui::os_theme::set_os_reduce_motion(Some(reduce));
-        std::thread::spawn(|| loop {
+        std::thread::spawn(move || loop {
             std::thread::sleep(std::time::Duration::from_secs(5));
-            let reduce = pf_client_core::os_prefs::reduce_motion();
-            pf_console_ui::os_theme::set_os_reduce_motion(reduce);
+            pf_console_ui::os_theme::set_os_reduce_motion(reduce_motion());
         });
     }
     let identity = match trust::load_or_create_identity() {
@@ -1405,16 +1405,23 @@ impl ServiceState {
             })
             .unzip();
         let probed = self.probed.clone();
-        let inflight = self.probe_inflight.clone();
+        // Dropped with the closure: the thread ending, panicking or never starting all free the pass.
+        struct Idle(Arc<AtomicBool>);
+        impl Drop for Idle {
+            fn drop(&mut self) {
+                self.0.store(false, Ordering::SeqCst);
+            }
+        }
+        let idle = Idle(self.probe_inflight.clone());
         std::thread::Builder::new()
             .name("punktfunk-probe".into())
             .spawn(move || {
+                let _idle = idle;
                 let results = trust::probe_known(&hosts, Duration::from_millis(900));
                 let mut map = probed.lock().unwrap();
                 for (key, ok) in keys.into_iter().zip(results) {
                     map.insert(key, ok);
                 }
-                inflight.store(false, Ordering::SeqCst);
             })
             .ok();
     }
