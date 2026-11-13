@@ -455,6 +455,9 @@ public final class PunktfunkConnection: @unchecked Sendable {
     /// Serializes the (single) cursor pull thread against close() — both cursor planes are
     /// drained by ONE thread, so one lock covers them.
     private let cursorLock = NSLock()
+    /// Held across `networkCheck`, which blocks for ten to twenty seconds: under `abiLock` it
+    /// would stall every send and `probeResult`, which the speed test polls while the check runs.
+    private let checkLock = NSLock()
     /// Same role for each further screen's pump, screens 1 to 3: one screen's poll never waits on
     /// another's.
     private let screenLocks = [NSLock(), NSLock(), NSLock()]
@@ -1589,7 +1592,7 @@ public final class PunktfunkConnection: @unchecked Sendable {
     /// with `deliveryFlags: deliveryProbeOnly`. nil when the host declined, a round never
     /// reported, or after close.
     public func networkCheck() -> HealthReport? {
-        return withLiveHandle(or: nil) { h in
+        return withLiveHandle(holding: checkLock, or: nil) { h in
             var out = PunktfunkHealthReport()
             guard punktfunk_connection_network_check(h, &out) == statusOK else { return nil }
             let clean: CleanRound? = out.has_clean != 0
@@ -2334,12 +2337,14 @@ public final class PunktfunkConnection: @unchecked Sendable {
         statsLock.lock()
         clipboardLock.lock()
         cursorLock.lock()
+        checkLock.lock()
         screenLocks.forEach { $0.lock() }
         abiLock.lock()
         let h = handle
         handle = nil
         abiLock.unlock()
         screenLocks.reversed().forEach { $0.unlock() }
+        checkLock.unlock()
         cursorLock.unlock()
         clipboardLock.unlock()
         statsLock.unlock()
