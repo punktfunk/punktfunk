@@ -176,16 +176,6 @@ final class SessionPresenter {
         return selected
     }
 
-    /// The glass gate's in-flight present budget (`PresentGate` capacity): 1 everywhere.
-    ///
-    /// Depth 1 is the only depth that works. The 2026-07 depth-2 experiment (one flip scanning
-    /// out + one queued, predicted ~5–8 ms at 120 Hz) REGRESSED the iPad Pro's display stage to
-    /// 22–28 ms vs depth 1's 14: any second gate slot becomes a STANDING queue — a burst fills
-    /// it, and with presents and latches then running at the same rate the occupancy never
-    /// returns to zero, so every frame permanently rides one extra refresh per slot. A bounded
-    /// FIFO can cap the queue but nothing ever drains it. Low latency needs a path that cannot
-    /// build that queue—deadline pacing or tvOS's decoded video plane—not a deeper gate.
-    ///
     #if os(macOS)
     /// Adaptive-refresh latency sessions choose immediate sparse presents or one dense present per
     /// display-link target: on arrival, a 120 fps stream on a ProMotion panel loses about a tenth
@@ -198,9 +188,19 @@ final class SessionPresenter {
     }
     #endif
 
+    /// The glass gate's in-flight present budget (`PresentGate` capacity): 1 everywhere.
+    ///
+    /// Depth 1 is the only depth that works. The 2026-07 depth-2 experiment (one flip scanning
+    /// out + one queued, predicted ~5–8 ms at 120 Hz) REGRESSED the iPad Pro's display stage to
+    /// 22–28 ms vs depth 1's 14: any second gate slot becomes a STANDING queue — a burst fills
+    /// it, and with presents and latches then running at the same rate the occupancy never
+    /// returns to zero, so every frame permanently rides one extra refresh per slot. A bounded
+    /// FIFO can cap the queue but nothing ever drains it. Low latency needs a path that cannot
+    /// build that queue—deadline pacing or tvOS's decoded video plane—not a deeper gate.
+    ///
     /// `PUNKTFUNK_GATE_DEPTH` (1…3) still overrides on iOS/tvOS so the standing-queue ladder
-    /// stays reproducible on-device; macOS is pinned to 1, env ignored — a deeper gate only builds
-    /// a standing queue (see above). Internal (not private) for unit tests.
+    /// stays reproducible on-device; macOS is pinned to 1, env ignored. Internal (not private)
+    /// for unit tests.
     nonisolated static func gateDepth(env: String?) -> Int {
         #if os(macOS)
         return 1
@@ -464,14 +464,6 @@ final class SessionPresenter {
         #endif
     }
 
-    /// Refresh display timing and position a Metal presentation layer.
-    ///
-    /// Every explicit-decode path updates its display link after reconfiguration, including tvOS's
-    /// decoded video plane. Metal paths then place their sublayer and size its drawable in backing
-    /// pixels so the shader owns scaling. The video layer uses `videoGravity` (see
-    /// `SessionPresenter.gravity(_:)`) and needs no geometry here.
-    ///
-    /// No-op before a connection starts and for stage-1 beyond the harmless timing update.
     /// The system scaler's closest match to `fit`, for the AVSampleBufferDisplayLayer paths
     /// (stage 1, tvOS's decoded plane). It does not snap like the placement does.
     nonisolated static func gravity(_ fit: VideoFit) -> AVLayerVideoGravity {
@@ -482,6 +474,14 @@ final class SessionPresenter {
         }
     }
 
+    /// Refresh display timing and position a Metal presentation layer.
+    ///
+    /// Every explicit-decode path updates its display link after reconfiguration, including tvOS's
+    /// decoded video plane. Metal paths then place their sublayer and size its drawable in backing
+    /// pixels so the shader owns scaling. The video layer uses `videoGravity` (see
+    /// `SessionPresenter.gravity(_:)`) and needs no geometry here.
+    ///
+    /// No-op before a connection starts and for stage-1 beyond the harmless timing update.
     func layout(in bounds: CGRect, contentsScale: CGFloat) {
         lastLayout = (bounds, contentsScale)
         guard let connection else { return }

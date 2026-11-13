@@ -1369,8 +1369,8 @@ private final class DeadlineLinkDelegate: NSObject, CAMetalDisplayLinkDelegate {
     /// The latency intent picks at the deadline; Smoothness presents on pairing.
     private let latePick: Bool
     private var loggedLinkUp = false
-    /// The refresh period: the shortest of the last 16 target steps, so a skipped update (two
-    /// refreshes) never counts and a rate change lands within 16.
+    // The refresh period: the shortest of the last 16 target steps, so a skipped update (two
+    // refreshes) never counts and a rate change lands within 16.
     private var lastTarget: CFTimeInterval = 0
     private var steps = [CFTimeInterval](repeating: .infinity, count: 16)
     private var stepIndex = 0
@@ -1690,6 +1690,13 @@ public final class Stage2Pipeline {
             })
     }
 
+    #if os(visionOS)
+    /// Draw into the curved screen instead of the layer. Before `start`. Main thread.
+    func setCurve(_ curve: CurveTarget?) {
+        presenter.curve = curve
+    }
+    #endif
+
     /// Start the AU pump, decoder, and selected presentation loop on the main thread.
     ///
     /// `onFrame` fires at receipt for host/network metering. `onDecodedSize` reports coded-size
@@ -1701,13 +1708,6 @@ public final class Stage2Pipeline {
     /// A stopped pipeline is permanent; construct a new instance for another session. `screen` past
     /// 0 is a further screen's pipeline: it decodes that screen and leaves the session's loss
     /// recovery, bitrate signal, stats and lent AU memory to screen 0's.
-    #if os(visionOS)
-    /// Draw into the curved screen instead of the layer. Before `start`. Main thread.
-    func setCurve(_ curve: CurveTarget?) {
-        presenter.curve = curve
-    }
-    #endif
-
     public func start(
         connection: PunktfunkConnection,
         onFrame: (@Sendable (AccessUnit) -> Void)?,
