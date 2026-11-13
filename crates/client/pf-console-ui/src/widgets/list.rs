@@ -1316,7 +1316,8 @@ impl MenuList {
     }
 
     /// The value field: slider track, the right-aligned readout with its slip crossfade,
-    /// the caret and the chevrons.
+    /// the caret and the chevrons. The caret row also draws [`Frame::preedit`] before its
+    /// caret, underlined, and records itself in [`Frame::caret`].
     fn paint_value(
         &self,
         canvas: &Canvas,
@@ -1336,10 +1337,17 @@ impl MenuList {
             k,
             dot_gutter,
         } = *fr;
-        let value = row.value.as_deref().unwrap_or_default();
+        let preedit = if row.caret { ui.preedit.as_str() } else { "" };
+        let typed: String;
+        let mut value = row.value.as_deref().unwrap_or_default();
+        if !preedit.is_empty() {
+            // Composing text replaces a placeholder and follows a value.
+            typed = format!("{}{preedit}", if row.value_dim { "" } else { value });
+            value = &typed;
+        }
         let vcolor = if row.danger {
             crate::theme::ERROR
-        } else if row.value_dim || !row.enabled {
+        } else if (row.value_dim && preedit.is_empty()) || !row.enabled {
             ui.fg(0.35)
         } else if f > 0.5 {
             ui.fg(1.0)
@@ -1436,17 +1444,34 @@ impl MenuList {
         if slipping.is_some() {
             canvas.restore(); // value-field clip
         }
+        if !preedit.is_empty() {
+            let w = fonts
+                .measure(preedit, W::Medium, 15.0 * k)
+                .min(fonts.measure(&shown, W::Medium, 15.0 * k));
+            let line = Rect::from_xywh(
+                (val_right + dx) as f32 - w,
+                (centred + 3.0 * k) as f32,
+                w,
+                (1.5 * k) as f32,
+            );
+            canvas.draw_rect(line, &fill(vcolor));
+        }
         if row.caret {
             // Ride `dx` so the caret stays on the text end mid-slip.
+            let caret_x = (val_right + 3.0 * k + dx) as f32;
             canvas.draw_rect(
                 Rect::from_xywh(
-                    (val_right + 3.0 * k + dx) as f32,
+                    caret_x,
                     (cy - 9.0 * k) as f32,
                     (2.0 * k) as f32,
                     (18.0 * k) as f32,
                 ),
                 &fill(ui.accent(1.0)),
             );
+            let to_device = canvas.local_to_device_as_3x3();
+            let (field, _) = to_device.map_rect(r);
+            let caret_x = to_device.map_point((caret_x, r.top)).x;
+            ui.caret.set(Some((field, caret_x - field.left)));
         }
         if row.adjustable && f > 0.01 {
             let alpha = 0.6 * f as f32;
@@ -1802,6 +1827,56 @@ mod tests {
         assert!(
             band_diff(&lifted, &still, w, x, cell_y) > 0,
             "and leaves its cell"
+        );
+    }
+
+    /// An input method's text in progress draws where the committed text would, after the
+    /// value or in place of the placeholder, plus an underline below the centre line. The
+    /// field records where its caret is.
+    #[test]
+    fn a_composing_field_draws_its_text_in_progress_underlined() {
+        let fonts = crate::theme::build_fonts().unwrap();
+        let (w, h) = (900, 200);
+        let mut surface = skia_safe::surfaces::raster_n32_premul((w, h)).unwrap();
+        let rect = Rect::from_xywh(0.0, 0.0, w as f32, h as f32);
+        let clear = skia_safe::Color4f::new(0.0, 0.0, 0.0, 1.0);
+        let mut draw = |value: &str, preedit: &str| {
+            let ui = crate::theme::Frame {
+                preedit: preedit.into(),
+                ..Default::default()
+            };
+            let mut field = RowSpec::field("Name", value.into(), "Placeholder");
+            field.caret = true;
+            let rows = [field];
+            let mut list = MenuList::new();
+            for _ in 0..240 {
+                surface.canvas().clear(clear);
+                let canvas = surface.canvas();
+                list.render(canvas, &ui, rect, &rows, &fonts, 1.0, 1.0 / 60.0, true);
+            }
+            let cell = list.row_rect(0).expect("the field is in view");
+            (read_back(&mut surface, w, h), cell, ui.caret.get())
+        };
+        let (composing, cell, caret) = draw("ab", "cd");
+        let (plain, ..) = draw("ab", "");
+        let (committed, ..) = draw("abcd", "");
+        let (over_placeholder, ..) = draw("", "cd");
+        let (cd, ..) = draw("cd", "");
+        let x = (cell.left as i32, cell.right as i32);
+        let row = (cell.top as i32, cell.bottom as i32);
+        let above = (cell.top as i32, (cell.top + cell.bottom) as i32 / 2);
+        assert!(band_diff(&composing, &plain, w, x, row) > 0, "it draws");
+        assert_eq!(band_diff(&composing, &committed, w, x, above), 0);
+        assert!(
+            band_diff(&composing, &committed, w, x, row) > 0,
+            "underlined"
+        );
+        assert_eq!(band_diff(&over_placeholder, &cd, w, x, above), 0);
+        let (field, offset) = caret.expect("the caret row records itself");
+        assert!((field.top - cell.top).abs() < 1.0, "{field:?} vs {cell:?}");
+        assert!(
+            offset > field.width() / 2.0 && offset < field.width(),
+            "{offset}"
         );
     }
 

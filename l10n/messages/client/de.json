@@ -1050,6 +1050,8 @@
 	"player_overlay_actions": "Schnellaktionen",
 	"player_cursor_gestures": "Lange drücken für Rechtsklick",
 	"player_cursor_gestures_hint": "Halte {button} für einen Rechtsklick, auf Fernbedienungen ohne zweite Taste; aus ist {button} ein einfacher Linksklick.",
+	"player_game_picture": "Bildmodus „Spiel“",
+	"player_game_picture_hint": "Schaltet den Fernseher während des Streams in den Bildmodus „Spiel“ und danach zurück in deinen.",
 	"player_gamepad": "Controller-Typ",
 	"player_gamepad_hint": "Der virtuelle Controller, den der Host anlegt – Automatisch passt ihn an deinen an.",
 	"player_gamepad_auto": "Automatisch",

@@ -615,9 +615,22 @@ impl Shell {
 
     /// SDL text input tracks overlay editing and the ring's Keyboard slot (IME / Steam
     /// OSK), edge-wise. A password field starts it as a hidden password, so an IME neither
-    /// shows nor learns it ([`text_input_want`]).
+    /// shows nor learns it ([`text_input_want`]). The IME's candidate window follows the
+    /// overlay's field, set only when it moved.
     pub(super) fn text_input_tick(&mut self) {
         let overlay = self.overlay.as_ref();
+        let ti = self.sdl_video.text_input();
+        if let Some((field, caret)) = overlay.and_then(|o| o.text_input_area()) {
+            let area = area_in_window(
+                field,
+                caret,
+                self.window.size_in_pixels(),
+                self.window.size(),
+            );
+            if ti.rect(&self.window).ok() != Some(area) {
+                ti.set_rect(&self.window, area.0, area.1);
+            }
+        }
         let want = text_input_want(
             self.ring_keyboard,
             overlay.is_some_and(|o| o.text_input_active()),
@@ -627,7 +640,6 @@ impl Shell {
         if want == self.text_input_on {
             return;
         }
-        let ti = self.sdl_video.text_input();
         if self.text_input_on.is_some() {
             ti.stop(&self.window);
         }
@@ -716,6 +728,27 @@ fn text_input_want(
 ) -> Option<bool> {
     let secure = secure && !ring;
     ((ring || editing) && !(secure && steam())).then_some(secure)
+}
+
+/// The overlay's text area, swapchain pixels, in window coordinates: what SDL places the
+/// input method's windows by.
+fn area_in_window(
+    field: sdl3::rect::Rect,
+    caret: i32,
+    (pw, ph): (u32, u32),
+    (lw, lh): (u32, u32),
+) -> (sdl3::rect::Rect, i32) {
+    let sx = lw as f32 / pw.max(1) as f32;
+    let sy = lh as f32 / ph.max(1) as f32;
+    let at = |v: i32, s: f32| (v as f32 * s).round() as i32;
+    let len = |v: u32, s: f32| (v as f32 * s).round() as u32;
+    let rect = sdl3::rect::Rect::new(
+        at(field.x(), sx),
+        at(field.y(), sy),
+        len(field.width(), sx),
+        len(field.height(), sy),
+    );
+    (rect, at(caret, sx))
 }
 
 /// SDL opens Steam's keyboard for text input: Steam sets this for a game it starts in Big
@@ -1213,5 +1246,14 @@ mod tests {
         assert_eq!(text_input_want(false, true, true, elsewhere), Some(true));
         assert_eq!(text_input_want(false, true, true, steam), None);
         assert_eq!(text_input_want(true, false, true, steam), Some(false));
+    }
+
+    /// At 200 % a field drawn in swapchain pixels lands at half those numbers in window units.
+    #[test]
+    fn the_text_area_reaches_sdl_in_window_units() {
+        let field = sdl3::rect::Rect::new(400, 300, 800, 104);
+        let (at, caret) = area_in_window(field, 700, (2560, 1600), (1280, 800));
+        assert_eq!(at, sdl3::rect::Rect::new(200, 150, 400, 52));
+        assert_eq!(caret, 350);
     }
 }

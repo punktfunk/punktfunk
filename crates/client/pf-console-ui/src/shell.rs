@@ -407,6 +407,9 @@ pub(crate) struct Shell {
     last_frame: Option<Instant>,
     /// Last menu, pointer, key or text input — the idle clock ([`crate::console::IDLE_AFTER`]).
     last_input: Instant,
+    /// An input method's text in progress for the open field ([`Self::preedit`]). Non-empty,
+    /// the input method owns the keys.
+    preedit: String,
     /// The last frame's ink, motion and inset: what the next frame follows on from, what
     /// input between frames reads, and what a host's chrome over a stream draws in.
     pub(crate) ui: crate::theme::Frame,
@@ -508,6 +511,7 @@ impl Shell {
             t0: Instant::now(),
             last_frame: None,
             last_input: Instant::now(),
+            preedit: String::new(),
             ui: crate::theme::Frame::default(),
             #[cfg(test)]
             fake_clock: None,
@@ -1460,11 +1464,15 @@ impl Shell {
 
     /// Keyboard fallback. Arrows and Enter/Esc are menu events; Space confirms and Y/X
     /// mirror Secondary/Tertiary (suppressed while editing — those keys are text).
-    /// `shift` only affects Tab.
+    /// `shift` only affects Tab. While an input method composes, every key is its own: a
+    /// backend that still delivers Backspace or Return then is not editing the field.
     pub(crate) fn key(&mut self, key: crate::input::Key, shift: bool, repeat: bool) -> bool {
         use crate::input::Key as S;
         self.last_input = Instant::now();
         self.input_source = Some(crate::console::InputSource::Keys);
+        if self.editing() && !self.preedit.is_empty() {
+            return true;
+        }
         if self.editing() {
             let (mut ctx, top) = self.ctx_and_top();
             if top.view_mut().edit_key(key, &mut ctx) {
@@ -1495,10 +1503,22 @@ impl Shell {
         true
     }
 
+    /// Committed text for the open field. It replaces any text in progress.
     pub(crate) fn text_input(&mut self, text: &str) {
         self.last_input = Instant::now();
+        self.preedit.clear();
         if let Some(top) = self.stack.last_mut() {
             top.view_mut().text_input(text);
+        }
+    }
+
+    /// An input method's text in progress, replacing the last: drawn in the open field and
+    /// kept out of its value. Empty ends the composition. A password field never shows one.
+    pub(crate) fn preedit(&mut self, text: &str) {
+        self.last_input = Instant::now();
+        self.preedit.clear();
+        if self.edit_field().is_some_and(|f| !f.secure) {
+            self.preedit.push_str(text);
         }
     }
 
