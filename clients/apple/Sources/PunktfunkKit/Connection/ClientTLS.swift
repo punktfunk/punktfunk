@@ -34,10 +34,10 @@ enum ClientTLS {
         }
     }
 
-    /// First PEM block of `type` ("CERTIFICATE" / "PRIVATE KEY") → its DER bytes.
-    static func derFromPEM(_ pem: String, type: String) -> Data? {
-        guard let start = pem.range(of: "-----BEGIN \(type)-----"),
-              let end = pem.range(of: "-----END \(type)-----", range: start.upperBound..<pem.endIndex)
+    /// The first CERTIFICATE block of `pem` → its DER bytes. CryptoKit parses the key's PEM itself.
+    static func certificateDER(fromPEM pem: String) -> Data? {
+        guard let start = pem.range(of: "-----BEGIN CERTIFICATE-----"),
+              let end = pem.range(of: "-----END CERTIFICATE-----", range: start.upperBound..<pem.endIndex)
         else { return nil }
         let b64 = pem[start.upperBound..<end.lowerBound]
             .components(separatedBy: .whitespacesAndNewlines).joined()
@@ -84,7 +84,7 @@ enum ClientTLS {
             throw TLSError.badKey((keyError?.takeRetainedValue()).map { "\($0)" } ?? "SecKeyCreateWithData")
         }
 
-        guard let certDER = derFromPEM(certPEM, type: "CERTIFICATE"),
+        guard let certDER = certificateDER(fromPEM: certPEM),
               let cert = SecCertificateCreateWithData(nil, certDER as CFData)
         else { throw TLSError.badCert }
 
