@@ -128,11 +128,13 @@ fn on_own_account(name: &str, marker: &str) {
 }
 
 /// Runs the test at `path` (`module::name`, below the crate) again as a child on a seat host,
-/// made or on a person's own account (`own`), with its config and library dirs, and returns
-/// what it printed. `marker` names the child its library dir.
+/// made or on a person's own account (`own`), with its config and library dirs and a home of
+/// its own, so its data and emulator folders never land in this user's. Returns what it printed.
+/// `marker` names the child its library dir.
 pub(super) fn on_seat(path: &str, marker: &str, own: bool) -> String {
     let config = tempfile::tempdir().unwrap();
     let library = tempfile::tempdir().unwrap();
+    let home = tempfile::tempdir().unwrap();
     let mut child = std::process::Command::new(std::env::current_exe().expect("this test binary"));
     child.args(["--exact", path, "--nocapture"]);
     for (key, _) in std::env::vars_os() {
@@ -149,6 +151,10 @@ pub(super) fn on_seat(path: &str, marker: &str, own: bool) -> String {
         .env("PUNKTFUNK_LIBRARY_DIR", library.path())
         .env("PUNKTFUNK_SEAT_SESSION", "1")
         .env("PUNKTFUNK_SEAT_ID", "0123456789abcdef0123456789abcdef")
+        .env("HOME", home.path())
+        .env("XDG_CONFIG_HOME", home.path().join(".config"))
+        .env("XDG_DATA_HOME", home.path().join(".local/share"))
+        .env("XDG_STATE_HOME", home.path().join(".local/state"))
         .output()
         .expect("run the child");
     let stdout = String::from_utf8_lossy(&out.stdout);

@@ -1726,7 +1726,7 @@
           "emulators"
         ],
         "summary": "Adopt a copy of an emulator",
-        "description": "Points the host at the operator's own copy, one no rule finds (a portable build unpacked\nanywhere), so it is listed and launched like any other; `forget` drops it again. Admin lane\nonly. A seat host on a person's own account adopts none: a prepare runs the copy as that\nperson, unasked.",
+        "description": "Points the host at a copy of the caller's own, one no rule finds (a portable build unpacked\nanywhere), so it is listed and launched like any other; `forget` drops it again. The\noperator's lane, and a seat's person on their seat host. On a person's own account only that\nperson adopts one: anyone else's copy would run as them.",
         "operationId": "adoptEmulator",
         "parameters": [
           {
@@ -1788,7 +1788,7 @@
             }
           },
           "403": {
-            "description": "A seat host on a person's own account, which adopts no copy",
+            "description": "A seat host on a person's own account, from any lane but that person's",
             "content": {
               "application/json": {
                 "schema": {

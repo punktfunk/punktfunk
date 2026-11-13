@@ -1173,10 +1173,10 @@ pub(crate) async fn install_emulator_content(
 
 /// Adopt a copy of an emulator
 ///
-/// Points the host at the operator's own copy, one no rule finds (a portable build unpacked
-/// anywhere), so it is listed and launched like any other; `forget` drops it again. Admin lane
-/// only. A seat host on a person's own account adopts none: a prepare runs the copy as that
-/// person, unasked.
+/// Points the host at a copy of the caller's own, one no rule finds (a portable build unpacked
+/// anywhere), so it is listed and launched like any other; `forget` drops it again. The
+/// operator's lane, and a seat's person on their seat host. On a person's own account only that
+/// person adopts one: anyone else's copy would run as them.
 #[utoipa::path(
     post,
     path = "/emulators/{id}/adopt",
@@ -1190,14 +1190,15 @@ pub(crate) async fn install_emulator_content(
         (status = NOT_FOUND, description = "Not in the catalog", body = ApiError),
         (status = CONFLICT, description = "Another install holds the prefix", body = ApiError),
         (status = UNAUTHORIZED, description = "Missing or invalid bearer token", body = ApiError),
-        (status = FORBIDDEN, description = "A seat host on a person's own account, which adopts no copy", body = ApiError),
+        (status = FORBIDDEN, description = "A seat host on a person's own account, from any lane but that person's", body = ApiError),
     )
 )]
 pub(crate) async fn adopt_emulator(
     Path(id): Path<String>,
+    Extension(lane): Extension<AuthLane>,
     ApiJson(req): ApiJson<AdoptRequest>,
 ) -> Response {
-    if pf_paths::seat::own_account() && !req.forget {
+    if pf_paths::seat::own_account() && !req.forget && lane != AuthLane::Person {
         return api_error_coded(
             StatusCode::FORBIDDEN,
             "emulator_adopt_own_account",

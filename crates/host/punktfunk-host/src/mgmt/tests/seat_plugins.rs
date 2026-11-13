@@ -299,3 +299,67 @@ async fn a_seat_s_own_plugin_reads_its_own_grants() {
         StatusCode::UNAUTHORIZED
     );
 }
+
+/// On a person's own account the person adopts a copy of their own and prepares their
+/// emulators; the operator keeps its refusal, and an install stays the box's. On a made seat the
+/// operator and the person both may. The child's emulators live in its own temp dirs.
+#[tokio::test]
+async fn a_person_adopts_and_prepares_their_own_emulators() {
+    if std::env::var_os(CHILD).is_none() {
+        on_both_seats("a_person_adopts_and_prepares_their_own_emulators");
+        return;
+    }
+    let home = std::path::PathBuf::from(std::env::var_os("HOME").unwrap());
+    let ours = match cfg!(windows) {
+        true => std::path::PathBuf::from(std::env::var_os(CHILD).unwrap()),
+        false => home.clone(),
+    };
+    assert!(
+        crate::emulators::prefix().starts_with(&ours),
+        "the child's emulators"
+    );
+    let gated = pf_paths::seat::own_account() && cfg!(target_os = "linux");
+    let app = test_app_seat(test_state(), TOKEN, MINE);
+    let person = person_session(&app).await;
+    let exe = home.join("apps/pcsx2-qt");
+    std::fs::create_dir_all(exe.parent().unwrap()).unwrap();
+    std::fs::write(&exe, "").unwrap();
+    let post = |route: &str, body: serde_json::Value| {
+        json_req(
+            Method::POST,
+            &format!("/api/v1/emulators/pcsx2/{route}"),
+            body,
+        )
+    };
+    let adopt = || post("adopt", json!({"exe": exe}));
+    let prepare = || post("prepare", json!({}));
+    // The Linux gate refuses both; elsewhere the adopt route refuses on its own.
+    let own = pf_paths::seat::own_account();
+    for (what, req, refused) in [("adopt", adopt(), own), ("prepare", prepare(), gated)] {
+        let (status, why) = send(&app, req).await;
+        if refused {
+            assert_eq!(status, StatusCode::FORBIDDEN, "operator {what}");
+            let code = why["code"].as_str().unwrap_or_default();
+            assert!(code.ends_with("_own_account"), "operator {what}: {why}");
+        } else {
+            assert_ne!(status, StatusCode::FORBIDDEN, "operator {what}: {why}");
+        }
+    }
+    let (status, copy) = send(&app, with_bearer(adopt(), &person)).await;
+    assert_eq!(status, StatusCode::OK, "person adopt: {copy}");
+    assert_eq!(copy["exe"], json!(exe));
+    let (status, why) = send(&app, with_bearer(prepare(), &person)).await;
+    assert_ne!(status, StatusCode::FORBIDDEN, "person prepare: {why}");
+    if gated {
+        let install = post("install", json!({}));
+        let (status, why) = send(&app, with_bearer(install, &person)).await;
+        assert_eq!(status, StatusCode::FORBIDDEN);
+        assert_eq!(why["code"], "emulators_own_account_yet");
+    }
+    let (status, _) = send(&app, with_bearer(adopt(), "demo-secret")).await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "plugin adopt");
+    assert_eq!(
+        send_cert(&app, adopt(), DEVICE).await,
+        StatusCode::UNAUTHORIZED
+    );
+}

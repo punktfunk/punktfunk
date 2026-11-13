@@ -4283,10 +4283,10 @@ readonly "getEmulatorRegistry": {
     <Config extends OperationConfig | undefined = undefined>(options: { readonly config?: Config | undefined } | undefined): Effect.Effect<WithOptionalResponse<typeof GetEmulatorRegistry200.Type, Config | undefined>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"GetEmulatorRegistry401", typeof GetEmulatorRegistry401.Type> | PunktfunkError<"GetEmulatorRegistry500", typeof GetEmulatorRegistry500.Type>>;
   }
   /**
-* Points the host at the operator's own copy, one no rule finds (a portable build unpacked
-* anywhere), so it is listed and launched like any other; `forget` drops it again. Admin lane
-* only. A seat host on a person's own account adopts none: a prepare runs the copy as that
-* person, unasked.
+* Points the host at a copy of the caller's own, one no rule finds (a portable build unpacked
+* anywhere), so it is listed and launched like any other; `forget` drops it again. The
+* operator's lane, and a seat's person on their seat host. On a person's own account only that
+* person adopts one: anyone else's copy would run as them.
 */
 readonly "adoptEmulator": {
     <Config extends OperationConfig | undefined = undefined>(id: string, options: { readonly payload: typeof AdoptEmulatorRequestJson.Encoded; readonly config: Config }): Effect.Effect<WithOptionalResponse<typeof AdoptEmulator200.Type, Config>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"AdoptEmulator400", typeof AdoptEmulator400.Type> | PunktfunkError<"AdoptEmulator401", typeof AdoptEmulator401.Type> | PunktfunkError<"AdoptEmulator403", typeof AdoptEmulator403.Type> | PunktfunkError<"AdoptEmulator404", typeof AdoptEmulator404.Type> | PunktfunkError<"AdoptEmulator409", typeof AdoptEmulator409.Type>>;
