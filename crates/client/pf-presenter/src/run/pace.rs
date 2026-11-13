@@ -321,6 +321,8 @@ impl StreamState {
                 .position(|&(pts, _)| pts == s.pts_ns)
                 .and_then(|i| self.aimed.remove(i))
                 .map_or(0, |(_, t)| t);
+            self.cadence
+                .note_aimed(s.displayed_ns, target_ns, s.exact, self.mode_period_ns);
             if target_ns > 0 || self.store.is_smoothing() {
                 let missed = if target_ns > 0 {
                     s.displayed_ns > target_ns + period / 2
