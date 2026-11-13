@@ -18813,6 +18813,15 @@
             "$ref": "#/components/schemas/SeatKind",
             "description": "Which kind of seat it is."
           },
+          "mgmt_port": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "The management port of the host on its ledger row, for the console. Absent to a paired\ndevice, and for a profile with no row.",
+            "minimum": 0
+          },
           "occupant": {
             "type": [
               "string",

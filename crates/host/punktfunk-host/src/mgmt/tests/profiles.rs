@@ -1233,6 +1233,42 @@ mod person {
             .all(|c| matches!(c, Command::UnlockState { id, .. } if id.as_str() == PERSON_SEAT)));
     }
 
+    /// The console reads each seat host's management port from its row; no device does, and a
+    /// profile with no row has none.
+    #[tokio::test]
+    async fn only_the_console_reads_a_seat_host_s_mgmt_port() {
+        let fp = "ab".repeat(32);
+        let mut rows = ledger();
+        rows[1].mgmt_port = 47996;
+        let sup = Arc::new(Fake::new(rows, |_| Err(refused("x", "x"))));
+        let app = door("mgmt-port", sup, &[&fp], OWNER);
+        let ports = |rows: &serde_json::Value| {
+            let rows = rows.as_array().unwrap().iter();
+            rows.map(|r| (r["id"].as_str().unwrap(), r["seat"]["mgmt_port"].clone()))
+                .map(|(id, port)| (id.to_string(), port))
+                .collect::<std::collections::BTreeMap<_, _>>()
+        };
+        let (status, console) = send(&app, get_req("/api/v1/profiles")).await;
+        assert_eq!(status, StatusCode::OK, "{console}");
+        let want = std::collections::BTreeMap::from([
+            (OWNER.to_string(), serde_json::Value::Null),
+            (PERSON.to_string(), serde_json::json!(47995)),
+            (WINDOWS.to_string(), serde_json::json!(47996)),
+        ]);
+        assert_eq!(ports(&console), want);
+        let none = |rows: &serde_json::Value| {
+            ports(rows)
+                == want
+                    .keys()
+                    .map(|id| (id.clone(), serde_json::Value::Null))
+                    .collect()
+        };
+        let (_, device) = as_device(&app, get_req("/api/v1/profiles/enumerate"), &fp).await;
+        assert!(none(&device), "{device}");
+        let (_, enumerated) = send(&app, get_req("/api/v1/profiles/enumerate")).await;
+        assert!(none(&enumerated), "{enumerated}");
+    }
+
     /// A paired device's key unlock gets its challenge; a device with no key, another row, an
     /// unknown profile and the console are refused.
     #[tokio::test]

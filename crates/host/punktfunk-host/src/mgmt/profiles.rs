@@ -191,6 +191,11 @@ pub(crate) struct SeatPublic {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[schema(required = false)]
     account: Option<String>,
+    /// The management port of the host on its ledger row, for the console. Absent to a paired
+    /// device, and for a profile with no row.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(required = false)]
+    mgmt_port: Option<u16>,
 }
 
 /// What a profile's seat is. A door places every profile on a seat, so a profile on the box's own
@@ -371,6 +376,7 @@ fn take_turns_seat(st: &MgmtState, display_name: &str, account: &str) -> SeatPub
         kind: SeatKind::Desktop,
         take_turns: true,
         account: None,
+        mgmt_port: None,
     }
 }
 
@@ -389,6 +395,7 @@ fn seat_line(st: &MgmtState, p: &Profile, seats: &Snapshot, operator: bool) -> S
         kind: SeatKind::Desktop,
         take_turns: false,
         account: None,
+        mgmt_port: None,
     };
     if let Some(id) = seats.row_of(&p.os_account) {
         let account = seats
@@ -418,6 +425,7 @@ fn seat_line(st: &MgmtState, p: &Profile, seats: &Snapshot, operator: bool) -> S
             kind: SeatKind::Desktop,
             take_turns: false,
             account: None,
+            mgmt_port: None,
         },
         OsAccount::Windows { .. } => unavailable((
             "seatline_account_not_startable",
@@ -440,6 +448,7 @@ fn seated(seats: &Snapshot, id: &str, operator: bool) -> SeatPublic {
         kind: SeatKind::Desktop,
         take_turns: false,
         account: None,
+        mgmt_port: None,
     };
     let Some((seat, _)) = seats.seat(id) else {
         let why = if !seats.on && pf_paths::seat::role().is_door() {
@@ -948,12 +957,18 @@ pub(super) fn start_seat(id: &str) {
     }
 }
 
+/// A profile as the operator reads it: why its seat failed, and its seat host's management port.
 fn admin(st: &MgmtState, profiles: &Profiles, p: &Profile, seats: &Snapshot) -> ProfileAdmin {
     let owner = profiles.owner_id();
     // As `person_seat` decides it: only a door's ledger names a person's own account.
     let own_account = st.door.is_some() && seats.person_row(&p.os_account).is_some();
+    let mut public = public(st, p, owner.as_deref(), None, seats, true);
+    if let Some(seat) = public.seat.as_mut() {
+        let row = seats.row_of(&p.os_account).and_then(|id| seats.seat(id));
+        seat.mgmt_port = row.map(|(row, _)| row.mgmt_port);
+    }
     ProfileAdmin {
-        public: public(st, p, owner.as_deref(), None, seats, true),
+        public,
         legacy_device: p.legacy_device.clone(),
         default: profiles.default_profile_id().as_deref() == Some(p.id.as_str()),
         steam_home: keeps_steam_home(&p.id),
