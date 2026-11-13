@@ -157,8 +157,8 @@ final class RumbleRenderer: @unchecked Sendable {
     /// evdev's `FF_RUMBLE` each carry exactly two magnitudes).
     private var target: (low: UInt16, high: UInt16, leftTrigger: UInt16, rightTrigger: UInt16) =
         (0, 0, 0, 0)
-    /// Runs while anything is (or should be) audible: staleness watchdog, segment re-arm,
-    /// throttled-level catch-up, engine rebuild after a reset, HID keepalive. Nil while silent,
+    /// Runs while anything is (or should be) audible: segment re-arm, throttled-level catch-up,
+    /// engine rebuild after a reset, HID keepalive. Nil while silent,
     /// so an idle controller costs no timer wakeups and no radio traffic.
     private var ticker: DispatchSourceTimer?
 
@@ -442,8 +442,8 @@ final class RumbleRenderer: @unchecked Sendable {
         return Segment(player: player, endsAt: begins + RumbleTuning.segmentSeconds)
     }
 
-    /// The ticker runs only while something needs tending — any nonzero target (watchdog,
-    /// throttle catch-up, HID keepalive, post-reset engine rebuild) or segments still alive.
+    /// The ticker runs only while something needs tending — any nonzero target (throttle
+    /// catch-up, HID keepalive, post-reset engine rebuild) or segments still alive.
     /// A pad with nothing to drive has nothing to tend, whatever the target.
     private func updateTicker() {
         #if os(macOS)

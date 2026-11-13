@@ -10,8 +10,7 @@ import GameController
 /// a passing test exercises the exact code a session runs.
 @MainActor
 public final class ControllerTester: ObservableObject {
-    // `.manual`: the panel's toggles hold a level until changed — no session wire refreshes
-    // exist here to keep the renderer's staleness watchdog fed.
+    // The panel's toggles hold a level until changed: the renderer never ends one on its own.
     private let renderer = RumbleRenderer()
     private weak var controller: GCController?
 
