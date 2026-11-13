@@ -74,10 +74,15 @@ final class SessionEndRouteTests: XCTestCase {
         XCTAssertEqual(route(.gameExited), SessionEndRoute.none)
     }
 
+    /// A close this client made says nothing: the host did not end it.
+    func testALocalCloseSaysNothing() {
+        XCTAssertEqual(route(.local), SessionEndRoute.none)
+        XCTAssertEqual(route(.local, shelf: true), SessionEndRoute.none)
+    }
+
     /// Every other reason has its own sentence.
     func testEachReasonHasItsSentence() {
         XCTAssertEqual(route(.hostEnded, shelf: true), .message(.endedByHost))
-        XCTAssertEqual(route(.local), .message(.endedByHost))
         XCTAssertEqual(route(.hostError), .message(.hostError))
         XCTAssertEqual(route(.none), .message(.unknown))
     }
