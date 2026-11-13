@@ -448,6 +448,7 @@ fn spawn_pipewire(
         .spawn({
             let closing = CloseOnExit(viewers.clone());
             move || {
+                pf_frame::thread_qos::boost_thread_priority(true);
                 let _closing = closing;
                 if let Err(e) = pipewire_thread(cfg, fd, ends, quit_rx) {
                     tracing::error!(error = %format!("{e:#}"), "pipewire capture thread failed");
