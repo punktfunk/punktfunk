@@ -520,12 +520,20 @@ pub(crate) fn runner_sid() -> Option<String> {
 /// the account signed in to the seat's session; any other host already is the account it acts
 /// for. An error is a seat account this host couldn't act as.
 pub(crate) fn as_seat_account<R>(f: impl FnOnce() -> R) -> std::io::Result<R> {
+    #[cfg(test)]
+    SEAT_HAND.with(|calls| calls.set(calls.get() + 1));
     #[cfg(windows)]
     if system_seat_host() {
         return crate::windows::interactive::as_session_user(f)
             .map_err(|e| std::io::Error::other(format!("{e:#}")));
     }
     Ok(f())
+}
+
+#[cfg(test)]
+thread_local! {
+    /// How often this thread asked [`as_seat_account`].
+    pub(crate) static SEAT_HAND: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 /// A Windows seat host: SYSTEM, for a runner that runs as the seat's account.

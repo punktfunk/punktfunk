@@ -381,25 +381,30 @@ fn pattern_of(p: &Path) -> Option<Pattern> {
 }
 
 impl Pattern {
-    /// The folders the pattern names today, sorted. A missing base names none.
+    /// The folders the pattern names today, sorted, listed as the seat's account on a seat host
+    /// ([`super::as_seat_account`]): a link the seat made names nothing that account can't see.
+    /// A missing base names none.
     fn expand(&self) -> Vec<PathBuf> {
-        let Ok(listed) = std::fs::read_dir(&self.base) else {
-            return Vec::new();
+        let listed = || {
+            let Ok(listed) = std::fs::read_dir(&self.base) else {
+                return Vec::new();
+            };
+            let mut out: Vec<PathBuf> = listed
+                .flatten()
+                .map(|entry| {
+                    let dir = entry.path();
+                    if self.tail.as_os_str().is_empty() {
+                        dir
+                    } else {
+                        dir.join(&self.tail)
+                    }
+                })
+                .filter(|p| p.is_dir())
+                .collect();
+            out.sort();
+            out
         };
-        let mut out: Vec<PathBuf> = listed
-            .flatten()
-            .map(|entry| {
-                let dir = entry.path();
-                if self.tail.as_os_str().is_empty() {
-                    dir
-                } else {
-                    dir.join(&self.tail)
-                }
-            })
-            .filter(|p| p.is_dir())
-            .collect();
-        out.sort();
-        out
+        super::as_seat_account(listed).unwrap_or_default()
     }
 
     /// Is `canonical` one of the folders this pattern names: the canonical base, or one
@@ -1828,6 +1833,23 @@ fn snapshot_of(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A pattern's folders are listed through the seat's hand, so a Windows seat host names only
+    /// what the seat's account can list.
+    #[test]
+    fn a_pattern_lists_its_folders_through_the_seat_s_hand() {
+        let base = tempfile::tempdir().unwrap();
+        for dir in ["a/covers", "b"] {
+            std::fs::create_dir_all(base.path().join(dir)).unwrap();
+        }
+        let pattern = pattern_of(&base.path().join("*").join("covers")).expect("a pattern");
+        let before = crate::plugins::SEAT_HAND.with(std::cell::Cell::get);
+        assert_eq!(pattern.expand(), [base.path().join("a").join("covers")]);
+        assert_eq!(
+            crate::plugins::SEAT_HAND.with(std::cell::Cell::get),
+            before + 1
+        );
+    }
 
     /// A sandboxed view of the host: temp home/config/runtime so the real ones never match.
     struct Fixture {
