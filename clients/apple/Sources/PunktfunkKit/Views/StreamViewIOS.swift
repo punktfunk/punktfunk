@@ -182,6 +182,8 @@ public final class StreamViewController: StreamViewControllerBase {
     private var displayModeObservation: NSKeyValueObservation?
     /// The decoded frames are HDR — what the display-mode request follows.
     private var frameHDR = false
+    /// Bumped when a display request is withdrawn, so its switch-end hop can tell it is stale.
+    private var hdrRequest = 0
     #endif
     private var inputCapture: InputCapture?
     #if os(iOS) || os(visionOS)
@@ -835,10 +837,7 @@ public final class StreamViewController: StreamViewControllerBase {
         inputCapture = nil
         // Return the TV to the user's preferred mode — the home screen must not stay in the
         // session's HDR10/refresh mode.
-        sessionDisplayManager?.preferredDisplayCriteria = nil
-        sessionDisplayManager = nil
-        displayModeObservation = nil
-        presenter.setHDROutput(false)
+        withdrawDisplayRequest()
         frameHDR = false
         #endif
         presenter.stop()
@@ -864,12 +863,22 @@ public final class StreamViewController: StreamViewControllerBase {
     }
 
     #if os(tvOS)
+    /// Withdraw the session's display request and stop treating the output as HDR. A switch-end
+    /// hop still queued for the withdrawn request sees a newer `hdrRequest` and does nothing.
+    private func withdrawDisplayRequest() {
+        sessionDisplayManager?.preferredDisplayCriteria = nil
+        sessionDisplayManager = nil
+        displayModeObservation = nil
+        hdrRequest += 1
+        presenter.setHDROutput(false)
+    }
+
     /// Ask the TV for a display mode matching the session — HDR10 at the stream's refresh rate —
     /// via AVDisplayManager, the tvOS mechanism custom renderers use for HDR output (AVFoundation
     /// playback layers do this implicitly). Honored only when the user allows matching (tvOS
-    /// Settings → Video and Audio → Match Content); the presenter reads the RESULT off UIScreen's
-    /// EDR headroom (pushed in SessionPresenter.layout) and keeps the in-shader tone-map whenever
-    /// the switch never lands, so an SDR-composited display can't show blown-out PQ either way.
+    /// Settings → Video and Audio → Match Content). The presenter passes PQ through once the
+    /// switch ends (`setHDROutput`) or the screen reports headroom, and tone-maps in the shader
+    /// otherwise.
     /// Requested while the decoded frames are HDR and withdrawn when they turn SDR, so a session
     /// can apply it more than once; the stop() teardown clears it.
     ///
@@ -880,12 +889,7 @@ public final class StreamViewController: StreamViewControllerBase {
     private func applyDisplayCriteriaIfNeeded() {
         guard let manager = view.window?.avDisplayManager, let connection else { return }
         guard frameHDR, connection.settings.hdrEnabled else {
-            if sessionDisplayManager != nil {
-                manager.preferredDisplayCriteria = nil
-                sessionDisplayManager = nil
-                displayModeObservation = nil
-                presenter.setHDROutput(false)
-            }
+            if sessionDisplayManager != nil { withdrawDisplayRequest() }
             return
         }
         guard manager.preferredDisplayCriteria == nil else { return }
@@ -921,12 +925,17 @@ public final class StreamViewController: StreamViewControllerBase {
         manager.preferredDisplayCriteria = AVDisplayCriteria(
             refreshRate: Float(mode.refreshHz), formatDescription: desc)
         sessionDisplayManager = manager
-        // The switch runs for a second or two; its end means the output is in our HDR mode.
-        // `UIScreen`'s EDR headroom stays 1 on tvOS whatever the mode, so this is the signal.
+        // The switch runs for a second or two; its end is taken as the output being in our mode.
+        // The hop lands only while this request stands: frames that turned SDR meanwhile, or a
+        // stop, withdrew it and already switched HDR output off.
+        let request = hdrRequest
         displayModeObservation = manager.observe(\.isDisplayModeSwitchInProgress, options: [.old, .new]) {
             [weak self] _, change in
             guard change.oldValue == true, change.newValue == false else { return }
-            DispatchQueue.main.async { self?.presenter.setHDROutput(true) }
+            DispatchQueue.main.async { [weak self] in
+                guard let self, self.hdrRequest == request else { return }
+                self.presenter.setHDROutput(true)
+            }
         }
         // PUNKTFUNK_PRESENT_DEBUG: whether the box takes the request, now and as the switch lands.
         if presentDebug {
