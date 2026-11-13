@@ -237,9 +237,12 @@ enum WaveletBitstream {
                     let chroma444 = (word1 >> 26) & 1 != 0
                     let w = Int(word0 & 0x3fff) + 1
                     let h = Int((word0 >> 14) & 0x3fff) + 1
-                    guard w >= 2, h >= 2, chroma444 || (w % 2 == 0 && h % 2 == 0) else {
-                        return false
-                    }
+                    // The fields reach 16384 a side, and a ring of planes that size is
+                    // gigabytes. The host's own per-axis wall is the limit here too.
+                    let side = RenderScale.maxDimension(codec: "pyrowave")
+                    guard w >= 2, h >= 2, w <= side, h <= side,
+                          chroma444 || (w % 2 == 0 && h % 2 == 0)
+                    else { return false }
                     if sawSOF {
                         // One frame, one geometry — a second SOF must agree.
                         guard layout?.width == w, layout?.height == h,
@@ -304,9 +307,12 @@ enum WaveletBitstream {
 /// kernel reads where the reassembler wrote, cut into slots of an AU and the kernel's
 /// read-past-the-end slack. A slot is free once the core released it and no decode reads it.
 public final class WaveletAccessUnitPool: AccessUnitMemory {
-    /// Past an AU: the slack the kernel's 64-bit sign load needs. 4096-byte slot strides keep
+    /// Past an AU: room for what the dequant kernel reads beyond a packet's own bytes. A
+    /// well-formed packet overshoots by one 64-bit sign load. A malformed one can send the
+    /// kernel about 2.5 KB past its header: 16 blocks of at most 144 bytes, then the sign
+    /// stream. One page keeps every such read inside the buffer. 4096-byte slot strides keep
     /// every AU 4-byte aligned.
-    static let slackBytes = 64
+    static let slackBytes = 4096
     /// AUs in flight at once: a few reassembling, one queued, the decodes still reading.
     static let slots = 8
 

@@ -132,6 +132,14 @@ final class PyroWaveParserTests: XCTestCase {
         XCTAssertNil(WaveletBitstream.parse(au: Data(au), chunkAligned: false, windowSize: 0))
     }
 
+    /// The header's size fields reach 16384 a side. Past the host's 8192 wall the frame is
+    /// dropped, before a ring of planes that size is asked of the GPU.
+    func testAnOversizedSOFIsDropped() {
+        let word0 = UInt32(16384 - 1) | (UInt32(16384 - 1) << 14) | (1 << 28) | (1 << 31)
+        let au = le32(word0) + le32(UInt32(1) | (1 << 30)) + packet(blockIndex: 0)
+        XCTAssertNil(WaveletBitstream.parse(au: Data(au), chunkAligned: false, windowSize: 0))
+    }
+
     func testTruncatedPacketIsRejected() {
         var au = sof(totalBlocks: 1)
         // Claims 4 payload words but only the 8-byte header follows.
