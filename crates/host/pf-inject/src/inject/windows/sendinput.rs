@@ -129,7 +129,8 @@ impl SendInputInjector {
 
     /// Send `event` as a report from the resident HID device, which raw input and anti-cheat
     /// read as hardware. `false` leaves it to `SendInput`: no device (a seat host, an old
-    /// driver), text, touch, an unmapped key, or a point off the primary monitor.
+    /// driver), text, touch, an unmapped key, or a point off the primary monitor. A release
+    /// follows its press: an up the device never held was pressed through `SendInput`.
     fn inject_hid(&mut self, event: &InputEvent) -> bool {
         use crate::mouse_windows::with_hid;
         let down = matches!(event.kind, InputKind::MouseButtonDown | InputKind::KeyDown);
@@ -141,7 +142,7 @@ impl SendInputInjector {
                 .is_some(),
             InputKind::MouseButtonDown | InputKind::MouseButtonUp => hid_button_bit(event.code)
                 .and_then(|bit| with_hid(|m| m.button(bit, down)))
-                .is_some(),
+                .is_some_and(|changed| changed || down),
             InputKind::MouseScroll | InputKind::Scroll => with_hid(|m| {
                 for op in self.scroll.plan(event) {
                     if let ScrollOp::Discrete120 { horizontal, value } = op {
@@ -159,7 +160,9 @@ impl SendInputInjector {
                     key_scan(vk, semantic, |vk| scan_ex(vk, semantic))
                         .and_then(|(scan, ext)| crate::keymap::scan_to_hid_usage(scan, ext))
                 };
-                usage.and_then(|u| with_hid(|m| m.key(u, down))).is_some()
+                usage
+                    .and_then(|u| with_hid(|m| m.key(u, down)))
+                    .is_some_and(|changed| changed || down)
             }
             _ => false,
         }
