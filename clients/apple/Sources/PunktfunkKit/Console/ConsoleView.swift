@@ -162,7 +162,7 @@ public final class ConsoleMetalView: ConsolePlatformView {
         #endif
     }
 
-    /// Design units per pixel. A TV takes the shell's own couch formula (`0`). A phone or
+    /// Device pixels per design unit. A TV takes the shell's own couch formula (`0`). A phone or
     /// tablet in the hand takes the device scale alone, rather than stretching the Deck's
     /// 800-unit field over an iPad's height: a unit is 0.75 pt on a phone and a point on a
     /// tablet, which sits further from the eye. A Mac or visionOS window takes the larger of
