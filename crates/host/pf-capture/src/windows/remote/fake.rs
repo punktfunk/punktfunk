@@ -324,6 +324,7 @@ pub(crate) fn params(width: u32, height: u32, hdr: bool, wire_seq_base: u32) -> 
         height,
         fps: 60,
         bitrate_kbps: 20_000,
+        peak_kbps: 20_000,
         hdr,
         hdr_meta: None,
         sdr_fp16: false,

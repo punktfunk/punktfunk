@@ -168,8 +168,9 @@ impl Poke {
 /// [`DriverEncodeOpenError`] when the far side walked the list and none opened, else the
 /// delivery error. There is no fallback. An open that succeeds takes `poke` over.
 ///
-/// The framing rides the request's v10 tail, after the surface size a far side that reads no
-/// framing opens at; caps say whether it framed ([`caps_from_wire`]).
+/// The heap holds the session's peak rate, so an IDR after a climb still fits. The framing
+/// rides the request's v10 tail, after the surface size a far side that reads no framing
+/// opens at; caps say whether it framed ([`caps_from_wire`]).
 pub(crate) fn open(
     t: &dyn Transport,
     params: &DriverEncodeParams,
@@ -177,7 +178,7 @@ pub(crate) fn open(
     poke: &Poke,
 ) -> Result<Box<dyn Encoder>> {
     let target_id = t.endpoint().target_id;
-    let heap = au::heap_bytes_for(params.bitrate_kbps, params.fps);
+    let heap = au::heap_bytes_for(params.peak_kbps.max(params.bitrate_kbps), params.fps);
     let Planted {
         memory,
         section: section_v,
@@ -756,6 +757,21 @@ mod tests {
             include_str!("encoder.rs"),
             "impl Encoder for EncoderProxy {",
         );
+    }
+
+    /// The section's heap holds the session's peak rate, not the rate it opens at.
+    #[test]
+    fn the_heap_is_sized_for_the_peak_rate() {
+        let (t, far) = fake::transport(EncoderSite::Driver);
+        let params = DriverEncodeParams {
+            peak_kbps: 200_000,
+            ..fake::params(1920, 1080, false, 0)
+        };
+        let _enc = open(&t, &params, fake::clock::CLOCKS, &Poke::default()).expect("an encoder");
+        let heap = au::heap_bytes_for(200_000, 60);
+        assert!(heap > au::heap_bytes_for(20_000, 60));
+        let req = far.lock().unwrap().set_encodes[0];
+        assert_eq!(req.section_bytes, au::section_bytes(heap));
     }
 
     /// A poke ends the loop's access-unit wait at once with nothing owed, and is taken; with
