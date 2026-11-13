@@ -28,6 +28,8 @@
 	"console_profile_title_games": "Hôte et profil",
 	"console_unlock_password_empty_a11y": "Mot de passe, vide",
 	"console_unlock_password_entered_a11y": "Mot de passe, saisi",
+	"console_unlock_pin_empty_a11y": "PIN, vide",
+	"console_unlock_pin_entered_a11y": "PIN, saisi",
 	"console_unlock_stay_signed_in_off_a11y": "Garder la session ouverte sur cet appareil, désactivé",
 	"console_unlock_stay_signed_in_on_a11y": "Garder la session ouverte sur cet appareil, activé",
 	"console_home_title": "Choisir un hôte",

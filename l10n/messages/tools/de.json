@@ -286,6 +286,8 @@
 		}
 	],
 	"setup_win_app_runtime_failed": "Die Windows App Runtime konnte nicht installiert werden – installiere sie von Hand: {url}",
+	"setup_win_data_dir_failed": "{dir} ließ sich nicht so einrichten, dass nur Administratoren schreiben dürfen. Hat ein anderes Konto dort vor der Installation von Punktfunk etwas abgelegt, lösche den Ordner und starte das Setup erneut – {cause}",
+	"setup_win_install_dir_failed": "{dir} ließ sich nicht so einrichten, dass nur Administratoren schreiben dürfen. Wähle einen anderen Ordner und starte das Setup erneut – {cause}",
 	"wizard_step_welcome": "Willkommen",
 	"wizard_step_configure": "Anpassen",
 	"wizard_step_network": "Netzwerk",
