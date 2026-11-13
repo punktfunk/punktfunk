@@ -1272,7 +1272,7 @@ public final class SessionAudio: @unchecked Sendable {
     /// The host moved the audio format and the drain ended on it. The ring and the render
     /// graph are the old format's, so this is the one rebuild that does NOT keep the ring:
     /// the engines come back with a new one, and a new drain, at the format the connection
-    /// reads now. Runs on `engineQueue`, like every rebuild.
+    /// reads now. Runs on `engineQueue` and retries a failed start, like every rebuild.
     private func audioFormatChanged() {
         engineQueue.async { [weak self] in
             guard let self else { return }
@@ -1287,12 +1287,7 @@ public final class SessionAudio: @unchecked Sendable {
             self.stateLock.unlock()
             guard let config else { return }
             _ = self.drainDone.wait(timeout: .now() + .milliseconds(400))
-            guard !self.flag.isStopped else { return }
-            self.tearDownEngines()
-            self.startEngines(
-                speakerUID: config.speakerUID, micUID: config.micUID,
-                micChannel: config.micChannel, micEnabled: config.micEnabled,
-                echoCancel: config.echoCancel)
+            self.performRebuild(config: config, attempt: 0)
         }
     }
 
