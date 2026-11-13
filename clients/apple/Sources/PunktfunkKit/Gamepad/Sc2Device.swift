@@ -163,12 +163,6 @@ enum Sc2Device {
     /// The Puck reports a controller bonded to one of its slots.
     static let wirelessConnect: UInt8 = 2
 
-    /// The gyro-enable Steam itself sends — WRITE_REGISTER, reg 0x30 (GYRO_MODE), value 0x0018
-    /// (raw accel | raw gyro); confirmed both ways on real hardware 2026-06-08. Kept ONLY for
-    /// logging and tests: the client must NEVER self-enable the gyro (a permanent enable re-flies
-    /// the desktop cursor) — Steam's own forwarded write is what opens core's IMU gate.
-    static let gyroEnableReference: [UInt8] = [0x01, 0x87, 0x03, 0x30, 0x18, 0x00]
-
     /// SDL's lizard-off refresh cadence.
     static let lizardRefreshSeconds: TimeInterval = 3.0
 

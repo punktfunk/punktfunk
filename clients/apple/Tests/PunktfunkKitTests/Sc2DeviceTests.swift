@@ -97,9 +97,6 @@ final class Sc2DeviceTests: XCTestCase {
         XCTAssertEqual(
             Array(Sc2Device.normalizeJoysticks[0 ..< 6]), [0x01, 0x87, 0x03, 0x2E, 0x00, 0x00])
         XCTAssertTrue(Sc2Device.normalizeJoysticks[6...].allSatisfy { $0 == 0 })
-        // The gyro-enable REFERENCE (WRITE_REGISTER reg 0x30 GYRO_MODE val 0x0018) — kept for
-        // logging/tests only; nothing in the client may ever send it unprompted.
-        XCTAssertEqual(Sc2Device.gyroEnableReference, [0x01, 0x87, 0x03, 0x30, 0x18, 0x00])
         // SDL's lizard-off refresh cadence.
         XCTAssertEqual(Sc2Device.lizardRefreshSeconds, 3.0)
     }
