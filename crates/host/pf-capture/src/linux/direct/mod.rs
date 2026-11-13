@@ -43,6 +43,8 @@ pub(crate) use capturer::WlCapturer;
 struct WlHandles {
     slot: FrameSlot,
     wake: std::sync::mpsc::Receiver<()>,
+    /// The thread's sender, for a poke: the thread holds the only strong one.
+    poke_wake: std::sync::Weak<SyncSender<()>>,
     shared: StreamShared,
     quit: Arc<AtomicBool>,
     join: std::thread::JoinHandle<()>,
@@ -62,6 +64,8 @@ fn spawn(
     shared: StreamShared,
 ) -> Result<WlHandles> {
     let (wake_tx, wake_rx) = std::sync::mpsc::sync_channel::<()>(1);
+    let wake_tx = Arc::new(wake_tx);
+    let poke_wake = Arc::downgrade(&wake_tx);
     let quit = Arc::new(AtomicBool::new(false));
     let (ready_tx, ready_rx) = std::sync::mpsc::channel::<Result<Option<HdrMeta>>>();
     let join = std::thread::Builder::new()
@@ -114,6 +118,7 @@ fn spawn(
     Ok(WlHandles {
         slot,
         wake: wake_rx,
+        poke_wake,
         shared,
         quit,
         join,
@@ -131,7 +136,7 @@ fn run(
     want_hdr: bool,
     header_pts: bool,
     slot: FrameSlot,
-    wake: SyncSender<()>,
+    wake: Arc<SyncSender<()>>,
     shared: &StreamShared,
     quit: &AtomicBool,
     started: std::sync::mpsc::Sender<Result<Option<HdrMeta>>>,

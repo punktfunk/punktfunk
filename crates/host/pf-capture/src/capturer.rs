@@ -208,7 +208,16 @@ pub trait Feed {
     /// consumes the frame; an error surfaces at the following `try_latest`.
     fn wait_arrival(&mut self, deadline: Instant);
 
-    /// A handle that ends a running [`Self::wait_arrival`] now, with no frame, so a recovery
+    /// [`Self::wait_arrival`] that no frame ends before `not_before` and a poke ends at any
+    /// point: `true` when the poke did, which it takes. The loop's credit gate runs here, so a
+    /// recovery ask need not wait it out. Default: sleep to `not_before`, then wait.
+    fn wait_paced(&mut self, not_before: Instant, deadline: Instant) -> bool {
+        std::thread::sleep(not_before.saturating_duration_since(Instant::now()));
+        self.wait_arrival(deadline);
+        false
+    }
+
+    /// A handle that ends a running [`Self::wait_paced`] now, with no frame, so a recovery
     /// ask from the control task goes out at once. `None`: the ask waits for the next tick.
     fn arrival_poke(&self) -> Option<Arc<dyn Fn() + Send + Sync>> {
         None

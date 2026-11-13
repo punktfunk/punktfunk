@@ -17,7 +17,7 @@ use super::consume::FenceWaitStats;
 use super::plan::{
     gpu_import, negotiation_plan, ImportOutcome, ImportPolicy, ImportState, NegotiationInputs,
 };
-use super::queue::{wait_ready, FrameQueue};
+use super::queue::{wait_ready, FrameQueue, Woke};
 use super::share::{self, CloseOnExit, Seat, ShareKey, StreamCore};
 use super::thread::{pipewire_thread, LoopEnds, PwCtl};
 use super::CaptureOpts;
@@ -576,12 +576,18 @@ impl Capturer for PortalCapturer {
 
 impl crate::Feed for PortalCapturer {
     fn wait_arrival(&mut self, deadline: std::time::Instant) {
-        // A driven producer paints on its own requests (`pacer::Pacer`), so
-        // this wait never triggers a paint. It returns on a finished render, not on an
-        // arrival: the producer sends a buffer before it has painted it.
-        if self.shared.status() != StreamStatus::Broken {
-            let _ = wait_ready(&self.queue, &self.wake, &self.poked, deadline);
+        self.wait_paced(std::time::Instant::now(), deadline);
+    }
+
+    /// A driven producer paints on its own requests (`pacer::Pacer`), so this wait never
+    /// triggers a paint. It returns on a finished render, not on an arrival: the producer
+    /// sends a buffer before it has painted it. A broken capture only sits out the gate.
+    fn wait_paced(&mut self, not_before: std::time::Instant, deadline: std::time::Instant) -> bool {
+        if self.shared.status() == StreamStatus::Broken {
+            std::thread::sleep(not_before.saturating_duration_since(std::time::Instant::now()));
+            return false;
         }
+        wait_ready(&self.queue, &self.wake, &self.poked, not_before, deadline) == Woke::Poked
     }
 
     fn arrival_poke(&self) -> Option<Arc<dyn Fn() + Send + Sync>> {
@@ -743,7 +749,8 @@ impl PortalCapturer {
             let slice = Duration::from_millis(500)
                 .min(deadline.saturating_duration_since(std::time::Instant::now()));
             let until = std::time::Instant::now() + slice;
-            let end = if !wait_ready(&self.queue, &self.wake, &self.poked, until) {
+            let woke = wait_ready(&self.queue, &self.wake, &self.poked, started, until);
+            let end = if woke == Woke::Gone {
                 RecvTimeoutError::Disconnected
             } else if std::time::Instant::now() >= deadline {
                 RecvTimeoutError::Timeout
