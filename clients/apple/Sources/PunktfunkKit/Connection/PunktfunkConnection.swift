@@ -109,18 +109,52 @@ public protocol AccessUnitMemory: AnyObject {
     func locate(_ pointer: UnsafeRawPointer) -> (token: UInt64, offset: Int)?
 }
 
-/// The lender behind the C callbacks' `userdata`.
+/// The lender behind the C callbacks' `userdata`, with a count of the buffers it has lent the core.
 private final class AccessUnitMemoryBox {
     let memory: AccessUnitMemory
+    private let lock = NSLock()
+    private var lentBuffers = 0
+    private var asked = false
+
     init(_ memory: AccessUnitMemory) { self.memory = memory }
+
+    /// The core asked for a buffer: this lender is the one it assembles in.
+    func lend() {
+        lock.lock()
+        asked = true
+        lentBuffers += 1
+        lock.unlock()
+    }
+
+    func returned() {
+        lock.lock()
+        lentBuffers -= 1
+        lock.unlock()
+    }
+
+    var wasAsked: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return asked
+    }
+
+    var holdsBuffers: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return lentBuffers > 0
+    }
 }
 
 private let accessUnitTake:
     @convention(c) (UnsafeMutableRawPointer?, UInt, UnsafeMutablePointer<PunktfunkAuStore>?) -> Bool = {
         userdata, count, out in
         guard let userdata, let out else { return false }
-        let memory = Unmanaged<AccessUnitMemoryBox>.fromOpaque(userdata).takeUnretainedValue().memory
-        guard let slot = memory.take(Int(count)) else { return false }
+        let box = Unmanaged<AccessUnitMemoryBox>.fromOpaque(userdata).takeUnretainedValue()
+        box.lend()
+        guard let slot = box.memory.take(Int(count)) else {
+            box.returned()
+            return false
+        }
         out.pointee = PunktfunkAuStore(
             data: slot.base.assumingMemoryBound(to: UInt8.self), len: UInt(slot.count),
             token: slot.token)
@@ -130,7 +164,38 @@ private let accessUnitTake:
 private let accessUnitRelease: @convention(c) (UnsafeMutableRawPointer?, UInt64) -> Void = {
     userdata, token in
     guard let userdata else { return }
-    Unmanaged<AccessUnitMemoryBox>.fromOpaque(userdata).takeUnretainedValue().memory.release(token)
+    let box = Unmanaged<AccessUnitMemoryBox>.fromOpaque(userdata).takeUnretainedValue()
+    box.memory.release(token)
+    box.returned()
+}
+
+/// The lenders the core was given. One stays until a later one has been asked for a buffer, so
+/// the core takes from it no more, and every buffer it lent is back. Under `pumpLock`.
+final class AccessUnitLenders {
+    private var boxes: [AccessUnitMemoryBox] = []
+
+    var retained: Int { boxes.count }
+
+    /// Hands `install` the callbacks for `memory`; the lender is kept when it returns true.
+    func lend(_ memory: AccessUnitMemory, install: (inout PunktfunkAuMemory) -> Bool) -> Bool {
+        let box = AccessUnitMemoryBox(memory)
+        var callbacks = PunktfunkAuMemory(
+            take: accessUnitTake, release: accessUnitRelease,
+            userdata: Unmanaged.passUnretained(box).toOpaque())
+        guard install(&callbacks) else { return false }
+        boxes.append(box)
+        return true
+    }
+
+    /// Drops the lenders nothing can call. The core installs a lender on its own thread some
+    /// time after `install`, and assembles in the newest one it has been given.
+    func sweep() {
+        guard let newest = boxes.lastIndex(where: { $0.wasAsked }) else { return }
+        boxes = boxes[..<newest].filter { $0.holdsBuffers } + boxes[newest...]
+    }
+
+    /// For after the core's threads are joined.
+    func removeAll() { boxes.removeAll() }
 }
 
 /// One Opus audio packet (48 kHz stereo, 5 ms frames) — decode with AVAudioConverter
@@ -371,8 +436,8 @@ public final class PunktfunkConnection: @unchecked Sendable {
     private let pathMonitor = NWPathMonitor()
     /// The lender `setAccessUnitMemory` installed, for `nextAU` to place pulls. Under `pumpLock`.
     private var accessUnitMemory: AccessUnitMemory?
-    /// Every lender ever installed, retained until `close()` ends the core's calls into them.
-    private var accessUnitMemoryBoxes: [Unmanaged<AccessUnitMemoryBox>] = []
+    /// The lenders the core can still call, kept until it can't. Under `pumpLock`.
+    private let accessUnitLenders = AccessUnitLenders()
     /// Same role for the audio drain thread (its own plane in the core).
     private let audioLock = NSLock()
     /// Same role for the feedback drain thread (rumble + HID-output — two core planes,
@@ -2288,30 +2353,25 @@ public final class PunktfunkConnection: @unchecked Sendable {
         // Joined: no core thread can call a lender any more.
         pumpLock.lock()
         accessUnitMemory = nil
-        accessUnitMemoryBoxes.forEach { $0.release() }
-        accessUnitMemoryBoxes.removeAll()
+        accessUnitLenders.removeAll()
         pumpLock.unlock()
     }
 
     /// Assemble access units in `memory` from the next frame on (nil: the heap). The core
     /// writes into its slots on its own threads, and `nextAU` then names the slot instead of
-    /// copying. From the pump thread, between pulls.
+    /// copying. From the pump thread, between pulls. A lender the core can no longer call is
+    /// dropped here (`AccessUnitLenders.sweep`).
     public func setAccessUnitMemory(_ memory: AccessUnitMemory?) {
         pumpLock.lock()
         defer { pumpLock.unlock() }
         let installed = withLiveHandle(or: false) { h -> Bool in
             guard let memory else { return punktfunk_connection_set_au_memory(h, nil) == statusOK }
-            let box = Unmanaged.passRetained(AccessUnitMemoryBox(memory))
-            var callbacks = PunktfunkAuMemory(
-                take: accessUnitTake, release: accessUnitRelease, userdata: box.toOpaque())
-            guard punktfunk_connection_set_au_memory(h, &callbacks) == statusOK else {
-                box.release()
-                return false
+            return accessUnitLenders.lend(memory) {
+                punktfunk_connection_set_au_memory(h, &$0) == statusOK
             }
-            accessUnitMemoryBoxes.append(box)
-            return true
         }
         accessUnitMemory = installed ? memory : nil
+        if installed { accessUnitLenders.sweep() }
     }
 
     /// Send one Opus mic frame (48 kHz) to the host, where it feeds a virtual

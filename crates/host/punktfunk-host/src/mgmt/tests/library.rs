@@ -944,6 +944,37 @@ fn concurrent_provider_syncs_keep_every_row() {
     assert_eq!(rows.len(), 8, "one row per provider: {rows:?}");
 }
 
+/// A file that does not parse is refused by every writer, so a downgrade or a hand edit costs
+/// the next sync nothing.
+#[test]
+fn a_library_file_that_does_not_parse_is_never_replaced() {
+    let dir = ConfigDirOverride::new();
+    let junk = b"{ \"entries\": [ not json";
+    let files = [
+        "library.json",
+        "library-stats.json",
+        "library-hidden.json",
+        "library-picks.json",
+    ];
+    for f in files {
+        std::fs::write(dir.path().join(f), junk).unwrap();
+    }
+    let view = crate::library::View::here();
+    let row = serde_json::json!({"external_id": "a", "title": "A"});
+    let inputs = vec![serde_json::from_value(row).unwrap()];
+    assert!(crate::library::reconcile_provider("p", None, inputs).is_err());
+    let manual = serde_json::from_value(serde_json::json!({"title": "A"})).unwrap();
+    assert!(crate::library::add_custom(manual, false).is_err());
+    assert!(crate::library::set_entry_hidden(&view, "steam:70", true).is_err());
+    let url = Some("https://example.com/a.png".to_string());
+    let art = crate::library::ArtKind::Portrait;
+    assert!(crate::library::set_art_pick(&view, "steam:70", art, url).is_err());
+    crate::library::record_run_time("steam:70", None, std::time::Duration::from_secs(60));
+    for f in files {
+        assert_eq!(std::fs::read(dir.path().join(f)).unwrap(), junk, "{f}");
+    }
+}
+
 /// A plugin re-sends its whole set on a timer; only a set that differs is news to clients.
 #[test]
 fn an_unchanged_provider_sync_stays_quiet() {

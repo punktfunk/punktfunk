@@ -9,9 +9,10 @@
 //! [`reclaim`] runs every file whose owner is dead. The engine names no backend: each entry
 //! goes to [`VirtualDisplay::undo`](crate::VirtualDisplay::undo) of the backend it records.
 //!
-//! An undo that fails, or whose heads do not read back lit, stays for the next pass. So does one
-//! naming a head the compositor no longer lists: it may come back still disabled, and this host
-//! runs the undo again once it does ([`apply`]). A file this version cannot read is left alone.
+//! An undo that fails, whose heads do not read back lit, or that names a head the compositor
+//! no longer lists stays, and this host runs it again while it lives ([`apply`]): a head may
+//! come back still disabled. Past a few looks it stays for the next pass. A file this version
+//! cannot read is left alone.
 //! Pin the contract with the tests below; the design is
 //! `design/component-health/16-topology-journal.md` (planning).
 
@@ -233,9 +234,10 @@ mod linux {
 
     /// Run the entries of `backend` that `seqs` name, newest first, with the journal unlocked:
     /// an undo and its read-back take seconds, and another session's [`push`] must not wait.
-    /// `Ok` removes an entry; `Err` keeps it for the next pass. A seq that is gone, or goes
-    /// while an earlier one runs, is nothing to do. An entry naming a head that is not listed
-    /// (unplugged, or a monitor switched off) stays, and [`watch_owed`] runs it again on return.
+    /// `Ok` removes an entry; `Err` keeps it. A seq that is gone, or goes while an earlier one
+    /// runs, is nothing to do. A re-enable that errors or does not read back lit, and an entry
+    /// naming a head that is not listed (unplugged, or a monitor switched off), stay owed:
+    /// [`watch_owed`] runs them again, and the next host takes what it gives up on.
     pub(crate) fn apply(seqs: &[u64], backend: &mut dyn VirtualDisplay) {
         if seqs.is_empty() {
             return;
@@ -250,8 +252,18 @@ mod linux {
             if !with(|j| j.doc.entries.iter().any(|now| now.seq == e.seq)) {
                 return Ok(true);
             }
-            backend.undo(&e.undo)?;
-            let gone = settled(&*backend, &e.undo, crate::monitors::DISABLE_BUDGET)?;
+            let tried = backend
+                .undo(&e.undo)
+                .and_then(|()| settled(&*backend, &e.undo, crate::monitors::DISABLE_BUDGET));
+            let gone = match tried {
+                Ok(gone) => gone,
+                Err(err) => {
+                    if matches!(e.undo, Undo::EnableHeads { .. }) {
+                        owed.push(e.seq);
+                    }
+                    return Err(err);
+                }
+            };
             if !gone.is_empty() {
                 tracing::info!(
                     backend = name, heads = ?gone,
@@ -267,10 +279,11 @@ mod linux {
         }
     }
 
-    /// Look for the heads of the `owed` entries every [`OWED_POLL`] until each is settled or
-    /// gone. Umbriel and niri keep a runtime disable for the monitor and Hyprland a rule for its
-    /// name, so a returning head comes back still disabled. After [`OWED_TRIES`] failed looks
-    /// an entry is left in the journal for the next host.
+    /// Look at the heads of the `owed` entries every [`OWED_POLL`] until each is settled: a
+    /// head that left mid-stream, or a re-enable that errored. Umbriel and niri keep a runtime
+    /// disable for the monitor and Hyprland a rule for its name, so a returning head comes back
+    /// still disabled. After [`OWED_TRIES`] failed looks an entry is left in the journal for
+    /// the next host.
     fn watch_owed(backend: &'static str, owed: Vec<u64>) {
         let mut owed: Vec<(u64, u32)> = owed.into_iter().map(|seq| (seq, 0)).collect();
         let spawned = std::thread::Builder::new()
@@ -789,6 +802,38 @@ mod linux {
                     std::thread::sleep(Duration::from_millis(50));
                 }
                 assert!(seqs().is_empty(), "the watch settled the entry");
+            });
+        }
+
+        /// A re-enable that errors on a live host stays in the journal and is run again by
+        /// the owed watch, which settles the entry once the head reads back lit.
+        #[test]
+        fn a_failed_undo_is_run_again_by_the_owed_watch() {
+            in_child("a_failed_undo_is_run_again_by_the_owed_watch", || {
+                let undo = heads(&["DP-1"]);
+                let seq = push("fake", undo.clone());
+                let fake = FakeDisplay::new("fake");
+                fake.serve_by_name();
+                fake.script(|s| {
+                    s.heads = vec![head("DP-1", false)];
+                    s.fail_undo = Some(undo.clone());
+                });
+                apply(&[seq], &mut *fake.boxed());
+                assert_eq!(fake.take_calls(), [Call::Undo(undo.clone())]);
+                assert_eq!(seqs(), [seq], "the refused re-enable stays owed");
+
+                fake.script(|s| s.fail_undo = None);
+                let deadline = Instant::now() + OWED_POLL * 3;
+                while fake.calls().is_empty() && Instant::now() < deadline {
+                    std::thread::sleep(Duration::from_millis(50));
+                }
+                assert_eq!(fake.take_calls(), [Call::Undo(undo)], "the watch re-ran it");
+                fake.script(|s| s.heads = vec![head("DP-1", true)]);
+                let deadline = Instant::now() + OWED_POLL * 3;
+                while !seqs().is_empty() && Instant::now() < deadline {
+                    std::thread::sleep(Duration::from_millis(50));
+                }
+                assert!(seqs().is_empty(), "the head read back lit and settled");
             });
         }
     }

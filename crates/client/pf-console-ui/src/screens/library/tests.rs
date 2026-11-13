@@ -4,7 +4,7 @@ use crate::screens::Screen;
 use crate::theme::{contrast, over};
 use art::{
     art_cache_size, decode_poster, decode_poster_off_thread, placeholder_face, ART_CACHE_H,
-    ART_CACHE_W,
+    ART_CACHE_W, DECODE_QUEUE,
 };
 use skia_safe::{Color4f, Point};
 
@@ -1263,6 +1263,27 @@ fn screens_on_one_host_share_a_cover() {
     second.sync(&library);
     assert!(second.art.contains_key("g0"), "shared, not decoded");
     assert!(!second.decoder.pending("g0"));
+}
+
+/// The decoder takes [`DECODE_QUEUE`] covers and then none until some finish, so a scroll's
+/// covers wait behind a bounded queue and not behind every cover it passed.
+#[test]
+fn the_decoder_queue_is_bounded() {
+    let mut decoder = art::ArtDecoder::default();
+    let bytes: std::sync::Arc<[u8]> = poster_png(0).into();
+    assert_eq!(decoder.room(), DECODE_QUEUE);
+    for i in 0..DECODE_QUEUE {
+        decoder.want(format!("g{i}"), bytes.clone(), 1.0);
+    }
+    assert_eq!(decoder.room(), 0, "full");
+    decoder.want("over".into(), bytes, 1.0);
+    assert_eq!(decoder.room(), 0, "never negative");
+    assert_eq!(decoder.finished().len(), DECODE_QUEUE + 1);
+    assert_eq!(
+        decoder.room(),
+        DECODE_QUEUE,
+        "finished covers free their places"
+    );
 }
 
 /// A 2:3 poster, PNG-encoded: a two-hue gradient with a pale disc, colour from `seed`.

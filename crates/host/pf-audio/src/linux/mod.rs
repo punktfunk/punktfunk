@@ -489,7 +489,9 @@ impl QuantumTracker {
     }
 }
 
-/// The capture stream's state, owned by its PipeWire listener.
+/// The capture stream's data-thread state: only `process` touches it. In the sink modes that
+/// is libpipewire's realtime data thread, while `state_changed` and `param_changed` run on
+/// the main loop, so those two reach it through [`CapEvents`] and never take `ud`.
 struct CapUd {
     tx: std::sync::mpsc::SyncSender<Vec<f32>>,
     channels: u32,
@@ -503,16 +505,35 @@ struct CapUd {
     /// Negotiated quantum; a gap is measured against this. Seeded with the ask; corrected
     /// on first data. A 1024-frame clamp is the deal we got, not a fault.
     quantum: Duration,
+    active: Arc<AtomicBool>,
+    events: Arc<CapEvents>,
+    /// The `events.epoch` this thread last acted on.
+    seen_epoch: u32,
+    /// Denominator for every frames↔time conversion. At 96 kHz a hardcoded 48 000 would
+    /// report every quantum as twice as long. `param_changed` stores the grant.
+    negotiated_rate: Arc<AtomicU32>,
+}
+
+/// What the main-loop callbacks hand the data thread. Atomics only: the data thread takes
+/// no lock.
+#[derive(Default)]
+struct CapEvents {
+    /// Bumped on every state change; the data thread drops its cadence stamp when it moves.
+    epoch: AtomicU32,
+    /// Spans away from `Streaming` that ended since the data thread last looked, and their µs.
+    pauses: AtomicU64,
+    paused_us: AtomicU64,
+}
+
+/// The main-loop half of the capture stream, owned by `state_changed` and `param_changed`.
+struct CapWatch {
+    events: Arc<CapEvents>,
+    negotiated_rate: Arc<AtomicU32>,
     /// Current format, so a resume to the same one is not a real change.
     negotiated: Option<(pipewire::spa::param::audio::AudioFormat, u32, u32)>,
-    active: Arc<AtomicBool>,
     /// When the stream last left `Streaming`, so the span is charged to the window it
     /// stretched. `None` while streaming.
     paused_since: Option<std::time::Instant>,
-    /// Denominator for every frames↔time conversion. At 96 kHz a hardcoded 48 000 would
-    /// report every quantum as twice as long.
-    rate_hz: u32,
-    negotiated_rate: Arc<AtomicU32>,
 }
 
 impl CapUd {
@@ -522,6 +543,7 @@ impl CapUd {
         rate_hz: u32,
         active: Arc<AtomicBool>,
         negotiated_rate: Arc<AtomicU32>,
+        events: Arc<CapEvents>,
     ) -> CapUd {
         CapUd {
             tx,
@@ -534,67 +556,28 @@ impl CapUd {
             quantum: Duration::from_micros(
                 capture_quantum_frames(rate_hz) as u64 * 1_000_000 / rate_hz as u64,
             ),
-            negotiated: None,
             active,
-            paused_since: None,
-            rate_hz,
+            events,
+            seen_epoch: 0,
             negotiated_rate,
         }
     }
 
-    /// A state change. A Paused↔Streaming span is a gap in the stream existing, not in
-    /// delivery: scoring it would bury the sub-10 ms holes. It is still reported, charged
-    /// to the window flushed after the resume, since that window stretches by the span.
-    fn on_state(&mut self, streaming: bool) {
-        self.last_cb = None;
-        if streaming {
-            if let Some(since) = self.paused_since.take() {
-                self.stats.observe_pause(since.elapsed());
-            }
-        } else {
-            self.paused_since
-                .get_or_insert_with(std::time::Instant::now);
-        }
-    }
-
-    /// A negotiated `(format, rate, channels)`. The same one again is the graph resuming us,
-    /// not a stream change. What is reported is what was granted, not asked
-    /// (`design/hi-res-audio.md`).
-    fn on_format(
-        &mut self,
-        now: (pipewire::spa::param::audio::AudioFormat, u32, u32),
-        mode: CaptureMode,
-    ) {
-        if self.negotiated == Some(now) {
-            tracing::debug!(
-                format = ?now.0,
-                rate = now.1,
-                channels = now.2,
-                "audio format renegotiated, unchanged (the graph resumed our sink)"
-            );
-            return;
-        }
-        self.negotiated = Some(now);
-        // Rate `0` means the pod carried none: "unstated" is not a claim that it changed.
-        if now.1 != 0 {
-            self.rate_hz = now.1;
-            self.negotiated_rate.store(now.1, Ordering::Relaxed);
-        }
-        // Sink modes: we own the sink, so this IS the format apps render into. Monitor mode:
-        // PipeWire's resampler reports a clean rate whatever ran upstream; the node's own
-        // rate is a registry lookup in `monitor_rate`.
-        tracing::info!(
-            format = ?now.0,
-            rate = now.1,
-            channels = now.2,
-            mode = mode.as_str(),
-            "audio format negotiated"
-        );
+    fn rate_hz(&self) -> u32 {
+        self.negotiated_rate.load(Ordering::Relaxed)
     }
 
     /// Score a callback's arrival, before any early return: a callback that ran empty still
-    /// ran, which is different from one that never ran.
+    /// ran, which is different from one that never ran. A state change since the last one
+    /// drops the stamp, and a pause that ended is charged to the window flushed after it.
     fn on_callback(&mut self, now: std::time::Instant) {
+        let epoch = self.events.epoch.load(Ordering::Acquire);
+        if epoch != self.seen_epoch {
+            self.seen_epoch = epoch;
+            self.last_cb = None;
+        }
+        self.stats.pauses += self.events.pauses.swap(0, Ordering::Relaxed);
+        self.stats.paused_us += self.events.paused_us.swap(0, Ordering::Relaxed);
         let since_last = self.last_cb.map(|t| now.duration_since(t));
         self.last_cb = Some(now);
         self.stats.observe_callback(since_last, self.quantum);
@@ -630,14 +613,15 @@ impl CapUd {
         if self.tx.try_send(samples).is_err() && self.active.load(Ordering::Relaxed) {
             self.stats.dropped_chunks += 1;
         }
-        self.stats
-            .flush_window(&mut self.last_stats, self.rate_hz, None);
+        let rate_hz = self.rate_hz();
+        self.stats.flush_window(&mut self.last_stats, rate_hz, None);
     }
 
     fn note_quantum(&mut self, was: usize, frames: usize) {
-        let rate = self.rate_hz.max(1);
+        let rate_hz = self.rate_hz();
+        let rate = rate_hz.max(1);
         self.quantum = Duration::from_micros(frames as u64 * 1_000_000 / rate as u64);
-        let want = capture_quantum_frames(self.rate_hz) as usize;
+        let want = capture_quantum_frames(rate_hz) as usize;
         let negotiated_ms = format!("{:.1}", frames as f32 * 1000.0 / rate as f32);
         if was != 0 {
             // Moves the gap threshold under a reader comparing windows.
@@ -667,6 +651,69 @@ impl CapUd {
                 "audio capture quantum negotiated"
             );
         }
+    }
+}
+
+impl CapWatch {
+    fn new(events: Arc<CapEvents>, negotiated_rate: Arc<AtomicU32>) -> CapWatch {
+        CapWatch {
+            events,
+            negotiated_rate,
+            negotiated: None,
+            paused_since: None,
+        }
+    }
+
+    /// A state change. A Paused↔Streaming span is a gap in the stream existing, not in
+    /// delivery: scoring it would bury the sub-10 ms holes. It is still reported, charged
+    /// to the window flushed after the resume, since that window stretches by the span.
+    fn on_state(&mut self, streaming: bool) {
+        self.events.epoch.fetch_add(1, Ordering::Release);
+        if streaming {
+            if let Some(since) = self.paused_since.take() {
+                self.events.pauses.fetch_add(1, Ordering::Relaxed);
+                self.events
+                    .paused_us
+                    .fetch_add(since.elapsed().as_micros() as u64, Ordering::Relaxed);
+            }
+        } else {
+            self.paused_since
+                .get_or_insert_with(std::time::Instant::now);
+        }
+    }
+
+    /// A negotiated `(format, rate, channels)`. The same one again is the graph resuming us,
+    /// not a stream change. What is reported is what was granted, not asked
+    /// (`design/hi-res-audio.md`).
+    fn on_format(
+        &mut self,
+        now: (pipewire::spa::param::audio::AudioFormat, u32, u32),
+        mode: CaptureMode,
+    ) {
+        if self.negotiated == Some(now) {
+            tracing::debug!(
+                format = ?now.0,
+                rate = now.1,
+                channels = now.2,
+                "audio format renegotiated, unchanged (the graph resumed our sink)"
+            );
+            return;
+        }
+        self.negotiated = Some(now);
+        // Rate `0` means the pod carried none: "unstated" is not a claim that it changed.
+        if now.1 != 0 {
+            self.negotiated_rate.store(now.1, Ordering::Relaxed);
+        }
+        // Sink modes: we own the sink, so this IS the format apps render into. Monitor mode:
+        // PipeWire's resampler reports a clean rate whatever ran upstream; the node's own
+        // rate is a registry lookup in `monitor_rate`.
+        tracing::info!(
+            format = ?now.0,
+            rate = now.1,
+            channels = now.2,
+            mode = mode.as_str(),
+            "audio format negotiated"
+        );
     }
 }
 
@@ -1038,28 +1085,44 @@ fn pw_thread(
         let stream = pw::stream::StreamBox::new(&core, "punktfunk-audio", props)
             .context("pw audio Stream")?;
 
-        let ud = CapUd::new(tx, channels, rate_hz, active, negotiated_rate);
+        let events = Arc::new(CapEvents::default());
+        let ud = CapUd::new(
+            tx,
+            channels,
+            rate_hz,
+            active,
+            negotiated_rate.clone(),
+            events.clone(),
+        );
+        // `state_changed` and `param_changed` run on this thread while `process` may run on the
+        // data thread: they share `CapEvents` with it and never touch `ud`.
+        let watch = Rc::new(RefCell::new(CapWatch::new(events, negotiated_rate)));
         let _listener = stream
             .add_local_listener_with_user_data(ud)
             .state_changed({
                 let mainloop = mainloop.clone();
-                move |_s, ud, old, new| {
+                let watch = watch.clone();
+                move |_s, _ud, old, new| {
                     tracing::debug!(?old, ?new, "pipewire audio stream state");
-                    ud.on_state(matches!(new, pw::stream::StreamState::Streaming));
+                    watch
+                        .borrow_mut()
+                        .on_state(matches!(new, pw::stream::StreamState::Streaming));
                     // Unrecoverable — exit so sessions reopen a fresh instance.
                     if matches!(new, pw::stream::StreamState::Error(_)) {
                         mainloop.quit();
                     }
                 }
             })
-            .param_changed(move |_stream, ud, id, param| {
+            .param_changed(move |_stream, _ud, id, param| {
                 let Some(param) = param else { return };
                 if id != pw::spa::param::ParamType::Format.as_raw() {
                     return;
                 }
                 let mut info = AudioInfoRaw::default();
                 if info.parse(param).is_ok() {
-                    ud.on_format((info.format(), info.rate(), info.channels()), mode);
+                    watch
+                        .borrow_mut()
+                        .on_format((info.format(), info.rate(), info.channels()), mode);
                 }
             })
             .process(|stream, ud| {
@@ -1322,5 +1385,39 @@ mod tests {
         };
         assert_eq!(hi_get("audio.rate"), Some("96000"));
         assert_eq!(hi_get("node.force-quantum"), Some("480"));
+    }
+
+    /// The main loop only writes `CapEvents`; the data thread acts on it at its next callback:
+    /// the stamp across a pause is dropped (no hole), the span is charged, the grant is read.
+    #[test]
+    fn a_pause_seen_on_the_main_loop_reaches_the_data_thread_without_a_hole() {
+        let (tx, _rx) = std::sync::mpsc::sync_channel(1);
+        let events = Arc::new(CapEvents::default());
+        let rate = Arc::new(AtomicU32::new(48_000));
+        let mut ud = CapUd::new(
+            tx,
+            2,
+            48_000,
+            Arc::new(AtomicBool::new(true)),
+            rate.clone(),
+            events.clone(),
+        );
+        let mut watch = CapWatch::new(events, rate);
+        let t0 = std::time::Instant::now();
+        ud.on_callback(t0);
+        watch.on_state(false);
+        std::thread::sleep(Duration::from_millis(5));
+        watch.on_state(true);
+        // 200 ms on: a hole, had the stamp survived the transition.
+        ud.on_callback(t0 + Duration::from_millis(200));
+        assert_eq!(ud.stats.gaps, 0);
+        assert_eq!(ud.stats.pauses, 1);
+        assert!(ud.stats.paused_us >= 5_000);
+        // Taken once: the next callback charges nothing more, and scores cadence again.
+        ud.on_callback(t0 + Duration::from_millis(400));
+        assert_eq!(ud.stats.pauses, 1);
+        assert_eq!(ud.stats.gaps, 1);
+        watch.negotiated_rate.store(96_000, Ordering::Relaxed);
+        assert_eq!(ud.rate_hz(), 96_000);
     }
 }

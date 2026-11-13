@@ -63,8 +63,6 @@ const RECONNECT: Duration = Duration::from_millis(500);
 const SETTLE: Duration = Duration::from_millis(150);
 /// Upper bound on events another thread's reply read buffered, and on [`SETTLE`]'s lateness.
 const POLL_MS: i32 = 50;
-/// A local owner answers a conversion at once; a silent one is gone or broken.
-const READ_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// One connection to the session's Xwayland.
 struct Live {
@@ -179,7 +177,7 @@ impl GamescopeClipboard {
             x11rb::CURRENT_TIME,
         )?;
         live.conn.flush().context("flush convert_selection")?;
-        tokio::time::timeout(READ_TIMEOUT, rx)
+        tokio::time::timeout(super::READ_TIMEOUT, rx)
             .await
             .context("clipboard owner did not answer")?
             .context("gamescope clipboard closed")?

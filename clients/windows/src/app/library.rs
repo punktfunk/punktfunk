@@ -6,8 +6,8 @@
 //! ("Browse library…"); picking a title starts a normal stream carrying `--launch id` —
 //! the host launches the app during the connect handshake.
 //!
-//! Poster bytes land in a small disk cache (`%LOCALAPPDATA%\punktfunk\art-cache`), which the
-//! `Image` loads them from: revisits (and offline browsing) are instant.
+//! Poster bytes land in the shared `pf_client_core::art_cache` (keyed by poster URL, bounded),
+//! which the `Image` loads them from: revisits (and offline browsing) are instant.
 //!
 //! The fetch and the art stream complete on worker threads into the root's [`LibraryState`];
 //! `Shared::library_gen` invalidates a superseded fetch exactly like the speed test's
@@ -24,7 +24,6 @@ use pf_client_core::trust::Settings;
 use pf_fluent::{Palette, Token};
 use pf_l10n::{client, common};
 use std::collections::{HashMap, VecDeque};
-use std::path::{Path, PathBuf};
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use windows_reactor::*;
@@ -34,6 +33,9 @@ use windows_reactor::*;
 const POSTER_MIN_WIDTH: f64 = 150.0;
 const POSTER_GAP: f64 = 12.0;
 const POSTER_RATIO: f64 = 1.5;
+/// How long arriving posters gather before the shelf is told: about ten renders a second at
+/// most, however fast the workers stream.
+const ART_BATCH: std::time::Duration = std::time::Duration::from_millis(100);
 
 /// One game, as the grid renders it (the wire `GameEntry` minus the artwork paths, which
 /// resolve into `LibraryState::art`).
@@ -228,6 +230,7 @@ pub(crate) fn start_fetch(ctx: &Arc<AppCtx>, set_library: &AsyncSetState<Library
                 }
             };
             let mut state = LibraryState::default();
+            drop_per_id_posters();
             let known = pf_client_core::trust::KnownHosts::load();
             let saved = known.resolve(
                 target.host.fp_hex.as_deref(),
@@ -272,19 +275,15 @@ pub(crate) fn start_fetch(ctx: &Arc<AppCtx>, set_library: &AsyncSetState<Library
 
             // Seed cached posters; queue the art pipeline for the rest.
             let base = library::base_url(&target.host.addr, mgmt);
-            let cache = art_cache_dir();
             let mut jobs: VecDeque<(String, Vec<String>)> = VecDeque::new();
             for g in &games {
-                match cache.as_deref().and_then(|d| cached_art(d, &g.id)) {
-                    Some(uri) => {
-                        state.art.insert(g.id.clone(), uri);
+                let candidates = g.art.poster_candidates(&base);
+                match cached_art(&candidates) {
+                    Some(path) => {
+                        state.art.insert(g.id.clone(), path);
                     }
-                    None => {
-                        let candidates = g.art.poster_candidates(&base);
-                        if !candidates.is_empty() {
-                            jobs.push_back((g.id.clone(), candidates));
-                        }
-                    }
+                    None if !candidates.is_empty() => jobs.push_back((g.id.clone(), candidates)),
+                    None => {}
                 }
             }
             state.phase = LibraryPhase::Ready(games.iter().map(game_of).collect());
@@ -305,18 +304,38 @@ pub(crate) fn start_fetch(ctx: &Arc<AppCtx>, set_library: &AsyncSetState<Library
                 return;
             }
             let api = library::HostApi::new(&target.host.addr, mgmt, port, &identity, pin);
+            let urls: HashMap<String, Vec<String>> = jobs.iter().cloned().collect();
             let rx = library::spawn_art_fetch(api, jobs);
-            while let Ok((id, bytes)) = rx.recv_blocking() {
+            // The workers have written the winning poster to the cache; the bytes are not needed.
+            // A publish clones the state and re-renders the shelf, so the posters that land in
+            // one ART_BATCH go out together.
+            while let Ok(first) = rx.recv_blocking() {
+                std::thread::sleep(ART_BATCH);
                 if shared.library_gen.load(Ordering::SeqCst) != generation {
                     return; // superseded — stop touching state (and the cache is shared anyway)
                 }
-                if let Some(uri) = cache.as_deref().and_then(|d| store_art(d, &id, &bytes)) {
-                    state.art.insert(id, uri);
+                let mut landed = false;
+                for (id, _) in
+                    std::iter::once(first).chain(std::iter::from_fn(|| rx.try_recv().ok()))
+                {
+                    if let Some(path) = urls.get(&id).and_then(|c| cached_art(c)) {
+                        state.art.insert(id, path);
+                        landed = true;
+                    }
+                }
+                if landed {
                     publish(&state);
                 }
             }
         })
         .ok();
+}
+
+/// Removes `%LOCALAPPDATA%\punktfunk\art-cache`, whose per-id posters nothing reads now.
+fn drop_per_id_posters() {
+    if let Some(local) = std::env::var_os("LOCALAPPDATA") {
+        let _ = std::fs::remove_dir_all(std::path::Path::new(&local).join("punktfunk/art-cache"));
+    }
 }
 
 /// A catalog entry as the grid draws it.
@@ -381,17 +400,21 @@ fn open_hidden(svc: &Svc, set_hide: &AsyncSetState<HideEdit>, hides: &Hides) {
         h.view = Some(HiddenView::Loading)
     }));
     let (api, _, generation) = shelf_api(&svc.ctx);
+    let base = {
+        let target = svc.ctx.shared.target.lock().unwrap();
+        let mgmt = target.host.mgmt_port.unwrap_or(library::DEFAULT_MGMT_PORT);
+        library::base_url(&target.host.addr, mgmt)
+    };
     let (ctx, set_hide, profile) = (svc.ctx.clone(), set_hide.clone(), hides.profile.clone());
     let _ = std::thread::Builder::new()
         .name("punktfunk-hidden".into())
         .spawn(move || {
-            let cache = art_cache_dir();
             let view = match hide::fetch_hidden_from(&api, &profile) {
                 Ok(entries) => HiddenView::Listed(
                     (entries.into_iter())
                         .map(|entry| Hidden {
                             game: game_of(&entry),
-                            art: cache.as_deref().and_then(|d| cached_art(d, &entry.id)),
+                            art: cached_art(&entry.art.poster_candidates(&base)),
                             entry,
                         })
                         .collect(),
@@ -409,33 +432,13 @@ fn open_hidden(svc: &Svc, set_hide: &AsyncSetState<HideEdit>, hides: &Hides) {
         });
 }
 
-/// `%LOCALAPPDATA%\punktfunk\art-cache` — poster bytes by game id, so revisits skip the
-/// network entirely. Small (one poster per library entry); no eviction yet.
-fn art_cache_dir() -> Option<PathBuf> {
-    let base = std::env::var_os("LOCALAPPDATA")?;
-    Some(PathBuf::from(base).join("punktfunk").join("art-cache"))
-}
-
-/// The cache filename for a game id (`steam:570` → `steam_570.img`) — ids are short and
-/// store-qualified, so the sanitized form stays unique in practice.
-fn art_file(dir: &Path, id: &str) -> PathBuf {
-    let safe: String = id
-        .chars()
-        .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
-        .collect();
-    dir.join(format!("{safe}.img"))
-}
-
-fn cached_art(dir: &Path, id: &str) -> Option<String> {
-    let p = art_file(dir, id);
-    p.exists().then(|| p.display().to_string())
-}
-
-fn store_art(dir: &Path, id: &str, bytes: &[u8]) -> Option<String> {
-    std::fs::create_dir_all(dir).ok()?;
-    let p = art_file(dir, id);
-    std::fs::write(&p, bytes).ok()?;
-    Some(p.display().to_string())
+/// The first candidate poster the shared cache holds, as the path `Image` loads. The file is
+/// replaced only by rename, so it is whole or absent.
+fn cached_art(candidates: &[String]) -> Option<String> {
+    let path = candidates
+        .iter()
+        .find_map(|u| pf_client_core::art_cache::path_of(u))?;
+    Some(path.display().to_string())
 }
 
 /// The per-GAME half of the link the host tiles offer (design/client-deep-links.md §5 names

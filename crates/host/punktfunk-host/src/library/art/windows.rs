@@ -2,9 +2,37 @@
 //! not the users base), a portable Playnite beside its exe, and `GetFinalPathNameByHandleW`.
 
 use super::*;
+use std::sync::Mutex;
+use std::time::{Duration, Instant};
 
-/// Roots beyond the users base.
+/// How long one scan of the registry and the users base is reused. A page of covers asks for
+/// sixty at once and every check would repeat it; a launcher installed meanwhile is picked up
+/// within this.
+const ROOTS_TTL: Duration = Duration::from_secs(30);
+
+static SCANNED: Mutex<Option<(Instant, Vec<PathBuf>)>> = Mutex::new(None);
+
+/// Roots beyond the users base: what [`scan_extra_roots`] returned, at most [`ROOTS_TTL`] ago.
+/// The lock is held across a scan, so concurrent callers wait for it instead of repeating it.
 pub(super) fn extra_roots() -> Vec<PathBuf> {
+    let mut scanned = SCANNED.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some((at, roots)) = scanned.as_ref() {
+        if at.elapsed() < ROOTS_TTL {
+            return roots.clone();
+        }
+    }
+    let roots = scan_extra_roots();
+    *scanned = Some((Instant::now(), roots.clone()));
+    roots
+}
+
+/// Drops the kept scan, for a test that changes what a scan finds.
+#[cfg(test)]
+pub(super) fn forget_extra_roots() {
+    *SCANNED.lock().unwrap_or_else(|e| e.into_inner()) = None;
+}
+
+fn scan_extra_roots() -> Vec<PathBuf> {
     let mut roots = steam_art_roots();
     // Portable Playnite keeps `library\files\…` beside the exe, outside every profile.
     roots.extend(super::super::launch::playnite_art_roots());

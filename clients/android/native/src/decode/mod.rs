@@ -209,12 +209,14 @@ impl DecodeOptions {
     }
 }
 
-/// The decode entry point on the `pf-decode` thread: dispatches to the codec's loop. All of
-/// them run until `shutdown` is set or the session closes.
+/// The decode entry point on the `pf-decode` thread: dispatches to the codec's loop, then
+/// drains the frame queue. The thread runs until `shutdown` is set or the session closes.
 ///
-/// PyroWave leaves before any of this: it is GPU compute with its own Vulkan present path
-/// ([`crate::pyro`]), sharing no MediaCodec machinery — not the codec object, not the
-/// surface handling, not the presenters. Everything below is the MediaCodec pipeline.
+/// PyroWave is GPU compute with its own Vulkan present path ([`crate::pyro`]), sharing no
+/// MediaCodec machinery — not the codec object, not the surface handling, not the presenters.
+/// A lane that ends by itself (no decoder starts, or every rebuild comes up barren) leaves the
+/// session without video, and a queue nobody pops makes core flush it and ask the host for a
+/// keyframe every [`FLUSH_COOLDOWN`](punktfunk_core::client::FLUSH_COOLDOWN).
 pub fn run(
     client: Arc<NativeClient>,
     window: NativeWindow,
@@ -223,8 +225,11 @@ pub fn run(
     opts: DecodeOptions,
 ) {
     if client.codec == punktfunk_core::quic::CODEC_PYROWAVE {
-        crate::pyro::run(client, window, shutdown, stats, opts);
-        return;
+        crate::pyro::run(client.clone(), window, shutdown.clone(), stats, opts);
+    } else {
+        run_async(client.clone(), window, shutdown.clone(), stats, opts);
     }
-    run_async(client, window, shutdown, stats, opts);
+    crate::session::drain_frames(&shutdown, || {
+        client.next_frame(std::time::Duration::from_millis(5))
+    });
 }

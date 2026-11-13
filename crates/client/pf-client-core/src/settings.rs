@@ -1014,6 +1014,24 @@ mod tests {
         let _ = std::fs::remove_dir_all(path.parent().unwrap());
     }
 
+    /// An update over a settings file that does not parse keeps that file as `.bad`.
+    #[test]
+    fn an_update_keeps_an_unparsable_settings_file_beside_the_new_one() {
+        let _guard = crate::trust::store_health_lock();
+        let path = crate::presets::tests::scratch_dir("settings-unparsable").join("settings.json");
+        std::fs::write(&path, br#"{"width":1280,"#).unwrap();
+        let s = Settings::update_at(&path, |s| {
+            s.last_window_w = 1280;
+            true
+        });
+        assert_eq!(s.last_window_w, 1280);
+        let kept = std::fs::read(path.with_extension("json.bad")).unwrap();
+        assert_eq!(kept, br#"{"width":1280,"#);
+        let stored: Settings = load_json_or_default(&path);
+        assert_eq!(stored.last_window_w, 1280);
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
     /// A pre-touch-mode store loads as `trackpad`; names round-trip through the enum.
     #[test]
     fn settings_touch_mode_defaults_trackpad() {

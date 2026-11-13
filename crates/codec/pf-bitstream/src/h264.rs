@@ -2419,6 +2419,22 @@ mod tests {
         }
     }
 
+    /// E.2.1 requires `max_dec_frame_buffering >= max_num_ref_frames`. A stream that states
+    /// less would fill a one-frame DPB with its reference and refuse every picture after.
+    #[test]
+    fn a_vui_dpb_depth_below_max_num_ref_frames_keeps_the_reference_floor() {
+        // `sps_at` sets max_num_ref_frames to 3.
+        let sps = sps_at(1280, 720, Level::L4_1, Some(1));
+        assert_eq!(dpb_limit(&sps), 3);
+
+        let sps = sps_at(1280, 720, Level::L4_1, Some(5));
+        assert_eq!(
+            dpb_limit(&sps),
+            5,
+            "a larger statement is still the stream's own"
+        );
+    }
+
     #[test]
     fn an_mmco_5_is_planned_with_a_rebase_warning_not_rejected() {
         let (sps, pps) = authored_sps_pps();

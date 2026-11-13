@@ -1746,12 +1746,14 @@ impl FormatFacts {
         let depth_reachable = source_hdr || sdr10_chain_ok;
         // Probe may open a tiny encoder: short-circuited behind the cheap gates.
         let ten_bit_asked = host_wants_10bit && client_supports_10bit && codec.supports_10bit();
-        let gpu_can_10bit = ten_bit_asked && depth_reachable && encoder.can_encode_10bit(codec);
+        let (gpu_can_10bit, display_hdr) =
+            ten_bit_gates(ten_bit_asked, depth_reachable, lit_hdr, || {
+                encoder.can_encode_10bit(codec)
+            });
         let bit_depth: u8 = if gpu_can_10bit { 10 } else { 8 };
         // The colour label and the capturer mandate read this, never `bit_depth >= 10` (10-bit
         // without it is SDR: BT.709 VUI).
         let session_hdr = gpu_can_10bit && source_hdr;
-        let display_hdr = ten_bit_asked && lit_hdr && encoder.can_encode_10bit(codec);
         tracing::info!(
             bit_depth,
             session_hdr,
@@ -1884,6 +1886,19 @@ pub(super) fn follows_source(
 /// HDR the client asks for: `VIDEO_CAP_HDR`, except a joiner of an SDR display (`owner_hdr`).
 fn hdr_asked(video_caps: u8, owner_hdr: Option<bool>) -> bool {
     video_caps & punktfunk_core::quic::VIDEO_CAP_HDR != 0 && owner_hdr != Some(false)
+}
+
+/// The GPU's 10-bit verdict for the stream (`depth_reachable`) and for the lit display
+/// (`lit_hdr`), from one ask: two could answer differently while a probe is unanswered. The ask
+/// runs only when a gate that needs it is open.
+fn ten_bit_gates(
+    ten_bit_asked: bool,
+    depth_reachable: bool,
+    lit_hdr: bool,
+    gpu_can_10bit: impl FnOnce() -> bool,
+) -> (bool, bool) {
+    let can = ten_bit_asked && (depth_reachable || lit_hdr) && gpu_can_10bit();
+    (depth_reachable && can, lit_hdr && can)
 }
 
 /// [`FormatFacts::resolve`] off the runtime: its probes may open a tiny encoder. A source that
@@ -2260,6 +2275,27 @@ mod tests {
             (0, 1, AUDIO_CODEC_OPUS, 48_000, 6, 700)
         );
         assert_eq!(cfg.layout, AudioLayout::Standard.wire());
+    }
+
+    /// The 10-bit verdict is asked once for both gates, and only when a gate that needs it is
+    /// open.
+    #[test]
+    fn the_10_bit_verdict_is_asked_once() {
+        let asks = std::cell::Cell::new(0u32);
+        let gate = |asked, depth, lit, answer| {
+            asks.set(0);
+            let gates = ten_bit_gates(asked, depth, lit, || {
+                asks.set(asks.get() + 1);
+                answer
+            });
+            (gates, asks.get())
+        };
+        assert_eq!(gate(true, true, true, true), ((true, true), 1));
+        assert_eq!(gate(true, true, true, false), ((false, false), 1));
+        assert_eq!(gate(true, true, false, true), ((true, false), 1));
+        assert_eq!(gate(true, false, true, true), ((false, true), 1));
+        assert_eq!(gate(true, false, false, true), ((false, false), 0));
+        assert_eq!(gate(false, true, true, true), ((false, false), 0));
     }
 
     /// HDR keeps 10-bit at 4:4:4 on Linux; only an SDR H.26x session drops to 8.

@@ -277,7 +277,9 @@ pub struct Opened<H> {
 /// then bisect `[FLOOR, target]` to within 20 Mbps, then try the floor without split.
 ///
 /// Only a param/caps rejection means "above the ceiling"; any other error ends the search, so
-/// a transient failure never caches a bogus ceiling. A floor that opened only after dropping
+/// a transient failure never caches a bogus ceiling. The search holds the best session while it
+/// opens the next, so the session cap can end it: that returns the session in hand, with no
+/// ceiling, and the error only when nothing is held. A floor that opened only after dropping
 /// split proves nothing about the bitrate, so it caches none.
 pub fn open_at_ceiling<H>(
     requested: u64,
@@ -329,6 +331,7 @@ pub fn open_at_ceiling<H>(
     // `lo` is the highest known-good rate (the floor assumed), `hi` the lowest rejected.
     let (mut lo, mut hi) = (FLOOR_BPS, target);
     let mut best: Option<(H, u64)> = None;
+    let mut proven = true;
     while hi > lo + CLAMP_TOL_BPS {
         let mid = lo + (hi - lo) / 2;
         match open(mid, used_split) {
@@ -340,14 +343,19 @@ pub fn open_at_ceiling<H>(
             }
             Err(e) if nvenc_status::is_param_rejection(&e) => hi = mid,
             Err(e) => {
-                if let Some((old, _)) = best.take() {
-                    destroy(old);
-                }
-                return Err(e);
+                let Some((_, kept_bps)) = &best else {
+                    return Err(e);
+                };
+                tracing::warn!(
+                    error = %format!("{e:#}"),
+                    kept_mbps = kept_bps / 1_000_000,
+                    "NVENC bitrate search ended early — keeping the open session"
+                );
+                proven = false;
+                break;
             }
         }
     }
-    let mut proven = true;
     let (handle, bps) = match best {
         Some(b) => b,
         None => match open(FLOOR_BPS, used_split) {
@@ -462,6 +470,9 @@ pub struct NvSession {
     pub width: u32,
     pub height: u32,
     pub fps: u32,
+    /// [`session_wave_cycle`] as the session opened. The recovery policy reads it every frame,
+    /// and the open and every reconfigure present the same `intraRefreshCnt`.
+    cycle: u32,
     /// Post-clamp target: the open ladder and reconfigure both write what the session runs at.
     pub bitrate_bps: u64,
     pub buffer_fmt: nv::NV_ENC_BUFFER_FORMAT,
@@ -558,6 +569,7 @@ impl NvSession {
             width,
             height,
             fps,
+            cycle: session_wave_cycle(codec, height, fps),
             bitrate_bps,
             buffer_fmt: nv::NV_ENC_BUFFER_FORMAT::NV_ENC_BUFFER_FORMAT_NV12,
             bit_depth: 8,
@@ -625,9 +637,10 @@ impl NvSession {
         self.next == 0
     }
 
-    /// Frames a forced intra refresh wave takes on this session ([`session_wave_cycle`]).
+    /// Frames a forced intra refresh wave takes on this session ([`session_wave_cycle`]),
+    /// latched when it opens.
     pub fn wave_cycle(&self) -> u32 {
-        session_wave_cycle(self.codec, self.height, self.fps)
+        self.cycle
     }
 
     /// How this session recovers. The driver owns the sweep: it ignores a re-force mid-sweep,
@@ -929,6 +942,7 @@ impl NvSession {
     /// The session is closed, and `target.device` is a live device of `target.device_type`
     /// for the call.
     pub unsafe fn open(&mut self, target: OpenTarget, split_mode: u32) -> Result<()> {
+        self.cycle = session_wave_cycle(self.codec, self.height, self.fps);
         // Sized per session, never per frame: the doNotWait sampler hands it to the driver.
         self.slice_offsets
             .resize(slice_offsets_len(self.width, self.height), 0);
@@ -1196,8 +1210,12 @@ impl NvSession {
         // P-only + infinite GOP: IDRs are forced, or the opening frame NVENC emits as one.
         // Chunked poll flags early chunks from this before the driver reports `pictureType`.
         let idr = forced || opening;
-        // The long-term step sits out an IDR, which empties the slots, and a wave.
-        let ltr = ltr.filter(|_| !idr && wave.is_none());
+        // An IDR empties the slots: it marks slot 0 and uses none, so a late loss on the next
+        // P still finds it. A wave sits the long-term step out.
+        let ltr = match ltr {
+            Some(_) if idr => Some((Some(0), None)),
+            ltr => ltr.filter(|_| wave.is_none()),
+        };
         let mut pic = nv::NV_ENC_PIC_PARAMS {
             version: nv::NV_ENC_PIC_PARAMS_VER,
             inputWidth: self.width,
@@ -2007,10 +2025,9 @@ mod ladder_tests {
         assert_eq!(*asked.borrow(), [100_000_000, 500_000_000]);
     }
 
-    /// Only a param rejection means "above the ceiling": anything else ends the search and
-    /// releases the session the bisection held.
-    #[test]
-    fn a_transient_failure_mid_search_propagates_and_releases() {
+    /// A driver that rejects above 300 Mbps and answers the session cap from `cap_from` up to
+    /// there, so the search's first success is the only session it grants.
+    fn capped(cap_from: u64) -> (anyhow::Result<Opened<u64>>, Vec<u64>) {
         let live = RefCell::new(Vec::new());
         let res = open_at_ceiling(
             800_000_000,
@@ -2018,7 +2035,7 @@ mod ladder_tests {
             None,
             |bps, _| match bps {
                 b if b > 300_000_000 => Err(reject()),
-                b if b >= 250_000_000 => Err(call_err(
+                b if b >= cap_from => Err(call_err(
                     "initialize_encoder",
                     NVENCSTATUS::NV_ENC_ERR_OUT_OF_MEMORY,
                 )),
@@ -2029,8 +2046,25 @@ mod ladder_tests {
             },
             |h| live.borrow_mut().retain(|&l| l != h),
         );
+        (res, live.into_inner())
+    }
+
+    /// Only a param rejection means "above the ceiling": anything else ends the search. The
+    /// session the search holds is proven, so it opens the stream and caches no ceiling.
+    #[test]
+    fn a_transient_failure_mid_search_keeps_the_proven_session() {
+        let (res, live) = capped(250_000_000);
+        let o = res.expect("the held session opens");
+        assert_eq!((o.bps, o.ceiling), (207_500_000, None));
+        assert_eq!(live, [o.handle], "one live session: the returned one");
+    }
+
+    /// With nothing held, a transient failure is the open's error.
+    #[test]
+    fn a_transient_failure_with_no_session_held_propagates() {
+        let (res, live) = capped(100_000_000);
         assert!(res.is_err());
-        assert!(live.borrow().is_empty(), "the held session was destroyed");
+        assert!(live.is_empty());
     }
 }
 
@@ -2235,11 +2269,12 @@ mod recovery_tests {
             last: s.frame_idx - 1,
             mask: u16::MAX,
         });
+        let held = s.ltr_slots.clone();
+        assert_eq!(held[0], Some(s.frame_idx - 1), "the IDR holds slot 0");
         REFUSE.set(1);
         assert!(encode(&mut s).is_err());
         assert_eq!(
-            s.ltr_slots,
-            [None, None],
+            s.ltr_slots, held,
             "no slot holds a picture that was never queued"
         );
     }
@@ -2257,6 +2292,20 @@ mod recovery_tests {
             s.wave.is_none() && s.pending_anchor,
             "an RFI anchor, not a wave"
         );
+    }
+
+    /// The first P is lost and reported past the short-term window: the IDR holds long-term
+    /// slot 0, so it anchors the next frame instead of a wave.
+    #[test]
+    fn a_late_loss_after_the_idr_anchors_on_the_idr() {
+        let mut s = stub_session(Codec::H265, 128);
+        for _ in 0..7 {
+            encode(&mut s).expect("the stub driver accepts every picture");
+        }
+        assert!(s.invalidate_ref_frames(1, 1));
+        assert!(s.wave.is_none(), "the IDR answers, not a wave");
+        assert_eq!(s.live.ltr_force, Some(0));
+        assert!(encode(&mut s).expect("the anchor").anchor);
     }
 
     /// Confirmations trail by six frames, and a loss is reported past the short-term window:

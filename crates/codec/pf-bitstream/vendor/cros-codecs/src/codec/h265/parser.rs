@@ -1805,7 +1805,9 @@ pub struct Slice<'a> {
 
 impl<'a> Slice<'a> {
     /// Sets the header for dependent slices by copying from an independent
-    /// slice.
+    /// slice. The segment keeps the fields that describe its own bytes: address,
+    /// entry points and header size. The picture-wide RPS fields come from the
+    /// independent header; a dependent parse leaves them at their defaults.
     pub fn replace_header(&mut self, header: SliceHeader) -> Result<(), String> {
         if !self.header.dependent_slice_segment_flag {
             Err("Replacing the slice header is only possible for dependent slices".into())
@@ -1816,13 +1818,11 @@ impl<'a> Slice<'a> {
             let dependent_slice_segment_flag = self.header.dependent_slice_segment_flag;
             let segment_address = self.header.segment_address;
 
+            let num_entry_point_offsets = self.header.num_entry_point_offsets;
             let offset_len_minus1 = self.header.offset_len_minus1;
             let entry_point_offset_minus1 = self.header.entry_point_offset_minus1;
-            let num_pic_total_curr = self.header.num_pic_total_curr;
             let header_bit_size = self.header.header_bit_size;
             let n_emulation_prevention_bytes = self.header.n_emulation_prevention_bytes;
-            let curr_rps_idx = self.header.curr_rps_idx;
-            let st_rps_bits = self.header.st_rps_bits;
 
             self.header = header;
 
@@ -1831,13 +1831,11 @@ impl<'a> Slice<'a> {
             self.header.pic_parameter_set_id = pic_parameter_set_id;
             self.header.dependent_slice_segment_flag = dependent_slice_segment_flag;
             self.header.segment_address = segment_address;
+            self.header.num_entry_point_offsets = num_entry_point_offsets;
             self.header.offset_len_minus1 = offset_len_minus1;
             self.header.entry_point_offset_minus1 = entry_point_offset_minus1;
-            self.header.num_pic_total_curr = num_pic_total_curr;
             self.header.header_bit_size = header_bit_size;
             self.header.n_emulation_prevention_bytes = n_emulation_prevention_bytes;
-            self.header.curr_rps_idx = curr_rps_idx;
-            self.header.st_rps_bits = st_rps_bits;
 
             Ok(())
         }
@@ -2336,7 +2334,9 @@ impl Parser {
                 vps.num_ticks_poc_diff_one_minus1 = r.read_ue()?;
             }
 
-            vps.num_hrd_parameters = r.read_ue()?;
+            // 7.4.3.1 stops at vps_num_layer_sets_minus1 + 1. Each entry below is a ~7.7 KB
+            // HrdParams built from a few input bits, so an unbounded count is a heap bomb.
+            vps.num_hrd_parameters = r.read_ue_max(vps.num_layer_sets_minus1 + 1)?;
 
             for i in 0..vps.num_hrd_parameters as usize {
                 vps.hrd_layer_set_idx.push(r.read_ue()?);
@@ -2709,6 +2709,11 @@ impl Parser {
         r: &mut BitReader,
         st_rps_idx: u8,
     ) -> Result<(), String> {
+        // 7.4.8: a set holds at most this many pictures. For a derived set the bound also
+        // keeps every index below inside the 64-flag and 65-entry arrays.
+        let max_pics =
+            u32::from(sps.max_dec_pic_buffering_minus1[usize::from(sps.max_sub_layers_minus1)]);
+
         if st_rps_idx != 0 {
             st.inter_ref_pic_set_prediction_flag = r.read_bit()?;
         }
@@ -2732,6 +2737,12 @@ impl Parser {
                 .short_term_ref_pic_set
                 .get(usize::from(ref_rps_idx))
                 .ok_or::<String>("Invalid ref_rps_idx".into())?;
+            if ref_st.num_delta_pocs > max_pics {
+                return Err(format!(
+                    "Invalid NumDeltaPocs {} of the reference set",
+                    ref_st.num_delta_pocs
+                ));
+            }
 
             let mut used_by_curr_pic_flag = [false; 64];
 
@@ -2824,15 +2835,17 @@ impl Parser {
             }
 
             st.num_positive_pics = i as u8;
-        } else {
-            st.num_negative_pics = r.read_ue_max(u32::from(
-                sps.max_dec_pic_buffering_minus1[usize::from(sps.max_sub_layers_minus1)],
-            ))?;
 
-            st.num_positive_pics = r.read_ue_max(u32::from(
-                sps.max_dec_pic_buffering_minus1[usize::from(sps.max_sub_layers_minus1)]
-                    - st.num_negative_pics,
-            ))?;
+            if u32::from(st.num_negative_pics) + u32::from(st.num_positive_pics) > max_pics {
+                return Err(format!(
+                    "Invalid NumDeltaPocs {} of the derived set",
+                    u32::from(st.num_negative_pics) + u32::from(st.num_positive_pics)
+                ));
+            }
+        } else {
+            st.num_negative_pics = r.read_ue_max(max_pics)?;
+
+            st.num_positive_pics = r.read_ue_max(max_pics - u32::from(st.num_negative_pics))?;
 
             for i in 0..usize::from(st.num_negative_pics) {
                 let delta_poc_s0_minus1: u32 = r.read_ue_max(32767)?;
@@ -2914,9 +2927,9 @@ impl Parser {
 
         for i in 0..=max_num_sublayers_minus1 as usize {
             hrd.fixed_pic_rate_general_flag[i] = r.read_bit()?;
-            if !hrd.fixed_pic_rate_general_flag[i] {
-                hrd.fixed_pic_rate_within_cvs_flag[i] = r.read_bit()?;
-            }
+            // E.3.2: fixed_pic_rate_within_cvs_flag is inferred 1 when the general flag is 1.
+            hrd.fixed_pic_rate_within_cvs_flag[i] =
+                hrd.fixed_pic_rate_general_flag[i] || r.read_bit()?;
             if hrd.fixed_pic_rate_within_cvs_flag[i] {
                 hrd.elemental_duration_in_tc_minus1[i] = r.read_ue_max(2047)?;
             } else {
@@ -4916,5 +4929,42 @@ mod tests {
         assert_eq!(slice.nalu.size, 290);
         // Subtract 2 bytes to account for the header size.
         assert_eq!(hdr.header_bit_size - 16, 80);
+    }
+
+    /// A dependent segment keeps the fields that describe its own bytes and takes the
+    /// picture's RPS fields from the independent header; its own parse leaves those at
+    /// their defaults.
+    #[test]
+    fn a_dependent_segment_keeps_its_entry_points_and_takes_the_pictures_rps_fields() {
+        let mut parser = Parser::default();
+        let vps_nalu = find_nalu_by_type(STREAM_TEST25FPS, NaluType::VpsNut, 0).unwrap();
+        parser.parse_vps(&vps_nalu).unwrap();
+        let sps_nalu = find_nalu_by_type(STREAM_TEST25FPS, NaluType::SpsNut, 0).unwrap();
+        parser.parse_sps(&sps_nalu).unwrap();
+        let pps_nalu = find_nalu_by_type(STREAM_TEST25FPS, NaluType::PpsNut, 0).unwrap();
+        parser.parse_pps(&pps_nalu).unwrap();
+
+        let nalu = find_nalu_by_type(STREAM_TEST25FPS, NaluType::TrailR, 0).unwrap();
+        let independent = parser.parse_slice_header(nalu).unwrap().header;
+        assert_eq!(independent.num_pic_total_curr, 1);
+        assert_eq!(independent.num_entry_point_offsets, 3);
+        assert_ne!(independent.st_rps_bits, 0);
+
+        // What parsing a dependent segment leaves: its own entry points, defaults elsewhere.
+        let nalu = find_nalu_by_type(STREAM_TEST25FPS, NaluType::TrailR, 0).unwrap();
+        let mut dependent = parser.parse_slice_header(nalu).unwrap();
+        dependent.header.dependent_slice_segment_flag = true;
+        dependent.header.num_entry_point_offsets = 1;
+        dependent.header.num_pic_total_curr = 0;
+        dependent.header.curr_rps_idx = 9;
+        dependent.header.st_rps_bits = 0;
+
+        dependent.replace_header(independent.clone()).unwrap();
+        let hdr = &dependent.header;
+        assert!(hdr.dependent_slice_segment_flag);
+        assert_eq!(hdr.num_entry_point_offsets, 1);
+        assert_eq!(hdr.num_pic_total_curr, independent.num_pic_total_curr);
+        assert_eq!(hdr.curr_rps_idx, independent.curr_rps_idx);
+        assert_eq!(hdr.st_rps_bits, independent.st_rps_bits);
     }
 }

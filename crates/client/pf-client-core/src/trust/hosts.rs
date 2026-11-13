@@ -1103,6 +1103,28 @@ mod tests {
         let _ = std::fs::remove_dir_all(path.parent().unwrap());
     }
 
+    /// A store that exists but does not parse is set aside as `.bad` before the edit
+    /// saves over it, and the saved store is valid.
+    #[test]
+    fn an_edit_keeps_an_unparsable_store_beside_the_new_one() {
+        let _guard = crate::trust::store_health_lock();
+        let path = scratch_store("hosts-unparsable");
+        // UTF-16 with a BOM: how Notepad re-saves a UTF-8 file.
+        let utf16: Vec<u8> = "\u{feff}{\"hosts\":[]}"
+            .encode_utf16()
+            .flat_map(u16::to_le_bytes)
+            .collect();
+        for bad in [utf16, b"{\"hosts\":[{".to_vec()] {
+            let _ = std::fs::remove_file(path.with_extension("json.bad"));
+            std::fs::write(&path, &bad).unwrap();
+            KnownHosts::locked_at(&path, |k| (true, k.hosts.push(named("fresh")))).unwrap();
+            assert_eq!(std::fs::read(path.with_extension("json.bad")).unwrap(), bad);
+            let stored: KnownHosts = load_json_or_default(&path);
+            assert_eq!(stored.hosts.len(), 1);
+        }
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
     /// An edit made from inside another on one thread runs under the outer lock rather than
     /// waiting on it, and `false` leaves the file as the inner edit wrote it.
     #[test]

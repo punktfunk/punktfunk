@@ -1200,7 +1200,8 @@ fn screen_pump(
 }
 
 /// The session thread: dial, open the decoder and the plane threads, run [`Pump`] until
-/// the session ends, then send exactly one terminal event.
+/// the session ends, then send exactly one terminal event. A stop raised during the redial
+/// pause ends the session without dialing.
 fn pump(
     params: SessionParams,
     ev_tx: async_channel::Sender<SessionEvent>,
@@ -1223,6 +1224,10 @@ fn pump(
     let until = Instant::now() + pause;
     while Instant::now() < until && !stop.load(Ordering::SeqCst) {
         std::thread::sleep(Duration::from_millis(20));
+    }
+    if stop.load(Ordering::SeqCst) {
+        end_session(&stop, &mic, None, &ev_tx, SessionEvent::Ended(None));
+        return;
     }
     let connector = match dial(&params, &stop, &plan, &ev_tx) {
         Ok(c) => c,
@@ -1313,6 +1318,7 @@ fn pump(
         access,
         planes,
         decoder,
+        av1: av1_intake(connector.video_format().codec),
         #[cfg(target_os = "linux")]
         fd_wake: None,
         lent_au_memory: None,
@@ -1329,6 +1335,11 @@ fn pump(
     p.lend_au_memory();
     let end = p.run();
     p.finish(end);
+}
+
+/// The AV1 receiver rule for a session decoding `codec`.
+fn av1_intake(codec: u8) -> Option<crate::video::av1_intake::Av1Intake> {
+    (codec == punktfunk_core::quic::CODEC_AV1).then(Default::default)
 }
 
 /// What the pump does after one AU.
@@ -1375,6 +1386,8 @@ struct Pump {
     access: crate::access::SessionAccess,
     planes: PlaneThreads,
     decoder: Decoder,
+    /// The AV1 receiver rule; `None` on other codecs.
+    av1: Option<crate::video::av1_intake::Av1Intake>,
     /// The sync_file waiter's inbox (`run`); a VAAPI decode's fence goes there at submit.
     #[cfg(target_os = "linux")]
     fd_wake: Option<std::sync::mpsc::Sender<std::os::fd::OwnedFd>>,
@@ -1517,6 +1530,7 @@ impl Pump {
     fn on_frame(&mut self, frame: Frame) -> Pass {
         if let Some(format) = frame.new_format {
             self.codec_ask = None;
+            self.av1 = av1_intake(format.codec);
             if let Err(e) = self
                 .decoder
                 .reformat(format.codec, stream_format_of(&format))
@@ -1538,10 +1552,12 @@ impl Pump {
         };
         // A straggler a reference codec rewinds on, or a partial a newer frame beat, is
         // dropped before decode; a gap arms the freeze and core asks for the range.
-        if !self
-            .connector
-            .recovery_on_frame(&frame, self.decoder.decode_order())
-        {
+        let arrival = self.connector.recovery_on_au(
+            frame.frame_index,
+            frame.complete,
+            self.decoder.decode_order(),
+        );
+        if !arrival.admit {
             return Pass::Skip;
         }
         if let Some(d) = self.au_dump.as_mut() {
@@ -1550,7 +1566,20 @@ impl Pump {
             }
         }
         let mut frame = frame;
-        let data = std::mem::take(&mut frame.data);
+        let mut data = std::mem::take(&mut frame.data);
+        if let Some(av1) = self.av1.as_mut() {
+            use crate::video::av1_intake::Intake;
+            match av1.note(frame.frame_index, arrival.gap, frame.flags, &data) {
+                Intake::Feed => {}
+                Intake::Rewritten(out) => data = out.into(),
+                Intake::Withhold(ask) => {
+                    if ask {
+                        let _ = self.connector.request_keyframe();
+                    }
+                    return Pass::Skip;
+                }
+            }
+        }
         let decoded = self.decoder.decode_au(data, frame.flags, frame.complete);
         self.lend_au_memory();
         match decoded {
@@ -2572,6 +2601,49 @@ mod tests {
         );
         assert_eq!(params(""), None);
         assert_eq!(params("tablet"), None);
+    }
+
+    /// A stop raised before the dial ends the session as ended, without a connection
+    /// attempt that would come back as a timeout.
+    #[test]
+    fn a_stop_before_the_dial_ends_without_dialing() {
+        let dial = Dial {
+            host: "127.0.0.1".into(),
+            port: 9,
+            pin: [9; 32],
+            launch: None,
+            profile: None,
+            connect_timeout: Duration::from_secs(5),
+        };
+        let probes = Probes {
+            mode: mode_1080p(),
+            vulkan: None,
+            display_hdr: None,
+            hdr_enabled: false,
+            identity: ("cert".into(), "key".into()),
+            gamepad: GamepadPref::Auto,
+            force_software: Arc::default(),
+            stats_verbosity: crate::trust::StatsVerbosity::Off,
+            hevc_444_hardware: false,
+        };
+        let params = SessionParams::from_plan(
+            &crate::trust::Settings::default(),
+            false,
+            None,
+            None,
+            None,
+            dial,
+            probes,
+        );
+        let (ev_tx, ev_rx) = async_channel::unbounded();
+        let (frame_tx, _frames) = async_channel::bounded(2);
+        let stop = Arc::new(AtomicBool::new(true));
+        pump(params, ev_tx, frame_tx, stop, MicControl::default());
+        assert!(matches!(ev_rx.try_recv(), Ok(SessionEvent::Ended(None))));
+        assert!(
+            ev_rx.try_recv().is_err(),
+            "and nothing after the one terminal event"
+        );
     }
 
     /// Each launch verdict is said once; one that needs no words says nothing.

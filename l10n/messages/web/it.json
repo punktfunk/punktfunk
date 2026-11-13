@@ -105,9 +105,9 @@
 		"declarations": ["input count", "local n = count: plural"],
 		"selectors": ["n"],
 		"match": {
-			"n=one": "{count} fotogramma audio in ritardo",
-			"n=many": "{count} fotogrammi audio in ritardo",
-			"n=*": "{count} fotogrammi audio in ritardo"
+			"n=one": "{count} frame audio in ritardo",
+			"n=many": "{count} frame audio in ritardo",
+			"n=*": "{count} frame audio in ritardo"
 		}
 	}],
 	"status_last_gyro": [{
@@ -933,7 +933,7 @@
 	"store_uninstall_confirm": "Disinstallare {title}?",
 	"store_uninstall_body": "Puoi installarlo di nuovo dal catalogo.",
 	"store_uninstall_failed": "Impossibile avviare la rimozione",
-	"store_update_no_entry": "Questo plugin al momento non è in nessun catalogo — aggiorna le fonti e riprova.",
+	"store_update_no_entry": "Questo plugin al momento non è in nessun catalogo — ricarica le fonti e riprova.",
 	"store_update_all_count": "Aggiorna tutti ({count})",
 	"store_updates_pending": [{
 		"declarations": ["input count", "local n = count: plural"],
@@ -964,8 +964,8 @@
 	"store_update_all_stopped": "Interrotto dopo un errore — aggiornati: {done}, non tentati: {left}. Riprova dalle righe qui sotto.",
 	"store_sources_title": "Fonti dei cataloghi",
 	"store_sources_help": "Il catalogo unom integrato è sempre presente. Ogni altra fonte l’hai aggiunta tu.",
-	"store_refresh_all": "Aggiorna tutte",
-	"store_refresh_failed": "Impossibile aggiornare i cataloghi",
+	"store_refresh_all": "Ricarica tutte",
+	"store_refresh_failed": "Impossibile ricaricare i cataloghi",
 	"store_source_builtin": "Integrato",
 	"store_source_signed": "Firmato",
 	"store_source_unsigned": "Non firmato",

@@ -239,10 +239,20 @@ impl RetrieveThread {
         })
     }
 
+    /// Wake the thread if it parked ([`std::thread::park_timeout`]) on an empty queue. A wake
+    /// that lands before the park makes the park return at once, so the caller pushes first and
+    /// wakes after.
+    pub fn wake(&self) {
+        if let Some(j) = &self.join {
+            j.thread().unpark();
+        }
+    }
+
     /// Retire the thread and wait for it to leave the call it is blocked in. Idempotent; the
     /// queue survives, and [`AuQueue::reset`] is what empties it.
     pub fn stop_and_join(&mut self) {
         self.stop.store(true, Ordering::Release);
+        self.wake();
         if let Some(j) = self.join.take() {
             let _ = j.join();
         }
@@ -311,5 +321,27 @@ mod tests {
         assert!(logged());
         q.reset();
         assert!(!logged());
+    }
+
+    /// A parked thread leaves its park on a wake and on a stop, long before the park times out.
+    #[test]
+    fn a_wake_or_a_stop_ends_a_park() {
+        let woken = Arc::new(AtomicBool::new(false));
+        let t_woken = woken.clone();
+        let mut t = RetrieveThread::spawn("test", move |stop| {
+            while !stop.load(Ordering::Acquire) {
+                std::thread::park_timeout(Duration::from_secs(60));
+                t_woken.store(true, Ordering::Release);
+            }
+        })
+        .unwrap();
+        t.wake();
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !woken.load(Ordering::Acquire) {
+            assert!(Instant::now() < deadline, "the wake left the thread parked");
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        // Joins at once; without the wake in `stop_and_join` it would wait out the 60 s park.
+        t.stop_and_join();
     }
 }

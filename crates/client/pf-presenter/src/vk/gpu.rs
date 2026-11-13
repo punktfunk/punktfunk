@@ -51,6 +51,18 @@ impl Presenter {
         Ok(())
     }
 
+    /// Idle our own work mid-session: the in-flight fence, then the graphics queue, which
+    /// carries the overlay's submits. Where the decode lane shares that queue, the queue lock
+    /// keeps its submits off it. Unlike `vkDeviceWaitIdle`, this never touches the decode
+    /// queue, so the pump may keep decoding.
+    pub(crate) fn quiesce_queue(&mut self) {
+        // A lost device reads nothing more, so a failed wait still lets go.
+        self.quiesce_own().ok();
+        let _q = self.queue_lock.guard();
+        // SAFETY: `queue` is owned here; `queue_lock` is held so no concurrent submit.
+        unsafe { self.device.queue_wait_idle(self.queue) }.ok();
+    }
+
     /// An empty batch that waits `acquire_sem`. A discarded image leaves the semaphore
     /// signalled, and the next acquire needs it unsignalled with no wait pending: that holds
     /// once the queue drains after this.

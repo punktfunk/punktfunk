@@ -586,11 +586,17 @@ fn fire_exec(
     let kind = ev.kind.name();
     let timeout = Duration::from_secs(u64::from(timeout_s));
     tracing::info!(cmd = %label, kind, "hook: running command");
-    // Off-thread: streaming planes never wait on operator code. Permit frees on thread exit.
-    std::thread::spawn(move || {
-        run_hook_process(&cmd, &json, &env, timeout, elevated);
-        drop(permit);
-    });
+    // Off-thread: streaming planes never wait on operator code. Permit frees on thread exit,
+    // or with the closure when the OS refuses the thread.
+    let spawned = std::thread::Builder::new()
+        .name("punktfunk-hook".into())
+        .spawn(move || {
+            run_hook_process(&cmd, &json, &env, timeout, elevated);
+            drop(permit);
+        });
+    if let Err(e) = spawned {
+        tracing::error!(cmd = %label, error = %e, "hook command did not launch");
+    }
 }
 
 /// Event as `PF_EVENT_*` env: scalar JSON leaves, path joined with `_` and uppercased
@@ -1005,10 +1011,15 @@ fn fire_webhook(
     let json = serde_json::to_string(ev).unwrap_or_else(|_| "{}".to_string());
     let kind = ev.kind.name();
     tracing::info!(url = %origin, kind, "hook: posting webhook");
-    std::thread::spawn(move || {
-        post_webhook(&url, &json, secret_file.as_deref(), WEBHOOK_TIMEOUT);
-        drop(permit);
-    });
+    let spawned = std::thread::Builder::new()
+        .name("punktfunk-webhook".into())
+        .spawn(move || {
+            post_webhook(&url, &json, secret_file.as_deref(), WEBHOOK_TIMEOUT);
+            drop(permit);
+        });
+    if let Err(e) = spawned {
+        tracing::error!(url = %origin, error = %e, "webhook did not send");
+    }
 }
 
 /// True if the host is loopback, link-local (incl. `169.254.169.254`), unspecified, or
@@ -1211,17 +1222,22 @@ impl Drop for PrepGuard {
         let timeout = Duration::from_secs(u64::from(DEFAULT_TIMEOUT_S));
         // Detached: drop may be async or a panic-unwind; teardown must not block.
         // One thread keeps reverse-of-`do` order.
-        std::thread::spawn(move || {
-            for (cmd, elevated) in undo.iter().rev() {
-                let label = cmd_label(cmd);
-                if let Err(e) = exec_path_check(cmd) {
-                    tracing::error!(cmd = %label, "REFUSING prep undo command — {e}");
-                    continue;
+        let spawned = std::thread::Builder::new()
+            .name("punktfunk-prep-undo".into())
+            .spawn(move || {
+                for (cmd, elevated) in undo.iter().rev() {
+                    let label = cmd_label(cmd);
+                    if let Err(e) = exec_path_check(cmd) {
+                        tracing::error!(cmd = %label, "REFUSING prep undo command — {e}");
+                        continue;
+                    }
+                    tracing::info!(cmd = %label, "prep: running undo");
+                    run_hook_process(cmd, "{}", &env, timeout, *elevated);
                 }
-                tracing::info!(cmd = %label, "prep: running undo");
-                run_hook_process(cmd, "{}", &env, timeout, *elevated);
-            }
-        });
+            });
+        if let Err(e) = spawned {
+            tracing::error!(error = %e, "prep undo did not launch");
+        }
     }
 }
 

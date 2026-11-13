@@ -763,7 +763,7 @@ pub(crate) async fn park_knock(
 
 /// A session slot, waited for only while the client is still there. A waiter that left must not
 /// take a slot, and with it, under `mode_conflict = steal`, another session's display.
-async fn slot_while_connected(
+pub(crate) async fn slot_while_connected(
     conn: &link::SessionLink,
     sem: &Arc<tokio::sync::Semaphore>,
 ) -> Result<tokio::sync::OwnedSemaphorePermit> {

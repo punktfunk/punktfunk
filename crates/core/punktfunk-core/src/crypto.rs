@@ -367,9 +367,28 @@ impl SessionCrypto {
 
     /// Seal `wire` (`header ‖ body ‖ TAG_LEN scratch`) as packet `seq`; its clear prefix is the AAD.
     pub fn seal_wire(&self, seq: u64, wire: &mut [u8]) -> Result<()> {
+        self.seal_wire_under(&self.send.key(seq), seq, wire)
+    }
+
+    /// [`Self::seal_wire`] for `wires[i]` as packet `seq_base + i`. The keys come from one
+    /// [`KeyRun`], so two threads sealing halves of a frame share no per-packet state.
+    pub fn seal_wires(&self, seq_base: u64, wires: &mut [Vec<u8>]) -> Result<()> {
+        if wires.is_empty() {
+            return Ok(());
+        }
+        let mut keys = KeyRun::new(&self.send, seq_base);
+        for (i, wire) in wires.iter_mut().enumerate() {
+            let seq = seq_base.wrapping_add(i as u64);
+            self.seal_wire_under(keys.key(seq), seq, wire)?;
+        }
+        Ok(())
+    }
+
+    /// `key` is packet `seq`'s key, taken from the send direction by the caller.
+    fn seal_wire_under(&self, key: &PacketKey, seq: u64, wire: &mut [u8]) -> Result<()> {
         let at = self.clear.min(wire.len());
         let (aad, rest) = wire.split_at_mut(at);
-        self.seal_media(seq, aad, rest)
+        key.seal(seq, aad, rest)
     }
 
     /// Open `wire` (`header ‖ sealed ‖ tag`) in place; the opened packet's length, header
@@ -397,15 +416,7 @@ impl SessionCrypto {
     /// Seal `buf` (`plaintext ‖ TAG_LEN scratch`) as packet `seq`, binding `aad`, the packet's
     /// clear prefix.
     pub fn seal_media(&self, seq: u64, aad: &[u8], buf: &mut [u8]) -> Result<()> {
-        if buf.len() < TAG_LEN {
-            return Err(PunktfunkError::BadPacket);
-        }
-        let key = self.send.key(seq);
-        let split = buf.len() - TAG_LEN;
-        let (plaintext, tag_slot) = buf.split_at_mut(split);
-        let tag = key.cipher.seal(media_nonce(&key.iv, seq), aad, plaintext)?;
-        tag_slot.copy_from_slice(&tag);
-        Ok(())
+        self.send.key(seq).seal(seq, aad, buf)
     }
 
     /// Open `buf` (`ciphertext ‖ tag`) of packet `seq` in place; the plaintext length. On
@@ -490,6 +501,50 @@ fn expand(prk: &[u8; 32], info: &[&[u8]], out: &mut [u8]) {
 struct PacketKey {
     cipher: Cipher,
     iv: [u8; 12],
+}
+
+impl PacketKey {
+    /// Seal `buf` (`plaintext ‖ TAG_LEN scratch`) as packet `seq`; `seq` must belong to this key.
+    fn seal(&self, seq: u64, aad: &[u8], buf: &mut [u8]) -> Result<()> {
+        let split = buf
+            .len()
+            .checked_sub(TAG_LEN)
+            .ok_or(PunktfunkError::BadPacket)?;
+        let (plaintext, tag_slot) = buf.split_at_mut(split);
+        let tag = self
+            .cipher
+            .seal(media_nonce(&self.iv, seq), aad, plaintext)?;
+        tag_slot.copy_from_slice(&tag);
+        Ok(())
+    }
+}
+
+/// The send keys for consecutive packets: the current one is held by this run alone and swapped
+/// when a packet's own number names another index. The run is a local; no key outlives it.
+struct KeyRun<'a> {
+    dir: &'a MediaDir,
+    index: u64,
+    key: std::sync::Arc<PacketKey>,
+}
+
+impl<'a> KeyRun<'a> {
+    fn new(dir: &'a MediaDir, seq: u64) -> Self {
+        KeyRun {
+            dir,
+            index: seq / MEDIA_KEY_PACKETS,
+            key: dir.key(seq),
+        }
+    }
+
+    /// Packet `seq`'s key, whichever side of an index boundary it falls.
+    fn key(&mut self, seq: u64) -> &PacketKey {
+        let index = seq / MEDIA_KEY_PACKETS;
+        if index != self.index {
+            self.key = self.dir.key(seq);
+            self.index = index;
+        }
+        &self.key
+    }
 }
 
 /// One direction of `punktfunk/2` media: its secret and the keys derived from it so far.
@@ -689,5 +744,66 @@ mod tests {
                 ));
             }
         }
+    }
+
+    /// A run seals each packet as the per-packet path does, across an index boundary and the
+    /// packet number wrapping, and each opens only under its own number.
+    #[test]
+    fn seal_wires_matches_per_packet_across_key_changes() {
+        for suite in [MediaSuite::Aes128Gcm, MediaSuite::ChaCha20Poly1305] {
+            let keys = MediaKeys::derive(&[3; 32], suite);
+            let by_run = SessionCrypto::media(&keys, Role::Host, true);
+            let by_one = SessionCrypto::media(&keys, Role::Host, true);
+            let client = SessionCrypto::media(&keys, Role::Client, true);
+            let body = by_run.clear_len() + 40;
+            for base in [
+                0,
+                MEDIA_KEY_PACKETS - 3,
+                5 * MEDIA_KEY_PACKETS - 1,
+                u64::MAX - 2,
+            ] {
+                let plain: Vec<Vec<u8>> = (0..8u8).map(|i| vec![i; body + TAG_LEN]).collect();
+                let mut run = plain.clone();
+                let mut one = plain.clone();
+                by_run.seal_wires(base, &mut run).unwrap();
+                for (i, w) in one.iter_mut().enumerate() {
+                    by_one.seal_wire(base.wrapping_add(i as u64), w).unwrap();
+                }
+                assert_eq!(run, one, "base {base}");
+                for (i, w) in run.iter_mut().enumerate() {
+                    let seq = base.wrapping_add(i as u64);
+                    let sealed = w.clone();
+                    let n = client.open_wire(seq, w).unwrap();
+                    assert_eq!(&w[..n], &plain[i][..n], "seq {seq}");
+                    let mut other = sealed.clone();
+                    assert!(client
+                        .open_wire(seq.wrapping_add(MEDIA_KEY_PACKETS), &mut other)
+                        .is_err());
+                }
+            }
+            by_run.seal_wires(0, &mut []).unwrap();
+        }
+    }
+
+    /// A run's key is the one its packet number names: forward, backward and across the wrap.
+    #[test]
+    fn key_run_follows_the_packet_number() {
+        let dir = MediaDir::new(MediaSuite::Aes128Gcm, [4; 32]);
+        let mut run = KeyRun::new(&dir, 0);
+        let seqs = [
+            0,
+            1,
+            MEDIA_KEY_PACKETS - 1,
+            MEDIA_KEY_PACKETS,
+            2 * MEDIA_KEY_PACKETS + 5,
+            MEDIA_KEY_PACKETS - 1,
+            0,
+            u64::MAX,
+            0,
+        ];
+        for seq in seqs {
+            assert_eq!(run.key(seq).iv, dir.key(seq).iv, "seq {seq}");
+        }
+        assert_ne!(dir.key(0).iv, dir.key(MEDIA_KEY_PACKETS).iv);
     }
 }

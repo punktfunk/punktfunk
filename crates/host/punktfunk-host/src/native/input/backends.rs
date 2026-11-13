@@ -31,6 +31,8 @@ trait PadManager {
         hidout: &mut dyn FnMut(HidOutput),
     );
     fn heartbeat(&mut self, max_gap: std::time::Duration);
+    /// A refresh of OS-slot pad `pad` that changed nothing: proof its client is alive.
+    fn heard(&mut self, _pad: usize) {}
 }
 
 impl<B: PadProto> PadManager for UhidManager<B> {
@@ -49,6 +51,9 @@ impl<B: PadProto> PadManager for UhidManager<B> {
     }
     fn heartbeat(&mut self, max_gap: std::time::Duration) {
         UhidManager::heartbeat(self, max_gap);
+    }
+    fn heard(&mut self, pad: usize) {
+        UhidManager::heard(self, pad);
     }
 }
 
@@ -132,6 +137,14 @@ impl PadBackends {
         }
         if let Some((Some(m), _)) = self.manager_for(kind) {
             m.apply_rich(rich);
+        }
+    }
+
+    /// An unchanged refresh of OS-slot pad `slot`, for the manager of `kind`. No device yet or
+    /// no backend of this kind: nothing to keep alive.
+    pub(super) fn heard(&mut self, kind: GamepadPref, slot: u8) {
+        if let Some((Some(m), _)) = self.manager_for(kind) {
+            m.heard(usize::from(slot));
         }
     }
 

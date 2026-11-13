@@ -98,7 +98,7 @@ pub fn resolve_launch(view: &View, id: &str) -> Option<LaunchTarget> {
     if is_own_id(id) && !keeps_own_titles() {
         return None;
     }
-    let entry = all_games_for(view).into_iter().find(|g| g.id == id)?;
+    let entry = find_game_for(view, id)?;
     let game = GameRef {
         id: Some(entry.id.clone()),
         store: Some(entry.store.clone()),
@@ -116,10 +116,11 @@ pub fn held_back(view: &View, id: &str) -> bool {
     if is_own_id(id) {
         return hidden;
     }
-    let Some(e) = load_custom().into_iter().find(|e| library_id_for(e) == id) else {
+    let catalog = catalog();
+    let Some(e) = catalog.entries.iter().find(|e| library_id_for(e) == id) else {
         return false;
     };
-    hidden || source_id_for(&e).is_some_and(|src| disabled_scanners(view).contains(src))
+    hidden || source_id_for(e).is_some_and(|src| disabled_scanners(view).contains(src))
 }
 
 /// The message id and sentence a launch of `id` that [`resolve_launch`] found nothing for in

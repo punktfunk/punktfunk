@@ -188,7 +188,21 @@ impl<'a> BitReader<'a> {
     }
 
     /// Skip `num_bits` bits from the stream.
+    ///
+    /// On a byte boundary of a reader without emulation prevention, whole bytes move the
+    /// cursor in one step; AV1 skips whole tile payloads this way.
     pub fn skip_bits(&mut self, mut num_bits: usize) -> Result<(), String> {
+        if !self.needs_epb && self.num_remaining_bits_in_curr_byte == 0 {
+            let start = self.data.position();
+            let end = start
+                .checked_add((num_bits / 8) as u64)
+                .filter(|end| *end <= self.data.get_ref().len() as u64)
+                .ok_or_else(|| GetByteError::OutOfBits.to_string())?;
+            self.data.set_position(end);
+            self.position += (end - start) * 8;
+            num_bits %= 8;
+        }
+
         while num_bits > 0 {
             let n = std::cmp::min(num_bits, 31);
             self.read_bits::<u32>(n)?;
@@ -906,5 +920,50 @@ mod tests {
         // Cursor now spent; a zero-width read must not pull the next byte in.
         assert_eq!(reader.read_bits::<u32>(0).unwrap(), 0);
         assert_eq!(reader.read_bits::<u32>(8).unwrap(), 0xCD);
+    }
+
+    /// The whole-byte skip lands where 31-bit-at-a-time reads would: the same position,
+    /// the same next value, and the same refusal past the end - from every starting bit,
+    /// for lengths on and off a byte boundary, with and without emulation prevention.
+    #[test]
+    fn skip_bits_lands_where_reading_the_same_bits_would() {
+        let data: Vec<u8> = (0..40u8)
+            .map(|b| b.wrapping_mul(37).wrapping_add(11))
+            .collect();
+        for needs_epb in [false, true] {
+            for lead in 0..=17usize {
+                for skip in [0usize, 1, 7, 8, 9, 31, 32, 33, 64, 100, 8 * 20] {
+                    let mut fast = BitReader::new(&data, needs_epb);
+                    let mut slow = BitReader::new(&data, needs_epb);
+                    fast.read_bits::<u32>(lead).unwrap();
+                    slow.read_bits::<u32>(lead).unwrap();
+
+                    fast.skip_bits(skip).unwrap();
+                    let mut left = skip;
+                    while left > 0 {
+                        let n = left.min(31);
+                        slow.read_bits::<u32>(n).unwrap();
+                        left -= n;
+                    }
+
+                    assert_eq!(fast.position(), slow.position(), "{lead}+{skip}");
+                    assert_eq!(fast.num_bits_left(), slow.num_bits_left(), "{lead}+{skip}");
+                    assert_eq!(
+                        fast.read_bits::<u32>(8).unwrap(),
+                        slow.read_bits::<u32>(8).unwrap(),
+                        "{lead}+{skip}"
+                    );
+                }
+            }
+        }
+
+        // Past the end fails, however it is reached.
+        for skip in [8 * 40 + 1, 8 * 41, usize::MAX / 16] {
+            let mut reader = BitReader::new(&data, false);
+            assert!(reader.skip_bits(skip).is_err(), "{skip}");
+        }
+        let mut reader = BitReader::new(&data, false);
+        reader.skip_bits(8 * 40).unwrap();
+        assert!(reader.read_bits::<u32>(1).is_err());
     }
 }

@@ -35,10 +35,20 @@ use crate::rfi::{
 /// 80 ms at 100 fps, past a Wi-Fi report. The level's DPB may allow fewer.
 const SLOTS: u8 = 8;
 
+/// The wave knobs, read once when the encoder opens so a frame does not scan the environment.
+#[derive(Clone, Copy)]
+struct WaveKnobs {
+    /// [`rfi::wave_enabled`].
+    enabled: bool,
+    /// [`rfi::pinned_cycle`].
+    pinned: Option<u32>,
+}
+
 pub struct NativeVaapiEncoder {
     /// `None` between a [`Encoder::reset`] and the submit that reopens.
     session: Option<Session>,
     params: SessionParams,
+    waves: WaveKnobs,
     codec: CodecParams,
     hdr: Option<HdrStatic>,
     force_kf: bool,
@@ -124,6 +134,10 @@ impl NativeVaapiEncoder {
         let mut this = Self {
             session: None,
             params,
+            waves: WaveKnobs {
+                enabled: rfi::wave_enabled(),
+                pinned: rfi::pinned_cycle(),
+            },
             codec,
             hdr: None,
             force_kf: true,
@@ -324,42 +338,50 @@ pub(crate) fn vaapi_capture_modifiers(fourcc: u32, candidates: &[u64]) -> Vec<u6
 /// Whether the host's render node offers an encode entrypoint for `codec`
 /// at this depth — what a native open needs. AV1 is not a native path.
 pub fn probe_can_encode(codec: Codec, ten_bit: bool) -> bool {
+    probe_entrypoint(codec, ten_bit).unwrap_or(false)
+}
+
+/// [`probe_can_encode`] with a probe that could not ask told apart: `None` when no VAAPI
+/// display opened, `Some(false)` when libva answered without an encode entrypoint.
+pub(crate) fn probe_entrypoint(codec: Codec, ten_bit: bool) -> Option<bool> {
     use pf_vaapi::config::{VA_PROFILE_H264_HIGH, VA_PROFILE_HEVC_MAIN, VA_PROFILE_HEVC_MAIN10};
     use pf_vaapi::enc_h264::{VA_ENTRYPOINT_ENC_SLICE, VA_ENTRYPOINT_ENC_SLICE_LP};
     let profile = match (codec, ten_bit) {
         (Codec::H264, false) => VA_PROFILE_H264_HIGH,
         (Codec::H265, false) => VA_PROFILE_HEVC_MAIN,
         (Codec::H265, true) => VA_PROFILE_HEVC_MAIN10,
-        _ => return false,
+        _ => return Some(false),
     };
     let node = pf_gpu::linux_render_node();
     let display = match Libva::load().and_then(|va| Display::open_path(va, &node.to_string_lossy()))
     {
         Ok(d) => d,
         Err(e) => {
-            // A codec set that found nothing is probed again on the next ask; the resolution
-            // warns once per entry, so this line stays at debug.
+            // The resolution holds off asking again and warns once per entry, so this line
+            // stays at debug.
             tracing::debug!(error = %format!("{e:#}"), "no VAAPI display to probe");
-            return false;
+            return None;
         }
     };
-    display
-        .entrypoints(profile)
-        .map(|e| {
-            e.iter()
-                .any(|&p| p == VA_ENTRYPOINT_ENC_SLICE || p == VA_ENTRYPOINT_ENC_SLICE_LP)
-        })
-        .unwrap_or(false)
+    Some(
+        display
+            .entrypoints(profile)
+            .map(|e| {
+                e.iter()
+                    .any(|&p| p == VA_ENTRYPOINT_ENC_SLICE || p == VA_ENTRYPOINT_ENC_SLICE_LP)
+            })
+            .unwrap_or(false),
+    )
 }
 
-/// How a session recovers. iHD tracks each reference's refreshed rows itself and a stripe
-/// that jumps back to the top never heals there, so a loss mid-wave queues a fresh wave
-/// behind the one in flight. There is no wave before the first picture.
-fn recovery_policy(session: &Session, params: &SessionParams) -> RecoveryPolicy {
+/// How a session recovers, on the knobs read at open. iHD tracks each reference's refreshed
+/// rows itself and a stripe that jumps back to the top never heals there, so a loss mid-wave
+/// queues a fresh wave behind the one in flight. There is no wave before the first picture.
+fn recovery_policy(session: &Session, params: &SessionParams, waves: WaveKnobs) -> RecoveryPolicy {
     let fps = (params.fps_num / params.fps_den.max(1)).max(1);
     RecoveryPolicy {
-        cycle: (rfi::wave_enabled() && session.next_wire() > 0)
-            .then(|| rfi::wave_cycle(session.wave_rows(), fps, u32::MAX, rfi::pinned_cycle())),
+        cycle: (waves.enabled && session.next_wire() > 0)
+            .then(|| rfi::wave_cycle(session.wave_rows(), fps, u32::MAX, waves.pinned)),
         mid_wave: MidWave::Queue,
         abandons: true,
     }
@@ -500,7 +522,7 @@ impl Encoder for NativeVaapiEncoder {
             acked: confirmed.is_some(),
             loss: false,
         };
-        let policy = recovery_policy(session, &self.params);
+        let policy = recovery_policy(session, &self.params, self.waves);
         let plan = rfi::plan_frame(self.recovery, pending, &policy);
         let slot = self.anchor.or(confirmed);
         // An owed IDR outranks a recovery anchor, as on NVENC and Vulkan.
@@ -610,7 +632,7 @@ impl Encoder for NativeVaapiEncoder {
             .recovery
             .wave
             .is_some_and(|w| w.spoiled_by(Some(next_ts - i64::from(w.index)), next_ts, last));
-        let policy = recovery_policy(session, &self.params);
+        let policy = recovery_policy(session, &self.params, self.waves);
         if let Some(next) = self.recovery.lose(&policy, spoils) {
             tracing::debug!(
                 first,

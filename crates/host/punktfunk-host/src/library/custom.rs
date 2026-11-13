@@ -277,22 +277,31 @@ enum LibraryFile {
     Legacy(Vec<CustomEntry>),
 }
 
-/// `shelf`'s rows; an absent or malformed file is an empty catalog, never an error. A row the
-/// shelf may not hold ([`Shelf::holds`]) is left out.
+/// `shelf`'s rows for a reader: a malformed file is an empty catalog. A writer loads with
+/// [`read_catalog`] instead.
 fn load_catalog(shelf: Shelf) -> Catalog {
-    let mut catalog = match std::fs::read_to_string(shelf.path()) {
+    read_catalog(shelf).unwrap_or_else(|e| {
+        tracing::warn!(error = %e, "library file malformed — ignoring custom entries");
+        Catalog::default()
+    })
+}
+
+/// `shelf`'s rows for a writer: an absent file is an empty catalog, one that does not read or
+/// parse is an error, so the save that follows never replaces it. A row the shelf may not hold
+/// ([`Shelf::holds`]) is left out.
+fn read_catalog(shelf: Shelf) -> Result<Catalog> {
+    let path = shelf.path();
+    let mut catalog = match std::fs::read_to_string(&path) {
         Ok(raw) => match serde_json::from_str::<LibraryFile>(&raw) {
             Ok(LibraryFile::V2(c)) => c,
             Ok(LibraryFile::Legacy(entries)) => Catalog {
                 entries,
                 claims: BTreeMap::new(),
             },
-            Err(e) => {
-                tracing::warn!(error = %e, "library.json malformed — ignoring custom entries");
-                Catalog::default()
-            }
+            Err(e) => anyhow::bail!("parse {}: {e}", path.display()),
         },
-        Err(_) => Catalog::default(),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Catalog::default(),
+        Err(e) => anyhow::bail!("read {}: {e}", path.display()),
     };
     let before = catalog.entries.len();
     catalog.entries.retain(|e| shelf.holds(e));
@@ -304,7 +313,7 @@ fn load_catalog(shelf: Shelf) -> Catalog {
             "library rows outside this file's ids left out"
         );
     }
-    catalog
+    Ok(catalog)
 }
 
 type CatalogCache = Mutex<Option<((Option<SystemTime>, u64), Arc<Catalog>)>>;
@@ -321,7 +330,7 @@ pub(crate) fn catalog() -> Arc<Catalog> {
 
 /// `shelf`'s catalog for readers, parsed once and kept until its file's mtime or length moves.
 /// Every list, launch and cover request reads it; parsing megabytes for each would dominate a
-/// large library. Writers parse their own copy ([`load_catalog`]) and drop this one on save.
+/// large library. Writers parse their own copy ([`read_catalog`]) and drop this one on save.
 fn catalog_of(shelf: Shelf) -> Arc<Catalog> {
     let Ok(md) = std::fs::metadata(shelf.path()) else {
         return Arc::default();
@@ -518,7 +527,7 @@ pub enum MutateOutcome<T> {
 pub fn add_custom(input: CustomInput, person: bool) -> Result<CustomEntry> {
     let shelf = Shelf::here();
     let _serial = catalog_lock();
-    let mut catalog = load_catalog(shelf);
+    let mut catalog = read_catalog(shelf)?;
     let entry = CustomEntry {
         id: new_id_on(shelf, &input.title),
         title: input.title,
@@ -553,7 +562,7 @@ pub fn update_custom(
 ) -> Result<MutateOutcome<CustomEntry>> {
     let shelf = Shelf::of(id);
     let _serial = catalog_lock();
-    let mut catalog = load_catalog(shelf);
+    let mut catalog = read_catalog(shelf)?;
     let Some(slot) = catalog.entries.iter_mut().find(|e| e.id == id) else {
         return Ok(MutateOutcome::NotFound);
     };
@@ -591,7 +600,7 @@ pub fn update_custom(
 pub fn delete_custom(id: &str) -> Result<MutateOutcome<()>> {
     let shelf = Shelf::of(id);
     let _serial = catalog_lock();
-    let mut catalog = load_catalog(shelf);
+    let mut catalog = read_catalog(shelf)?;
     let Some(entry) = catalog.entries.iter().find(|e| e.id == id) else {
         return Ok(MutateOutcome::NotFound);
     };
@@ -940,7 +949,7 @@ pub fn reconcile_provider(
     let shelf = provider_shelf();
     let store = store.filter(|_| shelf == Shelf::Box);
     let _serial = catalog_lock();
-    let mut catalog = load_catalog(shelf);
+    let mut catalog = read_catalog(shelf)?;
     // The provider's rows in its own order: a reconcile moves them to the end of the list.
     let rows = |c: &Catalog| {
         serde_json::to_value(
@@ -993,7 +1002,7 @@ pub fn reconcile_provider(
 pub fn delete_provider(provider: &str) -> Result<usize> {
     let shelf = provider_shelf();
     let _serial = catalog_lock();
-    let mut catalog = load_catalog(shelf);
+    let mut catalog = read_catalog(shelf)?;
     let before = catalog.entries.len();
     catalog
         .entries

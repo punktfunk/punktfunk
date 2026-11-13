@@ -391,6 +391,8 @@ struct Closed {
     audio_config: bool,
     /// The stream thread holds the sender and ends first.
     screen_tell: bool,
+    /// The session has no screen set to take a layout ask; logged once.
+    screens_ask: bool,
     /// The input thread is the only sender, and it ends with the session.
     pad_slots: bool,
     /// `--open` anonymous sessions never spawn deadline/watch; the sender drops at once.
