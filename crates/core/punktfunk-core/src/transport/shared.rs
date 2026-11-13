@@ -826,14 +826,46 @@ impl MediaSender {
         Some((r.to, self.conn.local_ip()))
     }
 
-    /// One send of `contents`, marked as video ([`send_marked`]).
+    /// One send of the packets in `run`, cut at `segment`, marked as video as [`send_marked`]
+    /// marks. Where the mark applies the kernel gathers the run from the packets themselves.
+    /// quinn-udp's send takes one buffer, so a run of more than one is copied into `staging`.
     fn transmit(
         &self,
         to: SocketAddr,
         from: Option<IpAddr>,
-        contents: &[u8],
+        run: &[&[u8]],
         segment: Option<usize>,
     ) -> std::io::Result<()> {
+        // Whether the gathered send went out, where the mark applies.
+        #[cfg(any(target_os = "linux", target_os = "android"))]
+        let marked =
+            (run.len() <= GATHER_MAX && super::qos::dscp_enabled_for(Some(to))).then(|| {
+                let mut iov = [std::io::IoSlice::new(&[]); GATHER_MAX];
+                for (slot, p) in iov.iter_mut().zip(run) {
+                    *slot = std::io::IoSlice::new(p);
+                }
+                let tos = (super::MediaClass::Video.dscp() << 2) as u8;
+                let iov = &iov[..run.len()];
+                super::udp::send_gathered_with_tos(&self.socket, to, from, iov, segment, tos)
+                    .is_ok()
+            });
+        #[cfg(not(any(target_os = "linux", target_os = "android")))]
+        let marked = None;
+        if marked == Some(true) {
+            return Ok(());
+        }
+        let mut staging = None;
+        let contents = match run {
+            [p] => *p,
+            _ => {
+                let s = staging.insert(self.staging.lock().unwrap_or_else(|e| e.into_inner()));
+                s.clear();
+                for p in run {
+                    s.extend_from_slice(p);
+                }
+                &s[..]
+            }
+        };
         let t = Transmit {
             destination: to,
             ecn: None,
@@ -841,11 +873,19 @@ impl MediaSender {
             segment_size: segment,
             src_ip: from,
         };
-        send_marked(&self.socket, &t, super::MediaClass::Video, || {
-            self.state.send((&self.socket).into(), &t)
-        })
+        let quinn = || self.state.send((&self.socket).into(), &t);
+        match marked {
+            // Refused marked, the run leaves through quinn-udp as `send_marked` falls back.
+            Some(_) => quinn(),
+            None => send_marked(&self.socket, &t, super::MediaClass::Video, quinn),
+        }
     }
 }
+
+/// Packets one gathered send takes at most: quinn-udp's GSO segment limit, far under the
+/// kernel's 1024 buffers a call (`UIO_MAXIOV`).
+#[cfg(any(target_os = "linux", target_os = "android"))]
+const GATHER_MAX: usize = 64;
 
 /// A held packet counts as sent: it is lost on the way, as on a link that dropped it.
 impl Transport for MediaSender {
@@ -853,7 +893,7 @@ impl Transport for MediaSender {
         let Some((to, from)) = self.path() else {
             return Ok(true);
         };
-        match self.transmit(to, from, packet, None) {
+        match self.transmit(to, from, &[packet], None) {
             Ok(()) => Ok(true),
             Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => Ok(false),
             Err(e) => Err(e),
@@ -865,7 +905,7 @@ impl Transport for MediaSender {
             return Ok(packets.len());
         };
         for (i, p) in packets.iter().enumerate() {
-            match self.transmit(to, from, p, None) {
+            match self.transmit(to, from, std::slice::from_ref(p), None) {
                 Ok(()) => {}
                 Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => return Ok(i),
                 Err(e) => return Err(e),
@@ -874,11 +914,11 @@ impl Transport for MediaSender {
         Ok(packets.len())
     }
 
-    /// Runs of equal-size packets leave as one offloaded send, each run within the platform's
-    /// segment limit and under the UDP payload bound of either IP family; the last packet of a
-    /// run may be shorter. An oversize run is `EMSGSIZE`, which quinn-udp reports as sent.
-    /// With `PUNKTFUNK_GSO=0`, or once the session's loss guard cleared the switch, packets
-    /// leave one by one.
+    /// Runs of equal-size packets leave as one offloaded send ([`Self::transmit`]), each run
+    /// within the platform's segment limit and under the UDP payload bound of either IP family;
+    /// the last packet of a run may be shorter. An oversize run is `EMSGSIZE`, which quinn-udp
+    /// reports as sent. With `PUNKTFUNK_GSO=0`, or once the session's loss guard cleared the
+    /// switch, packets leave one by one.
     fn send_gso(&self, packets: &[&[u8]]) -> std::io::Result<usize> {
         const GSO_MAX_PAYLOAD: usize = 65535 - 40 - 8;
         let max = self.state.max_gso_segments();
@@ -888,7 +928,6 @@ impl Transport for MediaSender {
         let Some((to, from)) = self.path() else {
             return Ok(packets.len());
         };
-        let mut staging = self.staging.lock().unwrap_or_else(|e| e.into_inner());
         let mut sent = 0;
         while sent < packets.len() {
             let size = packets[sent].len();
@@ -901,12 +940,8 @@ impl Transport for MediaSender {
             {
                 end += 1;
             }
-            staging.clear();
-            for p in &packets[sent..end] {
-                staging.extend_from_slice(p);
-            }
             let segment = (end - sent > 1).then_some(size);
-            match self.transmit(to, from, &staging, segment) {
+            match self.transmit(to, from, &packets[sent..end], segment) {
                 Ok(()) => sent = end,
                 Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => return Ok(sent),
                 Err(e) => return Err(e),
@@ -1613,45 +1648,132 @@ mod tests {
             assert!(families > 0);
         }
 
-        /// ns per 10 × 1100 B GSO group, the marked send against quinn-udp's, on loopback:
-        /// `cargo test -p punktfunk-core --features quic --release gso_send_cost -- --ignored
-        /// --nocapture`.
+        /// A gathered send leaves the datagrams the send of the same packets in one buffer
+        /// does, byte for byte: a run with a short last packet, a run of equal packets, and a
+        /// single packet, on both families.
+        #[test]
+        fn a_gathered_send_matches_the_contiguous_one() {
+            use crate::transport::udp::send_gathered_with_tos;
+            let mut buf = vec![0u8; 65536];
+            let mut families = 0;
+            for ip in ["127.0.0.1", "::1"] {
+                let Ok(rx) = UdpSocket::bind((ip, 0)) else {
+                    continue;
+                };
+                let to = rx.local_addr().unwrap();
+                let opt = socket2::SockRef::from(&rx);
+                if to.is_ipv4() {
+                    opt.set_recv_tos_v4(true).unwrap();
+                } else {
+                    opt.set_recv_tclass_v6(true).unwrap();
+                }
+                rx.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+                let tx = UdpSocket::bind((ip, 0)).unwrap();
+                let mut recv = |n: usize| -> Vec<(Vec<u8>, u8)> {
+                    (0..n)
+                        .map(|_| {
+                            let (len, tos) = recv_tos(&rx, &mut buf).unwrap();
+                            (buf[..len].to_vec(), tos)
+                        })
+                        .collect()
+                };
+                for lens in [&[1472, 1472, 1472, 300][..], &[1472; 4], &[1472]] {
+                    let packets: Vec<Vec<u8>> = lens
+                        .iter()
+                        .enumerate()
+                        .map(|(i, &n)| (0..n).map(|b| (i * 31 + b) as u8).collect())
+                        .collect();
+                    let segment = (packets.len() > 1).then_some(1472);
+                    let whole = packets.concat();
+                    let t = Transmit {
+                        destination: to,
+                        ecn: None,
+                        contents: &whole,
+                        segment_size: segment,
+                        src_ip: Some(to.ip()),
+                    };
+                    send_with_tos(&tx, &t, 0xA0).unwrap();
+                    let contiguous = recv(packets.len());
+                    let iov: Vec<std::io::IoSlice> =
+                        packets.iter().map(|p| std::io::IoSlice::new(p)).collect();
+                    send_gathered_with_tos(&tx, to, Some(to.ip()), &iov, segment, 0xA0).unwrap();
+                    let gathered = recv(packets.len());
+                    let sent: Vec<_> = packets.into_iter().map(|p| (p, 0xA0)).collect();
+                    assert_eq!(contiguous, sent, "{ip}, {lens:?}: one datagram a packet");
+                    assert_eq!(gathered, contiguous, "{ip}, {lens:?}");
+                }
+                rx.set_nonblocking(true).unwrap();
+                assert!(
+                    rx.recv(&mut buf).is_err(),
+                    "{ip}: no datagram beyond the packets"
+                );
+                families += 1;
+            }
+            assert!(families > 0);
+        }
+
+        /// ns per GSO group of 11 and 44 × 1472 B packets on loopback: the run copied into one
+        /// buffer and sent by quinn-udp or marked, against the marked send the kernel gathers
+        /// from the packets: `cargo test -p punktfunk-core --features quic --release
+        /// gso_send_cost -- --ignored --nocapture`.
         #[test]
         #[ignore = "a timing that only prints"]
         fn gso_send_cost() {
+            use crate::transport::udp::send_gathered_with_tos;
+            use std::io::IoSlice;
             let sink = UdpSocket::bind("127.0.0.1:0").unwrap();
             let tx = UdpSocket::bind("127.0.0.1:0").unwrap();
             let state = UdpSocketState::new((&tx).into()).unwrap();
-            let payload = vec![0x01u8; 11_000];
             let to = sink.local_addr().unwrap();
-            let t = Transmit {
-                destination: to,
-                ecn: None,
-                contents: &payload,
-                segment_size: Some(1100),
-                src_ip: Some(to.ip()),
-            };
             const N: u32 = 20_000;
-            let time = |send: &dyn Fn()| {
+            let time = |send: &mut dyn FnMut()| {
                 let start = Instant::now();
                 for _ in 0..N {
                     send();
                 }
                 start.elapsed().as_nanos() / u128::from(N)
             };
-            let quinn = || state.send((&tx).into(), &t).unwrap();
-            let marked = || {
-                send_marked(&tx, &t, MediaClass::Video, || {
-                    unreachable!("a loopback peer is marked")
-                })
-                .unwrap()
-            };
-            for _ in 0..3 {
-                println!(
-                    "ns per GSO group: quinn-udp {}, marked {}",
-                    time(&quinn),
-                    time(&marked)
-                );
+            for n in [11, 44] {
+                let packets = vec![vec![0x01u8; 1472]; n];
+                let mut staging = Vec::new();
+                let mut copied = |marked: bool| {
+                    staging.clear();
+                    for p in &packets {
+                        staging.extend_from_slice(p);
+                    }
+                    let t = Transmit {
+                        destination: to,
+                        ecn: None,
+                        contents: &staging,
+                        segment_size: Some(1472),
+                        src_ip: Some(to.ip()),
+                    };
+                    if marked {
+                        send_marked(&tx, &t, MediaClass::Video, || {
+                            unreachable!("a loopback peer is marked")
+                        })
+                        .unwrap()
+                    } else {
+                        state.send((&tx).into(), &t).unwrap()
+                    }
+                };
+                let mut gathered = || {
+                    let mut iov = [IoSlice::new(&[]); 64];
+                    for (slot, p) in iov.iter_mut().zip(&packets) {
+                        *slot = IoSlice::new(p);
+                    }
+                    send_gathered_with_tos(&tx, to, Some(to.ip()), &iov[..n], Some(1472), 0xA0)
+                        .unwrap()
+                };
+                for _ in 0..3 {
+                    let quinn = time(&mut || copied(false));
+                    let marked = time(&mut || copied(true));
+                    let gathered = time(&mut gathered);
+                    println!(
+                        "{n} x 1472 B, ns per GSO group: copied quinn-udp {quinn}, \
+                         copied marked {marked}, gathered marked {gathered}"
+                    );
+                }
             }
         }
     }
