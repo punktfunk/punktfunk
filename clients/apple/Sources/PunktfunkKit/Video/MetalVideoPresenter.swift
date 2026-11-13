@@ -1241,8 +1241,11 @@ public final class MetalVideoPresenter {
         // drops what nothing is using.
         CVMetalTextureCacheFlush(textureCache, 0)
         // Warm the latch: the first park needs a plane size, and a wrapped surface saves the
-        // pick the wrap.
-        if Self.lateLatchEnabled { _ = latchTextures(for: pixelBuffer, tenBit: tenBit) }
+        // pick the wrap. Only where a link vends the drawable: no other pacing parks, and a
+        // wrapped surface holds its memory past the decoder pool.
+        if Self.lateLatchEnabled, drawable != nil {
+            _ = latchTextures(for: pixelBuffer, tenBit: tenBit)
+        }
 
         #if os(tvOS)
         // HDR splits by the display's headroom (kept in step with the layer by `configure` above):
