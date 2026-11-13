@@ -77,11 +77,9 @@ final class AudioDeviceWatcher {
         lock.unlock()
 
         #if os(macOS)
-        // The engine notification is the direct signal, but it is delivered BY an engine — useless
-        // in the two places it is needed most: after a rebuild that could not start (no engine left
-        // to notify anyone) and on an engine topology whose notification behaviour is unverified
-        // (the voice-processing engine, which is the DEFAULT macOS configuration and which no Mac
-        // here can even initialize). The HAL is told either way.
+        // The engine notification is delivered BY an engine: useless after a rebuild that could
+        // not start (no engine left to notify anyone), and unverified for the voice-processing
+        // engine. The HAL is told either way.
         let block: AudioObjectPropertyListenerBlock = { [weak self] count, addresses in
             // On the main queue — registered against it below. No engine posted this, so nil.
             let changed = UnsafeBufferPointer(start: addresses, count: Int(count))

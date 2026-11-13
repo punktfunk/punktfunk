@@ -68,10 +68,8 @@ public final class SessionAudio: @unchecked Sendable {
     private var ring: AudioRing?
     /// Every engine build, start, stop and rebuild runs here, serially — and NOT on the main
     /// thread. macOS captures and sends input from the main thread, so the seconds a
-    /// voice-processing start can take (~1.9 s measured in the 2026-08-14 field loop) would
-    /// freeze the stream's input for exactly that long — the recovery must never make the main
-    /// thread wait on the audio server. The main queue keeps only the trigger bookkeeping
-    /// (debounce, backoff, retry ladder), which is cheap by construction.
+    /// voice-processing start can take would freeze the stream's input for that long. The main
+    /// queue keeps only the trigger bookkeeping (debounce, backoff, retry ladder).
     private let engineQueue = DispatchQueue(
         label: "io.unom.punktfunk.audio.engines", qos: .userInitiated)
     /// The video plane's end-to-end meter (capture→on-glass), if the owner wired one — the
@@ -256,34 +254,10 @@ public final class SessionAudio: @unchecked Sendable {
         do {
             #if os(iOS) || os(visionOS)
             if micEnabled {
-                // NO .defaultToSpeaker here, deliberately. It reads like "prefer the speaker over
-                // the earpiece", and the comment that used to sit here claimed headphones and
-                // Bluetooth still won. That is true of WIRED headphones and false of Bluetooth —
-                // a cable is the one way to test this and see the right answer. It is an
-                // OVERRIDE, and it outranks an A2DP route: with it set, every Bluetooth headset
-                // lost the stream to the phone's own speaker. That is the 0.25 field report ("no
-                // audio over Bluetooth ... plays through speakers if Mic input is enabled") — mic
-                // and echo cancellation both default to ON, so this branch is the DEFAULT path
-                // and every Bluetooth listener hit it; turning the mic off was the accidental
-                // workaround, because that lands on `.playback` below, which routes to A2DP
-                // happily.
-                //
-                // The earpiece problem it was reaching for is real, so it is solved after
-                // activation instead, against the route we were ACTUALLY given —
-                // see `steerBuiltInOutputToSpeaker`.
-                //
-                // `.allowBluetoothA2DP` alone, also deliberately: adding `.allowBluetooth` would
-                // make a headset's MIC usable, but it buys that by dragging the whole route onto
-                // HFP/SCO and collapsing game audio to narrowband. High-quality A2DP output plus
-                // the built-in mic is the better trade for a game-streaming client.
-                // `.mixWithOthers`, both branches: without it this session is EXCLUSIVE — merely
-                // activating it paused the user's Music at connect, and Music's RESUME took the
-                // session right back, which read as "stream audio stops when I resume Music"
-                // (field report; the interruption observer below is the other half of that fix).
-                // A game stream mixing over someone's playlist is the behavior a console has,
-                // and what this client's peers do. The trade is real but right: a mixable
-                // session is nobody's Now Playing app, so the lock screen shows the music, not
-                // the stream — which is exactly how it should read.
+                // No `.defaultToSpeaker`: it outranks an A2DP route. `steerBuiltInOutputToSpeaker`
+                // moves only the earpiece. No `.allowBluetooth`: its HFP route makes game audio
+                // narrowband. `.mixWithOthers` on both branches: an exclusive session pauses the
+                // player's music when it activates.
                 try session.setCategory(
                     .playAndRecord, mode: .default,
                     options: [.allowBluetoothA2DP, .mixWithOthers])
@@ -334,10 +308,8 @@ public final class SessionAudio: @unchecked Sendable {
             if reachable > 2, session.outputNumberOfChannels < reachable {
                 try? session.setPreferredOutputNumberOfChannels(reachable)
             }
-            // What we were actually GRANTED, not what we asked for. All three are best-effort, and
-            // the ring's behaviour depends on the quantum it really gets — without this, a report of
-            // audio jitter arrives with no way to tell a 10 ms session from a 5 ms or a 23 ms one,
-            // which is exactly the gap that made the last round of this take a simulation to close.
+            // What we were actually GRANTED, not what we asked for: all three are best-effort, and
+            // the ring's behaviour depends on the quantum it really gets.
             let grantedMS = session.ioBufferDuration * 1000
             let askedMS = Self.preferredIOBufferSeconds * 1000
             log.info("""
@@ -455,7 +427,7 @@ public final class SessionAudio: @unchecked Sendable {
         #if os(macOS)
         // A rebuild must not re-attempt a voice-processing start that already failed on this
         // input device: the failure repeats, and the failed attempt's HAL churn stops the healthy
-        // fallback engines — the 2026-08-14 rebuild loop (see `CombinedTopologyGate`).
+        // fallback engines (see `CombinedTopologyGate`).
         var combined = wantsCombined(
             speakerUID: speakerUID, micUID: micUID, micChannel: micChannel,
             echoCancel: echoCancel)
@@ -566,13 +538,9 @@ public final class SessionAudio: @unchecked Sendable {
         #endif
         tearDownEngines()
         #if !os(macOS)
-        // Release the session. (A mixable session interrupts nobody, so the resume cue below is
-        // now a courtesy for the edge where an OLD non-mixable install interrupted something —
-        // harmless either way, and deactivating promptly is still what orders a reconnect.) Like
-        // activation, setActive is synchronous/blocking — run it on the shared serial session queue
-        // (off the main thread). Enqueued HERE — engines already stopped, and BEFORE the drain wait
-        // below — so across a reconnect it lands ahead of the next session's activate on the shared
-        // queue (otherwise a deferred deactivate could deactivate the new session). Fire-and-forget.
+        // Release the session on the shared session queue (setActive blocks). Enqueued here,
+        // after the engines stop and before the drain wait, so across a reconnect it lands ahead
+        // of the next session's activate instead of deactivating it.
         Self.sessionQueue.async {
             do {
                 try AVAudioSession.sharedInstance().setActive(
@@ -714,10 +682,8 @@ public final class SessionAudio: @unchecked Sendable {
     /// that followed the change on its own must not be interrupted for it. Safe from any thread.
     ///
     /// The liveness check runs on `engineQueue`, BEHIND any start or rebuild in flight. A
-    /// voice-processing start takes about a second and posts route changes of its own, so a check
-    /// made on the main queue found the engines mid-swap, read that as "stopped", and scheduled
-    /// the rebuild that would trigger the next one — the iPad mic-on loop, one rebuild per
-    /// backoff step for the whole session.
+    /// voice-processing start takes about a second and posts route changes of its own; checked
+    /// from the main queue, the engines read as "stopped" mid-swap and schedule the next rebuild.
     ///
     /// Gated on a start having been ATTEMPTED rather than on an engine existing, which is the
     /// difference between recovering a session whose very first `startPlayback` failed — no
@@ -910,12 +876,10 @@ public final class SessionAudio: @unchecked Sendable {
 
     /// Interruptions still happen to a mixable session — a phone call, Siri, an app that claims
     /// a NON-mixable session of its own. iOS stops the engines, and when the interruption ends it
-    /// restarts NOTHING by itself; before this observer the stream just stayed silent (under the
-    /// old exclusive category, Music itself was such an interrupter, which is how "resume Music,
-    /// lose the stream" was ever possible). Reactivate and revive on `.ended` — unconditionally,
-    /// not only when iOS hints `.shouldResume`: a live stream is the one case where the user's
-    /// intent to keep hearing it is not in doubt, and `reviveStoppedEngines` already declines
-    /// when playback never went down.
+    /// restarts NOTHING by itself. Reactivate and revive on `.ended` — unconditionally, not only
+    /// when iOS hints `.shouldResume`: a live stream is the one case where the user's intent to
+    /// keep hearing it is not in doubt, and `reviveStoppedEngines` declines when playback never
+    /// went down.
     private func installInterruptionObserver(micEnabled: Bool) {
         let observer = NotificationCenter.default.addObserver(
             forName: AVAudioSession.interruptionNotification,
@@ -1006,10 +970,7 @@ public final class SessionAudio: @unchecked Sendable {
     ///
     /// Both, never just the depth: a deep ring on a jittery link is CORRECT behaviour — the
     /// adaptive floor put it there because the link kept starving — and only the offset separates
-    /// that from a ring that is simply holding audio late. Before this pair existed the plane
-    /// published nothing any surface could render (depth and target lived in a periodic log line),
-    /// and a field investigation into "the audio delay seems way too high" ran all the way to its
-    /// conclusion without either number.
+    /// that from a ring that is simply holding audio late.
     public struct Stats: Sendable {
         /// Decoded audio queued ahead of the speaker (ms).
         public let bufferMS: Int
@@ -1231,15 +1192,9 @@ public final class SessionAudio: @unchecked Sendable {
         }
         drainStarted = true
         stateLock.unlock()
-        // A/V sync. This thread is the only place that holds all three ingredients at once: the
-        // packet's host capture `ptsNs`, the ring depth, and the video plane's end-to-end figure.
-        // `ptsNs` was decoded into `AudioPCM` and then dropped on the floor right here for the
-        // plane's entire existence, which is why audio ran at whatever depth its jitter ring
-        // happened to settle at and nothing ever placed it against the picture.
-        //
-        // The escape hatch mirrors the Rust clients': a field regression in a loop that steers
-        // PLAYBACK should be bisectable without a rebuild. macOS honours it from the environment;
-        // elsewhere it simply never trips, which is the same as today's behaviour.
+        // A/V sync: the drain thread alone holds the packet's `ptsNs`, the ring depth and the
+        // video plane's end-to-end figure. `PUNKTFUNK_NO_AV_SYNC` turns the loop off, as it does
+        // on the Rust clients.
         let syncEnabled = !["1", "true"].contains(
             ProcessInfo.processInfo.environment["PUNKTFUNK_NO_AV_SYNC"] ?? "")
         // nil disarms the loop entirely — no reference, no correction (see `videoLatency`).

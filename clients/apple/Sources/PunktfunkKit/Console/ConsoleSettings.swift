@@ -188,8 +188,8 @@ public enum ConsoleSettings {
         .string("host_sort", DefaultsKey.hostSort, SettingDefault.hostSort),
         .string("host_grouping", DefaultsKey.hostGrouping, SettingDefault.hostGrouping),
         .string("gamepad_ui_mode", DefaultsKey.gamepadUIMode, GamepadUIEnvironment.modeWhenConnected),
-        // `Settings::extra` (flattened, so plain top-level keys). The `android.` prefix is
-        // where these were first written; the console reads the same names here.
+        // `Settings::extra` (flattened, so plain top-level keys). The prefix is part of the
+        // cross-client key.
         .bool("android.rumble_on_phone", DefaultsKey.rumbleOnDevice, SettingDefault.rumbleOnDevice),
         .bool("android.gyro_on_phone", DefaultsKey.gyroFromDevice, SettingDefault.gyroFromDevice),
         .bool("android.sc2_capture", DefaultsKey.sc2Capture, SettingDefault.sc2Capture),

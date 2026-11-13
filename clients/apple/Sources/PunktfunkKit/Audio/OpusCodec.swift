@@ -101,13 +101,9 @@ final class OpusDecoder {
 }
 
 final class OpusEncoder {
-    /// The encoder's packet duration in samples: 480 = 10 ms, halving the packetization
-    /// latency of the old 20 ms framing. CoreAudio honors it — mFramesPerPacket 480/mono
-    /// creates a converter that truly emits 10 ms CELT packets (TOC config 30), one per
-    /// 480-frame chunk, verified by inspection of the emitted TOC bytes and per-packet
-    /// frame accounting. 960 stays as the fallback should an older codec refuse 480.
-    /// The host's mic service decodes any Opus frame size up to 120 ms, so either is
-    /// wire-compatible.
+    /// The encoder's packet duration in samples: 480 = 10 ms, which CoreAudio emits as one 10 ms
+    /// CELT packet (TOC config 30) per 480-frame chunk. 960 is the fallback for a codec that
+    /// refuses 480; the host's mic service decodes any Opus frame size up to 120 ms.
     let framesPerPacket: AVAudioFrameCount
 
     /// 48 kHz MONO float32 interleaved — the uplink carries one microphone bus.
@@ -130,8 +126,7 @@ final class OpusEncoder {
             }
         }
         guard let made else { throw OpusCodecError.unavailable }
-        // 48 kbps: transparent for mono voice — the old 96 kbps budget was sized for
-        // the duplicated-stereo framing this encoder no longer emits.
+        // 48 kbps: transparent for mono voice.
         made.converter.bitRate = 48_000
         converter = made.converter
         framesPerPacket = made.fpp

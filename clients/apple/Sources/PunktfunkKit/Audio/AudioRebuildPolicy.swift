@@ -1,12 +1,7 @@
-// The two policy decisions of the device-change recovery, extracted where a unit test can reach
-// them. Both exist because of one field incident (2026-08-14, Mac Studio): the voice-processing
-// engine could not start on a 6-channel input device, every rebuild re-tried it, and the failed
-// attempt's HAL churn (VPIO builds and tears down an aggregate device) re-stopped the fallback
-// engines — which posted the configuration change that scheduled the next rebuild. A ~2.5 s
-// metronome of audio gaps, forever, with each rebuild also stalling the main thread (where macOS
-// input capture lives), so the stream's INPUT cut out on the same beat. The session-side wiring
-// lives in `SessionAudio`; the decisions live here because the loop shipped precisely because
-// they could not be tested without a mic and a session.
+// The two policy decisions of the device-change recovery, where a unit test can reach them
+// without a mic or a session: a voice-processing start that failed on an input device is not
+// retried on it, and rebuilds that keep retriggering each other back off. The wiring lives in
+// `SessionAudio`.
 
 #if os(macOS)
 import CoreAudio

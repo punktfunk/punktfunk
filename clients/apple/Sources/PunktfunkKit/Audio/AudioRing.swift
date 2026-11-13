@@ -2,29 +2,9 @@ import AVFoundation
 import os
 
 // MARK: - the ms ⇄ interleaved-sample conversion both the ring and the sync loop run on
-//
-// **Multiply first, divide last.** This is the whole of design/hi-res-audio.md §4.1, and it is the
-// Swift half of the same fix core just took (`punktfunk_core::audio::ms_to_samples`). Both types
-// below used to precompute `perMS = (rateHz / 1000) * channels` and express every figure they own
-// as `ms * perMS`. That division happens FIRST, so 44 100 Hz became 44 samples per millisecond and
-// every depth, target, shed threshold, hard cap, de-prime fuse and reported `bufferedMS`/`targetMS`
-// came out **2.3 % low** — quietly, permanently, and in the one subsystem two previous programs
-// spent their time making trustworthy. 48 000 and 96 000 were exact only because they happen to
-// divide.
-//
-// Keeping `rateHz` and `channels` as the two numbers they are, and dividing last, is exact at every
-// rate on the ladder (`pcm::rate_is_supported`: 44 100 / 48 000 / 88 200 / 96 000 / 176 400). It
-// costs one integer division per conversion and buys three more rates.
-//
-// **Why `Int` is enough here, where core needed an explicit `u64`.** Core's conversions run against
-// `usize`, which is 32 bits on some embedder targets, so they widen and saturate by hand. This
-// package builds for macOS 14 / iOS 17 / tvOS 17 only (Package.swift) — arm64 and x86_64, where
-// `Int` is 64-bit — and the largest product any caller can reach is the longest span this file
-// names against the top of the ladder: `syncBackoffMaxMS` (480 000 ms) × 176 400 Hz × 8 ch =
-// 6.8 × 10¹¹, forty bits, before the divide brings it back to 6.8 × 10⁸. That is five orders of
-// magnitude inside `Int.max`. The samples → ms direction is the one that takes a caller-supplied
-// count and is guarded, because Swift TRAPS on overflow rather than wrapping and that trap would
-// land in a realtime render callback.
+// Multiply first, divide last, like core's `ms_to_samples`: exact at every rate on the ladder.
+// 64-bit `Int` holds every ms → samples product the policy makes. Samples → ms takes a caller's
+// count, so it guards the multiply: an overflow traps, and that would land in a render callback.
 
 /// Interleaved samples per second at a negotiated layout — the denominator both conversions share.
 /// `max(1)` on both: a degenerate layout must not divide by zero in a render callback.
@@ -295,15 +275,6 @@ final class AudioRing: @unchecked Sendable {
 /// the picture it belongs with reach the glass" into a ring depth `AudioRing` should aim for.
 /// The Swift twin of `punktfunk_core::audio::AvSync`, held to it by `jitter-vectors.json`.
 ///
-/// **The defect it exists to fix.** The host stamps `pts_ns` on every audio datagram and the
-/// client decoded it into `AudioPCM` — and then never read it. Video's `pts_ns`, by contrast, is
-/// used end to end (`LatencyMeter` computes a true glass-to-glass `displayed + clockOffset − pts`
-/// per presented frame). So audio free-ran at whatever depth its jitter ring happened to settle
-/// at, video was presented on a wholly independent path, and nothing ever compared them: the A/V
-/// offset was an accident of buffer depths. It moved whenever the ring ratcheted under underrun
-/// pressure, and — the way this surfaced in the field — it got WORSE every time video got faster,
-/// because a quicker decoder lowers the video leg while leaving the audio leg exactly where it was.
-///
 /// **Video is the master.** In a game streamer the video leg is the input-feel budget and must
 /// never be inflated to satisfy the audio clock; audio tolerates small, crossfaded, rate-limited
 /// corrections that are inaudible, and `JitterPolicy` already applies them. So audio moves.
@@ -474,8 +445,7 @@ struct AvSync {
 /// stall on a bunching Wi-Fi link, or a host whose capture stalled — nothing arrives to reveal
 /// anything: `AudioRing` drains to empty, the render callback runs short, and `noteRead` de-primes
 /// and then re-primes a whole target's worth of fresh silence. The artifact is far longer than the
-/// audio actually missing, and this is the shape the 2026-08-15 field session spent 3–16 % of its
-/// wall-clock in.
+/// audio actually missing.
 ///
 /// So a drought that is draining the ring gets concealed too, from the same decoder state
 /// (`PunktfunkConnection.audioPlc`), for a bounded time. The BOUND is denominated in TIME, never in
@@ -490,7 +460,7 @@ struct AvSync {
 struct DroughtConceal {
     /// Frames concealed since the last real packet. Counted in FRAMES rather than milliseconds
     /// because that is what the drain thread actually does — one `audioPlc()` frame per `conceal()`
-    /// that says yes — and because the frame is no longer a fixed 5 ms; see `init(maxMS:frameUs:)`.
+    /// that says yes — and because the frame length is negotiated; see `init(maxMS:frameUs:)`.
     private var concealed = 0
     private let maxMS: Int
     /// One frame, in MICROSECONDS. Everything time-denominated here derives from it.
@@ -516,8 +486,7 @@ struct DroughtConceal {
     }
 
     /// How long a drought must last before it is concealed at all — TWO FRAMES, so an ordinary
-    /// inter-packet gap is never mistaken for a stall. It was a fixed `2 × frameMS`, which on a 2 ms
-    /// lossless frame waits five frames instead of two before conceding there is a stall.
+    /// inter-packet gap is never mistaken for a stall.
     ///
     /// ⚠ In whole milliseconds, because that is the granularity the caller measures the quiet wire
     /// at (core compares `Duration`s in µs). Every rung on the ladder is a multiple of 500 µs, so
