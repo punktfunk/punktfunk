@@ -240,7 +240,8 @@ session by design, and display activation fails while its session is inactive.
   `?profile=<id>` for a profile with a seat: they read and write that seat account's copies, in
   its profile folder. A seat host answers 409.
 - **The box's library, on Linux.** The box's library is the owner's. A seat other than the
-  owner's runs no plugins and lists and launches only what it can start as its own user:
+  owner's runs none of the box's plugins, and of the box's library lists and launches only what
+  it can start as its own user:
   `steam_appid` with an id that fits 32 bits and `steam_ui`, with its own Steam, and `emulator`,
   with a copy it can run and a game file it can read. The seat answers every change to the box's
   library with 409. The owner's host installs a Flathub emulator box-wide through `install_flatpak`, so every
@@ -249,11 +250,13 @@ session by design, and display activation fails while its session is inactive.
   core the entry names into its own RetroArch and places the firmware from its library copy.
 - **Its own runner's titles, on Linux.** What a plugin of the seat account's own runner
   publishes with `PUT library/provider/{provider}` lands in the seat host's own titles (below),
-  under `own:` ids. A `?store=` claim is dropped there, so
-  no row shadows a title of the box's. The provider's running and download reports read those
-  rows, and the box learns their names and pictures as it learns the others'. On a person's own
-  account every lane is refused (`plugins_own_account`), and a provider row found on their shelf
-  lists nothing.
+  under `own:` ids. On a made seat that runner is the seat account's `punktfunk-scripting` user
+  unit, which reads the seat's config directory, where the package enables the unit for every
+  account. A person's own account runs none: their unit reads their own desk config. A
+  `?store=` claim is dropped there, so no row shadows a title of the box's. The provider's
+  running and download reports read those rows, and the box learns their names and pictures as
+  it learns the others'. On a person's own account every lane is refused
+  (`plugins_own_account`), and a provider row found on their shelf lists nothing.
 - **Its own runner's folders, on Linux.** A plugin installed in the seat's own `plugins/` reads
   its manifest and grants from the seat's own config directory, never the box's for a plugin of
   the same id; any other plugin reads the box's copy. The operator decides them on a made seat,
@@ -659,11 +662,11 @@ that host answers, within two minutes, a supervisor that doesn't answer meanwhil
 any other door event a stopped owner's host misses.
 
 A seat's `game.*` goes to the same route with its `seat` kept: the owner's plugins hear it, and
-no host's hooks run on it. A seat host runs no plugins, so its `game.launching` carries a `hold`
-token, and the launch waits up to 130 seconds for `POST /game/holds/{token}/release`. The door
-sends it once the owner's host has run the plugins that hold the stage, whatever they answered,
-and at once when that host isn't running. An event a seat host lists with a `seat` already is
-one a host relayed there, and is never taken back.
+no host's hooks run on it. A seat's launch is held for the box's plugins, so its
+`game.launching` carries a `hold` token, and the launch waits up to 130 seconds for
+`POST /game/holds/{token}/release`. The door sends it once the owner's host has run the plugins
+that hold the stage, whatever they answered, and at once when that host isn't running. An event
+a seat host lists with a `seat` already is one a host relayed there, and is never taken back.
 
 The door's console also accepts a console handoff signed with the owner's host's token, the one
 the owner's own `ctl console-url` holds: the door keeps it in `owner-handoff-key` in its own
@@ -814,8 +817,13 @@ reaches this lane.
   The host marks each with `person: true`, and runs only hooks and lists only own titles so
   marked: a file planted without the mark runs nothing. A `prep` step runs only when an own
   title the person wrote names it. Any other lane is refused, with `hooks_own_account_person` or
-  `library_own_account_person`, reads no hooks there, and reads a marked title as 404. Plugins
-  and emulators stay refused, emulators with `emulators_own_account_yet`.
+  `library_own_account_person`, reads no hooks there, and reads a marked title as 404.
+- **Their emulators.** The person adopts a copy of their own (`POST emulators/{id}/adopt`) and
+  prepares their emulators (`POST emulators/{id}/prepare`, without a `firmware_dir`); every
+  other lane gets `emulators_own_account`. An install, a removal, content and the save exchange
+  stay refused for the person too, with `emulators_own_account_yet`. Hermir's adoption list is
+  in the account's own data folder, where no other lane writes. Plugins, the store and the
+  runner stay refused on every lane; the person decides only folder grants (above).
 
 #### Who opens a person's seat
 
