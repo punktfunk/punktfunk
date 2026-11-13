@@ -598,3 +598,29 @@ fn a_device_seat_becomes_a_profile_its_device_lands_in() {
     p.migrate_device_seats(&seats, &[("Enrico's iPad".into(), fp)]);
     assert_eq!(p.list().len(), before);
 }
+
+/// A connect stamps a profile once a minute: a reconnect burst saves nothing.
+#[test]
+fn touch_saves_only_a_stamp_older_than_the_granularity() {
+    let now = now_unix();
+    let mut file = box_file();
+    file.profiles[0].last_used_unix = now - 5;
+    file.profiles[1].last_used_unix = now - 3600;
+    let (recent, old) = (file.profiles[0].id.clone(), file.profiles[1].id.clone());
+    let (p, path) = store("touch", &file, None);
+
+    p.touch(&recent);
+    assert_eq!(p.get(&recent).unwrap().last_used_unix, now - 5);
+    p.touch(&old);
+    assert!(p.get(&old).unwrap().last_used_unix >= now);
+    let saved: ProfilesFile = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    let stamp = |id: &str| {
+        saved
+            .profiles
+            .iter()
+            .find(|p| p.id == id)
+            .map(|p| p.last_used_unix)
+    };
+    assert_eq!(stamp(&recent), Some(now - 5));
+    assert!(stamp(&old) >= Some(now));
+}

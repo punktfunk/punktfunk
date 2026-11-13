@@ -35,6 +35,8 @@ pub const DISPLAY_NAME_MAX: usize = 32;
 /// The largest avatar the host stores.
 pub const AVATAR_MAX_BYTES: usize = 1024 * 1024;
 const OWNER_ACCENT: &str = "#3b82f6";
+/// 60 s. The warm-seat pick and the console's "last played" read a connect to the minute.
+const TOUCH_GRANULARITY_SECS: u64 = 60;
 
 /// Host-minted, 12 lowercase hex.
 pub type ProfileId = String;
@@ -72,7 +74,7 @@ pub struct Profile {
     pub created_unix: u64,
     #[serde(default)]
     pub updated_unix: u64,
-    /// When a session last resolved to this profile. `0`: never.
+    /// When a session last resolved to this profile, to the minute. `0`: never.
     #[serde(default)]
     pub last_used_unix: u64,
 }
@@ -522,13 +524,21 @@ impl Profiles {
         })
     }
 
-    /// Stamps `last_used_unix`. Best-effort: a connect never fails on it.
+    /// Stamps `last_used_unix`. Best-effort: a connect never fails on it. A stamp under
+    /// [`TOUCH_GRANULARITY_SECS`] old stays, so a reconnect burst saves the file once.
     pub fn touch(&self, id: &str) {
-        let known = self.lock().file.profiles.iter().any(|p| p.id == id);
-        if known {
+        let now = now_unix();
+        let due = self
+            .lock()
+            .file
+            .profiles
+            .iter()
+            .find(|p| p.id == id)
+            .is_some_and(|p| now.abs_diff(p.last_used_unix) >= TOUCH_GRANULARITY_SECS);
+        if due {
             let _ = self.mutate(|file| {
                 if let Some(p) = file.profiles.iter_mut().find(|p| p.id == id) {
-                    p.last_used_unix = now_unix();
+                    p.last_used_unix = now;
                 }
                 Ok(())
             });
