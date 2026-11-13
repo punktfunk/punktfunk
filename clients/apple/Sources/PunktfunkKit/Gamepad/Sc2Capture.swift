@@ -336,6 +336,9 @@ public final class Sc2Capture {
     /// frame. A write `refusedWrite` names stays off the pad. NO main-actor hop — the rumble
     /// replay runs at Steam's 25–40 ms resend cadence and the device write happens on the link
     /// queue anyway.
+    ///
+    /// The write queues under `lock` while `pad` still names the source, so the rumble stop
+    /// `releaseSource` queues after removing it always lands after this write.
     public func onHidRaw(pad: UInt8, kind: UInt8, data: [UInt8]) {
         lock.lock()
         let source = sources.first(where: { $0.value.padIndex == pad })?.key
@@ -345,7 +348,9 @@ public final class Sc2Capture {
             log.debug("SC2: host write refused (kind \(kind), head \(Array(data.prefix(2)))): \(reason)")
             return
         }
-        write(source: source, kind: kind, frame: data)
+        lock.lock()
+        if sources[source]?.padIndex == pad { write(source: source, kind: kind, frame: data) }
+        lock.unlock()
     }
 
     /// The feature commands a host may send a 2015 pad after its report id 0, and the ones it
