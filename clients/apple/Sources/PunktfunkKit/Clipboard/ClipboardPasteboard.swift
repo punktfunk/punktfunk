@@ -4,9 +4,9 @@
 // The sync logic above this protocol — the drain thread, the offer sequence numbers, the pending
 // fetches a blocked paste waits on, echo suppression — is identical on macOS and iOS and is worth
 // having exactly one copy of. What genuinely differs is small and lives in the two adapters:
-// AppKit fulfils a paste by BLOCKING a provider thread, UIKit by answering an asynchronous load
-// handler; AppKit transcodes images through NSImage, UIKit through UIImage; and only UIKit has to
-// worry about the process being suspended out from under an offer it promised to serve.
+// AppKit fulfils a paste by BLOCKING the thread it asks on, UIKit by answering an asynchronous
+// load handler; AppKit transcodes images through NSImage, UIKit through UIImage; and only UIKit
+// has to worry about the process being suspended out from under an offer it promised to serve.
 #if !os(tvOS)
 import Foundation
 

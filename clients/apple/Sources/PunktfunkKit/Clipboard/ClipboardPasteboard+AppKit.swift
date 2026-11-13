@@ -1,8 +1,9 @@
 // The macOS half of the clipboard seam: `NSPasteboard.general`.
 //
-// AppKit's lazy-paste contract is a blocking one — `provideDataForType` is called on a provider
-// thread the moment a Mac app pastes, and whatever the item holds when that call returns is what
-// the app gets. So this adapter is the one place that turns the asynchronous fetch into a wait.
+// AppKit's lazy-paste contract is a blocking one — `provideDataForType` is called the moment a
+// Mac app pastes, on this app's main thread when the paste comes from another app (macOS 27), and
+// whatever the item holds when that call returns is what the app gets. So this adapter is the one
+// place that turns the asynchronous fetch into a wait.
 #if os(macOS)
 import AppKit
 import Foundation
@@ -90,8 +91,9 @@ final class AppKitPasteboard: ClipboardPasteboard {
 }
 
 /// The lazy paste hook: AppKit calls `provideDataForType` only when a Mac app actually pastes; the
-/// fetch then blocks this provider thread (never main) until the host's bytes arrive. On timeout
-/// or a dead session it provides nothing, so the paste inserts nothing rather than hanging.
+/// fetch then blocks the calling thread, main for another app's paste, until the host's bytes
+/// arrive or `ClipboardSync.fetchTimeout` passes. On timeout or a dead session it provides
+/// nothing, so the paste inserts nothing rather than hanging.
 private final class BlockingOfferProvider: NSObject, NSPasteboardItemDataProvider {
     private let fetch: ClipboardFetch
 
