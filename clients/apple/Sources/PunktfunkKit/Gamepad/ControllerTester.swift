@@ -47,8 +47,6 @@ public final class ControllerTester: ObservableObject {
         renderer.apply(low: u16(low), high: u16(high))
     }
 
-    public func stopRumble() { renderer.apply(low: 0, high: 0) }
-
     /// Replay an adaptive-trigger effect on a DualSense via the real `DualSenseTriggerEffect`
     /// renderer. `right == false` → L2, `true` → R2. No-op on a non-DualSense pad.
     public func applyTrigger(_ effect: DualSenseTriggerEffect, right: Bool) {
