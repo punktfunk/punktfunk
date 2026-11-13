@@ -51,11 +51,8 @@ public enum ConsoleSettings {
         if let name = j["gamepad"] as? String, let tag = padTypeTag(name) {
             defaults.set(tag, forKey: DefaultsKey.gamepadType)
         }
-        if let host = j["default_host"] as? String {
-            defaults.set(host, forKey: DefaultsKey.defaultHost)
-        } else if j["default_host"] is NSNull {
-            defaults.set("", forKey: DefaultsKey.defaultHost)
-        }
+        // The console leaves the key out when no host is the default.
+        defaults.set(j["default_host"] as? String ?? "", forKey: DefaultsKey.defaultHost)
     }
 
     private static func base(_ defaults: UserDefaults) -> [String: Any] {

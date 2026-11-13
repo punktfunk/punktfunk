@@ -208,6 +208,21 @@ final class ConsoleJSONTests: XCTestCase {
         defaults.removePersistentDomain(forName: "console-json-tests")
     }
 
+    /// The console's document has no `default_host` key once the player clears the default
+    /// (the Rust field skips `None`), so a save without the key clears this app's default too.
+    func testAConsoleSaveWithoutADefaultHostClearsIt() throws {
+        let suite = "console-default-host-tests"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defaults.removePersistentDomain(forName: suite)
+        defer { defaults.removePersistentDomain(forName: suite) }
+
+        ConsoleSettings.apply(["default_host": "desk"], defaults)
+        XCTAssertEqual(defaults.string(forKey: DefaultsKey.defaultHost), "desk")
+        ConsoleSettings.apply(["vsync": true], defaults)
+        XCTAssertEqual(defaults.string(forKey: DefaultsKey.defaultHost), "")
+        XCTAssertTrue(ConsoleSettings.document(defaults)["default_host"] is NSNull)
+    }
+
     /// A preset the console saved lands on this app's copy: the console's keys set or clear,
     /// the compositor comes back as its wire number, and an override only this app edits stays.
     func testAConsoleSaveKeepsWhatOnlyThisAppEdits() {
