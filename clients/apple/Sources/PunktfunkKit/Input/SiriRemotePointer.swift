@@ -1,10 +1,8 @@
 // The Siri Remote as a pointing device during a tvOS streaming session — the remote's touch
 // surface drives the HOST cursor (relative deltas, like a laptop trackpad), a surface press
-// clicks (left button), and Play/Pause right-clicks. It also owns the remote's DELIBERATE
-// session exit: hold Back/Menu ≥ `disconnectHold`. A short Back press does nothing — the
-// UIKit menu press it also generates is swallowed by ContentView's session branch, so neither
-// a trackpad fumble nor a game-controller B press can end the session (the pad's exit is the
-// L1+R1+Start+Select chord in GamepadCapture).
+// clicks (left button), and Play/Pause right-clicks. Back/Menu held ≥ `disconnectHold` ends
+// the session; a short press opens the quick-action ring (`onShortBack`). Neither reaches the
+// host, and ContentView's session branch swallows the UIKit menu press Back also generates.
 //
 // The remote is read through GameController as a GCMicroGamepad with
 // `reportsAbsoluteDpadValues = true`: the dpad axes then report the finger's ABSOLUTE position
