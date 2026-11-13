@@ -2042,14 +2042,19 @@ public final class Stage2Pipeline {
             var linkGone: DispatchSemaphore?
             // One link on the layer at a time. A link started while its predecessor is still
             // attached vends two drawables in three refreshes for good: 40 presents a second
-            // at 60 Hz, none of them late. The old thread leaves within one run-loop pass.
-            let restartLink = {
-                linkStop?.stop()
-                _ = linkGone?.wait(timeout: .now() + 0.5)
+            // at 60 Hz, none of them late. A predecessor that outlives the 0.5 s wait leaves
+            // the layer linkless; a later frame starts the successor once `linkGone` fires.
+            var successorWaits = false
+            let startNextLink = {
                 _ = stash.take() // the retired link's last vend
                 let stop = StopFlag()
                 linkStop = stop
                 linkGone = startLink(stop)
+            }
+            let restartLink = {
+                linkStop?.stop()
+                successorWaits = linkGone?.wait(timeout: .now() + 0.5) == .timedOut
+                if !successorWaits { startNextLink() }
             }
             // What became of the last drawable this thread handled, for the late line.
             var lastFate = "presented"
@@ -2132,6 +2137,10 @@ public final class Stage2Pipeline {
                     presenter.deferLayerWrites()
                     watchdog.noteVend(at: CACurrentMediaTime())
                     restartLink()
+                } else if successorWaits, linkGone?.wait(timeout: .now()) == .success {
+                    successorWaits = false
+                    watchdog.noteVend(at: CACurrentMediaTime())
+                    startNextLink()
                 }
                 guard let vended = stash.take() else {
                     // No vend yet (session start: the reconcile above just unblocked the
