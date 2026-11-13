@@ -265,8 +265,6 @@ public final class StreamLayerView: NSView {
     /// nil = nothing sent yet. Edge-detected by [`reconcileCursorRender`] from the live mouse
     /// model, so the chord, engage/release, and session start all reconcile through one path.
     private var sentClientDraws: Bool?
-    /// M3 hint tracking: edge-triggered so a manual ⌃⌥⇧M isn't fought — the override latch
-    /// holds until the HOST's intent next changes.
     /// One-shot auto-engage request (stream start, trust confirmed) — attempted as soon
     /// as the view is in a window with real bounds, then dropped, so it can never fire
     /// surprisingly later (e.g. on a resize).
@@ -705,9 +703,6 @@ public final class StreamLayerView: NSView {
         connection.setCursorRender(clientDraws: clientDraws)
     }
 
-    /// Flip the mouse model with the atomic release/re-engage swap; `reappearAt` (host video
-    /// px — the M3 hand-back position) warps the local pointer so leaving relative lands the
-    /// cursor exactly where the host last had it.
     /// Flip the mouse model (capture ⇄ desktop) live, re-engaging capture in the new model so
     /// disassociation and the absolute/relative forwarding swap atomically. Only the key window
     /// acts. A gamescope host grants only a relative pointer: absolute sends would be dropped.
@@ -820,14 +815,6 @@ public final class StreamLayerView: NSView {
             hotX: min(ev.hotX, w - 1), hotY: min(ev.hotY, h - 1))
     }
 
-    /// Points-per-host-pixel: the exact factor the video frame is placed into the view at (the same
-    /// placement `hostPoint`/`cgScreenPoint` use). The host forwards the pointer bitmap in host
-    /// framebuffer pixels — the mode we drive is in the client's BACKING pixels, so on retina this is
-    /// ~1/backingScale and the pointer lands at its TRUE size relative to the streamed desktop
-    /// (crisp, 1:1 with the video) rather than the 2×-inflated pixel-as-points it used to be. Because
-    /// the bitmap grows with the host's display scaling (96 px at 300% DPI), scaling by this is what
-    /// keeps a high-DPI host from forwarding a giant pointer. Falls back to 1 before the first
-    /// mode/layout.
     /// The size the picture is actually being drawn at, in host pixels: the DECODED frame's, not
     /// the negotiated mode's. The two disagree whenever a host correctively acks a different mode
     /// (Windows falls back to an advertised one), and the presenter aspect-fits to the decoded
@@ -1114,8 +1101,8 @@ public final class StreamLayerView: NSView {
         if mode == .desktop && !absOK {
             streamInputLog.info("desktop mouse mode unavailable on a gamescope host (relative-only) — using capture")
         }
-        // Cursor channel (M2): the host stopped compositing the pointer — drain its shape/
-        // state planes and draw the pointer as the real NSCursor (plus the M3 auto-flip).
+        // Cursor channel (M2): drain the host's shape/state planes and draw its pointer as the
+        // real NSCursor whenever the host does not composite it (`reconcileCursorRender`).
         if connection.hostSupportsCursor {
             cursorChannelActive = true
             streamInputLog.info("cursor channel negotiated — host cursor renders locally")
