@@ -254,8 +254,10 @@ final class AV1Tests: XCTestCase {
             data: Data(Self.keyframeTU), ptsNs: 42_000_000, frameIndex: 0, flags: 0, receivedNs: 1)
         let ready = try decodeOnce(au, format: format) { $0.setCodec(.av1) }
         XCTAssertEqual(ready.ptsNs, 42_000_000)
-        XCTAssertFalse(ready.isHDR)
-        let buffer = try XCTUnwrap(ready.pixelBuffer, "a VT decode delivers a .video frame")
+        guard case .video(let buffer, let isHDR) = ready.image else {
+            return XCTFail("a VT decode delivers a .video frame")
+        }
+        XCTAssertFalse(isHDR)
         XCTAssertEqual(CVPixelBufferGetWidth(buffer), 320)
         XCTAssertEqual(CVPixelBufferGetHeight(buffer), 180)
         XCTAssertEqual(

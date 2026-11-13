@@ -14,6 +14,16 @@ final class AnnexBTests: XCTestCase {
     private let start4: [UInt8] = [0, 0, 0, 1]
     private let start3: [UInt8] = [0, 0, 1]
 
+    /// The NALs `forEachNAL` finds, each as its own bytes.
+    private func nalUnits(in data: Data) -> [Data] {
+        var nals: [Data] = []
+        AnnexB.forEachNAL(in: data) { base, range in
+            nals.append(Data(bytes: base + range.lowerBound, count: range.count))
+            return true
+        }
+        return nals
+    }
+
     func testSplitMixedStartCodes() {
         let a = nal(type: 32, payload: [0xAA])
         let b = nal(type: 33, payload: [0xBB, 0xBC])
@@ -25,21 +35,21 @@ final class AnnexBTests: XCTestCase {
         au.append(contentsOf: start4)
         au.append(c)
 
-        let nals = AnnexB.nalUnits(in: au)
+        let nals = nalUnits(in: au)
         XCTAssertEqual(nals, [a, b, c])
-        XCTAssertEqual(nals.map(AnnexB.hevcNalType), [32, 33, 19])
+        XCTAssertEqual(nals.map { ($0[0] >> 1) & 0x3F }, [32, 33, 19])
     }
 
     func testSplitSingleNalNoTrailingCode() {
         let v = nal(type: 34, payload: [1, 2, 3])
         let au = Data(start3) + v
-        XCTAssertEqual(AnnexB.nalUnits(in: au), [v])
+        XCTAssertEqual(nalUnits(in: au), [v])
     }
 
     func testSplitEmptyAndGarbage() {
-        XCTAssertEqual(AnnexB.nalUnits(in: Data()), [])
+        XCTAssertEqual(nalUnits(in: Data()), [])
         // No start code at all → no NALs.
-        XCTAssertEqual(AnnexB.nalUnits(in: Data([9, 8, 7, 6])), [])
+        XCTAssertEqual(nalUnits(in: Data([9, 8, 7, 6])), [])
     }
 
     func testSplitDropsTrailingZeroPadding() {
@@ -51,25 +61,7 @@ final class AnnexBTests: XCTestCase {
         au.append(a)
         au.append(contentsOf: [0, 0, 0, 0, 0, 1]) // padding + start code
         au.append(b)
-        XCTAssertEqual(AnnexB.nalUnits(in: au), [a, b])
-    }
-
-    func testAvccDropsParameterSetsAndPrefixesLengths() {
-        let vps = nal(type: 32, payload: [0xAA])
-        let sps = nal(type: 33, payload: [0xBB])
-        let pps = nal(type: 34, payload: [0xCC])
-        let idr = nal(type: 19, payload: [0xDD, 0xDE, 0xDF, 0xE0])
-        var au = Data()
-        for n in [vps, sps, pps, idr] {
-            au.append(contentsOf: start4)
-            au.append(n)
-        }
-
-        let avcc = AnnexB.avcc(from: au, codec: .hevc)
-        // Only the IDR survives: 4-byte BE length, then the NAL bytes.
-        var expected = Data([0, 0, 0, UInt8(idr.count)])
-        expected.append(idr)
-        XCTAssertEqual(avcc, expected)
+        XCTAssertEqual(nalUnits(in: au), [a, b])
     }
 
     func testFormatDescriptionNilWithoutParameterSets() {

@@ -107,24 +107,6 @@ public enum AnnexB {
         }
     }
 
-    /// Split an Annex-B stream into NAL units (start codes stripped — see `forEachNAL` for
-    /// the boundary policy). Materializes a Data per NAL; the streaming paths use
-    /// `forEachNAL` directly instead.
-    static func nalUnits(in data: Data) -> [Data] {
-        var nals: [Data] = []
-        forEachNAL(in: data) { base, range in
-            nals.append(Data(bytes: base + range.lowerBound, count: range.count))
-            return true
-        }
-        return nals
-    }
-
-    /// HEVC NAL unit type (bits 1..6 of the first byte).
-    static func hevcNalType(_ nal: Data) -> UInt8 {
-        guard let first = nal.first else { return 0xFF }
-        return (first >> 1) & 0x3F
-    }
-
     /// Build a format description from an IDR AU's in-band parameter sets (HEVC: VPS/SPS/PPS;
     /// H.264: SPS/PPS). Returns nil when the AU carries no parameter sets (non-IDR). Runs per
     /// AU on the pump thread: parameter sets precede the first VCL NAL in a conforming AU, so
@@ -195,20 +177,6 @@ public enum AnnexB {
             }
         }
         return status == noErr ? format : nil
-    }
-
-    /// Re-pack an Annex-B AU as AVCC (4-byte big-endian length before each NAL), dropping
-    /// the parameter-set NALs (they live in the format description).
-    static func avcc(from au: Data, codec: VideoCodec) -> Data {
-        var out = Data(capacity: au.count + 16)
-        forEachNAL(in: au) { base, range in
-            if codec.isParameterSet(base[range.lowerBound]) { return true }
-            var len = UInt32(range.count).bigEndian
-            withUnsafeBytes(of: &len) { out.append(contentsOf: $0) }
-            out.append(UnsafeBufferPointer(start: base + range.lowerBound, count: range.count))
-            return true
-        }
-        return out
     }
 
     /// Wrap one AU as a decode-ready CMSampleBuffer. An AU in `pool` is rewritten where it lies

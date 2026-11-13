@@ -52,20 +52,6 @@ public struct ReadyFrame: @unchecked Sendable {
     /// latency intent, which has no clock and presents on arrival. May be in the PAST: that is a
     /// late frame, and the contract is "already due ⇒ present at the next opportunity".
     public var dueMediaTime: CFTimeInterval?
-
-    /// The VideoToolbox path's buffer; nil for a PyroWave planar frame. (Kept as the accessor
-    /// the decode round-trip tests assert against.)
-    public var pixelBuffer: CVPixelBuffer? {
-        if case .video(let buffer, _) = image { return buffer }
-        return nil
-    }
-
-    /// Whether this frame presents on the HDR path. PyroWave planar frames are 8-bit SDR by
-    /// contract.
-    public var isHDR: Bool {
-        if case .video(_, let hdr) = image { return hdr }
-        return false
-    }
 }
 
 /// Per-frame context threaded through the VideoToolbox frame refcon: the AU's receipt instant (for
