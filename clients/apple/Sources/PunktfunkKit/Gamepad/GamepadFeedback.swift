@@ -60,6 +60,8 @@ public final class GamepadFeedback {
     /// Another window's session owns the pads: rumble drops, and lightbar, player-LED and trigger
     /// writes are only cached until `setSilenced(false)` replays them. Guarded by `routingLock`.
     private var silenced = false
+    /// `stop()` ran: no renderer is built or retargeted after it. Guarded by `routingLock`.
+    private var stopped = false
 
     /// The raw-report sink for `.hidRaw` events — the Steam Controller 2 capture's
     /// `Sc2Capture.onHidRaw(pad:kind:data:)`, registered by the session owner. Guarded by
@@ -123,9 +125,10 @@ public final class GamepadFeedback {
     /// Bring the per-pad feedback slots in line with the forwarded set: drop pads no longer
     /// forwarded (silence + release their renderer, reset their controller), add a slot +
     /// renderer for each new pad, and retarget a pad whose controller changed (a re-plug into the
-    /// same freed index) — replaying its cached feedback onto the new device.
+    /// same freed index) — replaying its cached feedback onto the new device. A no-op after `stop()`.
     @MainActor
     private func reconcile(_ forwarded: [GamepadManager.DiscoveredController]) {
+        guard !withRouting({ stopped }) else { return }
         var want: [UInt8: GCController] = [:]
         for dc in forwarded {
             if let pad = manager.padIndex(for: dc) { want[pad] = dc.controller }
@@ -154,8 +157,12 @@ public final class GamepadFeedback {
             } else {
                 slots[pad] = Slot(controller: controller)
                 let renderer = RumbleRenderer()
-                renderer.retarget(controller)
-                withRouting { rumbleByPad[pad] = renderer }
+                // One lock span with `stop()`'s drain: it either stops this renderer or never sees it.
+                withRouting {
+                    guard !stopped else { return }
+                    renderer.retarget(controller)
+                    rumbleByPad[pad] = renderer
+                }
             }
         }
     }
@@ -218,6 +225,7 @@ public final class GamepadFeedback {
             drainStarted = false
         }
         let renderers = withRouting { () -> [RumbleRenderer] in
+            stopped = true
             let r = Array(rumbleByPad.values)
             rumbleByPad.removeAll()
             hidRawSink = nil // no raw replay onto a capture the session owner is tearing down
