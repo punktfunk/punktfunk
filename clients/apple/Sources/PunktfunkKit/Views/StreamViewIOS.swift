@@ -1,8 +1,10 @@
-// iOS/iPadOS presenter: the macOS AVSampleBufferDisplayLayer + StreamPump in a UIViewController,
-// so the scene can pointer-lock. UITouch.type routes fingers and pointers apart.
+// The stream view on iOS, iPadOS, visionOS and tvOS: the shared SessionPresenter in a
+// UIViewController, so the scene can pointer-lock. UITouch.type routes fingers and pointers apart.
 //
-// Direct fingers and Pencil always forward as wire touches, mapped through the aspect-fit letterbox
-// into host-mode pixels. A mouse or trackpad is a pointer and never forwards as a touch.
+// Direct fingers follow the touch-input model: `touch` forwards wire touches to a host that
+// injects them, mapped through the video placement into host-mode pixels, and the other models
+// drive TouchMouse. A Pencil takes the pen plane toward a pen-capable host and is a finger
+// otherwise. A mouse or trackpad is a pointer and never forwards as a touch.
 //
 // Locked (full-screen, frontmost, pointer capture allowed; see PointerLockChain): GCMouse drives
 // motion and buttons for every connected mouse and the system hides the cursor. Unlocked (Stage
