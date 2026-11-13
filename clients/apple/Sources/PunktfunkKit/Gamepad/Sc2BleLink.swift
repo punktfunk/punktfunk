@@ -470,8 +470,10 @@ final class Sc2BleLink: NSObject {
 
 // MARK: - CBCentralManagerDelegate
 
+// A central `finishStop` dropped can still have callbacks queued: each one checks it is the live one.
 extension Sc2BleLink: CBCentralManagerDelegate {
     func centralManagerDidUpdateState(_ central: CBCentralManager) {
+        guard central === self.central else { return }
         if central.state == .poweredOn {
             acquire()
         } else {
@@ -483,7 +485,7 @@ extension Sc2BleLink: CBCentralManagerDelegate {
         _ central: CBCentralManager, didDiscover peripheral: CBPeripheral,
         advertisementData: [String: Any], rssi RSSI: NSNumber
     ) {
-        guard controller == nil else { return }
+        guard central === self.central, controller == nil else { return }
         log.info("SC2: discovered '\(peripheral.name ?? "?")' (RSSI \(RSSI))")
         controller = peripheral // retain before connecting
         central.stopScan()
@@ -492,6 +494,7 @@ extension Sc2BleLink: CBCentralManagerDelegate {
     }
 
     func centralManager(_ central: CBCentralManager, didConnect peripheral: CBPeripheral) {
+        guard central === self.central else { return }
         log.info("SC2: connected; discovering services")
         peripheral.delegate = self
         peripheral.discoverServices([serviceCB])
@@ -500,6 +503,7 @@ extension Sc2BleLink: CBCentralManagerDelegate {
     func centralManager(
         _ central: CBCentralManager, didFailToConnect peripheral: CBPeripheral, error: Error?
     ) {
+        guard central === self.central else { return }
         log.warning("SC2: connect failed (\(error.map { String(describing: $0) } ?? "?")); retrying")
         controller = nil
         if central.state == .poweredOn { acquire() }
@@ -509,6 +513,7 @@ extension Sc2BleLink: CBCentralManagerDelegate {
         _ central: CBCentralManager, didDisconnectPeripheral peripheral: CBPeripheral,
         error: Error?
     ) {
+        guard central === self.central else { return }
         log.info("SC2: disconnected (\(error.map { String(describing: $0) } ?? "clean")) — releasing + re-acquiring")
         stopLizardTimer()
         ready = false
@@ -529,8 +534,10 @@ extension Sc2BleLink: CBCentralManagerDelegate {
 
 // MARK: - CBPeripheralDelegate
 
+// Likewise a peripheral from a dropped connection: only `controller`'s callbacks count.
 extension Sc2BleLink: CBPeripheralDelegate {
     func peripheral(_ peripheral: CBPeripheral, didDiscoverServices error: Error?) {
+        guard peripheral === controller else { return }
         for service in peripheral.services ?? [] {
             peripheral.discoverCharacteristics(nil, for: service)
         }
@@ -540,6 +547,7 @@ extension Sc2BleLink: CBPeripheralDelegate {
         _ peripheral: CBPeripheral, didDiscoverCharacteristicsFor service: CBService,
         error: Error?
     ) {
+        guard peripheral === controller else { return }
         var writable = 0
         var notifying = 0
         for ch in service.characteristics ?? [] {
@@ -591,6 +599,7 @@ extension Sc2BleLink: CBPeripheralDelegate {
     }
 
     func peripheralIsReady(toSendWriteWithoutResponse peripheral: CBPeripheral) {
+        guard peripheral === controller else { return }
         while peripheral.canSendWriteWithoutResponse, let (uuid, (ch, data)) = pendingWrites.first {
             pendingWrites.removeValue(forKey: uuid)
             peripheral.writeValue(data, for: ch, type: .withoutResponse)
@@ -600,7 +609,8 @@ extension Sc2BleLink: CBPeripheralDelegate {
     func peripheral(
         _ peripheral: CBPeripheral, didWriteValueFor characteristic: CBCharacteristic, error: Error?
     ) {
-        guard characteristic.uuid == reportCB, let job = identityJob, !job.awaitingRead else { return }
+        guard peripheral === controller, characteristic.uuid == reportCB,
+              let job = identityJob, !job.awaitingRead else { return }
         if isClassic {
             job.acksOwed -= 1
             guard job.acksOwed <= 0 else { return }
@@ -622,9 +632,11 @@ extension Sc2BleLink: CBPeripheralDelegate {
         _ peripheral: CBPeripheral, didUpdateValueFor characteristic: CBCharacteristic,
         error: Error?
     ) {
-        guard error == nil, let data = characteristic.value, !data.isEmpty else { return }
+        guard peripheral === controller, error == nil,
+              let data = characteristic.value, !data.isEmpty else { return }
+        // Input during `stop()`'s restore wait belongs to a session that has ended.
         if characteristic.uuid == classicInputCB {
-            guard let frame = PunktfunkConnection.sc1BleInput(
+            guard !pendingStop, let frame = PunktfunkConnection.sc1BleInput(
                 state: &classicState, segment: [Sc1Device.bleReport] + [UInt8](data))
             else { return }
             if !ready {
@@ -633,6 +645,7 @@ extension Sc2BleLink: CBPeripheralDelegate {
             }
             onReport(frame)
         } else if characteristic.uuid == inputCB {
+            guard !pendingStop else { return }
             let framed = Sc2Device.frameIncoming([UInt8](data))
             inCounter += 1
             if !ready {
