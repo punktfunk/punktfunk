@@ -1358,9 +1358,8 @@ private final class DeadlineLinkDelegate: NSObject, CAMetalDisplayLinkDelegate {
     private let renderSignal: DispatchSemaphore
     private let hint: FrameRateHint
     private let stats: PresentDebugStats?
-    /// Every update's vend→glass lead goes to the overlay as an OS-floor sample; its p50 is the
-    /// floor iOS and tvOS take off the shown display and end-to-end. ~1 refresh is the goal; ~2
-    /// means the compositor runs a frame ahead of us. Tracks VRR rate changes.
+    /// Takes one OS-floor sample per update (what it measures: `metalDisplayLink(_:needsUpdate:)`);
+    /// its p50 is the floor iOS and tvOS take off the shown display and end-to-end.
     private let hud: HudSink?
     /// The pool depth this session vends from (`startDeadlinePresenter` sets it on the layer).
     private let drawableCount: Int
