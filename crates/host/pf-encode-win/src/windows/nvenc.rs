@@ -26,7 +26,7 @@ use super::nvenc_core::{
 };
 use super::nvenc_session::{
     async_inflight_cap, async_retrieve_requested, full_chroma_input, lock_copy, open_session,
-    EncodeInput, NvSession, OpenTarget, RetrieveDone, RetrieveJob, POOL,
+    DoneTx, EncodeInput, NvSession, OpenTarget, RetrieveDone, RetrieveJob, POOL,
 };
 use super::nvenc_status;
 use super::{AuChunk, ChromaFormat, Codec, EncodedFrame, Encoder, EncoderCaps};
@@ -216,11 +216,7 @@ unsafe fn reap_parked_sessions() {
 /// Retrieve thread: wait on each job's completion event, lock/copy/unlock, send back.
 /// Exits when the job channel closes. Teardown drops the sender and joins before
 /// destroying the session, so `enc`/`bs`/`event` outlive every use. Touches only wait + lock/unlock.
-fn retrieve_loop(
-    enc: usize,
-    work_rx: mpsc::Receiver<RetrieveJob>,
-    done_tx: mpsc::Sender<RetrieveDone>,
-) {
+fn retrieve_loop(enc: usize, work_rx: mpsc::Receiver<RetrieveJob>, done_tx: DoneTx) {
     pf_frame::thread_qos::boost_thread_priority(false);
     // After one 5 s timeout, later jobs wait 250 ms. Teardown must drain every queued
     // job (abandoning would destroy/unmap while encoding); the first timeout is already

@@ -25,40 +25,72 @@ use std::sync::{Arc, Mutex};
 /// pins compositor buffers.
 type FrameSlot = Arc<std::sync::Mutex<Option<CapturedFrame>>>;
 
-/// `wait_paced` for the direct capturer: `true` when a poke (`poked`, taken here) ended it.
-/// Otherwise it returns once `slot` holds a frame and `not_before` has passed, `deadline`
-/// passes, or the producer is gone; a broken one only sits out `not_before`. Before then an
-/// arrival edge re-arms the wait. Never consumes: the frame stays for `try_latest`, which
-/// also classifies a dead producer.
+/// What ends a feed's arrival wait with no frame: [`crate::Feed::arrival_poke`] and
+/// [`crate::Feed::au_wake`], each set before its wake edge. A finished access unit is taken
+/// first: it goes out before the poke's tick.
+#[derive(Default)]
+struct Nudges {
+    poked: AtomicBool,
+    encoded: AtomicBool,
+}
+
+impl Nudges {
+    /// Take one pending nudge.
+    fn take(&self) -> Option<crate::Paced> {
+        if self.encoded.swap(false, Ordering::Relaxed) {
+            Some(crate::Paced::Encoded)
+        } else if self.poked.swap(false, Ordering::Relaxed) {
+            Some(crate::Paced::Poked)
+        } else {
+            None
+        }
+    }
+
+    /// The flag [`crate::Feed::au_wake`] (`encoded`) or [`crate::Feed::arrival_poke`] sets.
+    fn flag(&self, encoded: bool) -> &AtomicBool {
+        if encoded {
+            &self.encoded
+        } else {
+            &self.poked
+        }
+    }
+}
+
+/// `wait_paced` for the direct capturer: a nudge (taken here) ends it at any point. Otherwise
+/// it returns `Due` once `slot` holds a frame and `not_before` has passed, `deadline` passes,
+/// or the producer is gone; a broken one only sits out `not_before`. Before then an arrival
+/// edge re-arms the wait. Never consumes: the frame stays for `try_latest`, which also
+/// classifies a dead producer.
 fn wait_for_frame(
     slot: &FrameSlot,
     wake: &Receiver<()>,
     shared: &StreamShared,
-    poked: &AtomicBool,
+    nudges: &Nudges,
     not_before: std::time::Instant,
     deadline: std::time::Instant,
-) -> bool {
+) -> crate::Paced {
+    use crate::Paced::Due;
     if shared.status() == StreamStatus::Broken {
         std::thread::sleep(not_before.saturating_duration_since(std::time::Instant::now()));
-        return false;
+        return Due;
     }
     loop {
-        if poked.swap(false, Ordering::Relaxed) {
-            return true;
+        if let Some(nudge) = nudges.take() {
+            return nudge;
         }
         let now = std::time::Instant::now();
         let until = if now < not_before {
             not_before
         } else if slot.lock().is_ok_and(|s| s.is_some()) {
-            return false;
+            return Due;
         } else {
             deadline
         };
         let Some(left) = until.checked_duration_since(now) else {
-            return false;
+            return Due;
         };
         if let Err(RecvTimeoutError::Disconnected) = wake.recv_timeout(left) {
-            return false;
+            return Due;
         }
     }
 }

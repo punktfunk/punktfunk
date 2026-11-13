@@ -211,7 +211,7 @@ impl StreamState {
 
     /// The running capturer's poke, for the control task: its feed's, or its remote encoder's,
     /// which reaches every proxy the capturer opens. A stale handle after a swap only pokes a
-    /// capturer that is gone.
+    /// capturer that is gone. The encoder gets the feed's AU wake ([`Self::hand_au_wake`]).
     pub(super) fn publish_arrival_poke(&mut self) {
         let capturer = &mut self.live.capturer;
         let poke = (capturer.feed().and_then(|f| f.arrival_poke()))
@@ -221,11 +221,21 @@ impl StreamState {
             .arrival_poke
             .lock()
             .unwrap_or_else(|e| e.into_inner()) = poke;
+        self.hand_au_wake();
     }
 
-    /// A fresh encoder retrieves synchronously. The session's pipelined escalation carries onto
-    /// it, or the flags claim a mode the encoder is not in and escalation never fires again.
+    /// The feed's AU wake to the encoder, so a pipelined AU ends the tick wait
+    /// ([`crate::send_pacing::Waited::AuReady`]). Runs whenever either side is replaced.
+    fn hand_au_wake(&mut self) {
+        let wake = self.live.capturer.feed().and_then(|f| f.au_wake());
+        self.live.enc.set_au_wake(wake);
+    }
+
+    /// A fresh encoder retrieves synchronously, and gets the feed's AU wake. The session's
+    /// pipelined escalation carries onto it, or the flags claim a mode the encoder is not in
+    /// and escalation never fires again.
     fn carry_pipelining(&mut self) {
+        self.hand_au_wake();
         if self.pipelining.deescalating {
             // The wind-back the old encoder owed: the new one is already there.
             self.pipelining.deescalating = false;
@@ -539,6 +549,7 @@ pub(super) mod tests {
             },
             src_period_ns: None,
             encode_chain_ns: 0,
+            tick_stamps: None,
             last_real_cap: None,
             _watcher: None,
             #[cfg(target_os = "linux")]

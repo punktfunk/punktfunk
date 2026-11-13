@@ -2,9 +2,9 @@
 
 use super::spawn;
 use crate::linux::{
-    drain_edges, health_identity, wait_for_frame, FrameSlot, StreamShared, StreamStatus,
+    drain_edges, health_identity, wait_for_frame, FrameSlot, Nudges, StreamShared, StreamStatus,
 };
-use crate::{CapturedFrame, Capturer, Feed, FirstFrame, ZeroCopyPolicy};
+use crate::{CapturedFrame, Capturer, Feed, FirstFrame, Paced, ZeroCopyPolicy};
 use anyhow::{anyhow, Result};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, RecvTimeoutError, SyncSender};
@@ -22,8 +22,9 @@ use std::time::Duration;
 pub struct WlCapturer {
     slot: FrameSlot,
     wake: Receiver<()>,
-    /// Set by [`Feed::arrival_poke`]; the arrival wait takes it and returns with no frame.
-    poked: Arc<AtomicBool>,
+    /// Set by [`Feed::arrival_poke`] and [`Feed::au_wake`]; the arrival wait takes one and
+    /// returns with no frame.
+    nudges: Arc<Nudges>,
     /// The thread's wake sender, held weakly so the thread's end still disconnects `wake`.
     poke_wake: Weak<SyncSender<()>>,
     shared: StreamShared,
@@ -70,7 +71,7 @@ impl WlCapturer {
         Ok(WlCapturer {
             slot: h.slot,
             wake: h.wake,
-            poked: Arc::default(),
+            nudges: Arc::default(),
             poke_wake: h.poke_wake,
             shared: h.shared,
             output_name,
@@ -166,24 +167,39 @@ impl Capturer for WlCapturer {
     }
 }
 
+impl WlCapturer {
+    /// Sets the nudge (`encoded`: an access unit, else a poke), then the thread's wake edge.
+    fn nudge(&self, encoded: bool) -> Arc<dyn Fn() + Send + Sync> {
+        let (nudges, wake) = (self.nudges.clone(), self.poke_wake.clone());
+        Arc::new(move || {
+            nudges.flag(encoded).store(true, Ordering::Relaxed);
+            if let Some(wake) = wake.upgrade() {
+                let _ = wake.try_send(());
+            }
+        })
+    }
+}
+
 impl Feed for WlCapturer {
     fn wait_arrival(&mut self, deadline: std::time::Instant) {
         self.wait_paced(std::time::Instant::now(), deadline);
     }
 
-    fn wait_paced(&mut self, not_before: std::time::Instant, deadline: std::time::Instant) -> bool {
-        let (slot, wake, shared, poked) = (&self.slot, &self.wake, &self.shared, &self.poked);
-        wait_for_frame(slot, wake, shared, poked, not_before, deadline)
+    fn wait_paced(
+        &mut self,
+        not_before: std::time::Instant,
+        deadline: std::time::Instant,
+    ) -> Paced {
+        let (slot, wake, shared, nudges) = (&self.slot, &self.wake, &self.shared, &self.nudges);
+        wait_for_frame(slot, wake, shared, nudges, not_before, deadline)
     }
 
     fn arrival_poke(&self) -> Option<Arc<dyn Fn() + Send + Sync>> {
-        let (poked, wake) = (self.poked.clone(), self.poke_wake.clone());
-        Some(Arc::new(move || {
-            poked.store(true, Ordering::Relaxed);
-            if let Some(wake) = wake.upgrade() {
-                let _ = wake.try_send(());
-            }
-        }))
+        Some(self.nudge(false))
+    }
+
+    fn au_wake(&self) -> Option<Arc<dyn Fn() + Send + Sync>> {
+        Some(self.nudge(true))
     }
 
     fn take_keepalive(&mut self) -> Option<Box<dyn Send>> {
@@ -215,7 +231,7 @@ mod wl_capturer_tests {
         let mut cap = WlCapturer {
             slot: Arc::default(),
             wake,
-            poked: Arc::default(),
+            nudges: Arc::default(),
             poke_wake: std::sync::Weak::new(),
             shared: StreamShared::new(pf_zerocopy::zero_copy_health(u64::MAX)),
             output_name: "TEST-1".into(),
@@ -275,7 +291,7 @@ mod wl_capturer_tests {
         let cap = WlCapturer {
             slot: Arc::default(),
             wake,
-            poked: Arc::default(),
+            nudges: Arc::default(),
             poke_wake: Arc::downgrade(&edge),
             shared,
             output_name: "TEST-1".into(),
@@ -398,34 +414,36 @@ mod wl_capturer_tests {
         }
     }
 
-    /// A poke from another thread ends the wait with no frame, the gate before `not_before`
-    /// included, and is taken; a frame alone waits the gate out.
+    /// A poke or an AU wake from another thread ends the wait with its own answer and no
+    /// frame, the gate before `not_before` included, and is taken; a frame alone waits the
+    /// gate out.
     #[test]
-    fn a_poke_ends_the_gate_and_a_frame_waits_for_it() {
-        use crate::Feed;
+    fn a_nudge_ends_the_gate_and_a_frame_waits_for_it() {
+        use crate::{Feed, Paced};
         use std::time::{Duration, Instant};
         let mut r = rig(At::Streaming);
-        let poke = r.cap.arrival_poke().expect("a poke");
-        let t0 = Instant::now();
-        let (gate, deadline) = (t0 + Duration::from_secs(2), t0 + Duration::from_secs(3));
-        let poked = std::thread::scope(|s| {
-            s.spawn(|| {
-                std::thread::sleep(Duration::from_millis(20));
-                poke();
+        let nudges = [
+            (r.cap.arrival_poke().expect("a poke"), Paced::Poked),
+            (r.cap.au_wake().expect("an AU wake"), Paced::Encoded),
+        ];
+        for (nudge, answer) in nudges {
+            let t0 = Instant::now();
+            let (gate, deadline) = (t0 + Duration::from_secs(2), t0 + Duration::from_secs(3));
+            let woke = std::thread::scope(|s| {
+                s.spawn(|| {
+                    std::thread::sleep(Duration::from_millis(20));
+                    nudge();
+                });
+                r.cap.wait_paced(gate, deadline)
             });
-            r.cap.wait_paced(gate, deadline)
-        });
-        assert!(
-            poked && t0.elapsed() < Duration::from_secs(1),
-            "woke on the poke"
-        );
+            assert_eq!(woke, answer);
+            assert!(t0.elapsed() < Duration::from_secs(1), "woke on {answer:?}");
+        }
         r.put_frame();
         let t0 = Instant::now();
         let gate = t0 + Duration::from_millis(60);
-        assert!(
-            !r.cap.wait_paced(gate, t0 + Duration::from_secs(2)),
-            "the poke was taken"
-        );
+        let woke = r.cap.wait_paced(gate, t0 + Duration::from_secs(2));
+        assert_eq!(woke, Paced::Due, "the nudges were taken");
         assert!(Instant::now() >= gate, "a frame ended the gate");
     }
 }

@@ -13,7 +13,8 @@
 //! Fields group by lifetime: `facts`, `shared` and `ends` (`facts.rs`) are fixed for the session,
 //! `live` is what a swap replaces, `display` what a rebuild reopens with, `diag` only logs, and
 //! the rest is the loop's own bookkeeping. Field order is teardown order. A per-tick value
-//! (`repeat`, `t_cap`, `owed`) travels in [`Tick`], not here.
+//! (`repeat`, `t_cap`, `owed`) travels in [`Tick`], not here; `tick_stamps` outlives its tick
+//! into the wait after it.
 
 use super::cursor::composite_plan;
 #[cfg(target_os = "linux")]
@@ -277,6 +278,8 @@ pub(super) struct StreamState {
     pub(super) src_period_ns: Option<u64>,
     /// Longest host submit+poll chain observed this tick, independent of perf sampling.
     pub(super) encode_chain_ns: u64,
+    /// The last submit's stamps, for the AUs the wait after it collects.
+    pub(super) tick_stamps: Option<super::encode::Stamps>,
     pub(super) last_real_cap: Option<std::time::Instant>,
 
     // ---- teardown order, which is field order: the send thread first, so the summary the
@@ -702,6 +705,7 @@ impl StreamState {
             fec,
             src_period_ns: None,
             encode_chain_ns: 0,
+            tick_stamps: None,
             last_real_cap: None,
             live_session,
             _watcher: None,
@@ -812,7 +816,9 @@ impl StreamState {
                 Flow::Break => break,
             }
             self.adapt_to_cadence();
-            self.sleep_to_next(t_cap, repeat);
+            if let Flow::Break = self.sleep_to_next(t_cap, repeat)? {
+                break;
+            }
         }
         Ok(())
     }
