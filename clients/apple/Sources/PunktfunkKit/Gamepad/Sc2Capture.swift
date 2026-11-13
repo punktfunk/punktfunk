@@ -616,8 +616,9 @@ public final class Sc2Capture {
     /// stuck last frame), typed-diff state dropped with the source entry, index handed back to
     /// the shared allocator. The removal restarts core's gate for that index.
     /// `.released` fires only when no other source still holds a slot, so the badge survives a
-    /// single pad of several powering off. Safe from any thread; no-op for an unseen source.
-    private func releaseSource(_ source: UInt64, reason: String) {
+    /// single pad of several powering off. `stopRumble` is for a pad that is still there; a
+    /// removed one has nothing to write to. Safe from any thread; no-op for an unseen source.
+    private func releaseSource(_ source: UInt64, reason: String, stopRumble: Bool = false) {
         lock.lock()
         guard let src = sources.removeValue(forKey: source) else {
             lock.unlock()
@@ -628,7 +629,7 @@ public final class Sc2Capture {
         lock.unlock()
         guard let index else { return }
         // A 2015 pad's haptics are finite pulse trains; `0x80` means something else to it.
-        if !isClassicSource(source) { write(source: source, kind: 0, frame: Self.rumbleStop) }
+        if stopRumble, !isClassicSource(source) { write(source: source, kind: 0, frame: Self.rumbleStop) }
         connection.send(.gamepadRemove(pad: UInt32(index)))
         DispatchQueue.main.async { [weak self, manager] in
             MainActor.assumeIsolated {
@@ -656,11 +657,11 @@ public final class Sc2Capture {
         manager.steamController2Claims = owned
     }
 
-    /// Release every source — the stop/suspend teardown.
+    /// Release every source — the stop/suspend teardown, with the pads still attached.
     private func releaseAll(reason: String) {
         lock.lock()
         let keys = Array(sources.keys)
         lock.unlock()
-        for key in keys { releaseSource(key, reason: reason) }
+        for key in keys { releaseSource(key, reason: reason, stopRumble: true) }
     }
 }
