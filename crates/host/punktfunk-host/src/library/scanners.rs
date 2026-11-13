@@ -177,8 +177,16 @@ pub fn list_scanners(view: &View) -> Vec<ScannerInfo> {
             plugin_ids.push((provider.to_string(), provider.to_string()));
         }
     }
-    let access = crate::plugins::access::AccessStore::open(pf_paths::seat::library_dir());
-    for s in access.snapshot().unwrap_or_default() {
+    // Each plugin's requests are in the grants file where it lives: a seat's own, or the box's.
+    let open = crate::plugins::access::AccessStore::open;
+    let snapshot = |dir| open(dir).snapshot().unwrap_or_default();
+    let mut asked = snapshot(pf_paths::seat::library_dir());
+    asked.retain(|s| !crate::plugins::manifest::seat_owns(&s.plugin));
+    if crate::library::keeps_provider_rows() {
+        let own = snapshot(pf_paths::config_dir()).into_iter();
+        asked.extend(own.filter(|s| crate::plugins::manifest::seat_owns(&s.plugin)));
+    }
+    for s in asked {
         if !s.pending.is_empty() && !plugin_ids.iter().any(|(_, p)| *p == s.plugin) {
             plugin_ids.push((s.plugin.clone(), s.plugin));
         }

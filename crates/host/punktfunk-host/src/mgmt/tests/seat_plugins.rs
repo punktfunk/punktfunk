@@ -203,3 +203,99 @@ async fn a_seat_s_plugin_ui_stays_on_its_seat_host() {
     let device = send_cert(&app, credential(), DEVICE).await;
     assert_eq!(device, StatusCode::UNAUTHORIZED);
 }
+
+/// A package declaring plugin `id`, installed under `plugins` as its runner finds it.
+fn install(plugins: &std::path::Path, id: &str, reads: &str) {
+    let name = format!("plugin-{id}");
+    let dir = plugins.join("node_modules").join(&name);
+    std::fs::create_dir_all(&dir).unwrap();
+    let body = json!({"name": name, "punktfunk": {"schema": 1, "id": id, "reads": [reads]}});
+    std::fs::write(dir.join("package.json"), body.to_string()).unwrap();
+    let deps_file = plugins.join("package.json");
+    let mut deps: serde_json::Value = std::fs::read_to_string(&deps_file)
+        .ok()
+        .and_then(|t| serde_json::from_str(&t).ok())
+        .unwrap_or_else(|| json!({"dependencies": {}}));
+    deps["dependencies"][&name] = json!("1");
+    std::fs::write(deps_file, deps.to_string()).unwrap();
+}
+
+/// On a Linux seat a plugin of its own runner reads its manifest and grants from the seat's own
+/// folder, never the box's for a plugin of the same id; a plugin the seat doesn't have reads
+/// the box's copy as before. A grant names only a folder the seat's account can list. The
+/// operator and the person grant on a made seat, the person alone on a person's own account.
+#[tokio::test]
+async fn a_seat_s_own_plugin_reads_its_own_grants() {
+    use crate::plugins::access::AccessStore;
+    use crate::plugins::manifest::{for_provider, granted_roots};
+    if std::env::var_os(CHILD).is_none() {
+        on_both_seats("a_seat_s_own_plugin_reads_its_own_grants");
+        return;
+    }
+    let library = std::path::PathBuf::from(std::env::var_os(CHILD).unwrap());
+    let config = pf_paths::config_dir();
+    let linux = cfg!(target_os = "linux");
+    install(&config.join("plugins"), "demo", "/seat/reads");
+    install(&library.join("plugins"), "demo", "/box/reads");
+    install(&library.join("plugins"), "boxonly", "/box/only");
+    let folders = tempfile::tempdir().unwrap();
+    let folder = |name: &str| {
+        let dir = folders.path().join(name);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir.canonicalize().unwrap()
+    };
+    let (seat_dir, box_dir, only_dir) = (folder("seat"), folder("box"), folder("only"));
+    let box_store = AccessStore::open(library.clone());
+    box_store.grant("demo", &box_dir, false, "console").unwrap();
+    box_store
+        .grant("boxonly", &only_dir, false, "console")
+        .unwrap();
+    AccessStore::open(config.clone())
+        .grant("demo", &seat_dir, false, "console")
+        .unwrap();
+    let (reads, roots) = match linux {
+        true => ("/seat/reads", vec![seat_dir.clone()]),
+        false => ("/box/reads", vec![box_dir.clone()]),
+    };
+    assert_eq!(for_provider("demo").unwrap().reads, [reads]);
+    assert_eq!(granted_roots("demo"), roots);
+    assert_eq!(for_provider("boxonly").unwrap().reads, ["/box/only"]);
+    assert_eq!(granted_roots("boxonly"), [only_dir]);
+
+    // A folder the seat's account can't list is no grant. Root lists everything.
+    #[cfg(unix)]
+    if crate::geteuid() != 0 {
+        use std::os::unix::fs::PermissionsExt;
+        let shut = folder("shut");
+        std::fs::set_permissions(&shut, std::fs::Permissions::from_mode(0o000)).unwrap();
+        let refused = AccessStore::open(config.clone()).grant("demo", &shut, false, "console");
+        std::fs::set_permissions(&shut, std::fs::Permissions::from_mode(0o700)).unwrap();
+        assert!(refused.unwrap_err().to_string().contains("not_readable"));
+    }
+
+    // Who decides a seat's grants.
+    let gated = pf_paths::seat::own_account() && linux;
+    let app = test_app_seat(test_state(), TOKEN, MINE);
+    let person = person_session(&app).await;
+    let allow = || {
+        let body = json!({"path": seat_dir, "decision": "allow", "write": false});
+        json_req(Method::POST, "/api/v1/plugin-access/demo/decide", body)
+    };
+    let (status, why) = send(&app, allow()).await;
+    if gated {
+        assert_eq!(
+            (status, &why["code"]),
+            (StatusCode::FORBIDDEN, &json!("plugins_own_account"))
+        );
+    } else {
+        assert_eq!(status, StatusCode::OK, "admin: {why}");
+    }
+    let (status, why) = send(&app, with_bearer(allow(), &person)).await;
+    assert_eq!(status, StatusCode::OK, "person: {why}");
+    let (status, _) = send(&app, with_bearer(allow(), "demo-secret")).await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "plugin");
+    assert_eq!(
+        send_cert(&app, allow(), DEVICE).await,
+        StatusCode::UNAUTHORIZED
+    );
+}

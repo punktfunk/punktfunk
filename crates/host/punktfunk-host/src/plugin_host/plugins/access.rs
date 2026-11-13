@@ -229,6 +229,26 @@ fn path_facts(canonical: &Path) -> PathFacts {
     }
 }
 
+/// Why a seat host refuses to grant `path`: its runner runs as the seat's account, so a folder
+/// that account can't list would promise more than the system gives. Only a seat host asks.
+/// A pattern grant is judged by its base, the part before `*`.
+fn seat_refusal(path: &Path) -> Option<io::Error> {
+    if !pf_paths::seat::role().is_seat_host() {
+        return None;
+    }
+    let base: PathBuf = path
+        .components()
+        .take_while(|c| c.as_os_str() != "*")
+        .collect();
+    let listed = std::fs::read_dir(&base).is_ok() && std::fs::metadata(base.join(".")).is_ok();
+    (!listed).then(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("'{}' can't be granted (not_readable)", base.display()),
+        )
+    })
+}
+
 /// Windows path spelling without the extended prefix, folded for comparison.
 #[cfg(windows)]
 fn windows_path(path: &Path) -> String {
@@ -1239,6 +1259,9 @@ impl AccessStore {
             }
             row
         };
+        if let Some(refused) = seat_refusal(Path::new(&row.path)) {
+            return Err(refused);
+        }
         apply_acl(Some(id), Path::new(&row.path), row.write, row.files)?;
         let guard = self.exclusive()?;
         let mut access = self.load_access()?;
@@ -1611,6 +1634,9 @@ impl AccessStore {
                 io::ErrorKind::InvalidInput,
                 format!("'{}' can't be granted ({rule})", canonical.display()),
             ));
+        }
+        if let Some(refused) = seat_refusal(&canonical) {
+            return Err(refused);
         }
         let path = canonical.to_string_lossy().into_owned();
         let write = {

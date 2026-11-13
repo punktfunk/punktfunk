@@ -254,6 +254,12 @@ session by design, and display activation fails while its session is inactive.
   rows, and the box learns their names and pictures as it learns the others'. On a person's own
   account every lane is refused (`plugins_own_account`), and a provider row found on their shelf
   lists nothing.
+- **Its own runner's folders, on Linux.** A plugin installed in the seat's own `plugins/` reads
+  its manifest and grants from the seat's own config directory, never the box's for a plugin of
+  the same id; any other plugin reads the box's copy. The operator decides them on a made seat,
+  the seat's person on both kinds of seat, and a folder the seat's account can't list is refused
+  (`not_readable`). On a person's own account an emulator or core install asked through a grant
+  stays refused (`emulators_own_account_yet`).
 - **One profile.** The seat serves the profile whose seat it is. A connect that names any other
   profile, the owner's included, is refused as an unknown profile; one that names none plays as
   this seat's profile. The owner's row alone also serves the owner and the profiles that share the

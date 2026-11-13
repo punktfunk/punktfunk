@@ -6657,7 +6657,7 @@
           "plugin-access"
         ],
         "summary": "Grant, deny, or forget an access request",
-        "description": "`allow` turns a pending request into a grant (the platform ACL lands first, so a failed\ngrant stores nothing), or with `write` set grants a path the operator handed over, on\nbehalf of `form` when named; `deny` remembers the no; `forget` removes a grant or denial.\nA folder that takes longer answers 202 and lists its walk until the record lands.",
+        "description": "`allow` turns a pending request into a grant (the platform ACL lands first, so a failed\ngrant stores nothing), or with `write` set grants a path the operator handed over, on\nbehalf of `form` when named; `deny` remembers the no; `forget` removes a grant or denial.\nA folder that takes longer answers 202 and lists its walk until the record lands. On a seat\nhost the grant is for its own runner: a folder the seat's account can't list is refused. On a\nperson's own account only that person decides, and an emulator or core install is refused.",
         "operationId": "decidePluginAccess",
         "parameters": [
           {
@@ -6722,7 +6722,7 @@
             }
           },
           "403": {
-            "description": "Not reachable on the plugin or device lane",
+            "description": "Not reachable on the plugin or device lane, or an install on a person's own account",
             "content": {
               "application/json": {
                 "schema": {

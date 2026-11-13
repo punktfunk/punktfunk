@@ -4945,7 +4945,9 @@ readonly "requestPluginAccess": {
 * `allow` turns a pending request into a grant (the platform ACL lands first, so a failed
 * grant stores nothing), or with `write` set grants a path the operator handed over, on
 * behalf of `form` when named; `deny` remembers the no; `forget` removes a grant or denial.
-* A folder that takes longer answers 202 and lists its walk until the record lands.
+* A folder that takes longer answers 202 and lists its walk until the record lands. On a seat
+* host the grant is for its own runner: a folder the seat's account can't list is refused. On a
+* person's own account only that person decides, and an emulator or core install is refused.
 */
 readonly "decidePluginAccess": {
     <Config extends OperationConfig | undefined = undefined>(plugin: string, options: { readonly payload: typeof DecidePluginAccessRequestJson.Encoded; readonly config: Config }): Effect.Effect<WithOptionalResponse<typeof DecidePluginAccess200.Type | typeof DecidePluginAccess202.Type, Config>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"DecidePluginAccess400", typeof DecidePluginAccess400.Type> | PunktfunkError<"DecidePluginAccess401", typeof DecidePluginAccess401.Type> | PunktfunkError<"DecidePluginAccess403", typeof DecidePluginAccess403.Type> | PunktfunkError<"DecidePluginAccess404", typeof DecidePluginAccess404.Type> | PunktfunkError<"DecidePluginAccess500", typeof DecidePluginAccess500.Type>>;

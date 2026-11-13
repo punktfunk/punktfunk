@@ -36,21 +36,23 @@ pub(super) fn refusal(method: &Method, path: &str) -> Option<(&'static str, &'st
 }
 
 /// What the person reads in their own session: emulators there come in a later version.
-const EMULATORS_YET: (&str, &str) = (
+pub(super) const EMULATORS_YET: (&str, &str) = (
     "emulators_own_account_yet",
     "Emulators can't be managed here yet.",
 );
 
 /// [`refusal`] on a seat host on a person's own Linux account, on every lane, that person's
-/// included; every other host passes.
+/// included but for their folder grants; every other host passes.
 pub(super) async fn gate(req: Request, next: Next) -> Response {
     let here = cfg!(target_os = "linux") && pf_paths::seat::own_account();
     let person =
         req.extensions().get::<super::auth::AuthLane>() == Some(&super::auth::AuthLane::Person);
+    let grants = req.uri().path().starts_with("/api/v1/plugin-access/");
     match here
         .then(|| refusal(req.method(), req.uri().path()))
         .flatten()
     {
+        Some(PLUGINS) if person && grants => next.run(req).await,
         Some(EMULATORS) if person => {
             api_error_coded(StatusCode::FORBIDDEN, EMULATORS_YET.0, EMULATORS_YET.1)
         }
