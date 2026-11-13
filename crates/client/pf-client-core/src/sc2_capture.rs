@@ -90,7 +90,8 @@ const CLASSIC_HOST_COMMANDS: [u8; 6] = [0x87, 0x8F, 0x9F, 0xB6, 0xC1, 0xCE];
 const TRITON_HELD_BACK: [u8; 3] = [0x81, 0x85, 0x8E];
 
 /// Why a report from the host must not reach the pad, or `None` to write it. A host that
-/// follows the rules above never sends what this refuses.
+/// follows the rules above never sends what this refuses. The Apple and Android captures refuse
+/// the same (`clients/shared/pad-write-vectors.json`).
 fn refused(model: Model, kind: u8, data: &[u8]) -> Option<&'static str> {
     match (model, kind) {
         (Model::Triton { .. }, HID_RAW_FEATURE) => {
@@ -559,43 +560,54 @@ mod tests {
         assert_eq!(raw_model(P::Xbox360, P::SteamController, 0x028E), None);
     }
 
-    /// A 2015 pad takes the commands the host forwards, framed with report id 0, and nothing
-    /// else: the host's own list of refusals stays refused, so does an output report.
+    /// `clients/shared/pad-write-vectors.json`, which `Sc2Capture.swift` and `Sc2Capture.kt`
+    /// replay too: every command byte against the two lists, then the framing rows.
     #[test]
-    fn a_2015_pad_takes_only_the_commands_the_host_forwards() {
-        for model in [Model::Classic, Model::ClassicBle] {
-            for cmd in [0x87, 0x8F, 0x9F, 0xB6, 0xC1, 0xCE] {
-                assert_eq!(refused(model, HID_RAW_FEATURE, &[0, cmd, 3, 1]), None);
+    fn host_writes_match_the_shared_vectors() {
+        let v: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../../clients/shared/pad-write-vectors.json"
+        ))
+        .expect("vector file parses");
+        let bytes = |a: &serde_json::Value| -> Vec<u8> {
+            let a = a.as_array().expect("a byte array");
+            a.iter()
+                .map(|b| b.as_u64().expect("a byte") as u8)
+                .collect()
+        };
+        let forwarded = bytes(&v["classic_forwarded"]);
+        let held_back = bytes(&v["triton_held_back"]);
+        let classic = [Model::Classic, Model::ClassicBle];
+        let triton = [Model::Triton { puck: false }, Model::Triton { puck: true }];
+        for cmd in 0..=u8::MAX {
+            for model in classic {
+                let r = refused(model, HID_RAW_FEATURE, &[0, cmd, 0]);
+                assert_eq!(
+                    r.is_some(),
+                    !forwarded.contains(&cmd),
+                    "{model:?} 0x{cmd:02x}"
+                );
             }
-            for cmd in [0x81, 0x85, 0x86, 0x8E, 0x90, 0xA7, 0xA9, 0xAD, 0xB3, 0xBF] {
-                assert!(refused(model, HID_RAW_FEATURE, &[0, cmd, 0]).is_some());
+            for model in triton {
+                let r = refused(model, HID_RAW_FEATURE, &[1, cmd, 0]);
+                assert_eq!(
+                    r.is_some(),
+                    held_back.contains(&cmd),
+                    "{model:?} 0x{cmd:02x}"
+                );
             }
-            assert!(refused(model, HID_RAW_FEATURE, &[1, 0x87, 0]).is_some());
-            assert!(refused(model, HID_RAW_FEATURE, &[0x87, 0]).is_some());
-            assert!(refused(model, HID_RAW_FEATURE, &[0]).is_some());
-            assert!(refused(model, HID_RAW_OUTPUT, &[0, 0x87, 0]).is_some());
         }
-    }
-
-    /// A Triton refuses lizard mode and the factory settings in either framing, and takes
-    /// settings, other feature reads and every output report.
-    #[test]
-    fn a_triton_keeps_lizard_mode_and_the_factory_settings_off_the_pad() {
-        let triton = Model::Triton { puck: false };
-        for cmd in [0x81, 0x85, 0x8E] {
-            assert!(refused(triton, HID_RAW_FEATURE, &[1, cmd, 0]).is_some());
-            assert!(refused(Model::Triton { puck: true }, HID_RAW_FEATURE, &[2, cmd]).is_some());
-            assert!(refused(triton, HID_RAW_FEATURE, &[cmd, 0]).is_some());
+        for row in v["frames"].as_array().expect("frames") {
+            let models: &[Model] = match row["model"].as_str() {
+                Some("classic") => &classic,
+                Some("triton") => &triton,
+                other => panic!("model {other:?}"),
+            };
+            let kind = row["kind"].as_u64().expect("kind") as u8;
+            let data = bytes(&row["data"]);
+            let want = row["refused"].as_bool().expect("refused");
+            for &model in models {
+                assert_eq!(refused(model, kind, &data).is_some(), want, "{row}");
+            }
         }
-        for frame in [
-            &[1, 0x87, 3, 0x2E, 0][..],
-            &[1, 0xAE, 0x15, 1],
-            &[0x87, 3],
-            &[],
-        ] {
-            assert_eq!(refused(triton, HID_RAW_FEATURE, frame), None);
-        }
-        assert_eq!(refused(triton, HID_RAW_OUTPUT, &[0x80, 1, 0, 0]), None);
-        assert_eq!(refused(triton, HID_RAW_OUTPUT, &[0x8E, 0]), None);
     }
 }

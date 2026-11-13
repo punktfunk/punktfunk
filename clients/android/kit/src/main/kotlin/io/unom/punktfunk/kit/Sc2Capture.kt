@@ -24,7 +24,7 @@ import java.util.concurrent.ConcurrentHashMap
  *   Xbox 360 pad) still gets a playable controller.
  * - **Raw return:** the host's hidraw writes (Steam's `0x80` rumble output reports, lizard/IMU
  *   feature settings) arrive via [GamepadFeedback.onHidRaw] → [onHidRaw] → the link, landing on
- *   the real controller's motors/firmware.
+ *   the real controller's motors/firmware unless [hostWriteRefused] names them.
  *
  * **UI mode** (`router == null`, owned by MainActivity while NOT streaming): the lizard-mode
  * kb/mouse never produces gamepad events, so an uncaptured SC2 can't drive the console UI at
@@ -144,9 +144,17 @@ class Sc2Capture(
         return ok
     }
 
-    /** Replay a host raw write on the physical pad — wire to [GamepadFeedback.onHidRaw]. */
+    /**
+     * Replay a host raw write on the physical pad — wire to [GamepadFeedback.onHidRaw]. A write
+     * [hostWriteRefused] names stays off the pad.
+     */
     fun onHidRaw(padIndex: Int, kind: Int, data: ByteArray) {
         val pad = pads.values.firstOrNull { it.wire?.index == padIndex } ?: return // another pad's
+        hostWriteRefused(classic, kind, data)?.let { reason ->
+            val head = data.take(2).joinToString(" ") { "%02x".format(it) }
+            Log.d(TAG, "host write refused (kind=$kind, head $head): $reason")
+            return
+        }
         writeLink(kind, data, pad.iface)
     }
 
@@ -463,4 +471,27 @@ class Sc2Capture(
             Sc2Device.VIEW, android.view.KeyEvent.KEYCODE_BUTTON_SELECT,
         )
     }
+}
+
+/** The feature commands a host may send a 2015 pad after its report id 0. */
+private val CLASSIC_HOST_COMMANDS = setOf(0x87, 0x8F, 0x9F, 0xB6, 0xC1, 0xCE)
+
+/** What a host never sends a Steam Controller 2: lizard mode off and on, the factory settings. */
+private val TRITON_HELD_BACK = setOf(0x81, 0x85, 0x8E)
+
+/**
+ * Why a host write must not reach the pad, or null to write it. [kind] 1 is a feature report; a
+ * Steam Controller 2's command is its first byte from `0x80`, else its second. pf-client-core
+ * `sc2_capture.rs` refuses the same (`clients/shared/pad-write-vectors.json`).
+ */
+internal fun hostWriteRefused(classic: Boolean, kind: Int, data: ByteArray): String? {
+    if (kind != 1) return if (classic) "a 2015 pad takes feature reports only" else null
+    val bytes = data.map { it.toInt() and 0xFF }
+    if (classic) {
+        if (bytes.size < 2 || bytes[0] != 0) return "not a feature frame with report id 0"
+        return if (bytes[1] in CLASSIC_HOST_COMMANDS) null else "command is not one the host forwards"
+    }
+    val first = bytes.firstOrNull() ?: return null
+    val cmd = if (first >= 0x80) first else bytes.getOrNull(1) ?: return null
+    return if (cmd in TRITON_HELD_BACK) "lizard mode and factory settings stay on the host" else null
 }
