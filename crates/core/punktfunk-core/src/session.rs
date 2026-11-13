@@ -782,10 +782,12 @@ impl Session {
         self.plain_tap = on.then(PlainTap::default);
     }
 
-    /// Host: the plaintext staged since the last call, in emission order.
-    pub fn drain_plaintext(&mut self, mut f: impl FnMut(&[u8])) {
+    /// Host: each packet's plaintext staged since the last call, in emission order, in the
+    /// tap's own buffer. `f` may keep the buffer by swapping in a spare: the tap writes over
+    /// whatever buffer it is left with.
+    pub fn drain_plaintext(&mut self, f: impl FnMut(&mut Vec<u8>)) {
         if let Some(t) = self.plain_tap.as_mut() {
-            t.wires[..t.used].iter().for_each(|w| f(w));
+            t.wires[..t.used].iter_mut().for_each(f);
             t.used = 0;
         }
     }
