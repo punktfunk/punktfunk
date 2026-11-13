@@ -176,7 +176,12 @@ export const GATES: readonly Route[] = [
 	open("POST", "native/pending/{id}/deny", NARROWS),
 	gated("POST", "pair/pin"),
 	open("POST", "plugin-access/requests", REPORT),
-	onlyWhen(allows, gated("POST", "plugin-access/{plugin}/decide", decidePost)),
+	ownLane(
+		onlyWhen(
+			allows,
+			gated("POST", "plugin-access/{plugin}/decide", decidePost),
+		),
+	),
 	open("POST", "plugin-access/{plugin}/release", NARROWS),
 	open("POST", "plugins/logs", REPORT),
 	refused("PUT", "plugins/{id}", pluginPut),

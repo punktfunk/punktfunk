@@ -137,6 +137,7 @@ function RootComponent() {
 						) : person ? (
 							<PersonShell>
 								<Outlet />
+								<AccessPrompt />
 							</PersonShell>
 						) : (
 							<AppShell>
