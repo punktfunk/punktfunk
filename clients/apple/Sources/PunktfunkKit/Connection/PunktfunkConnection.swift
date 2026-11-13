@@ -741,9 +741,8 @@ public final class PunktfunkConnection: @unchecked Sendable {
 
     /// The compositor the host actually resolved for this session's virtual output (the
     /// Welcome's echo of the requested `compositor`, with `.auto` resolved to a concrete
-    /// backend). `.auto` = an older host that didn't say. Clients use it to decide
-    /// client-side cursor behavior: `.gamescope`'s PipeWire capture carries no cursor, so
-    /// the client draws its own (a visible system cursor over the stream).
+    /// backend). `.auto` = an older host that didn't say. The stream view pins the capture
+    /// mouse model on `.gamescope`, whose input socket takes only relative pointer motion.
     public private(set) var resolvedCompositor: Compositor = .auto
 
     /// Host clock minus client clock (nanoseconds) — LIVE: the connect-time skew handshake's
