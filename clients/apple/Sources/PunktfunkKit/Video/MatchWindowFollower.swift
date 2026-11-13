@@ -19,22 +19,13 @@
 import Foundation
 import PunktfunkShared
 
-/// The pure, side-effect-free core of the Match-window trigger — so the normalize/skip discipline
-/// is unit-tested without a live connection or a UI (`MatchWindowTests`).
+/// The pure, side-effect-free core of the Match-window trigger — so the skip discipline is
+/// unit-tested without a live connection or a UI (`MatchWindowTests`).
 public enum MatchWindow {
-    /// Even-floor + clamp a physical-pixel size to a host-valid mode dimension: the host's
-    /// `validate_dimensions` rejects odd sizes, and we never ask below 320×200.
-    public static func normalize(widthPx: Int, heightPx: Int) -> (width: UInt32, height: UInt32) {
-        let evenClamp: (Int, UInt32) -> UInt32 = { px, minimum in
-            let even = UInt32(max(px, 0)) / 2 * 2
-            return max(even, minimum)
-        }
-        return (evenClamp(widthPx, 320), evenClamp(heightPx, 200))
-    }
-
     /// Whether to request `target` now (the debounce has already settled; spacing is the caller's
     /// timer): `nil` to skip — equal to the live mode and view, or to the last ask sent (a
-    /// rejected size / a host rollback must not loop). `target` is expected already-[normalize]d.
+    /// rejected size / a host rollback must not loop). `target` is expected host-valid already
+    /// (`RenderScale.apply`).
     public static func request(
         target: Ask, current: Ask, lastRequested: Ask?
     ) -> Ask? {
@@ -126,7 +117,7 @@ public final class MatchWindowFollower {
 
     /// The host-valid mode for a live window size: the window's physical pixels × the render scale,
     /// aspect-preserved, even, and clamped to the codec ceiling — the match-window twin of
-    /// `EffectiveSettings.streamMode`. Reduces to `MatchWindow.normalize` when the scale is 1.0.
+    /// `EffectiveSettings.streamMode`.
     private func targetMode(widthPx: Int, heightPx: Int) -> (width: UInt32, height: UInt32) {
         RenderScale.apply(
             baseWidth: widthPx, baseHeight: heightPx,
