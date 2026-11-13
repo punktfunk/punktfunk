@@ -638,7 +638,7 @@ impl SimpleComponent for AppModel {
             }
             AppMsg::Toast(msg) => self.toast(&msg),
             AppMsg::Hidden(msg, id) => {
-                let toast = adw::Toast::new(&msg);
+                let toast = plain_toast(&msg);
                 toast.set_button_label(Some(pf_l10n::common::common_undo()));
                 let library = self.library.sender().clone();
                 toast.connect_button_clicked(move |_| {
@@ -683,9 +683,17 @@ impl SimpleComponent for AppModel {
     }
 }
 
+/// A toast that shows `msg` as written. A toast reads markup unless told not to, and these
+/// carry a host's name, a game's title or a link's text.
+fn plain_toast(msg: &str) -> adw::Toast {
+    let toast = adw::Toast::new(msg);
+    toast.set_use_markup(false);
+    toast
+}
+
 impl AppModel {
     pub fn toast(&self, msg: &str) {
-        self.toasts.add_toast(adw::Toast::new(msg));
+        self.toasts.add_toast(plain_toast(msg));
     }
 
     /// A destination, over any host page pushed on top of it.
