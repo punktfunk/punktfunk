@@ -40,10 +40,8 @@ extension Stage2Pipeline {
     }()
 }
 
-/// The pf-present line's os_log mirror (subsystem io.unom.punktfunk, category "present") — the
-/// SessionModel "stats" mirror's sibling, so DEADLINE sessions stream their pacing decomposition
-/// to Console.app wirelessly with no env var / Xcode attach. Always on for deadline pacing (the
-/// stats are a few arrays + one log line per second); other pacings keep the env-gated print.
+/// The deadline link's lines (link up, stalls, wedges, the window line outside
+/// PUNKTFUNK_PRESENT_DEBUG), category "present". The pf-present line logs from PresentDiagnostics.
 private let presentLog = ClientLog(category: "present")
 /// Pump-side events (loss recovery, format seeding) — the stage-2 sibling of StreamPump's log.
 private let pumpLog = ClientLog(category: "pump")
