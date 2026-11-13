@@ -24,7 +24,7 @@ use super::CaptureOpts;
 use crate::knobs::Knobs;
 use crate::linux::portal::portal_thread;
 use crate::linux::{
-    drain_edges, health_identity, xfixes_cursor, CursorSlot, ImporterCell, Negotiation,
+    drain_edges, health_identity, xfixes_cursor, CursorSlot, ImporterCell, Negotiation, Nudges,
     StreamShared, StreamStatus,
 };
 use crate::{CapturedFrame, Capturer, FramePayload, ZeroCopyPolicy};
@@ -45,8 +45,9 @@ pub struct PortalCapturer {
     /// Wakeup only — the queue holds the frames, so a coalesced edge loses
     /// nothing. Sender dies with the PipeWire thread (`Disconnected`).
     wake: Receiver<()>,
-    /// Set by [`crate::Feed::arrival_poke`]; `wait_ready` takes it and returns with no frame.
-    poked: Arc<std::sync::atomic::AtomicBool>,
+    /// Set by [`crate::Feed::arrival_poke`] and [`crate::Feed::au_wake`]; `wait_ready` takes
+    /// one and returns with no frame.
+    nudges: Arc<Nudges>,
     /// Arrival to take, per frame (`PUNKTFUNK_PERF`).
     fence_wait: FenceWaitStats,
     shared: StreamShared,
@@ -308,7 +309,7 @@ impl PwHandles {
         PortalCapturer {
             queue: self.queue,
             wake: self.wake,
-            poked: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            nudges: Arc::default(),
             fence_wait: Default::default(),
             shared: self.core.shared.clone(),
             cursor_slot: self.core.cursor_slot.clone(),
@@ -575,6 +576,18 @@ impl Capturer for PortalCapturer {
     }
 }
 
+impl PortalCapturer {
+    /// Sets the nudge (`encoded`: an access unit, else a poke), then has the loop thread send
+    /// the wake edge. `None` without a loop thread to send it.
+    fn nudge(&self, encoded: bool) -> Option<Arc<dyn Fn() + Send + Sync>> {
+        let (nudges, ctl) = (self.nudges.clone(), self.core.as_ref()?.ctl.clone()?);
+        Some(Arc::new(move || {
+            nudges.flag(encoded).store(true, Ordering::Relaxed);
+            let _ = ctl.send(PwCtl::Poke);
+        }))
+    }
+}
+
 impl crate::Feed for PortalCapturer {
     fn wait_arrival(&mut self, deadline: std::time::Instant) {
         self.wait_paced(std::time::Instant::now(), deadline);
@@ -583,20 +596,27 @@ impl crate::Feed for PortalCapturer {
     /// A driven producer paints on its own requests (`pacer::Pacer`), so this wait never
     /// triggers a paint. It returns on a finished render, not on an arrival: the producer
     /// sends a buffer before it has painted it. A broken capture only sits out the gate.
-    fn wait_paced(&mut self, not_before: std::time::Instant, deadline: std::time::Instant) -> bool {
+    fn wait_paced(
+        &mut self,
+        not_before: std::time::Instant,
+        deadline: std::time::Instant,
+    ) -> crate::Paced {
         if self.shared.status() == StreamStatus::Broken {
             std::thread::sleep(not_before.saturating_duration_since(std::time::Instant::now()));
-            return false;
+            return crate::Paced::Due;
         }
-        wait_ready(&self.queue, &self.wake, &self.poked, not_before, deadline) == Woke::Poked
+        match wait_ready(&self.queue, &self.wake, &self.nudges, not_before, deadline) {
+            Woke::Nudged(nudge) => nudge,
+            Woke::Ready | Woke::Gone => crate::Paced::Due,
+        }
     }
 
     fn arrival_poke(&self) -> Option<Arc<dyn Fn() + Send + Sync>> {
-        let (poked, ctl) = (self.poked.clone(), self.core.as_ref()?.ctl.clone()?);
-        Some(Arc::new(move || {
-            poked.store(true, Ordering::Relaxed);
-            let _ = ctl.send(PwCtl::Poke);
-        }))
+        self.nudge(false)
+    }
+
+    fn au_wake(&self) -> Option<Arc<dyn Fn() + Send + Sync>> {
+        self.nudge(true)
     }
 
     fn set_active(&mut self, active: bool) {
@@ -750,7 +770,7 @@ impl PortalCapturer {
             let slice = Duration::from_millis(500)
                 .min(deadline.saturating_duration_since(std::time::Instant::now()));
             let until = std::time::Instant::now() + slice;
-            let woke = wait_ready(&self.queue, &self.wake, &self.poked, started, until);
+            let woke = wait_ready(&self.queue, &self.wake, &self.nudges, started, until);
             let end = if woke == Woke::Gone {
                 RecvTimeoutError::Disconnected
             } else if std::time::Instant::now() >= deadline {
@@ -1125,7 +1145,7 @@ mod status_reader_tests {
         let cap = PortalCapturer {
             queue: Default::default(),
             wake,
-            poked: Default::default(),
+            nudges: Default::default(),
             fence_wait: Default::default(),
             shared: shared.clone(),
             cursor_slot: Default::default(),

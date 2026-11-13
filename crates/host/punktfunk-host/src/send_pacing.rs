@@ -690,13 +690,8 @@ pub(crate) fn owed_aus(
     }
 }
 
-/// Wait for the next tick: the capturer's arrival under the credit pacer, the next access
-/// unit an encoder owes for the pixel-less `frame`, or the fixed-interval sleep to `next`.
-///
-/// `fresh` is a new frame's capture instant. A repeat (`None`) spends no credit and holds no
-/// slot: the real frame after it goes out on arrival. An arrival or an AU restarts the grid
-/// at `next`. A poke (a recovery ask) ends a feed's wait, the credit gate included, unless
-/// the next fresh frame carries the ask sooner ([`CaptureCredit::ask_waits`]).
+/// [`wait_tick_or_au`] for a loop that collects no access unit between ticks: an AU-ready
+/// wake only resumes the wait.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn wait_next_tick(
     capturer: &mut dyn crate::capture::Capturer,
@@ -708,10 +703,62 @@ pub(crate) fn wait_next_tick(
     interval: Duration,
     src_period_ns: Option<u64>,
 ) {
-    if !frame_driven_enabled() {
-        return sleep_to_grid(next);
+    let mut waited = wait_tick_or_au(
+        capturer,
+        enc,
+        frame,
+        credit,
+        next,
+        fresh,
+        interval,
+        src_period_ns,
+    );
+    while let Waited::AuReady(gate) = waited {
+        waited = gate.resume(capturer, credit, next);
     }
-    if let Some(feed) = capturer.feed() {
+}
+
+/// How [`wait_tick_or_au`] ended.
+pub(crate) enum Waited {
+    /// The next tick is due.
+    Tick,
+    /// The encoder finished an access unit first: collect it without submitting, then
+    /// [`TickGate::resume`] the same wait.
+    AuReady(TickGate),
+}
+
+/// One tick's feed wait as [`wait_tick_or_au`] set it: the credit gate, the keep-alive
+/// deadline and the source period. An AU-ready wake hands it back unchanged.
+pub(crate) struct TickGate {
+    not_before: Instant,
+    deadline: Instant,
+    period: Duration,
+}
+
+/// Wait for the next tick: the capturer's arrival under the credit pacer, the next access
+/// unit an encoder owes for the pixel-less `frame`, or the fixed-interval sleep to `next`.
+///
+/// `fresh` is a new frame's capture instant. A repeat (`None`) spends no credit and holds no
+/// slot: the real frame after it goes out on arrival. An arrival or an AU restarts the grid
+/// at `next`. A poke (a recovery ask) ends a feed's wait, the credit gate included, unless
+/// the next fresh frame carries the ask sooner ([`CaptureCredit::ask_waits`]). An encoder's
+/// finished access unit ends it too, as [`Waited::AuReady`].
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn wait_tick_or_au(
+    capturer: &mut dyn crate::capture::Capturer,
+    enc: &mut dyn crate::encode::Encoder,
+    frame: &crate::capture::CapturedFrame,
+    credit: &mut CaptureCredit,
+    next: &mut Instant,
+    fresh: Option<Instant>,
+    interval: Duration,
+    src_period_ns: Option<u64>,
+) -> Waited {
+    if !frame_driven_enabled() {
+        sleep_to_grid(next);
+        return Waited::Tick;
+    }
+    if capturer.feed().is_some() {
         let not_before = match fresh {
             Some(t_cap) => {
                 credit.busy = t_cap.elapsed();
@@ -722,19 +769,47 @@ pub(crate) fn wait_next_tick(
                 Instant::now()
             }
         };
-        let period = src_period_ns.map_or(interval, Duration::from_nanos);
-        let mut deadline = *next + keepalive_wait(interval, src_period_ns, credit.idle);
-        while feed.wait_paced(not_before, deadline) {
-            match credit.ask_waits(Instant::now(), not_before, period) {
-                Some(latest) => deadline = deadline.min(latest),
-                None => break,
+        let gate = TickGate {
+            not_before,
+            deadline: *next + keepalive_wait(interval, src_period_ns, credit.idle),
+            period: src_period_ns.map_or(interval, Duration::from_nanos),
+        };
+        return gate.resume(capturer, credit, next);
+    }
+    if owed_aus(frame, enc, *next).is_none() {
+        sleep_to_grid(next);
+        return Waited::Tick;
+    }
+    *next = Instant::now();
+    Waited::Tick
+}
+
+impl TickGate {
+    /// The feed wait under this gate, until the tick is due or an access unit is ready.
+    pub(crate) fn resume(
+        mut self,
+        capturer: &mut dyn crate::capture::Capturer,
+        credit: &CaptureCredit,
+        next: &mut Instant,
+    ) -> Waited {
+        if let Some(feed) = capturer.feed() {
+            loop {
+                match feed.wait_paced(self.not_before, self.deadline) {
+                    pf_capture::Paced::Due => break,
+                    pf_capture::Paced::Encoded => return Waited::AuReady(self),
+                    pf_capture::Paced::Poked => {
+                        match credit.ask_waits(Instant::now(), self.not_before, self.period) {
+                            Some(latest) => self.deadline = self.deadline.min(latest),
+                            None => break,
+                        }
+                    }
+                }
             }
         }
-    } else if owed_aus(frame, enc, *next).is_none() {
-        return sleep_to_grid(next);
+        // On its own phase the grid would hold a finished frame for up to a period.
+        *next = Instant::now();
+        Waited::Tick
     }
-    // On its own phase the grid would hold a finished frame for up to a period.
-    *next = Instant::now();
 }
 
 /// The fixed-cadence tick, re-anchored when the loop is behind it.
@@ -1411,9 +1486,12 @@ mod tests {
     impl pf_capture::Feed for Scripted {
         fn wait_arrival(&mut self, _deadline: Instant) {}
 
-        fn wait_paced(&mut self, not_before: Instant, deadline: Instant) -> bool {
+        fn wait_paced(&mut self, not_before: Instant, deadline: Instant) -> pf_capture::Paced {
             self.waits.push((not_before, deadline));
-            self.pokes.pop_front().unwrap_or(false)
+            match self.pokes.pop_front() {
+                Some(true) => pf_capture::Paced::Poked,
+                _ => pf_capture::Paced::Due,
+            }
         }
     }
 

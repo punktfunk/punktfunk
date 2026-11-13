@@ -109,6 +109,9 @@ impl Encoder for TrackedEncoder {
     fn set_pipelined(&mut self, on: bool) -> bool {
         self.inner.set_pipelined(on)
     }
+    fn set_au_wake(&mut self, wake: Option<std::sync::Arc<dyn Fn() + Send + Sync>>) {
+        self.inner.set_au_wake(wake)
+    }
     fn set_wire_chunking(&mut self, shard_payload: usize) {
         self.inner.set_wire_chunking(shard_payload)
     }

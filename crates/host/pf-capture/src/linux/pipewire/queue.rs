@@ -10,7 +10,6 @@ use crate::CapturedFrame;
 use pf_dmabuf::fence::WaitOutcome;
 use std::collections::VecDeque;
 use std::os::fd::{AsFd as _, OwnedFd};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::Receiver;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -165,26 +164,26 @@ impl Arrivals {
 pub(in crate::linux) enum Woke {
     /// A frame is ready, or `deadline` passed.
     Ready,
-    /// A poke landed, and the wait took it.
-    Poked,
+    /// A poke or an AU wake landed, and the wait took it.
+    Nudged(crate::Paced),
     /// The loop thread is gone.
     Gone,
 }
 
 /// Block until [`Arrivals::take_ready`] has a frame and `not_before` has passed, `deadline`
-/// passes, a poke lands (`poked`, taken here), or the loop thread is gone. Before `not_before`
-/// only a poke ends it: an arrival edge re-arms the wait. Never consumes a frame.
+/// passes, a nudge lands (taken here), or the loop thread is gone. Before `not_before` only a
+/// nudge ends it: an arrival edge re-arms the wait. Never consumes a frame.
 pub(in crate::linux) fn wait_ready(
     queue: &FrameQueue,
     wake: &Receiver<()>,
-    poked: &AtomicBool,
+    nudges: &crate::linux::Nudges,
     not_before: Instant,
     deadline: Instant,
 ) -> Woke {
     use std::sync::mpsc::RecvTimeoutError;
     loop {
-        if poked.swap(false, Ordering::Relaxed) {
-            return Woke::Poked;
+        if let Some(nudge) = nudges.take() {
+            return Woke::Nudged(nudge);
         }
         let now = Instant::now();
         if now < not_before {
@@ -221,11 +220,12 @@ pub(in crate::linux) fn wait_ready(
 #[cfg(test)]
 mod tests {
     use super::{Arrivals, RenderFence, RENDER_GUARD};
+    use crate::linux::Nudges;
+    use crate::Paced;
     use crate::{CapturedFrame, FramePayload, PixelFormat};
     use pf_dmabuf::fence::WaitOutcome;
     use std::os::fd::{AsRawFd as _, FromRawFd as _, OwnedFd};
-    use std::sync::atomic::{AtomicBool, Ordering};
-    use std::sync::Arc;
+    use std::sync::atomic::Ordering;
     use std::time::{Duration, Instant};
 
     fn frame(n: u64) -> CapturedFrame {
@@ -368,8 +368,8 @@ mod tests {
                 std::thread::sleep(Duration::from_millis(20));
                 signal(&w);
             });
-            let poked = AtomicBool::new(false);
-            let woke = super::wait_ready(&queue, &rx, &poked, t0, t0 + Duration::from_secs(2));
+            let nudges = Nudges::default();
+            let woke = super::wait_ready(&queue, &rx, &nudges, t0, t0 + Duration::from_secs(2));
             assert_eq!(woke, super::Woke::Ready);
         });
         assert!(t0.elapsed() < Duration::from_secs(1), "woke on the fence");
@@ -381,33 +381,35 @@ mod tests {
         let queue = super::FrameQueue::default();
         let (tx, rx) = std::sync::mpsc::sync_channel::<()>(1);
         drop(tx);
-        let poked = AtomicBool::new(false);
+        let nudges = Nudges::default();
         let now = Instant::now();
-        let woke = super::wait_ready(&queue, &rx, &poked, now, now + Duration::from_secs(2));
+        let woke = super::wait_ready(&queue, &rx, &nudges, now, now + Duration::from_secs(2));
         assert_eq!(woke, super::Woke::Gone);
     }
 
-    /// A poke ends the wait with no frame and is consumed, so the loop ticks on what it
-    /// has once and then waits as before. It ends the gate before `not_before` too.
+    /// A poke or an AU wake ends the wait with no frame and is consumed, so the loop acts on
+    /// it once and then waits as before. It ends the gate before `not_before` too.
     #[test]
-    fn a_poke_ends_the_wait_before_any_frame() {
-        for gate in [Duration::ZERO, Duration::from_secs(2)] {
-            let queue = super::FrameQueue::default();
-            let (tx, rx) = std::sync::mpsc::sync_channel::<()>(1);
-            let poked = Arc::new(AtomicBool::new(false));
-            let t0 = Instant::now();
-            std::thread::scope(|s| {
-                s.spawn(|| {
-                    std::thread::sleep(Duration::from_millis(20));
-                    poked.store(true, Ordering::Relaxed);
-                    let _ = tx.try_send(());
+    fn a_nudge_ends_the_wait_before_any_frame() {
+        for (encoded, answer) in [(false, Paced::Poked), (true, Paced::Encoded)] {
+            for gate in [Duration::ZERO, Duration::from_secs(2)] {
+                let queue = super::FrameQueue::default();
+                let (tx, rx) = std::sync::mpsc::sync_channel::<()>(1);
+                let nudges = Nudges::default();
+                let t0 = Instant::now();
+                std::thread::scope(|s| {
+                    s.spawn(|| {
+                        std::thread::sleep(Duration::from_millis(20));
+                        nudges.flag(encoded).store(true, Ordering::Relaxed);
+                        let _ = tx.try_send(());
+                    });
+                    let deadline = t0 + Duration::from_secs(3);
+                    let woke = super::wait_ready(&queue, &rx, &nudges, t0 + gate, deadline);
+                    assert_eq!(woke, super::Woke::Nudged(answer), "gate {gate:?}");
                 });
-                let deadline = t0 + Duration::from_secs(3);
-                let woke = super::wait_ready(&queue, &rx, &poked, t0 + gate, deadline);
-                assert_eq!(woke, super::Woke::Poked, "gate {gate:?}");
-            });
-            assert!(t0.elapsed() < Duration::from_secs(1), "woke on the poke");
-            assert!(!poked.load(Ordering::Relaxed), "the poke is consumed");
+                assert!(t0.elapsed() < Duration::from_secs(1), "woke on {answer:?}");
+                assert_eq!(nudges.take(), None, "the nudge is consumed");
+            }
         }
     }
 
@@ -416,12 +418,12 @@ mod tests {
     fn a_ready_frame_waits_out_the_gate() {
         let queue = super::FrameQueue::default();
         let (tx, rx) = std::sync::mpsc::sync_channel::<()>(1);
-        let poked = AtomicBool::new(false);
+        let nudges = Nudges::default();
         let t0 = Instant::now();
         queue.lock().unwrap().push(frame(1), None, t0);
         tx.try_send(()).unwrap();
         let gate = t0 + Duration::from_millis(60);
-        let woke = super::wait_ready(&queue, &rx, &poked, gate, t0 + Duration::from_secs(2));
+        let woke = super::wait_ready(&queue, &rx, &nudges, gate, t0 + Duration::from_secs(2));
         assert_eq!(woke, super::Woke::Ready);
         assert!(Instant::now() >= gate, "returned inside the gate");
         assert!(
