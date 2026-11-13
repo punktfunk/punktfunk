@@ -353,11 +353,6 @@ struct HostRefused: LocalizedError {
     var errorDescription: String? { reason }
 }
 
-/// One game the host currently has launched, from `/api/v1/status`.
-///
-/// A deliberately partial mirror of the host's `ActiveGame`: only the fields a client can act on.
-/// The console's own view of this payload carries more (which session, which plane, the grace
-/// countdown), and none of that is a player's business from the library screen.
 /// One title's download, from `GET /api/v1/status` `downloads[]`. Its words match the Rust and
 /// Kotlin shells', so a report quotes one line whichever client it came from.
 public struct HostDownload: Codable, Hashable, Sendable {
@@ -458,6 +453,11 @@ public struct HostDownload: Codable, Hashable, Sendable {
     }
 }
 
+/// One game the host currently has launched, from `/api/v1/status`.
+///
+/// A deliberately partial mirror of the host's `ActiveGame`: only the fields a client can act on.
+/// The console's own view of this payload carries more (which session, which plane, the grace
+/// countdown), and none of that is a player's business from the library screen.
 public struct RunningGame: Codable, Hashable, Sendable {
     /// Store-qualified library id (`steam:570`) — the key that lines this up with a `GameEntry`.
     /// Absent for an operator-typed GameStream command, which has no catalog entry behind it.
