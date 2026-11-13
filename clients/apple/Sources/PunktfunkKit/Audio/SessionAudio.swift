@@ -998,7 +998,7 @@ public final class SessionAudio: @unchecked Sendable {
     /// Push the latched mute onto whichever engine carries the uplink. Split out from
     /// `setMicMuted` because the start paths call it too, with the engine they just started —
     /// that's how a mute requested before the permission grant lands on the engine the grant
-    /// creates. Never resumes a stopped session's engine.
+    /// creates. Never leaves a stopped session's engine running.
     private func apply(micMuted muted: Bool, capture: AVAudioEngine?, combined: AVAudioEngine?) {
         if let combined {
             combined.inputNode.isVoiceProcessingInputMuted = muted
@@ -1009,6 +1009,8 @@ public final class SessionAudio: @unchecked Sendable {
             capture.pause()
         } else if !flag.isStopped {
             try? capture.start()
+            // `stop()` may have stopped this engine between the check and the start.
+            if flag.isStopped { capture.stop() }
         }
     }
 
