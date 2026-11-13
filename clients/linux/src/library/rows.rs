@@ -151,6 +151,43 @@ pub fn rows(l: &Layout) -> Vec<Row> {
     out
 }
 
+/// What a profile hides, under `heading`: one grid in the shelf's sort, launchers too, no
+/// desktop.
+pub fn hidden(
+    games: &[GameEntry],
+    sort: SortKey,
+    search: &str,
+    columns: usize,
+    heading: String,
+) -> Vec<Row> {
+    let l = Layout {
+        games,
+        sections: &[],
+        favorites: &[],
+        sort,
+        group: None,
+        search,
+        columns,
+        desktops: Vec::new(),
+    };
+    let tiles: Vec<Tile> = collate::collate(games, sort, None)
+        .into_iter()
+        .flat_map(|g| g.games)
+        .filter(|&i| l.matches(i))
+        .map(Tile::Game)
+        .collect();
+    if tiles.is_empty() {
+        return Vec::new();
+    }
+    let caption = l.sort_caption();
+    let mut out = vec![Row::Heading(heading)];
+    out.extend(tiles.chunks(columns.max(1)).map(|chunk| Row::Posters {
+        tiles: chunk.to_vec(),
+        caption,
+    }));
+    out
+}
+
 /// The grid, grouped when asked, chunked into rows of posters.
 fn games(l: &Layout, lead_desktop: bool, out: &mut Vec<Row>) {
     let caption = l.sort_caption();
@@ -332,6 +369,27 @@ mod tests {
                 assert_eq!(tiles, &[Tile::Game(0)]);
             }
         }
+    }
+
+    #[test]
+    fn hidden_titles_are_one_grid_with_launchers() {
+        let games = [
+            launcher("steam"),
+            game("a", "Alpha", 0),
+            game("b", "Beta", 0),
+        ];
+        let rows = hidden(&games, SortKey::HostOrder, "", 2, "Hidden for Kid".into());
+        assert_eq!(headings(&rows), ["Hidden for Kid"]);
+        let tiles: Vec<Tile> = rows
+            .iter()
+            .flat_map(|r| match r {
+                Row::Posters { tiles, .. } => tiles.clone(),
+                _ => Vec::new(),
+            })
+            .collect();
+        assert_eq!(tiles.len(), 3, "every hidden title, no desktop: {tiles:?}");
+        assert!(!tiles.contains(&Tile::Desktop));
+        assert!(hidden(&games, SortKey::HostOrder, "zzz", 2, "h".into()).is_empty());
     }
 
     #[test]

@@ -16,6 +16,7 @@ use crate::store::Store;
 use adw::prelude::*;
 use gtk::{gdk, gio, glib};
 use pf_client_core::collate::{GroupBy, SortKey};
+use pf_client_core::hide;
 use pf_client_core::library::{self, GameEntry, LibraryError, RunningGame};
 use pf_client_core::library_layout as layout;
 use pf_client_core::orchestrate::HostTarget;
@@ -70,6 +71,21 @@ pub struct View {
     pub columns: Cell<usize>,
     pub art: Rc<art::Art>,
     pub sender: relm4::Sender<LibraryMsg>,
+    /// The name of the profile this shelf plays as, while the box lets this device hide its
+    /// titles ([`hide::offer`]).
+    pub hides: RefCell<Option<String>>,
+    /// What that profile hides, shown dimmed in the shelf's place while asked for.
+    pub hidden: RefCell<Option<Vec<GameEntry>>>,
+}
+
+impl View {
+    /// The titles the rows index: the catalog, or the hidden ones while they show.
+    pub fn with_titles<T>(&self, f: impl FnOnce(&[GameEntry]) -> T) -> T {
+        match self.hidden.borrow().as_deref() {
+            Some(hidden) => f(hidden),
+            None => f(&self.games.borrow()),
+        }
+    }
 }
 
 pub struct LibraryInit {
@@ -101,6 +117,13 @@ pub enum LibraryMsg {
     Shortcut(String),
     EndGame(String),
     Ended(u64, library::GameEnd, String, Vec<RunningGame>),
+    /// Hide a title for the shelf's profile, or show one again (`false`).
+    SetHidden(String, bool),
+    /// What the host made of it, for the shelf of that generation.
+    HiddenSet(u64, String, bool, hide::Outcome),
+    /// Show what the shelf's profile hides in its place, or the shelf again.
+    ShowHidden(bool),
+    HiddenListed(u64, Result<Vec<GameEntry>, LibraryError>),
     FocusSearch,
     /// The shelf's host no longer takes this device's pin: pair again.
     Pair,
@@ -115,6 +138,8 @@ pub enum Loaded {
     Cached(Vec<GameEntry>),
     Fetched(Result<Vec<GameEntry>, library::LibraryError>),
     Running(Vec<RunningGame>),
+    /// The shelf's profile by name, where the box lets this device hide its titles.
+    Hides(Option<String>),
 }
 
 #[derive(Debug)]
@@ -122,6 +147,8 @@ pub enum LibraryOutput {
     Connect(ConnectRequest),
     WakeConnect(ConnectRequest),
     Toast(String),
+    /// A title left the shelf: the line, and the title's id that Undo shows again.
+    Hidden(String, String),
     ShowHosts,
     Pair(ConnectRequest),
 }
@@ -146,6 +173,11 @@ pub struct LibraryPage {
     drawn: Vec<Row>,
     /// The shelves and the selection the chip bar shows; a refresh that changes neither keeps it.
     chips_drawn: Option<Chips>,
+    /// Titles hidden from this shelf that it may show again: those hidden here, and the
+    /// hidden list's. A title shown again comes back as it was.
+    hidden_titles: HashMap<String, GameEntry>,
+    /// The page the shelf showed before its hidden titles took its place.
+    shelf_page: Option<glib::GString>,
     widgets: Widgets,
 }
 
@@ -164,6 +196,10 @@ struct Widgets {
     search_bar: gtk::SearchBar,
     search_entry: gtk::SearchEntry,
     sort: gio::SimpleAction,
+    /// Shows what the shelf's profile hides; there only where it may hide titles.
+    hidden: gtk::ToggleButton,
+    /// Says nothing is hidden.
+    none_hidden: adw::StatusPage,
 }
 
 impl SimpleComponent for LibraryPage {
@@ -198,6 +234,8 @@ impl SimpleComponent for LibraryPage {
             columns: Cell::new(4),
             art: Rc::default(),
             sender: sender.input_sender().clone(),
+            hides: RefCell::default(),
+            hidden: RefCell::default(),
         });
 
         let canvas = canvas::Canvas::new(&view, MAX_WIDTH);
@@ -243,6 +281,10 @@ impl SimpleComponent for LibraryPage {
             ),
             Some("nohost"),
         );
+        let none_hidden = adw::StatusPage::builder()
+            .icon_name("view-conceal-symbolic")
+            .build();
+        stack.add_named(&none_hidden, Some("nohidden"));
 
         let (header, bar) = crate::widgets::chrome::destination_header(&views, &narrow);
         let reload = crate::widgets::lucide::button("refresh-cw");
@@ -263,6 +305,14 @@ impl SimpleComponent for LibraryPage {
                 g
             }),
         );
+        let hidden = gtk::ToggleButton::builder()
+            .child(&crate::widgets::lucide::row_icon("eye-off"))
+            .visible(false)
+            .build();
+        {
+            let sender = sender.clone();
+            hidden.connect_toggled(move |b| sender.input(LibraryMsg::ShowHidden(b.is_active())));
+        }
         let customize = gtk::MenuButton::builder()
             .child(&crate::widgets::lucide::row_icon("sliders-horizontal"))
             .popover(&customize::popover(&store))
@@ -297,10 +347,11 @@ impl SimpleComponent for LibraryPage {
             .bidirectional()
             .sync_create()
             .build();
-        // Packed inward from the right: menu, customize, sort, search.
+        // Packed inward from the right: menu, customize, sort, hidden, search.
         header.pack_end(&crate::widgets::chrome::primary_menu());
         header.pack_end(&customize);
         header.pack_end(&arrange);
+        header.pack_end(&hidden);
         header.pack_end(&search_toggle);
 
         // A remembered shelf says so until the host answers.
@@ -353,6 +404,8 @@ impl SimpleComponent for LibraryPage {
             canvas,
             chips_drawn: None,
             drawn: Vec::new(),
+            hidden_titles: HashMap::new(),
+            shelf_page: None,
             widgets: Widgets {
                 root,
                 chips,
@@ -364,6 +417,8 @@ impl SimpleComponent for LibraryPage {
                 search_bar,
                 search_entry,
                 sort,
+                hidden,
+                none_hidden,
             },
         };
         model.refresh();
@@ -392,6 +447,7 @@ impl SimpleComponent for LibraryPage {
                     ))),
                 }
             }
+            LibraryMsg::Reload if self.view.hidden.borrow().is_some() => self.load_hidden(),
             LibraryMsg::Reload => self.load(true),
             LibraryMsg::Loaded(generation, loaded) => {
                 if generation == self.generation {
@@ -465,6 +521,25 @@ impl SimpleComponent for LibraryPage {
                 }
             }
             LibraryMsg::EndGame(id) => self.confirm_end(&id),
+            LibraryMsg::SetHidden(id, hidden) => self.set_hidden(id, hidden),
+            LibraryMsg::HiddenSet(generation, id, hidden, outcome) => {
+                let name = self.view.hides.borrow().clone().unwrap_or_default();
+                let notice = outcome.notice(hidden, &self.title(&id), &name);
+                let done = outcome == hide::Outcome::Done;
+                if done && generation == self.generation {
+                    self.moved(&id, hidden);
+                }
+                out(match done && hidden {
+                    true => LibraryOutput::Hidden(notice, id),
+                    false => LibraryOutput::Toast(notice),
+                });
+            }
+            LibraryMsg::ShowHidden(on) => self.show_hidden(on),
+            LibraryMsg::HiddenListed(generation, listed) => {
+                if generation == self.generation && self.view.hidden.borrow().is_some() {
+                    self.hidden_listed(listed);
+                }
+            }
             LibraryMsg::Ended(generation, outcome, title, running) => {
                 out(LibraryOutput::Toast(outcome.notice(&title)));
                 if generation == self.generation {
@@ -593,12 +668,14 @@ fn status_page(
 fn title_actions(sender: &ComponentSender<LibraryPage>) -> gio::SimpleActionGroup {
     let group = gio::SimpleActionGroup::new();
     type Act = (&'static str, fn(String) -> LibraryMsg);
-    let acts: [Act; 5] = [
+    let acts: [Act; 7] = [
         ("play", LibraryMsg::Play),
         ("favorite", LibraryMsg::ToggleFavorite),
         ("details", LibraryMsg::Details),
         ("copy-link", LibraryMsg::CopyLink),
         ("end-game", LibraryMsg::EndGame),
+        ("hide", |id| LibraryMsg::SetHidden(id, true)),
+        ("show", |id| LibraryMsg::SetHidden(id, false)),
     ];
     for (name, msg) in acts {
         let action = gio::SimpleAction::new(name, Some(glib::VariantTy::STRING));
@@ -813,6 +890,13 @@ impl LibraryPage {
             .as_deref()
             .and_then(crate::trust::parse_hex32);
         if new_shelf {
+            // Another shelf plays as its own profile, asked anew.
+            *self.view.hidden.borrow_mut() = None;
+            *self.view.hides.borrow_mut() = None;
+            self.hidden_titles.clear();
+            self.shelf_page = None;
+            self.widgets.hidden.set_active(false);
+            self.widgets.hidden.set_visible(false);
             self.view.games.borrow_mut().clear();
             self.view.running.borrow_mut().clear();
             self.view.art.reset(Some(library::HostApi::new(
@@ -867,19 +951,34 @@ impl LibraryPage {
                 if !send(Loaded::Fetched(fetched.map(|(games, _)| games))) {
                     return;
                 }
-                send(Loaded::Running(library::fetch_running(
-                    &addr,
-                    port,
-                    stream_port,
-                    &identity,
-                    pin,
-                )));
+                let running = library::fetch_running(&addr, port, stream_port, &identity, pin);
+                if !send(Loaded::Running(running)) {
+                    return;
+                }
+                // The profile's own enumerate row says whether this device may hide its titles.
+                if let Some(pick) = profile.as_deref() {
+                    let listed = pf_client_core::profiles::fetch_enumerate(
+                        &addr,
+                        port,
+                        stream_port,
+                        &identity,
+                        pin,
+                    );
+                    let listed = listed.ok().flatten();
+                    let offer = hide::offer(listed.as_deref(), Some(pick));
+                    send(Loaded::Hides(offer.map(|r| r.display_name.clone())));
+                }
             })
             .expect("spawn library thread");
     }
 
     fn loaded_step(&mut self, loaded: Loaded) {
         let w = &self.widgets;
+        // While the hidden titles show, the shelf's own page waits behind them.
+        let page = |name: &str, waiting: &mut Option<glib::GString>| match waiting {
+            Some(waiting) => *waiting = name.into(),
+            None => w.stack.set_visible_child_name(name),
+        };
         match loaded {
             Loaded::Cached(games) => {
                 w.banner.set_button_label(None);
@@ -887,19 +986,29 @@ impl LibraryPage {
                 w.banner.set_revealed(true);
                 *self.view.games.borrow_mut() = games;
                 self.drawn.clear();
-                w.stack.set_visible_child_name("rows");
+                page("rows", &mut self.shelf_page);
             }
             Loaded::Fetched(Ok(games)) => {
                 w.banner.set_revealed(false);
                 *self.view.games.borrow_mut() = games;
                 self.drawn.clear();
-                w.stack.set_visible_child_name("rows");
+                page("rows", &mut self.shelf_page);
+            }
+            Loaded::Hides(name) => {
+                w.hidden.set_visible(name.is_some());
+                match &name {
+                    Some(name) => w
+                        .hidden
+                        .set_tooltip_text(Some(&client::lib_hidden_for(name))),
+                    None => w.hidden.set_active(false),
+                }
+                *self.view.hides.borrow_mut() = name;
             }
             Loaded::Fetched(Err(e)) => {
                 tracing::info!(error = %e, "library not fetched");
                 let name = self.shelf().map(|s| s.req.host.name).unwrap_or_default();
                 let pair = matches!(e, LibraryError::PinMismatch | LibraryError::NotPaired);
-                if self.view.games.borrow().is_empty() {
+                if self.view.games.borrow().is_empty() && self.shelf_page.is_none() {
                     w.error.set_description(Some(&failure(&e, &name)));
                     w.retry.set_visible(!pair);
                     w.pair.set_visible(pair);
@@ -961,8 +1070,13 @@ impl LibraryPage {
     fn relayout(&mut self) {
         let started = std::time::Instant::now();
         let sections = layout::sections(&self.store.settings().library_sections);
-        let rows = {
-            let (games, favorites) = (self.view.games.borrow(), self.view.favorites.borrow());
+        let view = Rc::clone(&self.view);
+        let rows = if let Some(hidden) = view.hidden.borrow().as_deref() {
+            let name = view.hides.borrow().clone().unwrap_or_default();
+            let heading = client::lib_hidden_for(&name);
+            rows::hidden(hidden, self.sort, &self.search, self.columns, heading)
+        } else {
+            let (games, favorites) = (view.games.borrow(), view.favorites.borrow());
             rows::rows(&rows::Layout {
                 games: &games,
                 sections: &sections,
@@ -971,7 +1085,7 @@ impl LibraryPage {
                 group: self.group,
                 search: &self.search,
                 columns: self.columns,
-                desktops: (self.view.desktops.borrow().iter())
+                desktops: (view.desktops.borrow().iter())
                     .map(|d| format!("{}\0{}\0{}\0{}", d.req.card_key(), d.name, d.os, d.playing))
                     .collect(),
             })
@@ -987,13 +1101,145 @@ impl LibraryPage {
         self.drawn = rows;
     }
 
+    /// Title `id`'s name: on the shelf, on the hidden list, or hidden from here.
     fn title(&self, id: &str) -> String {
-        self.view
-            .games
+        let find = |games: &[GameEntry]| games.iter().find(|g| g.id == id).map(|g| g.title.clone());
+        find(&self.view.games.borrow())
+            .or_else(|| self.view.with_titles(find))
+            .or_else(|| self.hidden_titles.get(id).map(|g| g.title.clone()))
+            .unwrap_or_else(|| id.to_string())
+    }
+
+    /// The shelf's host as this device reaches its management lane.
+    fn shelf_api(&self) -> Option<(String, library::HostApi)> {
+        let shelf = self.shelf()?;
+        let profile = shelf.profile?;
+        let pin = (shelf.req.host.fp_hex.as_deref()).and_then(crate::trust::parse_hex32);
+        let (addr, port) = (&shelf.req.host.addr, shelf.req.host.port);
+        let api = library::HostApi::new(addr, shelf.mgmt_port, port, &self.identity, pin);
+        Some((profile, api))
+    }
+
+    /// Hide (`hidden`) or show title `id` for the shelf's profile, on a worker. The host's
+    /// answer comes back as [`LibraryMsg::HiddenSet`].
+    fn set_hidden(&self, id: String, hidden: bool) {
+        let Some((profile, api)) = self.shelf_api() else {
+            return;
+        };
+        let (sender, generation) = (self.view.sender.clone(), self.generation);
+        std::thread::Builder::new()
+            .name("punktfunk-hide".into())
+            .spawn(move || {
+                let outcome = hide::set_hidden(&api, &profile, &id, hidden);
+                let _ = sender.send(LibraryMsg::HiddenSet(generation, id, hidden, outcome));
+            })
+            .expect("spawn hide thread");
+    }
+
+    /// The host took title `id` off the shelf (`hidden`) or gave it back. The shelf, the hidden
+    /// list and the cached catalog follow, with no new fetch.
+    fn moved(&mut self, id: &str, hidden: bool) {
+        let back = if hidden {
+            let mut games = self.view.games.borrow_mut();
+            if let Some(at) = games.iter().position(|g| g.id == id) {
+                self.hidden_titles.insert(id.into(), games.remove(at));
+            }
+            None
+        } else {
+            if let Some(list) = self.view.hidden.borrow_mut().as_mut() {
+                list.retain(|g| g.id != id);
+            }
+            let back = self.hidden_titles.remove(id);
+            let mut games = self.view.games.borrow_mut();
+            if let Some(g) = back.clone().filter(|_| !games.iter().any(|g| g.id == id)) {
+                games.push(g);
+            }
+            back
+        };
+        if let Some(shelf) = self.shelf() {
+            if let Some(fp) = &shelf.req.host.fp_hex {
+                let profile = shelf.profile.as_deref();
+                pf_client_core::library_cache::note_hidden(fp, profile, id, back.as_ref());
+            }
+        }
+        if self
+            .view
+            .hidden
             .borrow()
-            .iter()
-            .find(|g| g.id == id)
-            .map_or_else(|| id.to_string(), |g| g.title.clone())
+            .as_ref()
+            .is_some_and(Vec::is_empty)
+        {
+            self.widgets.stack.set_visible_child_name("nohidden");
+        }
+        self.drawn.clear();
+        self.relayout();
+    }
+
+    /// Show what the shelf's profile hides in the shelf's place (`on`), asked of the host now,
+    /// or the shelf again.
+    fn show_hidden(&mut self, on: bool) {
+        if on == self.view.hidden.borrow().is_some() {
+            return;
+        }
+        let name = self.view.hides.borrow().clone();
+        match (on, name) {
+            (true, Some(name)) => {
+                let none = &self.widgets.none_hidden;
+                none.set_title(&client::lib_hidden_for(&name));
+                none.set_description(Some(&client::lib_hidden_none(&name)));
+                self.shelf_page = self.widgets.stack.visible_child_name();
+                *self.view.hidden.borrow_mut() = Some(Vec::new());
+                self.load_hidden();
+            }
+            (true, None) => self.widgets.hidden.set_active(false),
+            (false, _) => {
+                *self.view.hidden.borrow_mut() = None;
+                if let Some(page) = self.shelf_page.take() {
+                    self.widgets.stack.set_visible_child_name(&page);
+                }
+            }
+        }
+        self.drawn.clear();
+        self.relayout();
+    }
+
+    /// Ask the host what the shelf's profile hides, on a worker.
+    fn load_hidden(&mut self) {
+        let Some((profile, api)) = self.shelf_api() else {
+            return;
+        };
+        self.widgets.stack.set_visible_child_name("loading");
+        let (sender, generation) = (self.view.sender.clone(), self.generation);
+        std::thread::Builder::new()
+            .name("punktfunk-hidden".into())
+            .spawn(move || {
+                let listed = hide::fetch_hidden_from(&api, &profile);
+                let _ = sender.send(LibraryMsg::HiddenListed(generation, listed));
+            })
+            .expect("spawn hidden-list thread");
+    }
+
+    fn hidden_listed(&mut self, listed: Result<Vec<GameEntry>, LibraryError>) {
+        let w = &self.widgets;
+        match listed {
+            Ok(games) => {
+                let known = games.iter().map(|g| (g.id.clone(), g.clone()));
+                self.hidden_titles.extend(known);
+                let page = if games.is_empty() { "nohidden" } else { "rows" };
+                *self.view.hidden.borrow_mut() = Some(games);
+                w.stack.set_visible_child_name(page);
+            }
+            Err(e) => {
+                tracing::info!(error = %e, "hidden titles not fetched");
+                let name = self.shelf().map(|s| s.req.host.name).unwrap_or_default();
+                w.error.set_description(Some(&failure(&e, &name)));
+                w.retry.set_visible(true);
+                w.pair.set_visible(false);
+                w.stack.set_visible_child_name("error");
+            }
+        }
+        self.drawn.clear();
+        self.relayout();
     }
 
     /// A title's `punktfunk://` link and a launcher label for it. A pinned shelf's preset rides
