@@ -27,9 +27,6 @@ import IOKit.hid
 private let log = ClientLog(category: "gamepad")
 
 final class Sc2UsbLink {
-    /// Per-report diagnostics. Lifecycle milestones always log; flip this only to debug the seam.
-    private static let verbose = false
-
     /// The queue every IOKit callback and every mutation below runs on — owned by `Sc2Capture`,
     /// USER_INTERACTIVE for the same reason the BLE link's is (a stalled consumer drops reports).
     private let queue: DispatchQueue
@@ -408,9 +405,6 @@ final class Sc2UsbLink {
             framed = [UInt8](repeating: 0, count: min(Int(len), Self.reportBufSize - 1) + 1)
             framed[0] = id
             for i in 1..<framed.count { framed[i] = report[i - 1] }
-        }
-        if Self.verbose {
-            log.debug("SC2 USB in: \(framed.map { String(format: "%02x", $0) }.joined(), privacy: .public)")
         }
         onReport(source, framed)
     }

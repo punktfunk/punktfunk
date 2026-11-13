@@ -21,11 +21,6 @@ import Foundation
 private let log = ClientLog(category: "gamepad")
 
 final class Sc2BleLink: NSObject {
-    /// Per-frame / per-write diagnostics (raw hex, per-characteristic props). Lifecycle
-    /// milestones (acquire/connect/census/ready/disconnect) always log; flip this only to debug
-    /// the BLE seam.
-    private static let verbose = false
-
     /// How long `stop()` holds the connection open for the lizard restore to land.
     private static let restoreWait: DispatchTimeInterval = .milliseconds(150)
 
@@ -33,9 +28,6 @@ final class Sc2BleLink: NSObject {
     private let inputCB = CBUUID(string: Sc2Device.inputCharUUID)
     private let reportCB = CBUUID(string: Sc2Device.reportCharUUID)
     private let classicInputCB = CBUUID(string: Sc1Device.bleInputCharUUID)
-    /// Report 0x47's characteristic. Never subscribed (see `Sc2Device.timestampCharUUID`); held
-    /// here only so the sweep can exclude a known-purpose characteristic by UUID.
-    private let timestampCB = CBUUID(string: Sc2Device.timestampCharUUID)
     /// Device Information — every BLE device exposes it, which is what makes it the handle for
     /// `retrieveConnectedPeripherals` (the OS-paired controller is NOT advertising).
     private let deviceInfoCB = CBUUID(string: "180A")
@@ -91,9 +83,6 @@ final class Sc2BleLink: NSObject {
     private var reportChar: CBCharacteristic?
     /// uuid (lowercase) → characteristic, for the per-report output routing.
     private var allChars: [String: CBCharacteristic] = [:]
-    /// Writable characteristics in discovery order — the sweep fallback for a firmware whose
-    /// output chars are not at id+0x35.
-    private var candidateChars: [CBCharacteristic] = []
     private var scanning = false
     private var polling = false
     private var ready = false
@@ -101,8 +90,6 @@ final class Sc2BleLink: NSObject {
     /// `stop()` wrote the lizard restore and is waiting for it to land — see `finishStop`.
     private var pendingStop = false
     private var lizardSends = 0
-    private var sweepCounter = 0
-    private var inCounter = 0
     /// Output report ids already reported as having no characteristic on this firmware — the
     /// unknown-firmware signal is worth exactly one line per id, not one per resend at 25-40 ms.
     private var unmappedIds: Set<UInt8> = []
@@ -192,7 +179,6 @@ final class Sc2BleLink: NSObject {
         reportChar = nil
         setClassic(false)
         allChars.removeAll()
-        candidateChars.removeAll()
         pendingWrites.removeAll()
         scanning = false
         polling = false
@@ -240,7 +226,7 @@ final class Sc2BleLink: NSObject {
                 // declared length (Sc2Device.outputWrite).
                 guard let write = Sc2Device.outputWrite(frame: frame) else { return }
                 payload = write.payload
-                target = allChars[write.charUUID] ?? sweepCandidate(id: frame[0])
+                target = allChars[write.charUUID]
                 // A miss means this firmware does not put report `id` at 100F6C<id+0x35>. There
                 // is no safe way to recover it live — ten output characteristics share one
                 // property mask and nothing distinguishes rumble from a trackpad pulse, so any
@@ -260,10 +246,6 @@ final class Sc2BleLink: NSObject {
                 target = reportChar
             }
             guard let target else { return }
-            if Self.verbose {
-                let hex = payload.prefix(13).map { String(format: "%02x", $0) }.joined(separator: " ")
-                log.debug("SC2 write kind=\(kind) id=0x\(String(format: "%02x", frame[0])) \(payload.count)B: \(hex)")
-            }
             // OUTPUT prefers unacked writes (the 25-40 ms rumble resend rate must not queue
             // behind acks); FEATURE prefers acked. Either way honor what the char offers.
             let wantAck = kind != 0
@@ -360,28 +342,6 @@ final class Sc2BleLink: NSObject {
         let serial = String(decoding: unit.dropFirst(4).prefix { $0 != 0 }, as: UTF8.self)
         log.info("SC2: identity \(serial, privacy: .public), \(job.replies.count)/\(job.requests.count) replies")
         job.done(.init(serial: serial, replies: job.replies))
-    }
-
-    /// Firmware without a per-report characteristic at id+0x35: rotate through the writable
-    /// candidates (~1 s each at the 25 Hz resend rate) to find where its outputs live. This is
-    /// how the real map was found on the bench, and it stays for the next unknown firmware.
-    ///
-    /// ⚠ BENCH TOOL — gated off in shipping builds, because it does not converge. Nothing here
-    /// observes whether a write produced haptics, so there is no success signal to latch: the
-    /// rotation runs for the life of the session, and on an unknown firmware MOST output frames
-    /// land on the wrong characteristic forever rather than eventually settling on the right one
-    /// (with N candidates the correct one is live 1 second in every N). That is not a fallback
-    /// that degrades gracefully — losing haptics on such a pad is the better failure than feeding
-    /// output payloads to parsers we have not identified. Flip `verbose` to map a new firmware,
-    /// then add its ids to `Sc2Device.outputCharUUID`.
-    private func sweepCandidate(id: UInt8) -> CBCharacteristic? {
-        guard Self.verbose, !candidateChars.isEmpty else { return nil }
-        let index = (sweepCounter / 25) % candidateChars.count
-        if sweepCounter % 25 == 0 {
-            log.info("SC2: no per-report char for id=0x\(String(format: "%02x", id)) — sweeping candidate \(index)")
-        }
-        sweepCounter += 1
-        return candidateChars[index]
     }
 
     // MARK: - Acquisition (mirroring Valve's own SDL hid.m)
@@ -521,7 +481,6 @@ extension Sc2BleLink: CBCentralManagerDelegate {
         reportChar = nil
         setClassic(false)
         allChars.removeAll()
-        candidateChars.removeAll()
         pendingWrites.removeAll()
         onClosed() // the capture releases its wire slot
         finishIdentity() // after the release, so the claim it ends finds its entry gone
@@ -554,19 +513,8 @@ extension Sc2BleLink: CBPeripheralDelegate {
             allChars[uuid] = ch
             if !ch.properties.isDisjoint(with: [.write, .writeWithoutResponse]) {
                 writable += 1
-                // ⚠ A characteristic whose purpose is KNOWN is never a sweep candidate. 100F6C34
-                // is writable (props 0x0a) and parses what it receives as a settings command
-                // (`0x87` = write register/value, the lizard-off and gyro-enable path), so an
-                // output payload swept onto it can persist an arbitrary firmware setting on the
-                // user's own controller. Counted in the census, excluded from the rotation.
-                if ![reportCB, inputCB, timestampCB, classicInputCB].contains(ch.uuid) {
-                    candidateChars.append(ch)
-                }
             }
             if ch.properties.contains(.notify) { notifying += 1 }
-            if Self.verbose {
-                log.debug("SC2 char \(uuid) props=0x\(String(ch.properties.rawValue, radix: 16))")
-            }
             if ch.uuid == inputCB {
                 inputChar = ch
                 peripheral.setNotifyValue(true, for: ch)
@@ -646,14 +594,9 @@ extension Sc2BleLink: CBPeripheralDelegate {
         } else if characteristic.uuid == inputCB {
             guard !pendingStop else { return }
             let framed = Sc2Device.frameIncoming([UInt8](data))
-            inCounter += 1
             if !ready {
                 ready = true
                 log.info("SC2: first input report (\(data.count) B) — device live")
-            }
-            if Self.verbose, inCounter <= 8 || inCounter % 200 == 0 {
-                let hex = data.prefix(32).map { String(format: "%02x", $0) }.joined(separator: " ")
-                log.debug("SC2 in #\(inCounter) len=\(data.count) raw: \(hex)")
             }
             onReport(framed)
         } else if characteristic.uuid == reportCB {

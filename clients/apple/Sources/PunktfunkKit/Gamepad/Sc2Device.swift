@@ -66,10 +66,6 @@ enum Sc2Device {
     /// characteristic VALUE carries NO report-id byte (the id is implied by the UUID): without
     /// re-prepending 0x45 an id-keyed consumer drops every frame. See `frameIncoming`.
     static let inputCharUUID = "100F6C7A-1735-4313-B402-38567131E5F3"
-    /// Timestamp characteristic (notify): report 0x47. Never subscribed, as on Android: the gyro
-    /// does not ride it (the IMU streams inside the SAME 0x45 report once enabled). The constant
-    /// stays for the connect-time characteristic census log.
-    static let timestampCharUUID = "100F6C7C-1735-4313-B402-38567131E5F3"
     /// Report/feature characteristic (write/read; notify on some firmware): where FEATURE
     /// commands land — the hardware-proven gyro-enable/lizard-off path. Props 0x0a on-device.
     static let reportCharUUID = "100F6C34-1735-4313-B402-38567131E5F3"
