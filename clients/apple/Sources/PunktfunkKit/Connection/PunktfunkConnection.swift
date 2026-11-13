@@ -761,14 +761,12 @@ public final class PunktfunkConnection: @unchecked Sendable {
     /// (20 000) when 0 was requested. `0` = an older host that didn't report it.
     public private(set) var resolvedBitrateKbps: UInt32 = 0
 
-    /// What the stream decodes as: the codec, CICP colour, depth and chroma of the newest AU
-    /// `nextAU` handed out. The connect-time format until an AU with `newFormat` moves it, read
-    /// live from the core; the last connect-time value once the session closed.
+    /// What the stream decodes as: the CICP transfer, depth and chroma of the newest AU `nextAU`
+    /// handed out. The connect-time format until an AU with `newFormat` moves it, read live from
+    /// the core; the last connect-time value once the session closed. The decoders read primaries,
+    /// matrix and range off the bitstream.
     public struct StreamFormat: Sendable, Equatable {
-        public var primaries: UInt8 = 1
         public var transfer: UInt8 = 1
-        public var matrix: UInt8 = 1
-        public var fullRange = false
         public var bitDepth: UInt8 = 8
         public var chromaFormat: UInt8 = 1
     }
@@ -783,23 +781,16 @@ public final class PunktfunkConnection: @unchecked Sendable {
     }
 
     private static func readFormat(_ h: OpaquePointer) -> StreamFormat {
-        var prim: UInt8 = 1, trc: UInt8 = 1, mtx: UInt8 = 1, fullRange: UInt8 = 0, depth: UInt8 = 8
-        _ = punktfunk_connection_color_info(h, &prim, &trc, &mtx, &fullRange, &depth)
+        var trc: UInt8 = 1, depth: UInt8 = 8
+        _ = punktfunk_connection_color_info(h, nil, &trc, nil, nil, &depth)
         var chroma: UInt8 = 1
         _ = punktfunk_connection_chroma_format(h, &chroma)
-        return StreamFormat(
-            primaries: prim, transfer: trc, matrix: mtx, fullRange: fullRange != 0,
-            bitDepth: depth, chromaFormat: chroma)
+        return StreamFormat(transfer: trc, bitDepth: depth, chromaFormat: chroma)
     }
 
-    /// The colour signalling the host encodes with now (CICP code points): `colorPrimaries`
-    /// (1=BT.709, 9=BT.2020), `colorTransfer` (1=BT.709, 16=PQ, 18=HLG), `colorMatrix`
-    /// (1=BT.709, 9=BT.2020-NCL), `colorFullRange`. BT.709 limited SDR for an older host. Configure
-    /// the decoder/presenter from these; mastering metadata arrives via `nextHdrMeta`.
-    public var colorPrimaries: UInt8 { streamFormat.primaries }
+    /// The transfer the host encodes with now (CICP: 1=BT.709, 16=PQ, 18=HLG); BT.709 for an
+    /// older host.
     public var colorTransfer: UInt8 { streamFormat.transfer }
-    public var colorMatrix: UInt8 { streamFormat.matrix }
-    public var colorFullRange: Bool { streamFormat.fullRange }
     /// Encoded bit depth (8 or 10).
     public var bitDepth: UInt8 { streamFormat.bitDepth }
     /// The chroma subsampling the host encodes now, as the HEVC `chroma_format_idc`: `1` = 4:2:0
