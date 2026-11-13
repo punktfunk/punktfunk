@@ -78,6 +78,16 @@ final class AnnexBTests: XCTestCase {
         XCTAssertNil(AnnexB.formatDescription(fromIDR: au, codec: .hevc))
     }
 
+    /// The host decides how many parameter sets an AU carries: a flood of them is refused, and
+    /// the stack does not grow with the count.
+    func testFormatDescriptionSurvivesAFloodOfParameterSets() {
+        var au = Data(start4) + nal(type: 32, payload: [0xAA])
+        au.append(Data(start4) + nal(type: 33, payload: [0xBB]))
+        let pps = Data(start3) + nal(type: 34, payload: [0xCC])
+        for _ in 0..<100_000 { au.append(pps) }
+        XCTAssertNil(AnnexB.formatDescription(fromIDR: au, codec: .hevc))
+    }
+
     /// `enter` stops the walk at a NAL's start code: everything before it has been handed to
     /// `body`, and nothing of it or after it is.
     func testEnterStopsTheWalkBeforeANalsPayload() {
