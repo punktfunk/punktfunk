@@ -5,7 +5,8 @@
 //! is the grant — no RemoteDesktop portal and no "Allow remote control?" dialog — so it
 //! works with nobody at the seat. Connect on the session `$WAYLAND_DISPLAY`. Keys are
 //! raw Linux evdev codes; KWin maps them through the session keymap (no keymap upload).
-//! Committed text goes as keysyms (v6, Plasma 6.5+), which KWin types in the session layout.
+//! Committed text goes as keysyms (v6, Plasma 6.5+), which KWin types in the session layout;
+//! the modifiers a character needs go down as real keys around it ([`text_modifiers`]).
 //! Absolute pointer/touch use *logical* compositor pixels (post scale). At scale ≠ 1 the
 //! logical edge is `physical / scale`; a streamed pixel coordinate then lands `scale×`
 //! too far toward the bottom-right. Track each output's logical rectangle via
@@ -24,13 +25,16 @@ use crate::scroll::{ScrollBackend, ScrollMapper, ScrollOp};
 use anyhow::{Context, Result};
 use punktfunk_core::input::InputKind;
 use std::time::{Duration, Instant};
+use wayland_client::protocol::wl_keyboard::{self, WlKeyboard};
 use wayland_client::protocol::wl_output::{self, WlOutput};
 use wayland_client::protocol::wl_registry::{self, WlRegistry};
+use wayland_client::protocol::wl_seat::{self, WlSeat};
 use wayland_client::{Connection, Dispatch, EventQueue, Proxy, QueueHandle, WEnum};
 use wayland_protocols::xdg::xdg_output::zv1::client::{
     zxdg_output_manager_v1::ZxdgOutputManagerV1,
     zxdg_output_v1::{self, ZxdgOutputV1},
 };
+use xkbcommon::xkb;
 
 // Inline scanner (no build.rs). Path is relative to CARGO_MANIFEST_DIR.
 #[allow(clippy::all, dead_code, non_camel_case_types, non_snake_case, unused)]
@@ -98,6 +102,10 @@ struct State {
     fake: Option<FakeInput>,
     xdg_mgr: Option<ZxdgOutputManagerV1>,
     outputs: Vec<OutputTrack>,
+    /// Never focused, so no key arrives: it is here for the keymap KWin sends every keyboard.
+    keyboard: Option<WlKeyboard>,
+    /// The session keymap, replaced whenever KWin sends another.
+    keymap: Option<xkb::Keymap>,
 }
 
 impl State {
@@ -147,6 +155,10 @@ impl Dispatch<WlRegistry, ()> for State {
                     }
                     state.xdg_mgr = Some(mgr);
                 }
+                // `capabilities` says when the seat has a keyboard to ask for.
+                "wl_seat" => {
+                    let _: WlSeat = registry.bind(name, version.min(7), qh, ());
+                }
                 _ => {}
             },
             wl_registry::Event::GlobalRemove { name } => {
@@ -180,6 +192,59 @@ impl Dispatch<FakeInput, ()> for State {
         _: &Connection,
         _: &QueueHandle<Self>,
     ) {
+    }
+}
+
+impl Dispatch<WlSeat, ()> for State {
+    fn event(
+        state: &mut Self,
+        seat: &WlSeat,
+        event: wl_seat::Event,
+        _: &(),
+        _: &Connection,
+        qh: &QueueHandle<Self>,
+    ) {
+        if let wl_seat::Event::Capabilities {
+            capabilities: WEnum::Value(caps),
+        } = event
+        {
+            if caps.contains(wl_seat::Capability::Keyboard) && state.keyboard.is_none() {
+                state.keyboard = Some(seat.get_keyboard(qh, ()));
+            }
+        }
+    }
+}
+
+impl Dispatch<WlKeyboard, ()> for State {
+    fn event(
+        state: &mut Self,
+        _: &WlKeyboard,
+        event: wl_keyboard::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        if let wl_keyboard::Event::Keymap {
+            format: WEnum::Value(wl_keyboard::KeymapFormat::XkbV1),
+            fd,
+            size,
+        } = event
+        {
+            // Read, not mapped: a file KWin shrinks under a mapping would fault this thread.
+            // From offset 0, whatever the descriptor's own position is.
+            use std::os::unix::fs::FileExt as _;
+            let mut text = vec![0; size as usize];
+            if std::fs::File::from(fd).read_exact_at(&mut text, 0).is_err() {
+                return;
+            }
+            // The file ends in a NUL the size counts.
+            let text = String::from_utf8_lossy(&text);
+            let text = text.trim_end_matches('\0').to_owned();
+            let ctx = xkb::Context::new(xkb::CONTEXT_NO_FLAGS);
+            let format = xkb::KEYMAP_FORMAT_TEXT_V1;
+            let flags = xkb::KEYMAP_COMPILE_NO_FLAGS;
+            state.keymap = xkb::Keymap::new_from_string(&ctx, text, format, flags);
+        }
     }
 }
 
@@ -260,6 +325,8 @@ pub struct KwinFakeInjector {
     scroll: ScrollMapper,
     /// What this device holds, released before it goes ([`Drop`]).
     plan: Plan,
+    /// The session bus, opened for the first [`active_layout`] ask.
+    bus: Option<zbus::blocking::Connection>,
 }
 
 /// Cap geometry roundtrips at 2 Hz. A roundtrip on every mouse-move would stall the control path.
@@ -310,8 +377,83 @@ pub(crate) fn keysym_supported() -> bool {
 /// The keysym that types `cp`. `None` for a control character (Enter and Tab ride the VK path).
 fn text_keysym(cp: u32) -> Option<u32> {
     char::from_u32(cp).filter(|c| !c.is_control())?;
-    let sym = xkbcommon::xkb::utf32_to_keysym(cp).raw();
-    (sym != xkbcommon::xkb::keysyms::KEY_NoSymbol).then_some(sym)
+    let sym = xkb::utf32_to_keysym(cp).raw();
+    (sym != xkb::keysyms::KEY_NoSymbol).then_some(sym)
+}
+
+/// The keys a layout or its options may make a level chooser, as evdev codes: Left Shift,
+/// Right Alt, Right Ctrl, Left Alt, both Meta keys, Menu, Caps Lock and the 102nd key.
+const LEVEL_KEYS: [u16; 9] = [42, 100, 97, 56, 125, 126, 127, 58, 86];
+
+/// The evdev keys to hold so `sym` types in `layout`: the modifier keys of the level KWin's
+/// keysym request picks, its first key and level carrying `sym`. KWin sets that level's
+/// modifiers in its state only, and an input method holding the keyboard grab then sees the key
+/// before them and hands back a stuck Shift. Held as real keys they reach it first.
+/// Empty for a level that needs none, a keysym the layout lacks (KWin types those from a
+/// scratch keymap), and modifiers no [`LEVEL_KEYS`] key sets.
+fn text_modifiers(keymap: &xkb::Keymap, layout: u32, sym: u32) -> Vec<u16> {
+    let codes = keymap.min_keycode().raw()..keymap.max_keycode().raw();
+    let level_mods = codes.into_iter().find_map(|code| {
+        let key = xkb::Keycode::new(code);
+        (0..keymap.num_levels_for_key(key, layout)).find_map(|level| {
+            let syms = keymap.key_get_syms_by_level(key, layout, level);
+            // KWin takes the first way to reach the level; none leaves the mask empty.
+            let mut masks = [0];
+            let _ = keymap.key_get_mods_for_level(key, layout, level, &mut masks);
+            syms.iter().any(|s| s.raw() == sym).then_some(masks[0])
+        })
+    });
+    let mut need = level_mods.unwrap_or(0);
+    let mut keys = Vec::new();
+    for key in LEVEL_KEYS {
+        if need == 0 {
+            break;
+        }
+        // What this key alone does to a fresh state: a plain modifier key depresses its
+        // modifiers and latches or locks nothing.
+        let mut state = xkb::State::new(keymap);
+        state.update_mask(0, 0, 0, 0, 0, layout);
+        // xkb keycodes are evdev + 8
+        state.update_key(
+            xkb::Keycode::new(u32::from(key) + 8),
+            xkb::KeyDirection::Down,
+        );
+        let down = state.serialize_mods(xkb::STATE_MODS_DEPRESSED);
+        let kept = state.serialize_mods(xkb::STATE_MODS_LATCHED | xkb::STATE_MODS_LOCKED);
+        if down != 0 && down & !need == 0 && kept == 0 {
+            keys.push(key);
+            need &= !down;
+        }
+    }
+    if need == 0 {
+        keys
+    } else {
+        Vec::new()
+    }
+}
+
+/// The index of KWin's active layout in `keymap`. A client without focus hears of no layout
+/// switch, so a keymap with several asks KWin's `org.kde.keyboard` service. `None` when KWin
+/// gives no usable answer.
+fn active_layout(
+    bus: &mut Option<zbus::blocking::Connection>,
+    keymap: &xkb::Keymap,
+) -> Option<u32> {
+    if keymap.num_layouts() <= 1 {
+        return Some(0);
+    }
+    if bus.is_none() {
+        *bus = zbus::blocking::Connection::session().ok();
+    }
+    let reply = bus.as_ref()?.call_method(
+        Some("org.kde.keyboard"),
+        "/Layouts",
+        Some("org.kde.KeyboardLayouts"),
+        "getLayout",
+        &(),
+    );
+    let layout: u32 = reply.ok()?.body().deserialize().ok()?;
+    (layout < keymap.num_layouts()).then_some(layout)
 }
 
 impl KwinFakeInjector {
@@ -347,6 +489,7 @@ impl KwinFakeInjector {
             last_refresh: None,
             scroll: ScrollMapper::new(ScrollBackend::Kwin),
             plan: Plan::default(),
+            bus: None,
         };
         injector.refresh_geometry();
         tracing::info!(
@@ -356,9 +499,9 @@ impl KwinFakeInjector {
         Ok(injector)
     }
 
-    /// Throttled to [`GEO_REFRESH`]. A wl_output that appeared this round only gets
-    /// `xdg_output` mid-dispatch, so `logical_size` lands on a later roundtrip — loop
-    /// (bounded) until every output has a size.
+    /// Read what KWin sent: output geometry and the keymap. Throttled to [`GEO_REFRESH`]. A
+    /// wl_output that appeared this round only gets `xdg_output` mid-dispatch, so
+    /// `logical_size` lands on a later roundtrip — loop (bounded) until every output has a size.
     fn refresh_geometry(&mut self) {
         let now = Instant::now();
         if let Some(t) = self.last_refresh {
@@ -405,8 +548,25 @@ impl KwinFakeInjector {
         (lx + nx * lw, ly + ny * lh)
     }
 
+    /// The modifier keys to hold around `sym`'s tap ([`text_modifiers`]), less those the
+    /// client holds itself: lifting one of those would end the client's own hold. None when
+    /// the keymap or the active layout is unknown.
+    fn text_hold(&mut self, sym: u32) -> Vec<u16> {
+        self.refresh_geometry();
+        let Some(keymap) = self.state.keymap.clone() else {
+            return Vec::new();
+        };
+        let Some(layout) = active_layout(&mut self.bus, &keymap) else {
+            return Vec::new();
+        };
+        let mut keys = text_modifiers(&keymap, layout, sym);
+        keys.retain(|&key| !self.plan.holds(key));
+        keys
+    }
+
     /// Emit one planned op. Keys are evdev codes; KWin owns the keymap and modifier state, so
-    /// there is no modifiers request. Text is a keysym tap. A touch is one frame per event.
+    /// there is no modifiers request. Text is a keysym tap inside the modifier keys it needs.
+    /// A touch is one frame per event.
     fn emit(&mut self, op: Op) {
         match op {
             Op::Motion { dx, dy } => self.fake.pointer_motion(dx.into(), dy.into()),
@@ -433,8 +593,15 @@ impl KwinFakeInjector {
             // Below v6 there is no keysym request, and the host offers no text.
             Op::Text(cp) => {
                 if let Some(sym) = text_keysym(cp).filter(|_| self.fake.version() >= MAX_VERSION) {
+                    let held = self.text_hold(sym);
+                    for &key in &held {
+                        self.fake.keyboard_key(key.into(), 1);
+                    }
                     self.fake.keyboard_keysym(sym, 1);
                     self.fake.keyboard_keysym(sym, 0);
+                    for &key in held.iter().rev() {
+                        self.fake.keyboard_key(key.into(), 0);
+                    }
                 }
             }
         }
@@ -487,7 +654,58 @@ impl InputInjector for KwinFakeInjector {
 
 #[cfg(test)]
 mod tests {
-    use super::text_keysym;
+    use super::{text_keysym, text_modifiers};
+    use xkbcommon::xkb;
+
+    /// Each character holds the real modifier keys of its level in the active layout, and
+    /// none where KWin's own keysym tap is enough.
+    #[test]
+    fn text_holds_the_modifier_keys_its_level_needs() {
+        const SHIFT: u16 = 42;
+        const ALTGR: u16 = 100;
+        let ctx = xkb::Context::new(xkb::CONTEXT_NO_FLAGS);
+        let keymap = |layout: &str| {
+            let flags = xkb::KEYMAP_COMPILE_NO_FLAGS;
+            xkb::Keymap::new_from_names(&ctx, "evdev", "pc105", layout, "", None, flags)
+        };
+        let (Some(us), Some(de), Some(us_ru)) = (keymap("us"), keymap("de"), keymap("us,ru"))
+        else {
+            eprintln!("no xkb data on this box — skipped");
+            return;
+        };
+        let rows: [(&str, &xkb::Keymap, u32, char, &[u16]); 14] = [
+            ("a plain letter", &us, 0, 'a', &[]),
+            ("a capital", &us, 0, 'A', &[SHIFT]),
+            ("a shifted symbol", &us, 0, '<', &[SHIFT]),
+            ("an unshifted symbol", &us, 0, '=', &[]),
+            ("a character the layout lacks", &us, 0, 'ñ', &[]),
+            ("the same symbol on its own key", &de, 0, '<', &[]),
+            ("that key's shifted level", &de, 0, '>', &[SHIFT]),
+            ("a third-level character", &de, 0, '€', &[ALTGR]),
+            ("another third-level character", &de, 0, '@', &[ALTGR]),
+            ("a fourth-level character", &de, 0, '¿', &[SHIFT, ALTGR]),
+            (
+                "a capital in the first of two layouts",
+                &us_ru,
+                0,
+                'A',
+                &[SHIFT],
+            ),
+            ("a capital the active layout lacks", &us_ru, 1, 'A', &[]),
+            ("a capital of the second layout", &us_ru, 1, 'Ж', &[SHIFT]),
+            (
+                "that capital while the first is active",
+                &us_ru,
+                0,
+                'Ж',
+                &[],
+            ),
+        ];
+        for (name, keymap, layout, c, want) in rows {
+            let sym = text_keysym(c as u32).unwrap();
+            assert_eq!(text_modifiers(keymap, layout, sym), want, "{name}");
+        }
+    }
 
     #[test]
     fn text_maps_to_layout_free_keysyms() {
