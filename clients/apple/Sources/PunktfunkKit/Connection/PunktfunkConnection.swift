@@ -2075,9 +2075,8 @@ public final class PunktfunkConnection: @unchecked Sendable {
 
     /// One HID-output feedback event a game wrote to the host's virtual pad — replay it on the
     /// real controller (GCDeviceLight, GCControllerPlayerIndex, GCDualSenseAdaptiveTrigger for
-    /// the DualSense kinds; the SC2 capture's GATT writes for `.hidRaw`). Only a `.dualSense`
-    /// session emits the first three; only an as-is Steam Controller 2 passthrough pad emits
-    /// `.hidRaw`.
+    /// the DualSense kinds; the SC2 capture's GATT writes for `.hidRaw`). Which kinds a pad's
+    /// virtual device emits is the host's: see `nextHidOutput`.
     public enum HidOutputEvent: Sendable, Equatable {
         /// Lightbar color.
         case led(pad: UInt8, r: UInt8, g: UInt8, b: UInt8)
@@ -2100,9 +2099,8 @@ public final class PunktfunkConnection: @unchecked Sendable {
     /// Pull the next HID-output feedback event (lightbar / player LEDs / adaptive triggers —
     /// or a raw `.hidRaw` report on an SC2 passthrough pad); nil on timeout, throws `.closed`
     /// once the session ended. Drain from the (single) feedback thread, alongside
-    /// `nextRumbleCommand`. Nothing arrives unless a pad's virtual device is a DualSense (the
-    /// first three), a DualShock 4 (lightbar only), or an as-is Steam Controller 2 (`.hidRaw`)
-    /// — poll with a short timeout, never spin.
+    /// `nextRumbleCommand`. Only a pad whose virtual device takes output writes (a PlayStation,
+    /// Nintendo or Steam pad, as the host builds it) sends any: poll with a short timeout.
     public func nextHidOutput(timeoutMs: UInt32 = 0) throws -> HidOutputEvent? {
         var out = PunktfunkHidOutput()
         return try poll(feedbackLock) { h in
