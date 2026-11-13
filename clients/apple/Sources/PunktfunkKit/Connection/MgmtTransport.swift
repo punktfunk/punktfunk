@@ -50,7 +50,8 @@ enum MgmtTransport {
     ///
     /// Runs over a pooled keep-alive connection. A connection the host has since dropped is
     /// indistinguishable from a live one until we write to it, so a REUSED connection that fails
-    /// is retried, up to once per pooled socket; a fresh connection that fails is a real error.
+    /// is retried (`retries(after:reused:)`), up to once per pooled socket; a fresh connection
+    /// that fails is a real error.
     static func request(
         host: String,
         port: UInt16,
@@ -87,10 +88,20 @@ enum MgmtTransport {
             } catch {
                 await MgmtConnectionPool.shared.release(connection, key: key)
                 lastError = error
-                if !wasReused || attempt == MgmtConnectionPool.maxPerHost { throw error }
+                if !retries(after: error, reused: wasReused) || attempt == MgmtConnectionPool.maxPerHost {
+                    throw error
+                }
             }
         }
         throw lastError
+    }
+
+    /// Only a reused socket that failed as a socket goes again: the host may have closed it while
+    /// idle. After a timeout or an answer that would not parse, the host may have run the request,
+    /// and a POST must not run twice.
+    static func retries(after error: Error, reused: Bool) -> Bool {
+        guard reused, case .connection? = error as? MgmtTransportError else { return false }
+        return true
     }
 
     static func hex(_ data: Data) -> String {
@@ -175,7 +186,7 @@ actor MgmtConnectionPool {
     /// Also the retry budget: every pooled socket may be a stale keep-alive.
     static let maxPerHost = 4
     /// Idle longer than this and a pooled socket is replaced, not trusted: a host that vanished
-    /// silently costs a full request timeout per socket before the retry loop gives up.
+    /// silently would cost the request its full timeout.
     static let maxIdle: TimeInterval = 20
 
     /// Throws `CancellationError` for a cancelled caller, before it takes a connection. A grid
@@ -458,7 +469,7 @@ final class MgmtConnection: @unchecked Sendable {
                     // No framing header: the body ran to EOF, so what we have is the whole thing
                     // and the connection is spent.
                     self.isHealthy = false
-                    let response = try HTTPResponseParser.parse(self.buffer)
+                    let response = try Self.closeFramed(self.buffer)
                     self.servedRequest = true
                     self.finish(.success(response))
                     return
@@ -470,6 +481,16 @@ final class MgmtConnection: @unchecked Sendable {
             }
             self.receive()
         }
+    }
+
+    /// What the peer sent before it closed, as a close-framed answer. Nothing at all is a socket
+    /// error: the host hung up without running the request, as it does on a kept-alive socket
+    /// it closed while idle, and that is the failure a reused connection retries.
+    static func closeFramed(_ received: Data) throws -> HTTPResponse {
+        guard !received.isEmpty else {
+            throw MgmtTransportError.connection("closed before answering")
+        }
+        return try HTTPResponseParser.parse(received)
     }
 
     private func finish(_ result: Result<HTTPResponse, Error>) {

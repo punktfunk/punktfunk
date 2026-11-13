@@ -16,4 +16,27 @@ final class MgmtTransportTests: XCTestCase {
         await reads.value
         XCTAssertFalse(connection.isHealthy)
     }
+
+    /// A reused socket that failed as a socket goes again; a timeout or a bad answer never does,
+    /// since the host may already have run the request.
+    func testRetriesOnlyAReusedSocketThatFailedAsASocket() {
+        let dropped = MgmtTransportError.connection("reset")
+        XCTAssertTrue(MgmtTransport.retries(after: dropped, reused: true))
+        XCTAssertFalse(MgmtTransport.retries(after: dropped, reused: false))
+        XCTAssertFalse(MgmtTransport.retries(after: MgmtTransportError.timedOut, reused: true))
+        XCTAssertFalse(MgmtTransport.retries(after: MgmtTransportError.tooLarge, reused: true))
+    }
+
+    /// A kept-alive socket the host closed while idle hangs up without a byte: that reads as a
+    /// socket error, so the reused connection retries. A partial answer does not.
+    func testAHangUpBeforeAnyAnswerIsASocketError() throws {
+        XCTAssertThrowsError(try MgmtConnection.closeFramed(Data())) {
+            XCTAssertTrue(MgmtTransport.retries(after: $0, reused: true))
+        }
+        XCTAssertThrowsError(try MgmtConnection.closeFramed(Data("HTTP/1.1 200 OK\r\nContent-".utf8))) {
+            XCTAssertFalse(MgmtTransport.retries(after: $0, reused: true))
+        }
+        let whole = try MgmtConnection.closeFramed(Data("HTTP/1.1 200 OK\r\n\r\nbody".utf8))
+        XCTAssertEqual(whole.body, Data("body".utf8))
+    }
 }
