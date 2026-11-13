@@ -402,15 +402,15 @@ struct ArrivalSlots {
 
 /// Selects when a decoded frame enters the layer; decode and the newest-wins store are shared.
 ///
-/// - `arrival` (stage-2): render from frame arrival. This is the macOS default for every codec and
-///   an explicit A/B elsewhere; macOS smoothness can additionally schedule it on the vsync grid.
+/// Which pacing a platform takes by default is decided in `PresenterChoice.platformDefault`.
+///
+/// - `arrival` (stage-2): render from frame arrival; macOS smoothness can additionally schedule
+///   it on the vsync grid.
 /// - `glass` (stage-3): admit a bounded number of presents and reopen each slot from its on-glass
 ///   callback. Frames decoded while closed coalesce in the store instead of joining the layer FIFO.
-/// - `deadline` (stage-4): pair the newest frame with a CAMetalDisplayLink-vended drawable. This is
-///   the iOS default; tvOS retains it as an A/B path because its minimum render window spans two
-///   fixed-rate refreshes.
+/// - `deadline` (stage-4): pair the newest frame with a CAMetalDisplayLink-vended drawable.
 /// - `decoded`: send VideoToolbox's IOSurface-backed output directly to the system video renderer.
-///   This is tvOS's latency default and avoids compressed decode buffering plus the Metal FIFO.
+///   Reached only through `PUNKTFUNK_PRESENTER=decoded`.
 public enum PresentPacing: Sendable, Equatable {
     case arrival
     case glass
@@ -1341,7 +1341,8 @@ extension MetalVideoPresenter {
                 isHDR: isHDR, tenBitSDR: MetalVideoPresenter.tenBitBuffer(pixelBuffer))
         case .planar(let planes):
             reconcileLayer(
-                decodedSize: CGSize(width: planes.width, height: planes.height), isHDR: planes.pq)
+                decodedSize: CGSize(width: planes.width, height: planes.height), isHDR: planes.pq,
+                tenBitSDR: planes.tenBitSDR)
         }
     }
 }
@@ -2356,15 +2357,6 @@ public final class Stage2Pipeline {
     /// nominal source interval, and hence its cushion ceiling, on every pacing.
     public func setFrameRateHint(hz: Float) {
         frameRateHint.stage(hz: hz)
-    }
-
-    /// Pen-proximity rate boost (drawing workloads): drive the deadline link — and with it the
-    /// panel, whose cadence paces UIKit's touch/Pencil event delivery — at the range ceiling
-    /// while a Pencil is in range, so a sub-panel-rate stream stops halving pencil sampling.
-    /// Staged like the rate hint; no-op under arrival/glass pacing. MAIN thread.
-    public func setInteractionBoost(_ on: Bool) {
-        frameRateHint.setBoost(on)
-        presentLog.info("pen boost \(on ? "engaged" : "released", privacy: .public)")
     }
 
     /// Whether the window can scan out Direct — fullscreen, nothing of the app's own over the

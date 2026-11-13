@@ -126,6 +126,19 @@ final class ConsoleABITests: XCTestCase {
         XCTAssertFalse(events.contains(#"{"action":"Quit"}"#), "events: \(events)")
     }
 
+    #if os(macOS)
+    /// The Mac view owns a mouse-moved tracking area: AppKit delivers hover nowhere else.
+    @MainActor
+    func testTheMacViewTracksMouseMoves() throws {
+        let bridge = try XCTUnwrap(ConsoleBridge(
+            options: #"{"device_name": "Test", "gpu_cache_bytes": 0, "settings": {}}"#,
+            device: device, queue: queue))
+        let view = ConsoleMetalView(bridge: bridge, device: device, queue: queue, delegate: nil)
+        view.updateTrackingAreas()
+        XCTAssertTrue(view.trackingAreas.contains { $0.options.contains(.mouseMoved) })
+    }
+    #endif
+
     /// With nothing typed into its prompt, the console hands over nothing and writes nothing;
     /// a NULL buffer is refused, not written through.
     @MainActor

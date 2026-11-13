@@ -140,6 +140,15 @@ and stop.
 A constant’s comment is why the number, not the incident that produced it.
 A version comment is the live handshake, not a biography of every bump.
 
+A default or a platform's path has one home: the line that decides it. Elsewhere, name
+that line instead of repeating its answer; the copy goes stale the day the line changes.
+An OS limit names the OS version it was checked on.
+
+Bad (a copy, on the enum): `decoded … is tvOS's latency default`
+Good: `Which pacing a platform takes is decided in PresenterChoice.platformDefault.`
+Bad: `tvOS has no EDR API`
+Good: `tvOS lacks edrMetadata; it has CALayer.toneMapMode from tvOS 18.`
+
 Bad (archaeology): `A v2 host never stamps the field, so a v3 driver would refuse
 every attach — lockstep by the handshake, as ever. On-glass 2026-07-23…`
 Good (the live rule): `A host that leaves this field zero fails the bind.`

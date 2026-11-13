@@ -8,8 +8,8 @@
 
 import Foundation
 
-/// The one App-Group identifier, matched by `Config/*.entitlements`
-/// (`com.apple.security.application-groups`). Registered on the developer portal for both the app
+/// The one App-Group identifier, matched by `Config/*.entitlements` and
+/// `PunktfunkWidgetsExtension.entitlements` (`com.apple.security.application-groups`). Registered on the developer portal for both the app
 /// id (`io.unom.punktfunk`) and the widget extension id (`io.unom.punktfunk.widgets`).
 public enum AppGroup {
     public static let suiteName = "group.io.unom.punktfunk"
@@ -24,8 +24,8 @@ public enum AppGroup {
 }
 
 /// Widget kind strings. The extension declares them and the app reloads by them, so a rename that
-/// touches only one side leaves a widget nothing ever refreshes again (both timelines are
-/// `.never`).
+/// touches only one side leaves a widget the app never reloads: the library timeline is
+/// `.never`, the hosts one refreshes hourly.
 public enum WidgetKind {
     public static let hosts = "PunktfunkHosts"
     public static let library = "PunktfunkLibrary"

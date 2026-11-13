@@ -174,9 +174,6 @@ public final class StreamViewController: StreamViewControllerBase {
     /// The shared presenter stack: stage-2 (CAMetalLayer sublayer + display link) with the
     /// stage-1 StreamPump → displayLayer path as the Metal-unavailable / DEBUG fallback.
     private let presenter = SessionPresenter()
-    /// Pending pen-boost release — 2 s of hysteresis so hover flicker at the glass edge
-    /// doesn't thrash the deadline link's rate range (see `setInteractionBoost`).
-    private var penBoostRelease: DispatchWorkItem?
     #if os(tvOS)
     /// The window's display manager the session's mode request was set on — held weakly so
     /// stop() can clear the request even after the view has left the window.
@@ -185,6 +182,8 @@ public final class StreamViewController: StreamViewControllerBase {
     private var displayModeObservation: NSKeyValueObservation?
     /// The decoded frames are HDR — what the display-mode request follows.
     private var frameHDR = false
+    /// Bumped when a display request is withdrawn, so its switch-end hop can tell it is stale.
+    private var hdrRequest = 0
     #endif
     private var inputCapture: InputCapture?
     #if os(iOS) || os(visionOS)
@@ -518,26 +517,6 @@ public final class StreamViewController: StreamViewControllerBase {
             guard self?.captureEnabled == true else { return }
             connection?.sendPen(batch)
         }
-        // Pencil near the glass ⇒ pin the panel (and with it UIKit's event cadence) at the
-        // link range's ceiling, so a sub-panel-rate stream stops halving pencil sampling.
-        // Engage is immediate; release waits 2 s so edge-of-canvas hover flicker can't
-        // thrash the link. MAIN thread (UIKit events + main-queue work item).
-        streamView.onPenProximity = { [weak self] near in
-            guard let self else { return }
-            self.penBoostRelease?.cancel()
-            self.penBoostRelease = nil
-            if near {
-                self.presenter.setInteractionBoost(true)
-            } else {
-                let release = DispatchWorkItem { [weak self] in
-                    guard let self else { return }
-                    self.penBoostRelease = nil
-                    self.presenter.setInteractionBoost(false)
-                }
-                self.penBoostRelease = release
-                DispatchQueue.main.asyncAfter(deadline: .now() + 2, execute: release)
-            }
-        }
         // Indirect pointer WITHOUT a lock → absolute cursor + buttons. Under lock a mouse or trackpad
         // also emits UIKit indirect events pinned at the lock point while GCMouse owns motion and
         // buttons, so this path is gated off (`gcMouseForwarding`). Otherwise a click sends twice.
@@ -832,9 +811,6 @@ public final class StreamViewController: StreamViewControllerBase {
         streamView.onDial = nil
         TouchInputMode.sessionOverride = nil // the ring's mid-stream switch dies with the session
         streamView.onPenBatch = nil // after reset — the pen's leave-range sample rides it
-        streamView.onPenProximity = nil // after reset — its leave-range transition fired above
-        penBoostRelease?.cancel()
-        penBoostRelease = nil
         streamView.penEnabled = false
         streamView.onPointerMoveAbs = nil
         streamView.onPointerButton = nil
@@ -861,10 +837,7 @@ public final class StreamViewController: StreamViewControllerBase {
         inputCapture = nil
         // Return the TV to the user's preferred mode — the home screen must not stay in the
         // session's HDR10/refresh mode.
-        sessionDisplayManager?.preferredDisplayCriteria = nil
-        sessionDisplayManager = nil
-        displayModeObservation = nil
-        presenter.setHDROutput(false)
+        withdrawDisplayRequest()
         frameHDR = false
         #endif
         presenter.stop()
@@ -890,14 +863,24 @@ public final class StreamViewController: StreamViewControllerBase {
     }
 
     #if os(tvOS)
+    /// Withdraw the session's display request and stop treating the output as HDR. A switch-end
+    /// hop still queued for the withdrawn request sees a newer `hdrRequest` and does nothing.
+    private func withdrawDisplayRequest() {
+        sessionDisplayManager?.preferredDisplayCriteria = nil
+        sessionDisplayManager = nil
+        displayModeObservation = nil
+        hdrRequest += 1
+        presenter.setHDROutput(false)
+    }
+
     /// Ask the TV for a display mode matching the session — HDR10 at the stream's refresh rate —
     /// via AVDisplayManager, the tvOS mechanism custom renderers use for HDR output (AVFoundation
     /// playback layers do this implicitly). Honored only when the user allows matching (tvOS
-    /// Settings → Video and Audio → Match Content); the presenter reads the RESULT off UIScreen's
-    /// EDR headroom (pushed in SessionPresenter.layout) and keeps the in-shader tone-map whenever
-    /// the switch never lands, so an SDR-composited display can't show blown-out PQ either way.
-    /// Applied once per session, as soon as the window and the negotiated mode both exist; the
-    /// stop() teardown clears it.
+    /// Settings → Video and Audio → Match Content). The presenter passes PQ through once the
+    /// switch ends (`setHDROutput`) or the screen reports headroom, and tone-maps in the shader
+    /// otherwise.
+    /// Requested while the decoded frames are HDR and withdrawn when they turn SDR, so a session
+    /// can apply it more than once; the stop() teardown clears it.
     ///
     /// ⚠️ Keyed on the decoded frames being HDR (`frameHDR`), not the Welcome or the setting alone.
     /// The criteria hardcode BT.2020 PQ, and in its HDR modes the Apple TV sends limited-range
@@ -906,12 +889,7 @@ public final class StreamViewController: StreamViewControllerBase {
     private func applyDisplayCriteriaIfNeeded() {
         guard let manager = view.window?.avDisplayManager, let connection else { return }
         guard frameHDR, connection.settings.hdrEnabled else {
-            if sessionDisplayManager != nil {
-                manager.preferredDisplayCriteria = nil
-                sessionDisplayManager = nil
-                displayModeObservation = nil
-                presenter.setHDROutput(false)
-            }
+            if sessionDisplayManager != nil { withdrawDisplayRequest() }
             return
         }
         guard manager.preferredDisplayCriteria == nil else { return }
@@ -947,12 +925,17 @@ public final class StreamViewController: StreamViewControllerBase {
         manager.preferredDisplayCriteria = AVDisplayCriteria(
             refreshRate: Float(mode.refreshHz), formatDescription: desc)
         sessionDisplayManager = manager
-        // The switch runs for a second or two; its end means the output is in our HDR mode.
-        // `UIScreen`'s EDR headroom stays 1 on tvOS whatever the mode, so this is the signal.
+        // The switch runs for a second or two; its end is taken as the output being in our mode.
+        // The hop lands only while this request stands: frames that turned SDR meanwhile, or a
+        // stop, withdrew it and already switched HDR output off.
+        let request = hdrRequest
         displayModeObservation = manager.observe(\.isDisplayModeSwitchInProgress, options: [.old, .new]) {
             [weak self] _, change in
             guard change.oldValue == true, change.newValue == false else { return }
-            DispatchQueue.main.async { self?.presenter.setHDROutput(true) }
+            DispatchQueue.main.async { [weak self] in
+                guard let self, self.hdrRequest == request else { return }
+                self.presenter.setHDROutput(true)
+            }
         }
         // PUNKTFUNK_PRESENT_DEBUG: whether the box takes the request, now and as the switch lands.
         if presentDebug {
@@ -1352,8 +1335,6 @@ final class StreamLayerUIView: UIView {
     /// The host types committed text (`HOST_CAP_TEXT_INPUT`), so the soft keyboard sends
     /// characters instead of US key positions.
     var textInputEnabled = false
-    /// Pencil proximity transitions (hover or contact) — the presenter's panel-rate boost.
-    var onPenProximity: ((Bool) -> Void)?
     /// Indirect pointer (mouse/trackpad with no lock) → absolute cursor moves.
     var onPointerMoveAbs: ((HostPoint) -> Void)?
     /// Indirect-pointer buttons (GameStream ids: 1=left 3=right); `down` = press.
@@ -1404,7 +1385,6 @@ final class StreamLayerUIView: UIView {
     private lazy var pencil: PencilStream = {
         let stream = PencilStream()
         stream.send = { [weak self] batch in self?.onPenBatch?(batch) }
-        stream.onProximity = { [weak self] near in self?.onPenProximity?(near) }
         stream.videoNorm = { [weak self] point in
             guard let h = self?.hostPoint(from: point) else { return nil }
             return (Float(h.x) / Float(max(h.w - 1, 1)), Float(h.y) / Float(max(h.h - 1, 1)))
@@ -1671,7 +1651,7 @@ final class StreamLayerUIView: UIView {
     }
 
     /// Trackpad / wheel scroll → host scroll deltas. The translation is consumed each callback so
-    /// the next is a fresh delta, and scales at ≈ one WHEEL notch per 10 pt of pan.
+    /// the next is a fresh delta, sent in points and unscaled.
     ///
     /// Both axes pass through with their sign intact, which is what makes the stream follow the
     /// system's Natural Scrolling switch: UIKit has already applied that preference by the time it
