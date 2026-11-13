@@ -15,11 +15,11 @@ Copyright: Copyright (c) unom
 ShortDescription: Game-Streaming-Host mit geringer Latenz — streamt die Spiele deines PCs an jeden Punktfunk- oder Moonlight-Client.
 Description: |-
   Punktfunk Host macht einen Windows-11-PC zum Game-Streaming-Server mit geringer Latenz. Er erfasst
-  den Desktop oder ein eigenes virtuelles Display, kodiert mit NVENC / AMF / QSV / Vulkan und
+  den Desktop oder eine eigene virtuelle Anzeige, kodiert mit NVENC / AMF / QSV / Vulkan und
   streamt über sein eigenes QUIC-Protokoll an Punktfunk-Clients unter Windows, macOS, iOS, tvOS,
   Android und Linux — oder per GameStream an unveränderte Moonlight-Clients.
 
-  Der Installer bringt den virtuellen Displaytreiber pf-vdisplay mit (Streaming in nativer Auflösung
+  Der Installer bringt den virtuellen Anzeigetreiber pf-vdisplay mit (Streaming in nativer Auflösung
   und mit HDR ohne physischen Monitor), virtuelle Gamepads (DualSense, DualShock 4, Xbox 360) und
   eine Web-Konsole zur Verwaltung auf Port 47992.
 Tags:
