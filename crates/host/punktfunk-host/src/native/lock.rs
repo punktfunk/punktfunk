@@ -161,18 +161,20 @@ fn enrolled(unlock: &ProfileUnlock) -> Option<UnlockKey> {
     pf_seats::unlock::key_bytes(&key).map(|_| key)
 }
 
-/// The refusal for wrong PINs that lasts `wait`: seconds under a minute, else minutes, rounded
-/// up.
+/// The refusal for wrong PINs that lasts `wait`: seconds under a minute, minutes up to two
+/// hours, else hours, each rounded up. A wait grows to a day ([`pf_seats::locks::PIN_WINDOW_MAX`]).
 fn wait_words(wait: Duration) -> Said {
     let seconds = wait.as_secs() + u64::from(wait.subsec_nanos() > 0);
     let (id, count, unit) = if seconds < 60 {
         ("close_lock_pin_wait_seconds", seconds.max(1), "second")
-    } else {
+    } else if seconds <= 2 * 60 * 60 {
         (
             "close_lock_pin_wait_minutes",
             seconds.div_ceil(60),
             "minute",
         )
+    } else {
+        ("close_lock_pin_wait_hours", seconds.div_ceil(3600), "hour")
     };
     let plural = if count == 1 { "" } else { "s" };
     let text = format!("Too many wrong PINs. Try again in {count} {unit}{plural}.");
@@ -209,7 +211,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_lockout_reads_in_whole_seconds_or_minutes() {
+    fn a_lockout_reads_in_whole_seconds_minutes_or_hours() {
         let s = Duration::from_secs;
         let read = |wait| {
             let words = wait_words(wait);
@@ -236,6 +238,22 @@ mod tests {
         assert_eq!(
             read(s(61)).1,
             "Too many wrong PINs. Try again in 2 minutes."
+        );
+        assert_eq!(
+            read(s(2 * 60 * 60)).1,
+            "Too many wrong PINs. Try again in 120 minutes."
+        );
+        assert_eq!(
+            read(s(pf_seats::locks::PIN_WINDOW_MAX as u64)),
+            (
+                "close_lock_pin_wait_hours".into(),
+                "Too many wrong PINs. Try again in 24 hours.".into(),
+                count(24)
+            )
+        );
+        assert_eq!(
+            read(s(2 * 60 * 60 + 1)).1,
+            "Too many wrong PINs. Try again in 3 hours."
         );
     }
 }

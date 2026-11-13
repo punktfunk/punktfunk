@@ -340,6 +340,21 @@
 	"close_lock_not_saved": "This host couldn't save that. Try again in a moment.",
 	"close_lock_pin_unreadable": "Couldn't read the PIN this device sent. Try again.",
 	"close_lock_pin_update": "This profile needs its PIN. Update Punktfunk on this device.",
+	"close_lock_pin_wait_hours": [
+		{
+			"declarations": [
+				"input count",
+				"local n = count: plural"
+			],
+			"selectors": [
+				"n"
+			],
+			"match": {
+				"n=one": "Too many wrong PINs. Try again in {count} hour.",
+				"n=other": "Too many wrong PINs. Try again in {count} hours."
+			}
+		}
+	],
 	"close_lock_pin_wait_minutes": [
 		{
 			"declarations": [

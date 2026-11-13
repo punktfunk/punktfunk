@@ -172,11 +172,13 @@ fn protected_dir(path: &Path, sddl: &str) -> Result<(), String> {
 
 /// Give `dir` the DACL `sddl` describes (`grants`: its ACEs as icacls spells them): a missing
 /// dir is born with it, one that exists takes it in place of what it inherited. A link, or a
-/// dir another account owns, is refused. `Ok(true)` when the dir existed and others could write
-/// in it until now: what it holds is not proven. Ends on `ensure_admin_only_source`.
+/// dir another account owns, is refused. A dir others could write in until now then loses every
+/// file and every folder they own ([`pf_paths_win::clear_open_tree`]). It holds
+/// [`pf_paths_win::UNPROVEN`] from its lock until that is done, so a run that fails halfway
+/// leaves the dir locked and the next run finishes the clear.
 // A real-box step: demo and test runs neither extract nor deploy a payload.
 #[allow(clippy::disallowed_methods)]
-pub(crate) fn lock_dir(dir: &Path, sddl: &str, grants: &[&str]) -> Result<bool, String> {
+pub(crate) fn lock_dir(dir: &Path, sddl: &str, grants: &[&str]) -> Result<(), String> {
     use std::os::windows::fs::MetadataExt;
     const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
     let was_open = match std::fs::symlink_metadata(dir) {
@@ -217,5 +219,71 @@ pub(crate) fn lock_dir(dir: &Path, sddl: &str, grants: &[&str]) -> Result<bool, 
         }
     };
     pf_paths_win::ensure_admin_only_source(dir).map_err(|e| e.to_string())?;
-    Ok(was_open)
+    let unproven = dir.join(pf_paths_win::UNPROVEN);
+    if was_open || std::fs::symlink_metadata(&unproven).is_ok() {
+        pf_paths_win::mark_unproven(&unproven).map_err(|e| e.to_string())?;
+        pf_paths_win::clear_open_tree(dir, &unproven).map_err(|e| e.to_string())?;
+        std::fs::remove_file(&unproven)
+            .map_err(|e| format!("remove {}: {e}", unproven.display()))?;
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    /// Elevated: an open folder is locked and emptied of files; one a process holds without
+    /// share-delete is refused and stays locked with its marker, and the next run clears it; a
+    /// healthy re-run walks nothing. Not elevated, the folder this test owns is refused untouched.
+    #[test]
+    #[allow(clippy::disallowed_methods)]
+    fn an_open_install_dir_is_cleared_now_or_by_the_next_run() {
+        use std::os::windows::fs::OpenOptionsExt;
+        const GRANTS: [&str; 2] = ["*S-1-5-18:(OI)(CI)(F)", "*S-1-5-32-544:(OI)(CI)(F)"];
+        let lock = |dir: &std::path::Path| super::lock_dir(dir, pf_paths_win::ADMIN_ONLY, &GRANTS);
+        let base = std::env::temp_dir().join(format!("pf-setup-open-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let app = base.join("app");
+        std::fs::create_dir_all(&app).unwrap();
+        // Users may modify below `base`, as a volume root lets them.
+        let granted = std::process::Command::new(pf_paths::system32("icacls.exe"))
+            .arg(&base)
+            .args(["/grant", "*S-1-5-32-545:(OI)(CI)(M)", "/Q"])
+            .stdout(std::process::Stdio::null())
+            .status()
+            .unwrap();
+        assert!(granted.success());
+        std::fs::write(app.join("version.dll"), "x").unwrap();
+        if pf_paths_win::is_admin_owned(&app) != Some(true) {
+            assert!(lock(&app).is_err());
+            assert!(app.join("version.dll").exists());
+            let _ = std::fs::remove_dir_all(&base);
+            return;
+        }
+
+        let held = std::fs::OpenOptions::new()
+            .read(true)
+            .share_mode(0x1) // FILE_SHARE_READ: no rename while this is open
+            .open(app.join("version.dll"))
+            .unwrap();
+        let marker = app.join(pf_paths_win::UNPROVEN);
+        assert!(lock(&app).is_err());
+        assert!(
+            pf_paths_win::ensure_admin_only_source(&app).is_ok(),
+            "a failed clear reopened the folder"
+        );
+        assert!(marker.is_file(), "nothing tells the next run");
+        drop(held);
+        lock(&app).unwrap();
+        assert!(!app.join("version.dll").exists());
+        assert!(app.join("version.dll.untrusted").exists());
+        assert!(!marker.exists(), "a cleared folder keeps its marker");
+
+        std::fs::write(app.join("punktfunk-host.exe"), "x").unwrap();
+        lock(&app).unwrap();
+        assert!(
+            app.join("punktfunk-host.exe").exists(),
+            "a healthy dir was walked"
+        );
+        let _ = std::fs::remove_dir_all(&base);
+    }
 }

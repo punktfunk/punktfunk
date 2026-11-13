@@ -19,7 +19,7 @@
           "actions"
         ],
         "summary": "List host actions",
-        "description": "Per-caller view: platform availability plus whether this caller may invoke each one.\nAdmin: everything permitted. Paired cert: power per the device's live Host-power grant,\n`display.next` while the device owns a live session. Unknown ids still render with the\nserver-supplied title.",
+        "description": "Per-caller view: platform availability plus whether this caller may invoke each one.\nAdmin: everything permitted. Paired cert: power per the device's live Host-power grant,\n`display.next` while the device streams a session of its own and may choose its screen.\nUnknown ids still render with the server-supplied title.",
         "operationId": "listActions",
         "responses": {
           "200": {
@@ -52,7 +52,7 @@
           "actions"
         ],
         "summary": "Invoke a host action",
-        "description": "Id-only, empty body: nothing in the request reaches the privileged path. Power actions\nanswer `202`, end every session (typed HostPower close), wait ~1 s so this response\nflushes, then act; paired-cert callers need Host power and are `409` while another\ndevice's session is live or a seat host doesn't answer, the admin console never is. One\npower action at a time.\n`display.next` answers `200` with the monitor now streamed and ends nothing; a paired\ncert needs a live session of its own.",
+        "description": "Id-only, empty body: nothing in the request reaches the privileged path. Power actions\nanswer `202`, end every session (typed HostPower close), wait ~1 s so this response\nflushes, then act; paired-cert callers need Host power and are `409` while another\ndevice's session is live or a seat host doesn't answer, the admin console never is. One\npower action at a time.\n`display.next` answers `200` with the monitor now streamed and ends nothing; a paired\ncert needs a live session of its own and the Choose-its-screen grant.",
         "operationId": "invokeAction",
         "parameters": [
           {
@@ -90,7 +90,7 @@
             }
           },
           "403": {
-            "description": "This caller's access does not include this action (no Host power grant, or no live session of its own for `display.next`)",
+            "description": "This caller's access does not include this action (no Host power grant; for `display.next`, no live session of its own or no Choose-its-screen grant)",
             "content": {
               "application/json": {
                 "schema": {

@@ -155,11 +155,12 @@ only root can change.
 ### A profile on an existing account runs as that person
 
 A profile on an existing account plays on that person's own account, on Linux and Windows. So the
-console password can't run a command as them, its seat runs no hooks. On an existing Linux
-account the console manages nothing inside the account: no plugins run there, and it installs,
-prepares and removes no emulator. On an existing Windows account the seat installs **Verified**
-plugins only and takes no emulator copy named by hand. Games still start what the library says
-when the person picks them, custom titles' commands and prep steps included.
+console password can't run a command as them: its seat runs none of the box's hooks, and a custom
+title whose command or prep step the operator wrote is left out of its library. On an existing
+Linux account the console manages nothing inside the account: it adds no plugin there, and it
+installs, prepares and removes no emulator. Hooks, custom titles and plugins the person adds from
+[their own console](/docs/own-account) run as them. On an existing Windows account the seat
+installs **Verified** plugins only and takes no emulator copy named by hand.
 
 ### Only its person opens an existing Linux account
 
@@ -194,6 +195,8 @@ it:
 - **Declared programs only.** A package declares which programs the host may start for it and the
   shape of their arguments; a library entry only fills in values. Paths outside what the package
   declares or you allowed are refused, and folder grants are read-only unless you allow a write.
+  A write the package declares waits for that yes too and shows as a request; one under `/tmp`
+  doesn't.
 - **A sandbox per plugin.** On Linux each plugin runs in its own
   [bubblewrap](https://github.com/containers/bubblewrap) sandbox: an empty home, no network unless
   its manifest asks, read access to the paths it declared and you allowed, and its own PID namespace,

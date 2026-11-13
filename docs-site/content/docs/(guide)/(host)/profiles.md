@@ -223,7 +223,8 @@ password.
   unlock can keep that instead, and opens the profile with it from then on. An app that can't
   ask for a PIN yet says `This profile needs its PIN. Update Punktfunk on this device.`
 - Wrong PINs make a device wait, as a wrong account password does. Ten wrong PINs for one profile
-  within 15 minutes, from any devices, stop PIN entry for it for a while; the devices on its list
+  within 15 minutes, from any devices, stop PIN entry for it for a while. Each further round of
+  ten doubles the wait, up to a day, until the right PIN or a new one; the devices on its list
   still open it.
 - Signing a device out ends its session, and so does locking a profile it plays unless you keep
   that device when you lock.

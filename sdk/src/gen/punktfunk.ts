@@ -4041,8 +4041,8 @@ export interface Punktfunk {
   /**
 * Per-caller view: platform availability plus whether this caller may invoke each one.
 * Admin: everything permitted. Paired cert: power per the device's live Host-power grant,
-* `display.next` while the device owns a live session. Unknown ids still render with the
-* server-supplied title.
+* `display.next` while the device streams a session of its own and may choose its screen.
+* Unknown ids still render with the server-supplied title.
 */
 readonly "listActions": {
     <Config extends OperationConfig | undefined = undefined>(options: { readonly config: Config }): Effect.Effect<WithOptionalResponse<typeof ListActions200.Type, Config>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"ListActions401", typeof ListActions401.Type>>;
@@ -4055,7 +4055,7 @@ readonly "listActions": {
 * device's session is live or a seat host doesn't answer, the admin console never is. One
 * power action at a time.
 * `display.next` answers `200` with the monitor now streamed and ends nothing; a paired
-* cert needs a live session of its own.
+* cert needs a live session of its own and the Choose-its-screen grant.
 */
 readonly "invokeAction": {
     <Config extends OperationConfig | undefined = undefined>(id: string, options: { readonly config: Config }): Effect.Effect<WithOptionalResponse<typeof InvokeAction200.Type | void, Config>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"InvokeAction401", typeof InvokeAction401.Type> | PunktfunkError<"InvokeAction403", typeof InvokeAction403.Type> | PunktfunkError<"InvokeAction404", typeof InvokeAction404.Type> | PunktfunkError<"InvokeAction409", typeof InvokeAction409.Type> | PunktfunkError<"InvokeAction500", typeof InvokeAction500.Type> | PunktfunkError<"InvokeAction501", typeof InvokeAction501.Type>>;

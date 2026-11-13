@@ -333,14 +333,39 @@ public final class Sc2Capture {
     /// Replay one host raw write on the physical pad that claimed `pad` — wire this to
     /// `GamepadFeedback`'s hidRaw sink. Called on the feedback drain thread; `kind` is
     /// `PUNKTFUNK_HID_RAW_OUTPUT` (0) / `PUNKTFUNK_HID_RAW_FEATURE` (1) and `data` the id-first
-    /// frame. NO main-actor hop — the rumble replay runs at Steam's 25–40 ms resend cadence and
-    /// the device write happens on the link queue anyway.
+    /// frame. A write `refusedWrite` names stays off the pad. NO main-actor hop — the rumble
+    /// replay runs at Steam's 25–40 ms resend cadence and the device write happens on the link
+    /// queue anyway.
     public func onHidRaw(pad: UInt8, kind: UInt8, data: [UInt8]) {
         lock.lock()
         let source = sources.first(where: { $0.value.padIndex == pad })?.key
         lock.unlock()
         guard let source else { return } // addressed to some other controller
+        if let reason = Self.refusedWrite(classic: isClassicSource(source), kind: kind, data: data) {
+            log.debug("SC2: host write refused (kind \(kind), head \(Array(data.prefix(2)))): \(reason)")
+            return
+        }
         write(source: source, kind: kind, frame: data)
+    }
+
+    /// The feature commands a host may send a 2015 pad after its report id 0, and the ones it
+    /// never sends a Steam Controller 2: lizard mode off and on, and the factory settings.
+    static let classicHostCommands: Set<UInt8> = [0x87, 0x8F, 0x9F, 0xB6, 0xC1, 0xCE]
+    static let tritonHeldBack: Set<UInt8> = [0x81, 0x85, 0x8E]
+
+    /// Why a host write must not reach the pad, or nil to write it. `kind` 1 is a feature
+    /// report; a Steam Controller 2's command is its first byte from `0x80`, else its second.
+    /// pf-client-core `sc2_capture.rs` refuses the same (`clients/shared/pad-write-vectors.json`).
+    static func refusedWrite(classic: Bool, kind: UInt8, data: [UInt8]) -> String? {
+        if classic {
+            guard kind == 1 else { return "a 2015 pad takes feature reports only" }
+            guard data.count >= 2, data[0] == 0 else { return "not a feature frame with report id 0" }
+            return classicHostCommands.contains(data[1]) ? nil : "command is not one the host forwards"
+        }
+        guard kind == 1, let first = data.first else { return nil }
+        guard first >= 0x80 || data.count >= 2 else { return nil }
+        let cmd = first >= 0x80 ? first : data[1]
+        return tritonHeldBack.contains(cmd) ? "lizard mode and factory settings stay on the host" : nil
     }
 
     /// One id-first frame to `source`'s transport, on its link queue.

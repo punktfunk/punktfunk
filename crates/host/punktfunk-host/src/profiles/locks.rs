@@ -220,7 +220,7 @@ impl LockStore {
 
     /// Wrong PINs for profile `id` in the last 15 minutes, over all devices.
     pub(crate) fn failures(&self, id: &str) -> usize {
-        self.get(id).wrong_pins(crate::clock::unix_secs())
+        self.get(id).recent_wrong_pins(crate::clock::unix_secs())
     }
 
     /// Applies `change` to profile `id`'s lock, its expired presence dropped, and saves the file
