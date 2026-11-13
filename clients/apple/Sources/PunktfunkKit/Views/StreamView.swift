@@ -741,7 +741,8 @@ public final class StreamLayerView: NSView {
 
     /// The single cursor pull thread (both planes share the connection's cursor lock):
     /// latest-wins state at a short timeout + a non-blocking shape poll per iteration.
-    /// Exits when the connection closes; events hop to main where all cursor state lives.
+    /// Exits when the connection closes, which can be after `stop()`. Events hop to main, where
+    /// all cursor state lives, and land only while `connection` is still this view's.
     private func startCursorPump(_ connection: PunktfunkConnection) {
         let thread = Thread { [weak self] in
             while true {
@@ -754,10 +755,16 @@ public final class StreamLayerView: NSView {
                         }
                     }
                     while let shape = try connection.nextCursorShape(timeoutMs: 0) {
-                        DispatchQueue.main.async { self?.applyCursorShape(shape) }
+                        DispatchQueue.main.async {
+                            guard let self, self.connection === connection else { return }
+                            self.applyCursorShape(shape)
+                        }
                     }
                     if let st = newest {
-                        DispatchQueue.main.async { self?.applyCursorState(st) }
+                        DispatchQueue.main.async {
+                            guard let self, self.connection === connection else { return }
+                            self.applyCursorState(st)
+                        }
                     }
                 } catch {
                     return // connection closed — the session is over
