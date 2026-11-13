@@ -4100,8 +4100,8 @@ readonly "getPersonAvatarStream": (options: { readonly params?: typeof GetPerson
   /**
 * On a seat host, from loopback: trade the one-time ticket `ctl console-url` wrote into the
 * page it opened for a session token. The ticket is signed with this host's person token, at
-* most 60 s old, used once, and for this host's own profile. Every other host refuses it. Ten
-* refused tickets in a minute make the next wait out that minute.
+* most 60 s old, used once, and for this host's own profile. Every other host refuses it. After
+* ten refused tickets in a minute a refused one answers 429; a good one still opens.
 */
 readonly "openPersonSession": {
     <Config extends OperationConfig | undefined = undefined>(options: { readonly payload: typeof OpenPersonSessionRequestJson.Encoded; readonly config: Config }): Effect.Effect<WithOptionalResponse<typeof OpenPersonSession200.Type, Config>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"OpenPersonSession401", typeof OpenPersonSession401.Type> | PunktfunkError<"OpenPersonSession429", typeof OpenPersonSession429.Type>>;

@@ -318,7 +318,7 @@
           "host"
         ],
         "summary": "Open a person session",
-        "description": "On a seat host, from loopback: trade the one-time ticket `ctl console-url` wrote into the\npage it opened for a session token. The ticket is signed with this host's person token, at\nmost 60 s old, used once, and for this host's own profile. Every other host refuses it. Ten\nrefused tickets in a minute make the next wait out that minute.",
+        "description": "On a seat host, from loopback: trade the one-time ticket `ctl console-url` wrote into the\npage it opened for a session token. The ticket is signed with this host's person token, at\nmost 60 s old, used once, and for this host's own profile. Every other host refuses it. After\nten refused tickets in a minute a refused one answers 429; a good one still opens.",
         "operationId": "openPersonSession",
         "requestBody": {
           "content": {

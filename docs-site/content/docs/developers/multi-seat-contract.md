@@ -819,8 +819,9 @@ reaches this lane.
   `https://127.0.0.1:47992/_auth/person?ticket=<ticket>`.
 - **The session.** `POST /api/v1/auth/person/session` with `{"ticket"}`, from loopback, answers
   `{token, expires_at, profile}`. The host takes a ticket at most 60 s from its stamp, once, for
-  its own profile; otherwise 401 `person_ticket_refused`, and 429 `person_ticket_wait` after ten
-  refusals in a minute. A session lasts 12 hours, 16 at most, and ends with the host or on
+  its own profile; otherwise 401 `person_ticket_refused`, and 429 `person_ticket_wait` for a
+  refused one after ten refusals in a minute. A good ticket opens whatever was refused before
+  it. A session lasts 12 hours, 16 at most, and ends with the host or on
   `DELETE` with its token as the bearer. A call with an expired one answers 401
   `person_session_ended`.
 - **On the seat host.** `Authorization: Bearer <session>`, from loopback, reaches every route
@@ -831,9 +832,9 @@ reaches this lane.
 - **On the box.** The console sends `X-Punktfunk-Person-Session` and `X-Punktfunk-Person-Profile`
   with no bearer, and `?as=` naming that profile, to the door from loopback. The door asks the
   profile's seat host `POST /api/v1/auth/person/verify` `{"token"}` with its admin token, and
-  takes the call only when the answer names that profile. After ten answers in a minute that
-  vouch for none, a profile's calls get 429 `person_ticket_wait` for the rest of that minute,
-  and its seat host isn't asked; a seat that didn't answer counts for nothing. It reaches
+  takes the call only when the answer names that profile; any other call answers 401
+  `person_session_ended`. Refusals are not counted, so no other local caller can close a
+  profile to its own person. It reaches
   `mgmt_routes::PERSON` and the reads `GET library`, `library/page`, `library/art/{id}/{kind}`,
   `library/scanners`, `library/overrides` and `session/settings`, never for the owner.
   `library/overrides` carries the box's shared sets as `box_sets`, which the person reads and

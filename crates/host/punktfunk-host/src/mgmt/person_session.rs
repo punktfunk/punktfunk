@@ -159,9 +159,6 @@ impl PersonAuth {
         inner
             .failures
             .retain(|at| now.saturating_duration_since(*at) < FAILURE_WINDOW);
-        if inner.failures.len() >= MAX_FAILURES {
-            return Err(Refused::Wait);
-        }
         inner
             .spent
             .retain(|_, at| now.saturating_duration_since(*at) < SPENT_FOR);
@@ -170,7 +167,12 @@ impl PersonAuth {
         let good = parsed.as_ref().is_some_and(|t| {
             t.fresh(unix) && t.signed_by(&self.token) && own.as_deref() == Some(t.profile)
         });
+        // A good ticket opens whatever was refused before it: the limit only quiets bad ones,
+        // so no other local caller can keep the person out.
         let (Some(t), true, false) = (parsed, good, inner.spent.contains_key(ticket)) else {
+            if inner.failures.len() >= MAX_FAILURES {
+                return Err(Refused::Wait);
+            }
             inner.failures.push(now);
             return Err(Refused::Ticket);
         };
@@ -265,8 +267,8 @@ fn parsed<T: serde::de::DeserializeOwned>(body: &[u8]) -> Option<T> {
 ///
 /// On a seat host, from loopback: trade the one-time ticket `ctl console-url` wrote into the
 /// page it opened for a session token. The ticket is signed with this host's person token, at
-/// most 60 s old, used once, and for this host's own profile. Every other host refuses it. Ten
-/// refused tickets in a minute make the next wait out that minute.
+/// most 60 s old, used once, and for this host's own profile. Every other host refuses it. After
+/// ten refused tickets in a minute a refused one answers 429; a good one still opens.
 #[utoipa::path(
     post,
     path = "/auth/person/session",
@@ -426,31 +428,7 @@ pub(crate) async fn get_person_avatar(
     }
 }
 
-/// The box's refused person sessions, per profile: a seat host's "no", or a session for another
-/// profile. As with tickets, ten in a minute make the next wait out that minute, so a local
-/// caller can't have the door ask a seat host without end. Keyed only by a profile with a seat.
-#[derive(Default)]
-pub(crate) struct Refusals(Mutex<HashMap<String, Vec<Instant>>>);
-
-impl Refusals {
-    /// Whether `profile` waits out its window at `now`.
-    pub(crate) fn waiting(&self, profile: &str, now: Instant) -> bool {
-        let mut map = self.0.lock().unwrap_or_else(|e| e.into_inner());
-        let Some(at) = map.get_mut(profile) else {
-            return false;
-        };
-        at.retain(|t| now.saturating_duration_since(*t) < FAILURE_WINDOW);
-        at.len() >= MAX_FAILURES
-    }
-
-    fn note(&self, profile: &str, now: Instant) {
-        let mut map = self.0.lock().unwrap_or_else(|e| e.into_inner());
-        map.entry(profile.to_string()).or_default().push(now);
-    }
-}
-
-/// The 429 a person session gets after too many refused tries: on its seat host, of tickets; on
-/// the box, of sessions its seat host didn't vouch for.
+/// The 429 a refused ticket gets on a seat host after too many refused ones.
 pub(crate) fn wait_a_minute() -> Response {
     api_error_coded(
         StatusCode::TOO_MANY_REQUESTS,
@@ -476,9 +454,8 @@ pub(crate) fn presented(headers: &HeaderMap) -> Option<(&str, &str)> {
 }
 
 /// `profile`, once its seat host answered that `token` is a live session there for it. Never
-/// the owner, and never a profile with no seat of its own. Wakes no seat. A seat host's answer
-/// that vouches for none is noted in [`MgmtState::person_refusals`]; a seat that didn't answer
-/// is not.
+/// the owner, and never a profile with no seat of its own. Wakes no seat. Refusals are not
+/// counted: a count any local caller can run up would close the profile to its own person.
 pub(crate) async fn vouched_by_seat(st: &MgmtState, profile: &str, token: &str) -> Option<String> {
     let profiles = st.app.profiles.get()?;
     let owner = profiles.owner_id();
@@ -502,14 +479,11 @@ pub(crate) async fn vouched_by_seat(st: &MgmtState, profile: &str, token: &str) 
     let Answer::Reply(status, _, answer) = st.seat_call(Target::Seat(seat), call).await else {
         return None;
     };
-    let theirs = (status == 200)
+    (status == 200)
         .then(|| parsed::<PersonOf>(&answer))
         .flatten()
-        .filter(|of| of.profile == profile);
-    if theirs.is_none() {
-        st.person_refusals.note(profile, Instant::now());
-    }
-    theirs.map(|of| of.profile)
+        .filter(|of| of.profile == profile)
+        .map(|of| of.profile)
 }
 
 #[cfg(test)]
@@ -562,18 +536,28 @@ mod tests {
         );
     }
 
-    /// Ten refused tickets in a minute refuse the next one, good or not, until the minute passes.
+    /// After ten refused tickets in a minute the next bad one waits, and a good one still opens.
     #[test]
-    fn refused_tickets_wait_out_a_minute() {
+    fn refused_tickets_wait_and_a_good_one_still_opens() {
         let (host, now) = (auth(TOKEN), Instant::now());
+        let bad = |n: usize| ticket(OTHER, 1_000, &format!("{n:032x}"), MINE);
         for n in 0..MAX_FAILURES {
-            let bad = ticket(OTHER, 1_000, &format!("{n:032x}"), MINE);
-            assert_eq!(host.redeem(&bad, 1_000, now).unwrap_err(), Refused::Ticket);
+            assert_eq!(
+                host.redeem(&bad(n), 1_000, now).unwrap_err(),
+                Refused::Ticket
+            );
         }
+        assert_eq!(
+            host.redeem(&bad(99), 1_000, now).unwrap_err(),
+            Refused::Wait
+        );
         let good = ticket(TOKEN, 1_000, NONCE, MINE);
-        assert_eq!(host.redeem(&good, 1_000, now).unwrap_err(), Refused::Wait);
+        assert!(host.redeem(&good, 1_000, now).is_ok());
         let later = now + FAILURE_WINDOW;
-        assert!(host.redeem(&good, 1_000, later).is_ok());
+        assert_eq!(
+            host.redeem(&bad(100), 1_000, later).unwrap_err(),
+            Refused::Ticket
+        );
     }
 
     /// A session lives 12 hours at most, ends when it is revoked, and is no other's.

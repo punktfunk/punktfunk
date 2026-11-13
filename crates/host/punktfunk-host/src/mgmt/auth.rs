@@ -449,12 +449,9 @@ async fn forward_person(req: Request, next: Next, profile: String) -> Response {
 }
 
 /// A person session on the box: no bearer beside it, a route it reaches, `as` naming its
-/// profile, and that profile's seat host saying the token is live there for it. A profile with
-/// too many refused sessions just now waits, and its seat host isn't asked.
+/// profile, and that profile's seat host saying the token is live there for it.
 async fn person_session(st: &MgmtState, mut req: Request, next: Next) -> Response {
-    use super::person_session::{
-        box_may_reach, presented, session_ended, vouched_by_seat, wait_a_minute,
-    };
+    use super::person_session::{box_may_reach, presented, session_ended, vouched_by_seat};
     let Some((token, profile)) = presented(req.headers()) else {
         return session_ended();
     };
@@ -466,12 +463,6 @@ async fn person_session(st: &MgmtState, mut req: Request, next: Next) -> Respons
             StatusCode::FORBIDDEN,
             "a person session carries no bearer, and reaches its own profile's view alone",
         );
-    }
-    if st
-        .person_refusals
-        .waiting(&profile, std::time::Instant::now())
-    {
-        return wait_a_minute();
     }
     match vouched_by_seat(st, &profile, &token).await {
         Some(profile) => {
