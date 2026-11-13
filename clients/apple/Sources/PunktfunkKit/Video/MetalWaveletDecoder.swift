@@ -17,8 +17,8 @@
 // MTLBuffer), the parse records where each packet lies, and the dequant kernel reads it there;
 // only a FRAG chain or a misaligned body moves, within the AU. GPU, per frame: one
 // concurrent encoder for the ~42 dequant dispatches, then one per iDWT level (encoder
-// boundaries stand in for Vulkan's barriers), into a ring of 4 plane sets that stays alive
-// while the presenter samples it.
+// boundaries stand in for Vulkan's barriers), into a ring of plane sets (the pipeline sizes it
+// past its frame store, 4 at least) that stays alive while the presenter samples it.
 
 #if canImport(Metal)
 import Foundation
