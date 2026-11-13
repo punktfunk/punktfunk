@@ -480,6 +480,7 @@ pub struct SessionHandle {
 
 pub fn start(params: SessionParams) -> SessionHandle {
     punktfunk_core::client::set_thread_boost(crate::audio_rt::boost_core_thread);
+    crate::video::set_waiter_boost(|| crate::audio_rt::boost_and_log("pf-decode-done"));
     let (ev_tx, ev_rx) = async_channel::unbounded();
     // Tiny frame queue, newest wins: force_send displaces the oldest when the UI lags.
     let (frame_tx, frame_rx) = async_channel::bounded(2);
@@ -1131,8 +1132,9 @@ pub fn start_screen(
     }
 }
 
-/// Pull, decode and hand on one further screen's frames. A decoder opens at the first frame
-/// and at each new format; a lost picture asks the host for a keyframe on that screen alone.
+/// Pull, decode and hand on one further screen's frames, on a boosted thread like the
+/// primary pump's. A decoder opens at the first frame and at each new format; a lost
+/// picture asks the host for a keyframe on that screen alone.
 fn screen_pump(
     connector: &NativeClient,
     screen: u8,
@@ -1141,6 +1143,7 @@ fn screen_pump(
     frame_tx: &async_channel::Sender<DecodedFrame>,
     stop: &AtomicBool,
 ) {
+    crate::audio_rt::boost_and_log("screen-decode");
     let mut decoder: Option<Decoder> = None;
     let mut current = None;
     // A window opened mid-stream starts at a keyframe that names the format.

@@ -77,6 +77,9 @@ mod video_v4l2_hevc;
 // Native Vulkan Video (H.264/H.265/AV1) on the presenter's device. Auto's top rung on both desktop OSes; pin `PUNKTFUNK_DECODER=native-vulkan`. Evidence: `video`.
 #[cfg(desktop)]
 mod video_vk_native;
+// The priority hook for the Vulkan Video decode-done thread; the embedder installs it before a session starts.
+#[cfg(desktop)]
+pub use pf_vkdecode::decoder::waiter::set_waiter_boost;
 // D3D11 decode-device: shareable-texture hand-off ring, device creation, `display_hdr_volume`. `video_d3d11_native` and `clients/session` build on it.
 #[cfg(all(feature = "d3d11va", windows))]
 pub mod video_d3d11;
