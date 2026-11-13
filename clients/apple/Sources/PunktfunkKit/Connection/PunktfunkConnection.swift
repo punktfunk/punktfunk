@@ -531,34 +531,33 @@ public final class PunktfunkConnection: @unchecked Sendable {
 
     /// Which virtual gamepad the host creates for this session's pads (the
     /// `PUNKTFUNK_GAMEPAD_*` ABI values). `.auto` lets the host decide (its env var, else
-    /// X-Box 360); `.dualSense` / `.dualShock4` are honored only on hosts with UHID (Linux) —
-    /// games then see a real PlayStation pad and its lightbar (and, on a DualSense,
-    /// adaptive-trigger / player-LED) writes come back on the HID-output plane
-    /// (`nextHidOutput`). `.xboxOne` is an X-Box-Series-glyph variant of `.xbox360` (same
-    /// buttons/sticks/triggers + rumble, no touchpad/motion/lightbar). The host's actual
-    /// choice is `resolvedGamepad`. `clients/shared/gamepad-kind-vectors.json` pins every case
-    /// against core's `GamepadPref`; a test pins the raw values to the header.
+    /// X-Box 360). A host builds the kinds its OS can (the host's `pick_gamepad`) and folds the
+    /// rest, most to `.xbox360`; `resolvedGamepad` is what it built. A PlayStation pad's lightbar
+    /// (and, on a DualSense, adaptive-trigger / player-LED) writes come back on the HID-output
+    /// plane (`nextHidOutput`). `.xboxOne` is an X-Box-Series-glyph variant of `.xbox360` (same
+    /// buttons/sticks/triggers + rumble, no touchpad/motion/lightbar).
+    /// `clients/shared/gamepad-kind-vectors.json` pins every case against core's `GamepadPref`;
+    /// a test pins the raw values to the header.
     public enum GamepadType: UInt32, CaseIterable, Sendable {
         case auto = 0
         case xbox360 = 1
         case dualSense = 2
         case xboxOne = 3
         case dualShock4 = 4
-        // Valve Steam Controller / Steam Deck (Linux UHID hid-steam hosts). Parity only on Apple —
-        // GameController never surfaces a 0x28DE HID device, so the client can't capture one; these
-        // exist so the resolved type round-trips and name parsing matches the host.
+        // Valve Steam Controller and Steam Deck. `Sc2Capture` declares a classic Steam Controller
+        // it opens itself; GameController never surfaces one.
         case steamController = 5
         case steamDeck = 6
-        /// DualSense Edge (Linux UHID / Windows UMDF hosts): the DualSense plus native back/Fn
-        /// buttons. GameController exposes the Edge as a `GCDualSenseGamepad` with its own
+        /// DualSense Edge: the DualSense plus native back/Fn buttons. GameController exposes the
+        /// Edge as a `GCDualSenseGamepad` with its own
         /// product category; paddle CAPTURE is still gated on G22, but the declared identity +
         /// rich planes match the physical pad.
         case dualSenseEdge = 7
-        /// Nintendo Switch Pro Controller (Linux UHID hid-nintendo hosts): correct Nintendo
-        /// glyphs + positional layout on the host side.
+        /// Nintendo Switch Pro Controller: correct Nintendo glyphs + positional layout on the
+        /// host side.
         case switchPro = 8
-        /// New Steam Controller (2026, `28DE:1302`), passed through as-is on Linux hosts (raw
-        /// report mirroring; Steam Input is the consumer). CAPTURABLE over BLE everywhere
+        /// New Steam Controller (2026, `28DE:1302`), passed through as-is (raw report
+        /// mirroring; Steam Input is the consumer). CAPTURABLE over BLE everywhere
         /// (`Sc2BleLink`) and on macOS over USB (`Sc2UsbLink`) — GameController never surfaces
         /// the raw Valve device, so `Sc2Capture` opens it directly and declares this kind.
         case steamController2 = 9
@@ -573,8 +572,8 @@ public final class PunktfunkConnection: @unchecked Sendable {
         /// `Sc2Capture`, where acting on a wired pad's (truthful, but irrelevant) "no radio link"
         /// once tore the wire slot down 255 ms after it was created.
         case steamController2Puck = 10
-        /// Xbox Elite Series 2 (Windows UMDF hosts; other hosts fold it to `.xbox360`). No picker
-        /// offers it; it exists so the host's echo and the dev hook's name round-trip.
+        /// Xbox Elite Series 2. No picker offers it; it exists so the host's echo and the dev
+        /// hook's name round-trip.
         case xboxElite = 11
         // The host-built pads below are never captured here. They exist so the echo and the dev
         // hook's name round-trip and the motion answer matches the host's.
