@@ -61,8 +61,8 @@ public final class LatencyMeter: @unchecked Sendable {
     /// **What it is for.** Read off the END-TO-END meter, this is the video plane's live
     /// glass-to-glass figure — `displayed + clockOffset − pts`, exactly the shape `AvSync` compares
     /// audio against — and it is the reference the A/V sync loop needs. It is published from
-    /// `record`, so BOTH present paths (arrival and deadline) feed it without either knowing that
-    /// audio exists.
+    /// `record`, so every presenter feeds it (stage-1 at enqueue, the others on glass) without
+    /// knowing that audio exists.
     ///
     /// **Why staleness is not optional.** The number is a level, so absent an age check it would
     /// simply keep its last value forever. This client has a state where that matters: the
