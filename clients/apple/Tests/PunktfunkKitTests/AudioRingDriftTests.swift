@@ -818,6 +818,27 @@ final class AudioRingDriftTests: XCTestCase {
         }
     }
 
+    /// A steady stream through a small ring wraps its indices three times and plays back as
+    /// written, sample for sample.
+    func testAStreamPlaysBackIntactAcrossTheRingsWrap() {
+        let ring = AudioRing(seconds: 1, channels: 1, rateHz: 1_000) // 1 000 samples
+        var next: Float = 0
+        func feed(_ count: Int) {
+            let chunk = (0..<count).map { Float($0) + next }
+            next += Float(count)
+            chunk.withUnsafeBufferPointer { ring.write($0.baseAddress!, count: count) }
+        }
+        feed(20) // the 20 ms base target, so the first read is primed
+        var played: [Float] = []
+        var out = [Float](repeating: -1, count: 10)
+        for _ in 0..<300 {
+            out.withUnsafeMutableBufferPointer { ring.read(into: $0.baseAddress!, count: 10) }
+            played += out
+            feed(10)
+        }
+        XCTAssertEqual(played, (0..<3_000).map(Float.init))
+    }
+
     /// The seam of the insert, heard end to end: fill the ring with a ramp (any splice is a
     /// visible jump), let one insert fire, and check every step of the PLAYED stream — including
     /// the one into the duplicated frame and the one out of it — stays inside the fade's slope.

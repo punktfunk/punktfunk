@@ -155,8 +155,11 @@ final class AudioRing: @unchecked Sendable {
         if writeIdx + count - readIdx > capacity {
             readIdx = writeIdx + count - capacity
         }
-        for i in 0..<count {
-            buf[(writeIdx + i) % capacity] = samples[i]
+        let at = writeIdx % capacity
+        let first = min(count, capacity - at)
+        buf.withUnsafeMutableBufferPointer { b in
+            (b.baseAddress! + at).update(from: samples, count: first)
+            b.baseAddress!.update(from: samples + first, count: count - first)
         }
         writeIdx += count
     }
@@ -175,12 +178,14 @@ final class AudioRing: @unchecked Sendable {
             insertCount += 1
         }
         let n = step.silence ? 0 : min(writeIdx - readIdx, count)
-        let capacity = buf.count
-        for i in 0..<n {
-            out[i] = buf[(readIdx + i) % capacity]
+        let at = readIdx % buf.count
+        let first = min(n, buf.count - at)
+        buf.withUnsafeBufferPointer { b in
+            out.update(from: b.baseAddress! + at, count: first)
+            (out + first).update(from: b.baseAddress!, count: n - first)
         }
         readIdx += n
-        for i in n..<count { out[i] = 0 }
+        (out + n).update(repeating: 0, count: count - n)
         let ranShort = !step.silence && n < count
         if ranShort { underrunCount += 1 }
         policy.noteRead(ranShort: ranShort)
