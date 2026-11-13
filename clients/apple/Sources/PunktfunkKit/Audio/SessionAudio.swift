@@ -1530,8 +1530,8 @@ public final class SessionAudio: @unchecked Sendable {
         #endif
 
         // Mono end to end: the resampler takes mono at the input's rate onto the encoder's
-        // 48 kHz mono, and the host's decoder upmixes. Every buffer is allocated here, so the
-        // worker allocates nothing in steady state.
+        // 48 kHz mono, and the host's decoder upmixes. The PCM buffers are allocated here; in
+        // steady state the worker allocates only the packets the encoder returns.
         let scratchFrames = AVAudioFrameCount(MicUplink.batchLimit)
         guard let encoder = try? OpusEncoder(),
               var chain = Self.micChain(
