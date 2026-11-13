@@ -119,8 +119,7 @@ struct ContentView: View {
     @Environment(\.controlActiveState) private var controlActiveState
     #endif
     /// Wakes a sleeping host and waits for it to come back online before connecting (drives the
-    /// "Waking…" phase of the connect overlay). Available on every platform now that the iOS/tvOS
-    /// multicast entitlement is granted (see PunktfunkConnection.wakeOnLANAvailable).
+    /// "Waking…" phase of the connect overlay). Available on every platform (`WakePolicy`).
     @StateObject private var waker = HostWaker()
     #if os(macOS)
     /// Whether the hosting window is native-fullscreen right now (reported by

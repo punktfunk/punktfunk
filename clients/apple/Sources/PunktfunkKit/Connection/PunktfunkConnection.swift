@@ -345,13 +345,6 @@ private final class PendingCallback {
 }
 
 public extension PunktfunkConnection {
-    /// Whether the Wake-on-LAN broadcast path is usable on this platform/build. macOS can always
-    /// broadcast (its App Sandbox network entitlements cover it). iOS/tvOS need the managed
-    /// `com.apple.developer.networking.multicast` entitlement — now approved and enabled (see
-    /// `Config/Punktfunk.entitlements`), so wake is available on every platform. Kept as the single
-    /// switch every call site gates on, should a future build ever need to disable it.
-    static var wakeOnLANAvailable: Bool { true }
-
     /// Send a Wake-on-LAN magic packet to wake a sleeping host. `macs` are the host's NIC MAC(s)
     /// (`aa:bb:cc:dd:ee:ff`, learned from its mDNS `mac` TXT while awake); malformed entries are
     /// skipped. `lastKnownIP`, when an IPv4 address, is additionally unicast. The core broadcasts to every
