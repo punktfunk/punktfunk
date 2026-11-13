@@ -416,6 +416,9 @@ pub struct Live {
     /// The long-term slot the next frame predicts from alone: the anchor of a loss the DPB no
     /// longer reaches ([`NvSession::force_kept`]).
     ltr_force: Option<usize>,
+    /// Slots marked since the last IDR, one bit each. The driver holds a marked picture until
+    /// the next IDR whatever this table says, and each one takes a short-term DPB place.
+    ltr_held: u32,
 }
 
 impl Default for Live {
@@ -442,6 +445,7 @@ impl Default for Live {
             ltr_next: 0,
             kept: crate::rfi::Kept::default(),
             ltr_force: None,
+            ltr_held: 0,
         }
     }
 }
@@ -1400,12 +1404,14 @@ impl NvSession {
         let live = &mut self.live;
         if idr {
             live.ltr_slots.fill(None);
+            live.ltr_held = 0;
             live.ltr_next = 0;
         }
         live.ltr_force = None;
         let marked = matches!(step, Some((Some(_), _)));
         if let Some((Some(m), _)) = step {
             live.ltr_slots[m] = Some(ts);
+            live.ltr_held |= 1 << m;
             live.ltr_next = (m + 1) % live.ltr_slots.len();
         }
         if self.reference_floor.is_none() {
@@ -1736,7 +1742,7 @@ impl NvSession {
         if self.wave.is_some() || super::nvenc_core::wave_always() {
             return self.start_wave(first, last);
         }
-        let short_term = super::nvenc_core::RFI_DPB.saturating_sub(self.ltr_frames);
+        let short_term = super::nvenc_core::RFI_DPB.saturating_sub(self.ltr_held.count_ones());
         match plan_range_recovery(first, last, self.frame_idx, self.last_rfi_range, short_term) {
             // Already invalidated. Re-arm the anchor: the previous recovery AU may itself have
             // been lost, and the next frame is equally clean.
@@ -2235,6 +2241,21 @@ mod recovery_tests {
             s.ltr_slots,
             [None, None],
             "no slot holds a picture that was never queued"
+        );
+    }
+
+    /// Right after an IDR no long-term slot is held, so the short-term window still reaches
+    /// the IDR, and a loss reported two frames late anchors there instead of waving.
+    #[test]
+    fn a_loss_after_the_idr_anchors_on_it() {
+        let mut s = stub_session(Codec::H265, 128);
+        for _ in 0..3 {
+            encode(&mut s).expect("the stub driver accepts every picture");
+        }
+        assert!(s.invalidate_ref_frames(1, 1));
+        assert!(
+            s.wave.is_none() && s.pending_anchor,
+            "an RFI anchor, not a wave"
         );
     }
 
