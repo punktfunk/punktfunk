@@ -4224,6 +4224,7 @@ name = "punktfunk-encode-worker"
 version = "0.46.0"
 dependencies = [
  "pf-encode",
+ "pf-frame",
  "pf-zerocopy",
  "tracing",
  "tracing-subscriber",

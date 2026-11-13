@@ -553,7 +553,10 @@ fn real_main() -> Result<()> {
         Some("zerocopy-probe") => zerocopy::probe(),
         // Hidden: capture spawns this from a pinned fd of its own image — design/zerocopy-worker-isolation.md.
         #[cfg(target_os = "linux")]
-        Some("zerocopy-worker") => zerocopy::worker::run_from_args(&args[1..]),
+        Some("zerocopy-worker") => {
+            pf_frame::thread_qos::boost_thread_priority(true);
+            zerocopy::worker::run_from_args(&args[1..])
+        }
         // Hidden: backgrounds beside a nested gamescope app so a fresh headless instance composites
         // from the first second. Needs that session's DISPLAY.
         #[cfg(target_os = "linux")]

@@ -69,6 +69,7 @@ fn spawn(
         .spawn({
             let (slot, shared, quit) = (slot.clone(), shared.clone(), quit.clone());
             move || {
+                pf_frame::thread_qos::boost_thread_priority(true);
                 if let Err(e) = run(
                     &output_name,
                     policy,
