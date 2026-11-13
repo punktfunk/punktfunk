@@ -21,6 +21,7 @@ use axum::http::{header, Method};
 use axum::middleware::Next;
 use axum::Extension;
 use sha2::{Digest, Sha256};
+use std::collections::BTreeMap;
 
 /// A seat host reading the box's library ([`pf_paths::seat::box_library_dir`], `box_library`)
 /// changes none of it: every write under `/api/v1/library` answers 409, but the custom-entry
@@ -1565,11 +1566,24 @@ fn override_refused(e: crate::library::OverrideError) -> Response {
     }
 }
 
+/// The body of `GET /library/overrides`.
+#[derive(Serialize, ToSchema)]
+pub(crate) struct OverridesAnswer {
+    #[serde(flatten)]
+    doc: crate::library::OverridesDoc,
+    /// With `as` naming a profile with a layer of its own: the box's shared overrides by id,
+    /// which that profile's entries may name with `set`. Read only here.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(required = false, value_type = Option<BTreeMap<String, crate::library::GameOverridesSchema>>)]
+    box_sets: Option<BTreeMap<String, punktfunk_core::game_overrides::GameOverrides>>,
+}
+
 /// Read the game overrides
 ///
 /// The shared overrides, each game's entry and each source's, as `library-overrides.json`
 /// holds them. `GET /library` carries what each title resolves to. With `as`, the profile's own
-/// file: where it has an entry for a game or its source, that entry wins over the box's.
+/// file: where it has an entry for a game or its source, that entry wins over the box's. Beside
+/// it, `box_sets`: the box's shared overrides it may point at, which only the console changes.
 #[utoipa::path(
     get,
     path = "/library/overrides",
@@ -1577,7 +1591,7 @@ fn override_refused(e: crate::library::OverrideError) -> Response {
     operation_id = "getLibraryOverrides",
     params(("as" = Option<String>, Query, description = "Profile id: that profile's own overrides")),
     responses(
-        (status = OK, description = "The shared overrides and every game's and source's entry", body = crate::library::OverridesDoc),
+        (status = OK, description = "The shared overrides and every game's and source's entry", body = OverridesAnswer),
         (status = UNAUTHORIZED, description = "Missing or invalid bearer token", body = ApiError),
         (status = NOT_FOUND, description = "`as` names no profile on this host", body = ApiError),
     )
@@ -1587,7 +1601,12 @@ pub(crate) async fn get_library_overrides(
     who: AsProfile,
 ) -> Response {
     let scoped = scoped!(who, st);
-    Json(crate::library::load_overrides(&scoped.view)).into_response()
+    let view = &scoped.view;
+    let box_sets = view
+        .layer()
+        .map(|_| crate::library::load_overrides(&view.base()).sets);
+    let doc = crate::library::load_overrides(view);
+    Json(OverridesAnswer { doc, box_sets }).into_response()
 }
 
 /// Create a shared override

@@ -681,3 +681,46 @@ async fn the_owner_s_host_takes_a_vouched_session_as_that_profile() {
         assert_eq!(send(&app, vouch(req, SEAT_P)).await.0, want, "{path}");
     }
 }
+
+/// A person session reads the box's shared overrides beside its profile's own, to point at one,
+/// and changes none of them. The box's own read carries no copy of its sets.
+#[tokio::test]
+async fn a_person_reads_the_box_s_shared_overrides() {
+    let tmp = ConfigDirOverride::new();
+    write_fixture(tmp.path());
+    let trust = tempfile::tempdir().unwrap();
+    let copy = trust.path().join("profiles.json");
+    std::fs::write(&copy, super::profile_view::profiles().to_string()).unwrap();
+    let state = test_state();
+    let store = crate::profiles::Profiles::load_box(copy, Some("0".repeat(32)));
+    let _ = state.profiles.set(Arc::new(store));
+    let app = test_app(state, None);
+    let vouch = |mut req: axum::http::Request<Body>| {
+        let value = axum::http::HeaderValue::from_static(SEAT_P);
+        let header = crate::mgmt::person::VOUCH_HEADER;
+        req.headers_mut().insert(header, value);
+        req
+    };
+    let set = serde_json::json!({"name": "4K", "lines": 2160});
+    let create = json_req(Method::POST, "/api/v1/library/overrides/sets", set);
+    let (status, set) = send(&app, create).await;
+    assert_eq!(status, StatusCode::CREATED, "{set}");
+    let id = set["id"].as_str().unwrap();
+
+    let read = get_req(&format!("/api/v1/library/overrides?as={SEAT_P}"));
+    let (status, doc) = send(&app, vouch(read)).await;
+    assert_eq!(status, StatusCode::OK, "{doc}");
+    assert_eq!(doc["box_sets"][id]["lines"], 2160, "{doc}");
+    assert_eq!(doc["games"], serde_json::json!({"steam:400": {"hz": 30}}));
+    let (_, own) = send(&app, get_req("/api/v1/library/overrides")).await;
+    assert!(own.get("box_sets").is_none(), "{own}");
+
+    let before = super::person::files(tmp.path());
+    let path = format!("/api/v1/library/overrides/sets/{id}?as={SEAT_P}");
+    let change = json_req(Method::PUT, &path, serde_json::json!({"hz": 30}));
+    assert_eq!(send(&app, vouch(change)).await.0, StatusCode::UNAUTHORIZED);
+    let path = format!("/api/v1/library/overrides/sets?as={SEAT_P}");
+    let add = json_req(Method::POST, &path, serde_json::json!({"name": "Mine"}));
+    assert_eq!(send(&app, vouch(add)).await.0, StatusCode::UNAUTHORIZED);
+    assert_eq!(super::person::files(tmp.path()), before);
+}

@@ -4472,7 +4472,7 @@
           "library"
         ],
         "summary": "Read the game overrides",
-        "description": "The shared overrides, each game's entry and each source's, as `library-overrides.json`\nholds them. `GET /library` carries what each title resolves to. With `as`, the profile's own\nfile: where it has an entry for a game or its source, that entry wins over the box's.",
+        "description": "The shared overrides, each game's entry and each source's, as `library-overrides.json`\nholds them. `GET /library` carries what each title resolves to. With `as`, the profile's own\nfile: where it has an entry for a game or its source, that entry wins over the box's. Beside\nit, `box_sets`: the box's shared overrides it may point at, which only the console changes.",
         "operationId": "getLibraryOverrides",
         "parameters": [
           {
@@ -4491,7 +4491,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/OverridesDoc"
+                  "$ref": "#/components/schemas/OverridesAnswer"
                 }
               }
             }
@@ -16894,6 +16894,32 @@
             "minimum": 0
           }
         }
+      },
+      "OverridesAnswer": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/OverridesDoc"
+          },
+          {
+            "type": "object",
+            "properties": {
+              "box_sets": {
+                "type": [
+                  "object",
+                  "null"
+                ],
+                "description": "With `as` naming a profile with a layer of its own: the box's shared overrides by id,\nwhich that profile's entries may name with `set`. Read only here.",
+                "additionalProperties": {
+                  "$ref": "#/components/schemas/GameOverrides"
+                },
+                "propertyNames": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        ],
+        "description": "The body of `GET /library/overrides`."
       },
       "OverridesDoc": {
         "type": "object",
