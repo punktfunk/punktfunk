@@ -7,7 +7,7 @@
 //! the token is live and its own ([`vouched_by_seat`]). Then the session reaches `PERSON` and
 //! the reads the person's pages need ([`box_may_reach`]), as that profile, never as the owner.
 
-use super::owner::{Answer, Forwarded, Target};
+use super::owner::{Answer, Forwarded, Seats, Target};
 use super::scope::{scope_of, Scope};
 use super::shared::*;
 use axum::http::{HeaderMap, Method};
@@ -51,10 +51,32 @@ pub(crate) const BOX_READS: &[(&str, &str)] = &[
     ("GET", "/api/v1/session/settings"),
 ];
 
+/// What the person lane reaches on a Windows seat host beside [`SEAT_READS`]: their hooks and own
+/// titles, which run as them. That host is SYSTEM, so every other profile route there would act
+/// as SYSTEM on what the call names.
+pub(crate) const WINDOWS_SEAT: &[(&str, &str)] = &[
+    ("GET", "/api/v1/hooks"),
+    ("PUT", "/api/v1/hooks"),
+    ("POST", "/api/v1/library/custom"),
+    ("GET", "/api/v1/library/custom/{id}"),
+    ("PUT", "/api/v1/library/custom/{id}"),
+    ("DELETE", "/api/v1/library/custom/{id}"),
+    ("GET", "/api/v1/library/art/{id}/{kind}"),
+];
+
 /// Whether the person lane reaches `method` `path` on its seat host: a profile's data or
-/// execution, or one of [`SEAT_READS`]. A route with no scope stays closed.
+/// execution, or one of [`SEAT_READS`]; on Windows [`WINDOWS_SEAT`] alone of the profile's.
+/// A route with no scope stays closed.
 pub(crate) fn may_reach(method: &Method, path: &str) -> bool {
+    reaches(cfg!(windows), method, path)
+}
+
+/// [`may_reach`] on a `windows` seat host or a Linux one.
+pub(crate) fn reaches(windows: bool, method: &Method, path: &str) -> bool {
     match scope_of(method, path) {
+        Some(Scope::ProfileData | Scope::ProfileExec) if windows => {
+            listed(WINDOWS_SEAT, method, path)
+        }
         Some(Scope::ProfileData | Scope::ProfileExec) => true,
         Some(_) => listed(SEAT_READS, method, path),
         None => false,
@@ -453,10 +475,12 @@ pub(crate) fn presented(headers: &HeaderMap) -> Option<(&str, &str)> {
     Some((get(SESSION_HEADER)?, get(PROFILE_HEADER)?))
 }
 
-/// `profile`, once its seat host answered that `token` is a live session there for it. Never
-/// the owner, and never a profile with no seat of its own. Wakes no seat. Refusals are not
-/// counted: a count any local caller can run up would close the profile to its own person.
+/// `profile`, once its seat host answered that `token` is a live session there for it, asked
+/// through the door's seats or, on a Windows box, the supervisor's. Never the owner, and never a
+/// profile with no seat of its own. Wakes no seat. Refusals are not counted: a count any local
+/// caller can run up would close the profile to its own person.
 pub(crate) async fn vouched_by_seat(st: &MgmtState, profile: &str, token: &str) -> Option<String> {
+    let seats = st.door.clone().or_else(box_seats)?;
     let profiles = st.app.profiles.get()?;
     let owner = profiles.owner_id();
     if !crate::library::is_profile_id(profile) || owner.as_deref() == Some(profile) {
@@ -476,7 +500,8 @@ pub(crate) async fn vouched_by_seat(st: &MgmtState, profile: &str, token: &str) 
         stream: false,
         start: false,
     };
-    let Answer::Reply(status, _, answer) = st.seat_call(Target::Seat(seat), call).await else {
+    let asked = tokio::task::spawn_blocking(move || seats.call(&Target::Seat(seat), call));
+    let Ok(Answer::Reply(status, _, answer)) = asked.await else {
         return None;
     };
     (status == 200)
@@ -484,6 +509,13 @@ pub(crate) async fn vouched_by_seat(st: &MgmtState, profile: &str, token: &str) 
         .flatten()
         .filter(|of| of.profile == profile)
         .map(|of| of.profile)
+}
+
+/// The seats a box with no door reaches itself: on Windows, through the supervisor's pipe. A
+/// seat host is no box, and vouches for no one.
+fn box_seats() -> Option<Arc<dyn Seats>> {
+    let here = cfg!(windows) && !pf_paths::seat::role().is_seat_host();
+    here.then(|| Arc::new(super::owner::LiveSeats) as Arc<dyn Seats>)
 }
 
 #[cfg(test)]

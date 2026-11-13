@@ -1,11 +1,11 @@
 //! The Win32 half of `mgmt::theme`: the SID of the user signed in to this host's session, and a
 //! DWORD or string out of their hive. It lives here because `mgmt` forbids `unsafe`, and each of
-//! these reads is a Win32 call.
+//! these reads is a Win32 call. The person pipe reads its callers' SIDs through here too.
 
 use windows::core::{Owned, HSTRING, PWSTR};
 use windows::Win32::Foundation::{ERROR_SUCCESS, HANDLE, HLOCAL};
 use windows::Win32::Security::Authorization::ConvertSidToStringSidW;
-use windows::Win32::Security::{GetTokenInformation, TokenUser, TOKEN_USER};
+use windows::Win32::Security::{GetTokenInformation, TokenUser, PSID, TOKEN_USER};
 use windows::Win32::System::Registry::{RegGetValueW, HKEY_USERS, RRF_RT_REG_DWORD, RRF_RT_REG_SZ};
 use windows::Win32::System::RemoteDesktop::WTSQueryUserToken;
 
@@ -22,16 +22,21 @@ pub(crate) fn session_sid() -> Option<String> {
     unsafe { WTSQueryUserToken(session, &mut token) }.ok()?;
     // SAFETY: the query succeeded, so `token` is a handle this frame alone owns.
     let token = unsafe { Owned::new(token) };
+    token_sid(*token)
+}
+
+/// The user SID of `token`, which must grant `TOKEN_QUERY`, as `S-1-…`.
+pub(crate) fn token_sid(token: HANDLE) -> Option<String> {
     // Sized in two calls: the first asks how big the variable-length SID is.
     let mut needed = 0u32;
     // SAFETY: a deliberate size probe — null buffer with zero length is the documented way
     // to ask, and it fails with ERROR_INSUFFICIENT_BUFFER while setting `needed`.
-    let _ = unsafe { GetTokenInformation(*token, TokenUser, None, 0, &mut needed) };
+    let _ = unsafe { GetTokenInformation(token, TokenUser, None, 0, &mut needed) };
     let mut buf = vec![0u8; needed as usize];
     // SAFETY: `buf` is `needed` bytes, which is what the probe above asked for.
     unsafe {
         GetTokenInformation(
-            *token,
+            token,
             TokenUser,
             Some(buf.as_mut_ptr().cast()),
             needed,
@@ -44,8 +49,17 @@ pub(crate) fn session_sid() -> Option<String> {
     let sid = unsafe { buf.as_ptr().cast::<TOKEN_USER>().read_unaligned() }
         .User
         .Sid;
+    // SAFETY: `sid` points into `buf`, which lives past the call.
+    unsafe { sid_string(sid) }
+}
+
+/// `sid` as `S-1-…`.
+///
+/// # Safety
+/// `sid` points at a valid SID for the duration of the call.
+pub(crate) unsafe fn sid_string(sid: PSID) -> Option<String> {
     let mut out = PWSTR::null();
-    // SAFETY: `sid` is the live SID above; `out` is a live local out-param.
+    // SAFETY: the caller vouches for `sid`; `out` is a live local out-param.
     unsafe { ConvertSidToStringSidW(sid, &mut out) }.ok()?;
     // SAFETY: `out` is the LocalAlloc'd string the call returned; `Owned` frees it once.
     let _free = unsafe { Owned::new(HLOCAL(out.0.cast())) };

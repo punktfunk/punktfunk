@@ -1,11 +1,13 @@
-//! The person token: 32 random bytes a seat host writes into its own config folder at each
-//! start, `0600`, so only the account it runs as can read it. A ticket signed with it proves the
-//! caller is that account: `ctl console-url` signs one inside the seat, and the seat host
-//! redeems it for a person session (`mgmt::person_session`). The supervisor and the door never
-//! read it.
+//! The person token: 32 random bytes a seat host mints at each start. A ticket signed with it
+//! proves the caller is the seat's account, and the seat host redeems it for a person session
+//! (`mgmt::person_session`). The supervisor and the door never read it.
+//!
+//! On Linux the host runs as that account and writes it into its own config folder, `0600`;
+//! `ctl console-url` inside the seat reads it and signs. A Windows seat host runs as SYSTEM, so
+//! it keeps the token in memory and signs a ticket for whoever its pipe [`admits`]
+//! (`windows::person_pipe`).
 
 use hmac::{Hmac, KeyInit, Mac};
-#[cfg(any(unix, test))]
 use pf_paths::seat::{HostRole, SeatRole};
 #[cfg(unix)]
 use std::path::Path;
@@ -18,11 +20,35 @@ pub(crate) const FILE: &str = pf_paths::seat::PERSON_TOKEN;
 pub(crate) const TICKET_TTL_SECS: u64 = 60;
 
 /// Whether a host in `role` mints one: a seat host of its own, made for its seat or on a
-/// person's own account. Never the owner's row, the door or a plain host; a Windows seat host
-/// runs as SYSTEM, where no file is the person's alone.
-#[cfg(any(unix, test))]
+/// person's own account, on Linux or Windows. Never the owner's row, the door or a plain host.
 pub(crate) fn mints(role: HostRole) -> bool {
-    cfg!(target_os = "linux") && role == HostRole::Seat(SeatRole::Contract)
+    cfg!(any(target_os = "linux", windows)) && role == HostRole::Seat(SeatRole::Contract)
+}
+
+/// The process at the other end of a Windows seat host's person pipe, as its token says.
+#[cfg(any(windows, test))]
+#[derive(Debug)]
+pub(crate) struct PipeCaller {
+    /// `S-1-…`.
+    pub(crate) sid: String,
+    pub(crate) session: u32,
+    /// The mandatory label's RID: `0x2000` medium, `0x1000` low.
+    pub(crate) integrity: u32,
+    pub(crate) app_container: bool,
+}
+
+/// `SECURITY_MANDATORY_MEDIUM_RID`: a person's ordinary process.
+#[cfg(any(windows, test))]
+pub(crate) const MEDIUM_INTEGRITY: u32 = 0x2000;
+
+/// Whether `caller` is the seat's person: the account signed in to the seat's session
+/// (`seat_sid`), in that session, at medium integrity or above, outside any AppContainer.
+#[cfg(any(windows, test))]
+pub(crate) fn admits(caller: &PipeCaller, seat_sid: &str, seat_session: u32) -> bool {
+    caller.sid == seat_sid
+        && caller.session == seat_session
+        && caller.integrity >= MEDIUM_INTEGRITY
+        && !caller.app_container
 }
 
 /// A fresh token in `dir`'s [`FILE`], replacing what was there. `Err` says why the person lane
@@ -96,7 +122,6 @@ fn mac_of(token: &str) -> Hmac<sha2::Sha256> {
 
 /// A ticket for `profile`, issued at `ts` with `nonce` (lowercase hex): `<ts>.<nonce>.<profile>.<mac>`,
 /// the MAC HMAC-SHA256 over [`message`] keyed by the person token. Every byte is `[0-9a-f.]`.
-#[cfg(any(unix, test))]
 pub(crate) fn sign(token: &str, ts: u64, nonce: &str, profile: &str) -> String {
     let mut mac = mac_of(token);
     mac.update(message(ts, nonce, profile).as_bytes());
@@ -228,8 +253,61 @@ mod tests {
     #[test]
     fn only_a_seat_host_of_its_own_mints_one() {
         for role in HostRole::ALL {
-            let want = cfg!(target_os = "linux") && role == HostRole::Seat(SeatRole::Contract);
+            let here = cfg!(any(target_os = "linux", windows));
+            let want = here && role == HostRole::Seat(SeatRole::Contract);
             assert_eq!(mints(role), want, "{role:?}");
+        }
+    }
+
+    /// The pipe takes the seat's account in the seat's session, at medium integrity or above
+    /// and in no container. Another user, another session (an admin's, or the seat account's
+    /// own elsewhere), SYSTEM, a low-integrity process and an AppContainer each mint nothing.
+    #[test]
+    fn the_pipe_admits_the_seat_s_person_alone() {
+        const SEAT: &str = "S-1-5-21-1-2-3-1001";
+        let person = || PipeCaller {
+            sid: SEAT.into(),
+            session: 3,
+            integrity: MEDIUM_INTEGRITY,
+            app_container: false,
+        };
+        assert!(admits(&person(), SEAT, 3));
+        let elevated = PipeCaller {
+            integrity: 0x3000,
+            ..person()
+        };
+        assert!(admits(&elevated, SEAT, 3), "their own elevated process");
+        let refused = [
+            PipeCaller {
+                sid: "S-1-5-21-1-2-3-1002".into(),
+                ..person()
+            },
+            PipeCaller {
+                sid: "S-1-5-21-1-2-3-500".into(),
+                session: 1,
+                integrity: 0x3000,
+                ..person()
+            },
+            PipeCaller {
+                session: 1,
+                ..person()
+            },
+            PipeCaller {
+                sid: "S-1-5-18".into(),
+                integrity: 0x4000,
+                ..person()
+            },
+            PipeCaller {
+                integrity: 0x1000,
+                ..person()
+            },
+            PipeCaller {
+                app_container: true,
+                ..person()
+            },
+        ];
+        for caller in refused {
+            assert!(!admits(&caller, SEAT, 3), "{caller:?}");
         }
     }
 }
