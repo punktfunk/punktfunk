@@ -11,7 +11,7 @@
 // drop), `linux::handover`'s `SO_PEERPIDFD` read and `linux::loopback`'s `bpf(2)` call.
 #![cfg_attr(not(windows), deny(unsafe_code))]
 
-mod attempts;
+pub mod attempts;
 pub mod backend;
 pub mod backoff;
 #[cfg(any(windows, test))]
@@ -23,6 +23,7 @@ pub mod ipc;
 /// The Linux half. Its tests run wherever Unix does; only the daemon needs Linux.
 #[cfg(any(target_os = "linux", all(test, unix)))]
 pub mod linux;
+pub mod locks;
 pub mod logging;
 pub mod model;
 pub mod persistence;

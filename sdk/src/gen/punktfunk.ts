@@ -265,8 +265,10 @@ export type SeatKind = "shared" | "desktop"
 export const SeatKind = Schema.Literals(["shared", "desktop"]).annotate({ "description": "What a profile's seat is. A door places every profile on a seat, so a profile on the box's own\nsession has one too: the owner's.", "identifier": "SeatKind" })
 export type SeatState = "ready" | "starting" | "stopped" | "occupied" | "unavailable"
 export const SeatState = Schema.Literals(["ready", "starting", "stopped", "occupied", "unavailable"]).annotate({ "identifier": "SeatState" })
-export type UnlockNeed = "none" | "password" | "key"
-export const UnlockNeed = Schema.Literals(["none", "password", "key"]).annotate({ "description": "What a device sends with its connect to open a profile on a person's own Linux account.", "identifier": "UnlockNeed" })
+export type UnlockNeed = "none" | "password" | "key" | "pin"
+export const UnlockNeed = Schema.Literals(["none", "password", "key", "pin"]).annotate({ "description": "What a device sends with its connect to open a profile: a profile on a person's own Linux\naccount, or a locked one. A client that doesn't know a word reads it as `password`.", "identifier": "UnlockNeed" })
+export type LockSummary = { readonly "failed_pins": number, readonly "locked": boolean, readonly "pin": boolean, readonly "shared_with"?: string | null } & { readonly [x: string]: Schema.Json }
+export const LockSummary = Schema.StructWithRest(Schema.Struct({ "failed_pins": Schema.Number.annotate({ "description": "Wrong PINs in the last 15 minutes over all devices. At 10, PIN entry waits.", "format": "int32" }).check(Schema.isInt().annotate({ "expected": "an integer" })).check(Schema.isGreaterThanOrEqualTo(0).annotate({ "expected": "a value greater than or equal to 0" })), "locked": Schema.Boolean.annotate({ "description": "Only the devices on its list, and a device that brings its PIN, open it. Also `true` for\nevery profile while the lock file doesn't read." }), "pin": Schema.Boolean.annotate({ "description": "It has a PIN." }), "shared_with": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null]).annotate({ "description": "The owner profile whose lock opens it, for a profile that shares the owner's desktop:\nthe other fields are that lock's." })) }), [Schema.Record(Schema.String, Schema.Json.annotate({ "expected": "JSON value" }))]).annotate({ "description": "A profile's lock, as the profile list shows it.", "identifier": "LockSummary" })
 export type DefaultProfile = { readonly "id"?: string | null } & { readonly [x: string]: Schema.Json }
 export const DefaultProfile = Schema.StructWithRest(Schema.Struct({ "id": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null]).annotate({ "description": "`null` is the owner." })) }), [Schema.Record(Schema.String, Schema.Json.annotate({ "expected": "JSON value" }))]).annotate({ "description": "`PUT /profiles/default`.", "identifier": "DefaultProfile" })
 export type CheckLevel = "info" | "warning" | "error"
@@ -277,8 +279,16 @@ export type SeatingPlatform = "windows" | "linux" | "other"
 export const SeatingPlatform = Schema.Literals(["windows", "linux", "other"]).annotate({ "identifier": "SeatingPlatform" })
 export type SeatingChange = { readonly "allow_rdp_from_network"?: boolean, readonly "enabled": boolean, readonly "prepare"?: boolean } & { readonly [x: string]: Schema.Json }
 export const SeatingChange = Schema.StructWithRest(Schema.Struct({ "allow_rdp_from_network": Schema.optionalKey(Schema.Boolean.annotate({ "description": "Leave Remote Desktop reachable from the network. Off keeps it on this machine." })), "enabled": Schema.Boolean, "prepare": Schema.optionalKey(Schema.Boolean.annotate({ "description": "Windows Server: first install the Remote Desktop Session Host role and set licensing to\nPer User where they are missing. Installing the role can take minutes and asks for a\nrestart." })) }), [Schema.Record(Schema.String, Schema.Json.annotate({ "expected": "JSON value" }))]).annotate({ "description": "`PUT /profiles/seating`.", "identifier": "SeatingChange" })
-export type SignedInKind = "for_now" | "stay" | "key"
-export const SignedInKind = Schema.Literals(["for_now", "stay", "key"]).annotate({ "description": "How a signed-in device gets back on.", "identifier": "SignedInKind" })
+export type SignedInKind = "for_now" | "stay" | "added" | "key"
+export const SignedInKind = Schema.Literals(["for_now", "stay", "added", "key"]).annotate({ "description": "How a signed-in device gets back on.", "identifier": "SignedInKind" })
+export type ProfileDeviceAdd = { readonly "fingerprint": string } & { readonly [x: string]: Schema.Json }
+export const ProfileDeviceAdd = Schema.StructWithRest(Schema.Struct({ "fingerprint": Schema.String.annotate({ "description": "SHA-256 of a paired device's certificate, hex: a Punktfunk device or a Moonlight one." }) }), [Schema.Record(Schema.String, Schema.Json.annotate({ "expected": "JSON value" }))]).annotate({ "description": "`POST /profiles/{id}/devices`.", "identifier": "ProfileDeviceAdd" })
+export type PlayingDevice = { readonly "fingerprint"?: string | null, readonly "name": string } & { readonly [x: string]: Schema.Json }
+export const PlayingDevice = Schema.StructWithRest(Schema.Struct({ "fingerprint": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null]).annotate({ "description": "SHA-256 of the device's certificate, lowercase hex. Absent when its session matches no\nsingle paired device: it can't be kept, only warned about." })), "name": Schema.String.annotate({ "description": "The name it paired with, else the name its session gave." }) }), [Schema.Record(Schema.String, Schema.Json.annotate({ "expected": "JSON value" }))]).annotate({ "description": "A device playing as a profile now.", "identifier": "PlayingDevice" })
+export type LockProfile = { readonly "devices"?: ReadonlyArray<string>, readonly "pin"?: string | null } & { readonly [x: string]: Schema.Json }
+export const LockProfile = Schema.StructWithRest(Schema.Struct({ "devices": Schema.optionalKey(Schema.Array(Schema.String).annotate({ "description": "Paired devices, by certificate SHA-256 hex: the list it locks with, in place of any an\nearlier lock left. A profile already locked takes only devices it lets in." })), "pin": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null]).annotate({ "description": "4 to 8 digits: its PIN from now. Absent keeps the PIN it has. A profile already locked\ntakes none.", "examples": ["2468"] })) }), [Schema.Record(Schema.String, Schema.Json.annotate({ "expected": "JSON value" }))]).annotate({ "description": "`POST /profiles/{id}/lock`, optional.", "identifier": "LockProfile" })
+export type ProfilePin = { readonly "pin": string } & { readonly [x: string]: Schema.Json }
+export const ProfilePin = Schema.StructWithRest(Schema.Struct({ "pin": Schema.String.annotate({ "description": "4 to 8 digits.", "examples": ["2468"] }) }), [Schema.Record(Schema.String, Schema.Json.annotate({ "expected": "JSON value" }))]).annotate({ "description": "`PUT /profiles/{id}/lock/pin`.", "identifier": "ProfilePin" })
 export type UnlockChallenge = { readonly "challenge": string, readonly "seat": string } & { readonly [x: string]: Schema.Json }
 export const UnlockChallenge = Schema.StructWithRest(Schema.Struct({ "challenge": Schema.String.annotate({ "description": "32 random bytes, lowercase hex: good for one proof within two minutes.", "examples": ["9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08"] }), "seat": Schema.String.annotate({ "description": "The seat's id, 32 lowercase hex characters, as the signed message names it.", "examples": ["0123456789abcdef0123456789abcdef"] }) }), [Schema.Record(Schema.String, Schema.Json.annotate({ "expected": "JSON value" }))]).annotate({ "description": "`POST /profiles/{id}/unlock-challenge`.", "identifier": "UnlockChallenge" })
 export type GameOnNewLaunch = "keep" | "end"
@@ -449,8 +459,10 @@ export type SeatPublic = { readonly "account"?: string | null, readonly "detail"
 export const SeatPublic = Schema.StructWithRest(Schema.Struct({ "account": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null]).annotate({ "description": "The account of a seat on an existing one, for the console's card and its Remove\nsentence. Absent for an account punktfunk made, and to a paired device." })), "detail": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null]).annotate({ "description": "The progress line while `starting`, or why while `unavailable`." })), "detail_id": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null]).annotate({ "description": "The host message `detail` is the English of, worded with `detail_params`." })), "detail_params": Schema.optionalKey(Schema.Record(Schema.String, Schema.String).annotate({ "description": "The values of that message's placeholders, by name." }).check(Schema.isPropertyNames(Schema.String).annotate({ "expected": "an object with property names matching the schema" }))), "kind": Schema.suspend((): Schema.Codec<SeatKind> => SeatKind).annotate({ "description": "Which kind of seat it is." }), "occupant": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null]).annotate({ "description": "The device playing on it while `occupied`." })), "pin": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null]).annotate({ "description": "The certificate fingerprint of the host at `port`, hex, when it is a seat's own: a\nclient dialing `port` directly pins it. Absent: the pin of this host." })), "port": Schema.Number.annotate({ "description": "The port to dial for this profile.", "format": "int32" }).check(Schema.isInt().annotate({ "expected": "an integer" })).check(Schema.isGreaterThanOrEqualTo(0).annotate({ "expected": "a value greater than or equal to 0" })), "state": SeatState, "take_turns": Schema.optionalKey(Schema.Boolean.annotate({ "description": "A take-turns profile: its own Windows account on the one console, not a host of its own.\nIt dials this host like the owner does, so it has no per-seat library of its own and\nremoving it leaves the Windows account alone." })) }), [Schema.Record(Schema.String, Schema.Json.annotate({ "expected": "JSON value" }))]).annotate({ "description": "A profile's seat right now.", "identifier": "SeatPublic" })
 export type SeatCheck = { readonly "code": string, readonly "id"?: string | null, readonly "level": CheckLevel, readonly "message": string, readonly "params"?: { readonly [x: string]: string }, readonly "seat_id"?: string | null, readonly "seat_name"?: string | null } & { readonly [x: string]: Schema.Json }
 export const SeatCheck = Schema.StructWithRest(Schema.Struct({ "code": Schema.String.annotate({ "description": "A stable id such as `rds_role`.", "examples": ["rds_role"] }), "id": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null]).annotate({ "description": "The host message `message` is the English of, worded with `params`." })), "level": CheckLevel, "message": Schema.String.annotate({ "description": "One plain sentence for the operator." }), "params": Schema.optionalKey(Schema.Record(Schema.String, Schema.String).annotate({ "description": "The values of that message's placeholders, by name." }).check(Schema.isPropertyNames(Schema.String).annotate({ "expected": "an object with property names matching the schema" }))), "seat_id": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null]).annotate({ "description": "The seat it is about; absent when it is about the box." })), "seat_name": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null]).annotate({ "description": "The name of the profile that plays on that seat, when one does." })) }), [Schema.Record(Schema.String, Schema.Json.annotate({ "expected": "JSON value" }))]).annotate({ "description": "One thing the seat checks found.", "identifier": "SeatCheck" })
-export type SignedInDevice = { readonly "added_unix": number, readonly "fingerprint": string, readonly "kind": SignedInKind, readonly "last_unix": number, readonly "name": string } & { readonly [x: string]: Schema.Json }
-export const SignedInDevice = Schema.StructWithRest(Schema.Struct({ "added_unix": Schema.Number.annotate({ "description": "When it first signed in, unix seconds.", "format": "int64" }).check(Schema.isInt().annotate({ "expected": "an integer" })), "fingerprint": Schema.String.annotate({ "description": "SHA-256 of the device's certificate, lowercase hex." }), "kind": SignedInKind, "last_unix": Schema.Number.annotate({ "description": "When it last unlocked or rejoined, unix seconds.", "format": "int64" }).check(Schema.isInt().annotate({ "expected": "an integer" })), "name": Schema.String.annotate({ "description": "The name it paired with." }) }), [Schema.Record(Schema.String, Schema.Json.annotate({ "expected": "JSON value" }))]).annotate({ "description": "A device signed in to a profile on a person's own Linux account.", "identifier": "SignedInDevice" })
+export type SignedInDevice = { readonly "added_unix": number, readonly "fingerprint": string, readonly "kind": SignedInKind, readonly "last_unix": number, readonly "moonlight": boolean, readonly "name": string } & { readonly [x: string]: Schema.Json }
+export const SignedInDevice = Schema.StructWithRest(Schema.Struct({ "added_unix": Schema.Number.annotate({ "description": "When it first signed in, unix seconds.", "format": "int64" }).check(Schema.isInt().annotate({ "expected": "an integer" })), "fingerprint": Schema.String.annotate({ "description": "SHA-256 of the device's certificate, lowercase hex." }), "kind": SignedInKind, "last_unix": Schema.Number.annotate({ "description": "When it last unlocked or rejoined, unix seconds.", "format": "int64" }).check(Schema.isInt().annotate({ "expected": "an integer" })), "moonlight": Schema.Boolean.annotate({ "description": "A Moonlight pairing rather than a Punktfunk one. Never on a person's own account." }), "name": Schema.String.annotate({ "description": "The name it paired with." }) }), [Schema.Record(Schema.String, Schema.Json.annotate({ "expected": "JSON value" }))]).annotate({ "description": "A device signed in to a profile on a person's own Linux account, or on a locked profile's\nlist.", "identifier": "SignedInDevice" })
+export type ProfileLock = { readonly "failed_pins": number, readonly "locked": boolean, readonly "pin": boolean, readonly "shared_with"?: string | null, readonly "playing": ReadonlyArray<PlayingDevice> } & { readonly [x: string]: Schema.Json }
+export const ProfileLock = Schema.StructWithRest(Schema.Struct({ "failed_pins": Schema.Number.annotate({ "description": "Wrong PINs in the last 15 minutes over all devices. At 10, PIN entry waits.", "format": "int32" }).check(Schema.isInt().annotate({ "expected": "an integer" })).check(Schema.isGreaterThanOrEqualTo(0).annotate({ "expected": "a value greater than or equal to 0" })), "locked": Schema.Boolean.annotate({ "description": "Only the devices on its list, and a device that brings its PIN, open it. Also `true` for\nevery profile while the lock file doesn't read." }), "pin": Schema.Boolean.annotate({ "description": "It has a PIN." }), "shared_with": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null]).annotate({ "description": "The owner profile whose lock opens it, for a profile that shares the owner's desktop:\nthe other fields are that lock's." })), "playing": Schema.Array(PlayingDevice).annotate({ "description": "The devices playing as it now, on its desktop's other profiles too: the ones a lock would\ncut off unless they are kept." }) }), [Schema.Record(Schema.String, Schema.Json.annotate({ "expected": "JSON value" }))]).annotate({ "description": "A profile's lock, as the console shows it.", "identifier": "ProfileLock" })
 export type SessionSettings = { readonly "disconnect_grace_seconds"?: number, readonly "game_on_new_launch"?: GameOnNewLaunch, readonly "game_on_session_end"?: GameOnSessionEnd, readonly "session_on_game_exit"?: boolean, readonly "version"?: number } & { readonly [x: string]: Schema.Json }
 export const SessionSettings = Schema.StructWithRest(Schema.Struct({ "disconnect_grace_seconds": Schema.optionalKey(Schema.Number.annotate({ "description": "Ignored unless `game_on_session_end` is `Always`.", "format": "int32" }).check(Schema.isInt().annotate({ "expected": "an integer" })).check(Schema.isGreaterThanOrEqualTo(0).annotate({ "expected": "a value greater than or equal to 0" }))), "game_on_new_launch": Schema.optionalKey(GameOnNewLaunch), "game_on_session_end": Schema.optionalKey(GameOnSessionEnd), "session_on_game_exit": Schema.optionalKey(Schema.Boolean), "version": Schema.optionalKey(Schema.Number.annotate({ "format": "int32" }).check(Schema.isInt().annotate({ "expected": "an integer" })).check(Schema.isGreaterThanOrEqualTo(0).annotate({ "expected": "a value greater than or equal to 0" }))) }), [Schema.Record(Schema.String, Schema.Json.annotate({ "expected": "JSON value" }))]).annotate({ "identifier": "SessionSettings" })
 export type LinkMinute = { readonly "abr_backoffs": number, readonly "abr_max_kbps": number, readonly "abr_min_kbps": number, readonly "acked_p": number, readonly "anchor_p": number, readonly "egress_kbps": number, readonly "fec_max_pct": number, readonly "fec_min_pct": number, readonly "gaps": number, readonly "idr": number, readonly "intra_refresh": number, readonly "keyframe_req": number, readonly "link_kbps": number, readonly "loss_head": number, readonly "loss_max_ppm": number, readonly "loss_mean_ppm": number, readonly "loss_mid": number, readonly "loss_tail": number, readonly "loss_windows": number, readonly "resend_pkts": number, readonly "retargets": number, readonly "rfi": number, readonly "rfi_declined": number, readonly "secs": number, readonly "session_id": number, readonly "shape": LinkShape, readonly "sock_drops": number, readonly "unrecovered": number, readonly "windows": number } & { readonly [x: string]: Schema.Json }
@@ -495,8 +507,8 @@ export type MetadataInput = { readonly "entries"?: ReadonlyArray<MetadataEntryIn
 export const MetadataInput = Schema.StructWithRest(Schema.Struct({ "entries": Schema.optionalKey(Schema.Array(MetadataEntryInput)), "matching": Schema.optionalKey(Matching) }), [Schema.Record(Schema.String, Schema.Json.annotate({ "expected": "JSON value" }))]).annotate({ "description": "`PUT /library/metadata/{source}`: the source's whole result.", "identifier": "MetadataInput" })
 export type CaptureHealth = { readonly "backend_opened"?: string | null, readonly "class": string, readonly "cooldown_remaining_ms"?: number | null, readonly "current_stage"?: string | null, readonly "detached": number, readonly "dropped_total": number, readonly "encoder_state"?: string | null, readonly "episodes_suppressed": number, readonly "evidence"?: string | null, readonly "last_episode"?: null | CaptureEpisode, readonly "late_frames": boolean, readonly "present_to_arrival_ms"?: number | null, readonly "published_total": number, readonly "source_gap_ms": number, readonly "stall_class"?: string | null } & { readonly [x: string]: Schema.Json }
 export const CaptureHealth = Schema.StructWithRest(Schema.Struct({ "backend_opened": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null]).annotate({ "description": "The backend the driver opened: `nvenc` / `amf` / `qsv` / `pyrowave`. Absent as above." })), "class": Schema.String.annotate({ "description": "`healthy` / `idle` / `suspect` / `stalled` / `recovering` / `rebuilding` / `secure_desktop`.", "examples": ["healthy"] }), "cooldown_remaining_ms": Schema.optionalKey(Schema.Union([Schema.Number.annotate({ "format": "int64" }).check(Schema.isInt().annotate({ "expected": "an integer" })).check(Schema.isGreaterThanOrEqualTo(0).annotate({ "expected": "a value greater than or equal to 0" })), Schema.Null]).annotate({ "description": "Time left in the post-failure cooldown, while one is in force." })), "current_stage": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null]).annotate({ "description": "The recovery stage running now, while an episode is open." })), "detached": Schema.Number.annotate({ "description": "Encode threads the driver abandoned after a wedge; two opens the driver cycle.", "format": "int32" }).check(Schema.isInt().annotate({ "expected": "an integer" })).check(Schema.isGreaterThanOrEqualTo(0).annotate({ "expected": "a value greater than or equal to 0" })), "dropped_total": Schema.Number.annotate({ "format": "int64" }).check(Schema.isInt().annotate({ "expected": "an integer" })).check(Schema.isGreaterThanOrEqualTo(0).annotate({ "expected": "a value greater than or equal to 0" })), "encoder_state": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null]).annotate({ "description": "The driver encoder's own state word: `closed` / `open` / `encoding` / `wedged`.\nAbsent until the session's first `SET_ENCODE`." })), "episodes_suppressed": Schema.Number.annotate({ "description": "Stalled verdicts refused for budget or cooldown since the last episode.", "format": "int32" }).check(Schema.isInt().annotate({ "expected": "an integer" })).check(Schema.isGreaterThanOrEqualTo(0).annotate({ "expected": "a value greater than or equal to 0" })), "evidence": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null]).annotate({ "description": "Activity evidence behind the verdict: `input` / `canary`." })), "last_episode": Schema.optionalKey(Schema.Union([Schema.Null, Schema.suspend((): Schema.Codec<CaptureEpisode> => CaptureEpisode).annotate({ "description": "The last closed recovery episode." })], { mode: "oneOf" })), "late_frames": Schema.Boolean.annotate({ "description": "`present_to_arrival_ms` is past the classifier's bound: frames come late rather than not\nat all. Reported only — no recovery rung fires on it." }), "present_to_arrival_ms": Schema.optionalKey(Schema.Union([Schema.Number.annotate({ "format": "int64" }).check(Schema.isInt().annotate({ "expected": "an integer" })).check(Schema.isGreaterThanOrEqualTo(0).annotate({ "expected": "a value greater than or equal to 0" })), Schema.Null]).annotate({ "description": "The newest access unit's OS present stamp against the moment the host took it." })), "published_total": Schema.Number.annotate({ "description": "Access units the driver published, and frames it dropped at its encode pool.", "format": "int64" }).check(Schema.isInt().annotate({ "expected": "an integer" })).check(Schema.isGreaterThanOrEqualTo(0).annotate({ "expected": "a value greater than or equal to 0" })), "source_gap_ms": Schema.Number.annotate({ "description": "Time since the last real source frame.", "format": "int64" }).check(Schema.isInt().annotate({ "expected": "an integer" })).check(Schema.isGreaterThanOrEqualTo(0).annotate({ "expected": "a value greater than or equal to 0" })), "stall_class": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null]).annotate({ "description": "When `class` is `stalled`: `worker` / `encoder` / `presentation` / `driver`." })) }), [Schema.Record(Schema.String, Schema.Json.annotate({ "expected": "JSON value" }))]).annotate({ "description": "Per-session capture health (Windows IDD-push): the live classifier verdict, the driver\nencoder's self-report and the last staged-recovery episode.", "identifier": "CaptureHealth" })
-export type ProfileAdmin = { readonly "accent"?: string | null, readonly "avatar"?: string | null, readonly "display_name": string, readonly "home": Home, readonly "id": string, readonly "last_used_unix": number, readonly "legacy_seat"?: boolean, readonly "owner": boolean, readonly "seat"?: null | SeatPublic, readonly "unlock"?: null | UnlockNeed, readonly "default": boolean, readonly "legacy_device"?: string | null, readonly "steam_home"?: boolean } & { readonly [x: string]: Schema.Json }
-export const ProfileAdmin = Schema.StructWithRest(Schema.Struct({ "accent": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null]).annotate({ "description": "`#RRGGBB` behind the initials when there is no picture." })), "avatar": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null]).annotate({ "description": "Host-relative URL of the picture." })), "display_name": Schema.String, "home": Schema.suspend((): Schema.Codec<Home> => Home).annotate({ "description": "What a bare connect opens." }), "id": Schema.String.annotate({ "examples": ["9a3f1c2b7e40"] }), "last_used_unix": Schema.Number.annotate({ "description": "When a session last played as it; `0`: never.", "format": "int64" }).check(Schema.isInt().annotate({ "expected": "an integer" })).check(Schema.isGreaterThanOrEqualTo(0).annotate({ "expected": "a value greater than or equal to 0" })), "legacy_seat": Schema.optionalKey(Schema.Boolean.annotate({ "description": "The asking device's old seat became this profile. A client takes it without a picker." })), "owner": Schema.Boolean.annotate({ "description": "The box's own session." }), "seat": Schema.optionalKey(Schema.Union([Schema.Null, Schema.suspend((): Schema.Codec<SeatPublic> => SeatPublic).annotate({ "description": "Its own seat; absent when it plays on the box's own session." })], { mode: "oneOf" })), "unlock": Schema.optionalKey(Schema.Union([Schema.Null, Schema.suspend((): Schema.Codec<UnlockNeed> => UnlockNeed).annotate({ "description": "What the asking device sends to open it. Every row of `enumerate` has it." })], { mode: "oneOf" })), "default": Schema.Boolean.annotate({ "description": "Where a device that names no profile lands." }), "legacy_device": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null]).annotate({ "description": "The device whose seat became this profile, lowercase hex." })), "steam_home": Schema.optionalKey(Schema.Boolean.annotate({ "description": "This host keeps a Steam home for it, with that Steam's sign-in and saved games. A removal\nwith `erase` deletes it." })) }), [Schema.Record(Schema.String, Schema.Json.annotate({ "expected": "JSON value" }))]).annotate({ "description": "One profile as the console manages it.", "identifier": "ProfileAdmin" })
+export type ProfileAdmin = { readonly "accent"?: string | null, readonly "avatar"?: string | null, readonly "display_name": string, readonly "home": Home, readonly "id": string, readonly "last_used_unix": number, readonly "legacy_seat"?: boolean, readonly "owner": boolean, readonly "seat"?: null | SeatPublic, readonly "unlock"?: null | UnlockNeed, readonly "default": boolean, readonly "legacy_device"?: string | null, readonly "lock"?: null | LockSummary, readonly "steam_home"?: boolean } & { readonly [x: string]: Schema.Json }
+export const ProfileAdmin = Schema.StructWithRest(Schema.Struct({ "accent": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null]).annotate({ "description": "`#RRGGBB` behind the initials when there is no picture." })), "avatar": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null]).annotate({ "description": "Host-relative URL of the picture." })), "display_name": Schema.String, "home": Schema.suspend((): Schema.Codec<Home> => Home).annotate({ "description": "What a bare connect opens." }), "id": Schema.String.annotate({ "examples": ["9a3f1c2b7e40"] }), "last_used_unix": Schema.Number.annotate({ "description": "When a session last played as it; `0`: never.", "format": "int64" }).check(Schema.isInt().annotate({ "expected": "an integer" })).check(Schema.isGreaterThanOrEqualTo(0).annotate({ "expected": "a value greater than or equal to 0" })), "legacy_seat": Schema.optionalKey(Schema.Boolean.annotate({ "description": "The asking device's old seat became this profile. A client takes it without a picker." })), "owner": Schema.Boolean.annotate({ "description": "The box's own session." }), "seat": Schema.optionalKey(Schema.Union([Schema.Null, Schema.suspend((): Schema.Codec<SeatPublic> => SeatPublic).annotate({ "description": "Its own seat; absent when it plays on the box's own session." })], { mode: "oneOf" })), "unlock": Schema.optionalKey(Schema.Union([Schema.Null, Schema.suspend((): Schema.Codec<UnlockNeed> => UnlockNeed).annotate({ "description": "What the asking device sends to open it. Every row of `enumerate` has it." })], { mode: "oneOf" })), "default": Schema.Boolean.annotate({ "description": "Where a device that names no profile lands." }), "legacy_device": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null]).annotate({ "description": "The device whose seat became this profile, lowercase hex." })), "lock": Schema.optionalKey(Schema.Union([Schema.Null, Schema.suspend((): Schema.Codec<LockSummary> => LockSummary).annotate({ "description": "Its lock. Absent for a profile on a person's own account, which opens with its password." })], { mode: "oneOf" })), "steam_home": Schema.optionalKey(Schema.Boolean.annotate({ "description": "This host keeps a Steam home for it, with that Steam's sign-in and saved games. A removal\nwith `erase` deletes it." })) }), [Schema.Record(Schema.String, Schema.Json.annotate({ "expected": "JSON value" }))]).annotate({ "description": "One profile as the console manages it.", "identifier": "ProfileAdmin" })
 export type ProfilePublic = { readonly "accent"?: string | null, readonly "avatar"?: string | null, readonly "display_name": string, readonly "home": Home, readonly "id": string, readonly "last_used_unix": number, readonly "legacy_seat"?: boolean, readonly "owner": boolean, readonly "seat"?: null | SeatPublic, readonly "unlock"?: null | UnlockNeed } & { readonly [x: string]: Schema.Json }
 export const ProfilePublic = Schema.StructWithRest(Schema.Struct({ "accent": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null]).annotate({ "description": "`#RRGGBB` behind the initials when there is no picture." })), "avatar": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null]).annotate({ "description": "Host-relative URL of the picture." })), "display_name": Schema.String, "home": Schema.suspend((): Schema.Codec<Home> => Home).annotate({ "description": "What a bare connect opens." }), "id": Schema.String.annotate({ "examples": ["9a3f1c2b7e40"] }), "last_used_unix": Schema.Number.annotate({ "description": "When a session last played as it; `0`: never.", "format": "int64" }).check(Schema.isInt().annotate({ "expected": "an integer" })).check(Schema.isGreaterThanOrEqualTo(0).annotate({ "expected": "a value greater than or equal to 0" })), "legacy_seat": Schema.optionalKey(Schema.Boolean.annotate({ "description": "The asking device's old seat became this profile. A client takes it without a picker." })), "owner": Schema.Boolean.annotate({ "description": "The box's own session." }), "seat": Schema.optionalKey(Schema.Union([Schema.Null, Schema.suspend((): Schema.Codec<SeatPublic> => SeatPublic).annotate({ "description": "Its own seat; absent when it plays on the box's own session." })], { mode: "oneOf" })), "unlock": Schema.optionalKey(Schema.Union([Schema.Null, Schema.suspend((): Schema.Codec<UnlockNeed> => UnlockNeed).annotate({ "description": "What the asking device sends to open it. Every row of `enumerate` has it." })], { mode: "oneOf" })) }), [Schema.Record(Schema.String, Schema.Json.annotate({ "expected": "JSON value" }))]).annotate({ "description": "One profile as a client's picker shows it.", "identifier": "ProfilePublic" })
 export type SeatsDoctor = { readonly "diagnostics": ReadonlyArray<SeatCheck>, readonly "healthy": boolean } & { readonly [x: string]: Schema.Json }
@@ -1582,6 +1594,20 @@ export type ListProfileDevices409 = ApiError
 export const ListProfileDevices409 = ApiError
 export type ListProfileDevices503 = ApiError
 export const ListProfileDevices503 = ApiError
+export type AddProfileDeviceRequestJson = ProfileDeviceAdd
+export const AddProfileDeviceRequestJson = ProfileDeviceAdd
+export type AddProfileDevice200 = ReadonlyArray<SignedInDevice>
+export const AddProfileDevice200 = Schema.Array(SignedInDevice)
+export type AddProfileDevice400 = ApiError
+export const AddProfileDevice400 = ApiError
+export type AddProfileDevice401 = ApiError
+export const AddProfileDevice401 = ApiError
+export type AddProfileDevice404 = ApiError
+export const AddProfileDevice404 = ApiError
+export type AddProfileDevice409 = ApiError
+export const AddProfileDevice409 = ApiError
+export type AddProfileDevice422 = ApiError
+export const AddProfileDevice422 = ApiError
 export type SignOutProfileDevices401 = ApiError
 export const SignOutProfileDevices401 = ApiError
 export type SignOutProfileDevices404 = ApiError
@@ -1610,6 +1636,54 @@ export type EndProfileSession409 = ApiError
 export const EndProfileSession409 = ApiError
 export type EndProfileSession503 = ApiError
 export const EndProfileSession503 = ApiError
+export type GetProfileLock200 = ProfileLock
+export const GetProfileLock200 = ProfileLock
+export type GetProfileLock401 = ApiError
+export const GetProfileLock401 = ApiError
+export type GetProfileLock404 = ApiError
+export const GetProfileLock404 = ApiError
+export type GetProfileLock409 = ApiError
+export const GetProfileLock409 = ApiError
+export type LockProfileRequestJson = null | LockProfile
+export const LockProfileRequestJson = Schema.Union([Schema.Null, LockProfile], { mode: "oneOf" })
+export type LockProfile200 = ProfileLock
+export const LockProfile200 = ProfileLock
+export type LockProfile400 = ApiError
+export const LockProfile400 = ApiError
+export type LockProfile401 = ApiError
+export const LockProfile401 = ApiError
+export type LockProfile404 = ApiError
+export const LockProfile404 = ApiError
+export type LockProfile409 = ApiError
+export const LockProfile409 = ApiError
+export type UnlockProfile200 = ProfileLock
+export const UnlockProfile200 = ProfileLock
+export type UnlockProfile401 = ApiError
+export const UnlockProfile401 = ApiError
+export type UnlockProfile404 = ApiError
+export const UnlockProfile404 = ApiError
+export type UnlockProfile409 = ApiError
+export const UnlockProfile409 = ApiError
+export type SetProfilePinRequestJson = ProfilePin
+export const SetProfilePinRequestJson = ProfilePin
+export type SetProfilePin200 = ProfileLock
+export const SetProfilePin200 = ProfileLock
+export type SetProfilePin400 = ApiError
+export const SetProfilePin400 = ApiError
+export type SetProfilePin401 = ApiError
+export const SetProfilePin401 = ApiError
+export type SetProfilePin404 = ApiError
+export const SetProfilePin404 = ApiError
+export type SetProfilePin409 = ApiError
+export const SetProfilePin409 = ApiError
+export type ClearProfilePin200 = ProfileLock
+export const ClearProfilePin200 = ProfileLock
+export type ClearProfilePin401 = ApiError
+export const ClearProfilePin401 = ApiError
+export type ClearProfilePin404 = ApiError
+export const ClearProfilePin404 = ApiError
+export type ClearProfilePin409 = ApiError
+export const ClearProfilePin409 = ApiError
 export type StartProfileSeat200 = ProfileAdmin
 export const StartProfileSeat200 = ProfileAdmin
 export type StartProfileSeat401 = ApiError
@@ -3362,6 +3436,20 @@ export const make = (
     }))
     ))
   ),
+    "addProfileDevice": (id, options: Parameters<Punktfunk["addProfileDevice"]>[1]) => __makePathRequest(HttpClientRequest.post, [id], () => "/api/v1/profiles/" + __encodePathParam(id) + "/devices").pipe(
+    Effect.flatMap((request) => request.pipe(
+      HttpClientRequest.bodyJsonUnsafe(options.payload),
+      withResponse(options.config)(HttpClientResponse.matchStatus({
+      "2xx": decodeSuccess(AddProfileDevice200),
+      "400": decodeError("AddProfileDevice400", AddProfileDevice400),
+      "401": decodeError("AddProfileDevice401", AddProfileDevice401),
+      "404": decodeError("AddProfileDevice404", AddProfileDevice404),
+      "409": decodeError("AddProfileDevice409", AddProfileDevice409),
+      "422": decodeError("AddProfileDevice422", AddProfileDevice422),
+      orElse: unexpectedStatus
+    }))
+    ))
+  ),
     "signOutProfileDevices": (id, options: Parameters<Punktfunk["signOutProfileDevices"]>[1]) => __makePathRequest(HttpClientRequest.delete, [id], () => "/api/v1/profiles/" + __encodePathParam(id) + "/devices").pipe(
     Effect.flatMap((request) => request.pipe(
       withResponse(options?.config)(HttpClientResponse.matchStatus({
@@ -3395,6 +3483,65 @@ export const make = (
       "404": decodeError("EndProfileSession404", EndProfileSession404),
       "409": decodeError("EndProfileSession409", EndProfileSession409),
       "503": decodeError("EndProfileSession503", EndProfileSession503),
+      orElse: unexpectedStatus
+    }))
+    ))
+  ),
+    "getProfileLock": (id, options: Parameters<Punktfunk["getProfileLock"]>[1]) => __makePathRequest(HttpClientRequest.get, [id], () => "/api/v1/profiles/" + __encodePathParam(id) + "/lock").pipe(
+    Effect.flatMap((request) => request.pipe(
+      withResponse(options?.config)(HttpClientResponse.matchStatus({
+      "2xx": decodeSuccess(GetProfileLock200),
+      "401": decodeError("GetProfileLock401", GetProfileLock401),
+      "404": decodeError("GetProfileLock404", GetProfileLock404),
+      "409": decodeError("GetProfileLock409", GetProfileLock409),
+      orElse: unexpectedStatus
+    }))
+    ))
+  ),
+    "lockProfile": (id, options: Parameters<Punktfunk["lockProfile"]>[1]) => __makePathRequest(HttpClientRequest.post, [id], () => "/api/v1/profiles/" + __encodePathParam(id) + "/lock").pipe(
+    Effect.flatMap((request) => request.pipe(
+      HttpClientRequest.bodyJsonUnsafe(options.payload),
+      withResponse(options.config)(HttpClientResponse.matchStatus({
+      "2xx": decodeSuccess(LockProfile200),
+      "400": decodeError("LockProfile400", LockProfile400),
+      "401": decodeError("LockProfile401", LockProfile401),
+      "404": decodeError("LockProfile404", LockProfile404),
+      "409": decodeError("LockProfile409", LockProfile409),
+      orElse: unexpectedStatus
+    }))
+    ))
+  ),
+    "unlockProfile": (id, options: Parameters<Punktfunk["unlockProfile"]>[1]) => __makePathRequest(HttpClientRequest.delete, [id], () => "/api/v1/profiles/" + __encodePathParam(id) + "/lock").pipe(
+    Effect.flatMap((request) => request.pipe(
+      withResponse(options?.config)(HttpClientResponse.matchStatus({
+      "2xx": decodeSuccess(UnlockProfile200),
+      "401": decodeError("UnlockProfile401", UnlockProfile401),
+      "404": decodeError("UnlockProfile404", UnlockProfile404),
+      "409": decodeError("UnlockProfile409", UnlockProfile409),
+      orElse: unexpectedStatus
+    }))
+    ))
+  ),
+    "setProfilePin": (id, options: Parameters<Punktfunk["setProfilePin"]>[1]) => __makePathRequest(HttpClientRequest.put, [id], () => "/api/v1/profiles/" + __encodePathParam(id) + "/lock/pin").pipe(
+    Effect.flatMap((request) => request.pipe(
+      HttpClientRequest.bodyJsonUnsafe(options.payload),
+      withResponse(options.config)(HttpClientResponse.matchStatus({
+      "2xx": decodeSuccess(SetProfilePin200),
+      "400": decodeError("SetProfilePin400", SetProfilePin400),
+      "401": decodeError("SetProfilePin401", SetProfilePin401),
+      "404": decodeError("SetProfilePin404", SetProfilePin404),
+      "409": decodeError("SetProfilePin409", SetProfilePin409),
+      orElse: unexpectedStatus
+    }))
+    ))
+  ),
+    "clearProfilePin": (id, options: Parameters<Punktfunk["clearProfilePin"]>[1]) => __makePathRequest(HttpClientRequest.delete, [id], () => "/api/v1/profiles/" + __encodePathParam(id) + "/lock/pin").pipe(
+    Effect.flatMap((request) => request.pipe(
+      withResponse(options?.config)(HttpClientResponse.matchStatus({
+      "2xx": decodeSuccess(ClearProfilePin200),
+      "401": decodeError("ClearProfilePin401", ClearProfilePin401),
+      "404": decodeError("ClearProfilePin404", ClearProfilePin404),
+      "409": decodeError("ClearProfilePin409", ClearProfilePin409),
       orElse: unexpectedStatus
     }))
     ))
@@ -4825,10 +4972,12 @@ readonly "setDoor": {
     <Config extends OperationConfig | undefined = undefined>(options: { readonly payload: typeof SetDoorRequestJson.Encoded; readonly config?: Config | undefined }): Effect.Effect<WithOptionalResponse<void, Config | undefined>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"SetDoor401", typeof SetDoor401.Type> | PunktfunkError<"SetDoor403", typeof SetDoor403.Type> | PunktfunkError<"SetDoor409", typeof SetDoor409.Type> | PunktfunkError<"SetDoor502", typeof SetDoor502.Type> | PunktfunkError<"SetDoor503", typeof SetDoor503.Type>>;
   }
   /**
-* Every profile on the box, the owner first. A client shows this as its picker. Each row's
-* `unlock` says what the asking device sends with its connect: a profile on a person's own
-* Linux account needs the account's password, or a key proof from a device that enrolled one,
-* until the device is signed in to its running desktop.
+* The profiles the asking device may open, the owner first, and the locked ones that take a
+* PIN; the console lists every profile. A client shows this as its picker. Each row's `unlock`
+* says what the asking device sends with its connect: a profile on a person's own Linux account
+* needs the account's password, or a key proof from a device that enrolled one, until the
+* device is signed in to its running desktop; a locked profile whose list lacks the device
+* needs its PIN.
 */
 readonly "enumerateProfiles": {
     <Config extends OperationConfig | undefined = undefined>(options: { readonly config: Config }): Effect.Effect<WithOptionalResponse<typeof EnumerateProfiles200.Type, Config>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"EnumerateProfiles401", typeof EnumerateProfiles401.Type> | PunktfunkError<"EnumerateProfiles404", typeof EnumerateProfiles404.Type>>;
@@ -4912,15 +5061,25 @@ readonly "deleteProfileAvatar": {
   }
   /**
 * For a profile on a person's own Linux account: each device that unlocked it, and how it gets
-* back on. Admin lane only.
+* back on. For any other profile: the devices its lock lets in, the same rows, kept while it is
+* open. Admin lane only.
 */
 readonly "listProfileDevices": {
     <Config extends OperationConfig | undefined = undefined>(id: string, options: { readonly config: Config }): Effect.Effect<WithOptionalResponse<typeof ListProfileDevices200.Type, Config>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"ListProfileDevices401", typeof ListProfileDevices401.Type> | PunktfunkError<"ListProfileDevices404", typeof ListProfileDevices404.Type> | PunktfunkError<"ListProfileDevices409", typeof ListProfileDevices409.Type> | PunktfunkError<"ListProfileDevices503", typeof ListProfileDevices503.Type>>;
     <Config extends OperationConfig | undefined = undefined>(id: string, options: { readonly config?: Config | undefined } | undefined): Effect.Effect<WithOptionalResponse<typeof ListProfileDevices200.Type, Config | undefined>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"ListProfileDevices401", typeof ListProfileDevices401.Type> | PunktfunkError<"ListProfileDevices404", typeof ListProfileDevices404.Type> | PunktfunkError<"ListProfileDevices409", typeof ListProfileDevices409.Type> | PunktfunkError<"ListProfileDevices503", typeof ListProfileDevices503.Type>>;
   }
   /**
+* Puts a device paired with this host, Punktfunk or Moonlight, on the profile's list until it
+* is signed out. Answers the list. Admin lane only.
+*/
+readonly "addProfileDevice": {
+    <Config extends OperationConfig | undefined = undefined>(id: string, options: { readonly payload: typeof AddProfileDeviceRequestJson.Encoded; readonly config: Config }): Effect.Effect<WithOptionalResponse<typeof AddProfileDevice200.Type, Config>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"AddProfileDevice400", typeof AddProfileDevice400.Type> | PunktfunkError<"AddProfileDevice401", typeof AddProfileDevice401.Type> | PunktfunkError<"AddProfileDevice404", typeof AddProfileDevice404.Type> | PunktfunkError<"AddProfileDevice409", typeof AddProfileDevice409.Type> | PunktfunkError<"AddProfileDevice422", typeof AddProfileDevice422.Type>>;
+    <Config extends OperationConfig | undefined = undefined>(id: string, options: { readonly payload: typeof AddProfileDeviceRequestJson.Encoded; readonly config?: Config | undefined }): Effect.Effect<WithOptionalResponse<typeof AddProfileDevice200.Type, Config | undefined>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"AddProfileDevice400", typeof AddProfileDevice400.Type> | PunktfunkError<"AddProfileDevice401", typeof AddProfileDevice401.Type> | PunktfunkError<"AddProfileDevice404", typeof AddProfileDevice404.Type> | PunktfunkError<"AddProfileDevice409", typeof AddProfileDevice409.Type> | PunktfunkError<"AddProfileDevice422", typeof AddProfileDevice422.Type>>;
+  }
+  /**
 * For a profile on a person's own Linux account: every device needs the account's password
-* again and every unlock key is forgotten. Admin lane only.
+* again and every unlock key is forgotten. For any other: its lock's list empties, and every
+* session on it from a device off the list ends. Admin lane only.
 */
 readonly "signOutProfileDevices": {
     <Config extends OperationConfig | undefined = undefined>(id: string, options: { readonly config: Config }): Effect.Effect<WithOptionalResponse<void, Config>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"SignOutProfileDevices401", typeof SignOutProfileDevices401.Type> | PunktfunkError<"SignOutProfileDevices404", typeof SignOutProfileDevices404.Type> | PunktfunkError<"SignOutProfileDevices409", typeof SignOutProfileDevices409.Type> | PunktfunkError<"SignOutProfileDevices503", typeof SignOutProfileDevices503.Type>>;
@@ -4928,7 +5087,8 @@ readonly "signOutProfileDevices": {
   }
   /**
 * For a profile on a person's own Linux account: the device needs the account's password again
-* and its unlock key is forgotten. Admin lane only.
+* and its unlock key is forgotten. For any other: the device leaves its lock's list, and a
+* session it plays there ends. Admin lane only.
 */
 readonly "signOutProfileDevice": {
     <Config extends OperationConfig | undefined = undefined>(id: string, fingerprint: string, options: { readonly config: Config }): Effect.Effect<WithOptionalResponse<void, Config>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"SignOutProfileDevice400", typeof SignOutProfileDevice400.Type> | PunktfunkError<"SignOutProfileDevice401", typeof SignOutProfileDevice401.Type> | PunktfunkError<"SignOutProfileDevice404", typeof SignOutProfileDevice404.Type> | PunktfunkError<"SignOutProfileDevice409", typeof SignOutProfileDevice409.Type> | PunktfunkError<"SignOutProfileDevice503", typeof SignOutProfileDevice503.Type>>;
@@ -4940,6 +5100,48 @@ readonly "signOutProfileDevice": {
 readonly "endProfileSession": {
     <Config extends OperationConfig | undefined = undefined>(id: string, options: { readonly config: Config }): Effect.Effect<WithOptionalResponse<typeof EndProfileSession200.Type, Config>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"EndProfileSession401", typeof EndProfileSession401.Type> | PunktfunkError<"EndProfileSession404", typeof EndProfileSession404.Type> | PunktfunkError<"EndProfileSession409", typeof EndProfileSession409.Type> | PunktfunkError<"EndProfileSession503", typeof EndProfileSession503.Type>>;
     <Config extends OperationConfig | undefined = undefined>(id: string, options: { readonly config?: Config | undefined } | undefined): Effect.Effect<WithOptionalResponse<typeof EndProfileSession200.Type, Config | undefined>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"EndProfileSession401", typeof EndProfileSession401.Type> | PunktfunkError<"EndProfileSession404", typeof EndProfileSession404.Type> | PunktfunkError<"EndProfileSession409", typeof EndProfileSession409.Type> | PunktfunkError<"EndProfileSession503", typeof EndProfileSession503.Type>>;
+  }
+  /**
+* Whether it is locked, whether it has a PIN, and the wrong PINs counted against it. Its
+* devices are `GET /profiles/{id}/devices`. Admin lane only.
+*/
+readonly "getProfileLock": {
+    <Config extends OperationConfig | undefined = undefined>(id: string, options: { readonly config: Config }): Effect.Effect<WithOptionalResponse<typeof GetProfileLock200.Type, Config>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"GetProfileLock401", typeof GetProfileLock401.Type> | PunktfunkError<"GetProfileLock404", typeof GetProfileLock404.Type> | PunktfunkError<"GetProfileLock409", typeof GetProfileLock409.Type>>;
+    <Config extends OperationConfig | undefined = undefined>(id: string, options: { readonly config?: Config | undefined } | undefined): Effect.Effect<WithOptionalResponse<typeof GetProfileLock200.Type, Config | undefined>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"GetProfileLock401", typeof GetProfileLock401.Type> | PunktfunkError<"GetProfileLock404", typeof GetProfileLock404.Type> | PunktfunkError<"GetProfileLock409", typeof GetProfileLock409.Type>>;
+  }
+  /**
+* From now its list is exactly `devices`, paired devices, so a lock keeps the ones someone
+* plays on, and with `pin` that is its PIN; a session from any other device ends. One step: on
+* any refusal nothing changed. On a profile already locked it changes nothing and takes only
+* devices the profile lets in and no PIN, so it never widens who opens it: the device and PIN
+* routes change a locked profile. Admin lane only.
+*/
+readonly "lockProfile": {
+    <Config extends OperationConfig | undefined = undefined>(id: string, options: { readonly payload: typeof LockProfileRequestJson.Encoded; readonly config: Config }): Effect.Effect<WithOptionalResponse<typeof LockProfile200.Type, Config>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"LockProfile400", typeof LockProfile400.Type> | PunktfunkError<"LockProfile401", typeof LockProfile401.Type> | PunktfunkError<"LockProfile404", typeof LockProfile404.Type> | PunktfunkError<"LockProfile409", typeof LockProfile409.Type>>;
+    <Config extends OperationConfig | undefined = undefined>(id: string, options: { readonly payload: typeof LockProfileRequestJson.Encoded; readonly config?: Config | undefined }): Effect.Effect<WithOptionalResponse<typeof LockProfile200.Type, Config | undefined>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"LockProfile400", typeof LockProfile400.Type> | PunktfunkError<"LockProfile401", typeof LockProfile401.Type> | PunktfunkError<"LockProfile404", typeof LockProfile404.Type> | PunktfunkError<"LockProfile409", typeof LockProfile409.Type>>;
+  }
+  /**
+* Every paired device opens it again. Its list and its PIN stay for the next lock. Admin lane
+* only.
+*/
+readonly "unlockProfile": {
+    <Config extends OperationConfig | undefined = undefined>(id: string, options: { readonly config: Config }): Effect.Effect<WithOptionalResponse<typeof UnlockProfile200.Type, Config>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"UnlockProfile401", typeof UnlockProfile401.Type> | PunktfunkError<"UnlockProfile404", typeof UnlockProfile404.Type> | PunktfunkError<"UnlockProfile409", typeof UnlockProfile409.Type>>;
+    <Config extends OperationConfig | undefined = undefined>(id: string, options: { readonly config?: Config | undefined } | undefined): Effect.Effect<WithOptionalResponse<typeof UnlockProfile200.Type, Config | undefined>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"UnlockProfile401", typeof UnlockProfile401.Type> | PunktfunkError<"UnlockProfile404", typeof UnlockProfile404.Type> | PunktfunkError<"UnlockProfile409", typeof UnlockProfile409.Type>>;
+  }
+  /**
+* While it is locked, a device off its list opens it with this PIN, and the PIN puts it on the
+* list. Replaces any PIN it had. Admin lane only.
+*/
+readonly "setProfilePin": {
+    <Config extends OperationConfig | undefined = undefined>(id: string, options: { readonly payload: typeof SetProfilePinRequestJson.Encoded; readonly config: Config }): Effect.Effect<WithOptionalResponse<typeof SetProfilePin200.Type, Config>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"SetProfilePin400", typeof SetProfilePin400.Type> | PunktfunkError<"SetProfilePin401", typeof SetProfilePin401.Type> | PunktfunkError<"SetProfilePin404", typeof SetProfilePin404.Type> | PunktfunkError<"SetProfilePin409", typeof SetProfilePin409.Type>>;
+    <Config extends OperationConfig | undefined = undefined>(id: string, options: { readonly payload: typeof SetProfilePinRequestJson.Encoded; readonly config?: Config | undefined }): Effect.Effect<WithOptionalResponse<typeof SetProfilePin200.Type, Config | undefined>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"SetProfilePin400", typeof SetProfilePin400.Type> | PunktfunkError<"SetProfilePin401", typeof SetProfilePin401.Type> | PunktfunkError<"SetProfilePin404", typeof SetProfilePin404.Type> | PunktfunkError<"SetProfilePin409", typeof SetProfilePin409.Type>>;
+  }
+  /**
+* While it is locked, only the devices on its list open it. Admin lane only.
+*/
+readonly "clearProfilePin": {
+    <Config extends OperationConfig | undefined = undefined>(id: string, options: { readonly config: Config }): Effect.Effect<WithOptionalResponse<typeof ClearProfilePin200.Type, Config>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"ClearProfilePin401", typeof ClearProfilePin401.Type> | PunktfunkError<"ClearProfilePin404", typeof ClearProfilePin404.Type> | PunktfunkError<"ClearProfilePin409", typeof ClearProfilePin409.Type>>;
+    <Config extends OperationConfig | undefined = undefined>(id: string, options: { readonly config?: Config | undefined } | undefined): Effect.Effect<WithOptionalResponse<typeof ClearProfilePin200.Type, Config | undefined>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"ClearProfilePin401", typeof ClearProfilePin401.Type> | PunktfunkError<"ClearProfilePin404", typeof ClearProfilePin404.Type> | PunktfunkError<"ClearProfilePin409", typeof ClearProfilePin409.Type>>;
   }
   /**
 * The console's **Start**: as `wake`, from the console. A profile on a person's own Linux
@@ -4970,8 +5172,9 @@ readonly "unlockChallenge": {
 * Starts a stopped seat so the next connect lands in it, and answers at once with the seat
 * `starting`; poll `enumerate` until it is `ready`. A profile with no seat to start only gets
 * its row back. A paired device wakes the profile it lands in when it names none; any other
-* needs its launch grant. A profile on a person's own Linux account is never woken: its
-* desktop starts when the connect brings the account's password.
+* needs its launch grant, and a locked one a device on its list. A profile on a person's own
+* Linux account is never woken: its desktop starts when the connect brings the account's
+* password.
 */
 readonly "wakeProfile": {
     <Config extends OperationConfig | undefined = undefined>(id: string, options: { readonly config: Config }): Effect.Effect<WithOptionalResponse<typeof WakeProfile200.Type, Config>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"WakeProfile401", typeof WakeProfile401.Type> | PunktfunkError<"WakeProfile403", typeof WakeProfile403.Type> | PunktfunkError<"WakeProfile404", typeof WakeProfile404.Type> | PunktfunkError<"WakeProfile409", typeof WakeProfile409.Type>>;

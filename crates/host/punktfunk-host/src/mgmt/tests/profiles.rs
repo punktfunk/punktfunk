@@ -137,6 +137,49 @@ async fn waking_another_profiles_seat_needs_the_launch_grant() {
     assert_eq!(send(&app, wake(&kid)).await.0, StatusCode::OK);
 }
 
+/// A locked profile wakes only for a device on its list, its own default profile and a launch
+/// grant included; the console wakes it.
+#[tokio::test]
+async fn a_device_wakes_a_locked_profile_only_from_its_list() {
+    let np = Arc::new(
+        crate::native_pairing::NativePairing::load_with(
+            Some(crate::test_support::scratch().join("pf-mgmt-prof-wake-lock.json")),
+            None,
+            false,
+        )
+        .unwrap(),
+    );
+    let (listed, other) = ("ab".repeat(32), "cd".repeat(32));
+    np.add("listed", &listed).unwrap();
+    np.add("other", &other).unwrap();
+    let state = state_with_profiles("wake-lock");
+    let profiles = state.profiles.get().unwrap().clone();
+    let owner = profiles.owner_id().unwrap();
+    let app = test_app_native(state, np);
+    let wake = || {
+        axum::http::Request::post(format!("/api/v1/profiles/{owner}/wake"))
+            .body(Body::empty())
+            .unwrap()
+    };
+    assert_eq!(
+        send_cert(&app, wake(), &other).await,
+        StatusCode::OK,
+        "open"
+    );
+    let device = pf_seats::ipc::Device {
+        fingerprint: listed.clone(),
+        name: "listed".into(),
+    };
+    let locked = profiles.locks().edit(&owner, |lock, now| {
+        lock.locked = true;
+        lock.admit(&device, now, true)
+    });
+    assert!(locked.unwrap());
+    assert_eq!(send_cert(&app, wake(), &other).await, StatusCode::FORBIDDEN);
+    assert_eq!(send_cert(&app, wake(), &listed).await, StatusCode::OK);
+    assert_eq!(send(&app, wake()).await.0, StatusCode::OK);
+}
+
 /// A device's own take-turns profile is off the console exactly when it needs a wake: the device
 /// wakes it without the launch grant, and still not the owner's.
 #[tokio::test]
@@ -452,6 +495,485 @@ async fn a_knock_shows_the_profile_it_named() {
     assert!(b[1].get("profile").is_none(), "{b}");
 }
 
+/// The lock lists the paired devices playing as the profile, and locking keeps the ones it is
+/// given in the same step. A locked profile's lock takes only devices it already lets in, and an
+/// unpaired device locks nothing.
+#[tokio::test]
+async fn locking_keeps_the_devices_it_is_given() {
+    use crate::profiles::Opens;
+    let _serial = crate::session_status::tests::REGISTRY.lock().await;
+    let np = Arc::new(
+        crate::native_pairing::NativePairing::load_with(
+            Some(crate::test_support::scratch().join("pf-mgmt-lock-keep.json")),
+            None,
+            false,
+        )
+        .unwrap(),
+    );
+    let (tv, phone) = ("a7".repeat(32), "b8".repeat(32));
+    np.add("Living room TV", &tv).unwrap();
+    np.add("Phone", &phone).unwrap();
+    let dir = crate::test_support::scratch();
+    let state = test_state();
+    let store = crate::profiles::Profiles::load_with(Some(dir.join("profiles.json")), None);
+    store.ensure_owner("box").unwrap();
+    let profiles = Arc::new(store);
+    let _ = state.profiles.set(profiles.clone());
+    let owner = profiles.owner_id().unwrap();
+    let app = test_app_native(state, np);
+    let mut controls = crate::session_status::SessionControls::open();
+    controls.profile = Some(crate::events::ProfileRef {
+        id: owner.clone(),
+        display_name: "Enrico".into(),
+    });
+    let _playing = crate::session_status::register(crate::session_status::Registration {
+        controls: controls.clone(),
+        ..crate::session_status::Registration::fake(&tv[..12])
+    });
+    let _unpaired = crate::session_status::register(crate::session_status::Registration {
+        controls,
+        client_name: Some("Ben's Deck".into()),
+        ..crate::session_status::Registration::fake("0123456789ab")
+    });
+    let lock = format!("/api/v1/profiles/{owner}/lock");
+    let (status, body) = send(&app, get_req(&lock)).await;
+    assert_eq!(status, StatusCode::OK);
+    let playing = serde_json::json!([
+        {"fingerprint": tv, "name": "Living room TV"},
+        {"name": "Ben's Deck"},
+    ]);
+    assert_eq!(
+        body["playing"], playing,
+        "a session no paired device carries has no fingerprint"
+    );
+
+    let keep = |fps: &[&str]| json_req(Method::POST, &lock, serde_json::json!({"devices": fps}));
+    let (status, body) = send(&app, keep(&[&"cd".repeat(32)])).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(body["code"], "profile_device_not_paired");
+    assert_eq!(
+        profiles.opens(&owner, Some(&phone)),
+        Opens::Yes,
+        "still open"
+    );
+
+    let (status, body) = send(&app, keep(&[&tv.to_uppercase()])).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["locked"], true);
+    assert_eq!(profiles.opens(&owner, Some(&tv)), Opens::Yes);
+    assert_eq!(profiles.opens(&owner, Some(&phone)), Opens::No);
+    let (status, body) = send(&app, keep(&[&phone])).await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert_eq!(body["code"], "profile_locked_already");
+    assert_eq!(
+        profiles.opens(&owner, Some(&phone)),
+        Opens::No,
+        "never widened"
+    );
+    assert_eq!(send(&app, keep(&[&tv])).await.0, StatusCode::OK);
+    let bare = axum::http::Request::post(&lock)
+        .body(Body::empty())
+        .unwrap();
+    assert_eq!(send(&app, bare).await.0, StatusCode::OK, "no body");
+}
+
+/// Locking takes its list and PIN in one step: the list replaces what an earlier lock left, an
+/// absent PIN keeps the one it has, and any refusal changes nothing. A locked profile takes no
+/// PIN from it.
+#[tokio::test]
+async fn a_lock_sets_its_list_and_pin_in_one_step() {
+    use crate::profiles::Opens;
+    let np = Arc::new(
+        crate::native_pairing::NativePairing::load_with(
+            Some(crate::test_support::scratch().join("pf-mgmt-lock-one-step.json")),
+            None,
+            false,
+        )
+        .unwrap(),
+    );
+    let (tv, phone) = ("a7".repeat(32), "b8".repeat(32));
+    np.add("Living room TV", &tv).unwrap();
+    np.add("Phone", &phone).unwrap();
+    let dir = crate::test_support::scratch();
+    let state = test_state();
+    let store = crate::profiles::Profiles::load_with(Some(dir.join("profiles.json")), None);
+    store.ensure_owner("box").unwrap();
+    let profiles = Arc::new(store);
+    let _ = state.profiles.set(profiles.clone());
+    let owner = profiles.owner_id().unwrap();
+    let app = test_app_native(state, np);
+    let path = format!("/api/v1/profiles/{owner}/lock");
+    let lock = |body: serde_json::Value| json_req(Method::POST, &path, body);
+    let unlock = || json_req(Method::DELETE, &path, serde_json::Value::Null);
+    let file = || profiles.locks().get(&owner);
+
+    let (status, body) = send(
+        &app,
+        lock(serde_json::json!({"devices": [tv], "pin": "2468"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(
+        (&body["locked"], &body["pin"]),
+        (&true.into(), &true.into())
+    );
+    assert_eq!(profiles.opens(&owner, Some(&phone)), Opens::Pin);
+    let (status, body) = send(
+        &app,
+        lock(serde_json::json!({"devices": [tv], "pin": "1357"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert_eq!(body["code"], "profile_locked_already");
+    let first = file().pin.unwrap();
+    assert!(
+        first.verify("2468"),
+        "a locked profile's PIN is the PIN route's"
+    );
+
+    assert_eq!(send(&app, unlock()).await.0, StatusCode::OK);
+    let refused = [
+        (
+            serde_json::json!({"devices": [phone], "pin": "12a4"}),
+            StatusCode::BAD_REQUEST,
+        ),
+        (
+            serde_json::json!({"devices": [phone, "cd".repeat(32)], "pin": "1357"}),
+            StatusCode::NOT_FOUND,
+        ),
+    ];
+    for (body, want) in refused {
+        let before = file();
+        assert_eq!(send(&app, lock(body.clone())).await.0, want, "{body}");
+        assert_eq!(file(), before, "{body}: nothing changed");
+    }
+
+    let (status, body) = send(&app, lock(serde_json::json!({"devices": [phone]}))).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let listed: Vec<_> = file()
+        .list
+        .entries()
+        .into_iter()
+        .map(|e| e.fingerprint)
+        .collect();
+    assert_eq!(listed, [phone], "the earlier list is replaced");
+    assert_eq!(
+        file().pin,
+        Some(first),
+        "an absent PIN keeps the one it had"
+    );
+    assert_eq!(profiles.opens(&owner, Some(&tv)), Opens::Pin);
+    let (_, devices) = send(&app, get_req(&format!("/api/v1/profiles/{owner}/devices"))).await;
+    assert_eq!(devices[0]["kind"], "added");
+}
+
+/// The console locks a profile, sets and clears its PIN, puts paired devices on its list, Punktfunk
+/// or Moonlight, signs them out and unlocks it; the file holds the PIN's hash, never the PIN.
+#[tokio::test]
+async fn the_console_locks_a_profile_for_the_devices_it_chooses() {
+    let np = Arc::new(
+        crate::native_pairing::NativePairing::load_with(
+            Some(crate::test_support::scratch().join("pf-mgmt-lock-routes.json")),
+            None,
+            false,
+        )
+        .unwrap(),
+    );
+    use crate::profiles::Opens;
+    let tv = "ab".repeat(32);
+    np.add("Living room TV", &tv).unwrap();
+    let dir = crate::test_support::scratch();
+    let state = test_state();
+    let store = crate::profiles::Profiles::load_with(Some(dir.join("profiles.json")), None);
+    store.ensure_owner("box").unwrap();
+    let _ = state.profiles.set(Arc::new(store));
+    let der = b"moonlight-cert".to_vec();
+    let moonlight = hex::encode(crate::https::sha256(&der));
+    state.paired.lock().unwrap().push(der);
+    let profiles = state.profiles.get().unwrap().clone();
+    let owner = profiles.owner_id().unwrap();
+    let app = test_app_native(state, np);
+    let at = |tail: &str| format!("/api/v1/profiles/{owner}{tail}");
+    let call = |method: Method, tail: &str, body: serde_json::Value| {
+        let (app, path) = (app.clone(), at(tail));
+        async move { send(&app, json_req(method, &path, body)).await }
+    };
+    let none = serde_json::Value::Null;
+    let lock = |locked: bool, pin: bool| serde_json::json!({"locked": locked, "pin": pin, "failed_pins": 0, "playing": []});
+
+    assert_eq!(
+        call(Method::GET, "/lock", none.clone()).await.1,
+        lock(false, false)
+    );
+    assert_eq!(
+        call(Method::GET, "/devices", none.clone()).await.1,
+        serde_json::json!([])
+    );
+    assert_eq!(
+        call(Method::POST, "/lock", serde_json::json!({})).await.1,
+        lock(true, false)
+    );
+    assert_eq!(profiles.opens(&owner, Some(&tv)), Opens::No);
+
+    let (status, body) = call(Method::PUT, "/lock/pin", serde_json::json!({"pin": "12a4"})).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(body["code"], "profile_pin_invalid");
+    let (status, body) = call(Method::PUT, "/lock/pin", serde_json::json!({"pin": "2468"})).await;
+    assert_eq!((status, body), (StatusCode::OK, lock(true, true)));
+    assert_eq!(profiles.opens(&owner, Some(&tv)), Opens::Pin);
+    let file = dir.join(pf_seats::locks::FILE);
+    let text = std::fs::read_to_string(&file).unwrap();
+    assert!(
+        !text.contains("2468") && text.contains("\"salt\""),
+        "{text}"
+    );
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = std::fs::metadata(&file).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o600);
+    }
+
+    let add = |fp: &str| serde_json::json!({ "fingerprint": fp });
+    let (status, body) = call(Method::POST, "/devices", add(&"cd".repeat(32))).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(body["code"], "profile_device_not_paired");
+    let (status, body) = call(Method::POST, "/devices", add("not-a-fingerprint")).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    let (status, body) = call(Method::POST, "/devices", add(&tv.to_uppercase())).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body[0]["fingerprint"], tv.as_str());
+    assert_eq!(body[0]["name"], "Living room TV");
+    assert_eq!(body[0]["kind"], "added");
+    let (_, body) = call(Method::POST, "/devices", add(&moonlight)).await;
+    assert_eq!(body.as_array().unwrap().len(), 2);
+    let tags: Vec<_> = body
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|d| &d["moonlight"])
+        .collect();
+    assert_eq!(tags, [false, true], "{body}");
+    assert_eq!(profiles.opens(&owner, Some(&tv)), Opens::Yes);
+    assert_eq!(profiles.opens(&owner, Some(&moonlight)), Opens::Yes);
+
+    let (status, _) = call(Method::DELETE, &format!("/devices/{tv}"), none.clone()).await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    assert_eq!(profiles.opens(&owner, Some(&tv)), Opens::Pin);
+    let (status, _) = call(Method::DELETE, "/devices", none.clone()).await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    assert_eq!(
+        call(Method::GET, "/devices", none.clone()).await.1,
+        serde_json::json!([])
+    );
+    assert_eq!(
+        call(Method::DELETE, "/lock/pin", none.clone()).await.1,
+        lock(true, false)
+    );
+    assert_eq!(profiles.opens(&owner, Some(&moonlight)), Opens::No);
+    assert_eq!(
+        call(Method::DELETE, "/lock", none.clone()).await.1,
+        lock(false, false)
+    );
+    assert_eq!(profiles.opens(&owner, Some(&tv)), Opens::Yes);
+    let (status, _) = send(
+        &app,
+        json_req(Method::GET, "/api/v1/profiles/c0ffee000000/lock", none),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+/// A lock file that doesn't read keeps every profile locked: the console reads why, and every
+/// change is refused until it is fixed.
+#[tokio::test]
+async fn an_unreadable_lock_file_refuses_every_change() {
+    let dir = crate::test_support::scratch();
+    std::fs::write(dir.join(pf_seats::locks::FILE), "not a lock file").unwrap();
+    let state = test_state();
+    let profiles = crate::profiles::Profiles::load_with(Some(dir.join("profiles.json")), None);
+    profiles.ensure_owner("box").unwrap();
+    let owner = profiles.owner_id().unwrap();
+    let _ = state.profiles.set(Arc::new(profiles));
+    let app = test_app(state, None);
+    for (method, tail) in [
+        (Method::GET, "/lock"),
+        (Method::DELETE, "/lock"),
+        (Method::GET, "/devices"),
+        (Method::DELETE, "/devices"),
+    ] {
+        let path = format!("/api/v1/profiles/{owner}{tail}");
+        let (status, body) = send(
+            &app,
+            json_req(method.clone(), &path, serde_json::Value::Null),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CONFLICT, "{method} {tail}");
+        assert_eq!(body["code"], "profile_locks_unreadable", "{method} {tail}");
+    }
+}
+
+/// The owner, Kid and Teen on seats of their own, and Guest sharing the owner's desktop, in a
+/// store of its own.
+fn locked_family(state: &AppState) -> Arc<crate::profiles::Profiles> {
+    let dir = crate::test_support::scratch();
+    let seat = |id: &str, name: &str, row: &str| {
+        serde_json::json!({"id": id, "display_name": name,
+            "os_account": {"kind": "seat", "seat": row.repeat(16)}})
+    };
+    let file = serde_json::json!({"version": 1, "profiles": [
+        {"id": FAMILY_OWNER, "display_name": "Enrico", "os_account": {"kind": "operator"}},
+        seat(FAMILY_KID, "Kid", "a1"),
+        seat(FAMILY_TEEN, "Teen", "b2"),
+        {"id": FAMILY_GUEST, "display_name": "Guest", "os_account": {"kind": "operator"}},
+    ]});
+    std::fs::write(dir.join("profiles.json"), file.to_string()).unwrap();
+    let profiles = crate::profiles::Profiles::load_with(Some(dir.join("profiles.json")), None);
+    let profiles = Arc::new(profiles);
+    let _ = state.profiles.set(profiles.clone());
+    profiles
+}
+
+const FAMILY_OWNER: &str = "4f1c3a9b0e27";
+const FAMILY_KID: &str = "a1a1a1a1a1a1";
+const FAMILY_TEEN: &str = "b2b2b2b2b2b2";
+const FAMILY_GUEST: &str = "5a1e00000001";
+
+/// A device's picker lists the profiles it may open, and a locked one with a PIN marked `pin`; a
+/// locked one with no PIN is absent unless the device is on its list. A profile sharing the
+/// owner's desktop shows exactly as the owner does. The console lists all.
+#[tokio::test]
+async fn the_picker_lists_what_the_device_may_open() {
+    let np = Arc::new(
+        crate::native_pairing::NativePairing::load_with(
+            Some(crate::test_support::scratch().join("pf-mgmt-picker-lock.json")),
+            None,
+            false,
+        )
+        .unwrap(),
+    );
+    let (listed, other) = ("ab".repeat(32), "cd".repeat(32));
+    np.add("listed", &listed).unwrap();
+    np.add("other", &other).unwrap();
+    let state = test_state();
+    let profiles = locked_family(&state);
+    let app = test_app_native(state, np);
+    let (owner, kid, teen, guest) = (FAMILY_OWNER, FAMILY_KID, FAMILY_TEEN, FAMILY_GUEST);
+    let device = pf_seats::ipc::Device {
+        fingerprint: listed.clone(),
+        name: "listed".into(),
+    };
+    for (id, pin) in [(owner, true), (kid, false), (teen, true)] {
+        let edited = profiles.locks().edit(id, |lock, now| {
+            lock.locked = true;
+            lock.pin = pin.then(|| pf_seats::locks::PinHash::new("2468")).flatten();
+            if id != teen {
+                assert!(lock.admit(&device, now, true));
+            }
+        });
+        edited.unwrap();
+    }
+    let rows = |body: serde_json::Value| {
+        let rows = body.as_array().unwrap().iter();
+        rows.map(|r| (r["id"].as_str().unwrap().to_string(), r["unlock"].clone()))
+            .collect::<Vec<_>>()
+    };
+    let picker = |fp: String| {
+        let app = app.clone();
+        async move {
+            let mut req = get_req("/api/v1/profiles/enumerate");
+            req.extensions_mut().insert(PeerCertFingerprint(Some(fp)));
+            let resp = app.oneshot(req).await.unwrap();
+            let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+                .await
+                .unwrap();
+            rows(serde_json::from_slice(&body).unwrap())
+        }
+    };
+    let row = |id: &str, word: &str| (id.to_string(), serde_json::json!(word));
+    assert_eq!(
+        picker(listed).await,
+        [
+            row(owner, "none"),
+            row(kid, "none"),
+            row(teen, "pin"),
+            row(guest, "none")
+        ]
+    );
+    assert_eq!(
+        picker(other).await,
+        [row(owner, "pin"), row(teen, "pin"), row(guest, "pin")]
+    );
+    profiles
+        .locks()
+        .edit(owner, |lock, _| lock.pin = None)
+        .unwrap();
+    let rows_now = picker("cd".repeat(32)).await;
+    assert_eq!(rows_now, [row(teen, "pin")], "no owner, no guest");
+    let (status, all) = send(&app, get_req("/api/v1/profiles/enumerate")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        all.as_array()
+            .unwrap()
+            .iter()
+            .all(|r| r.get("lock").is_none()),
+        "{all}"
+    );
+    assert_eq!(rows(all).len(), 4, "the console sees every profile");
+
+    // The console's list carries each lock, a sharer's as the owner's.
+    let (_, console) = send(&app, get_req("/api/v1/profiles")).await;
+    let locks: Vec<_> = console
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| (r["id"].as_str().unwrap(), r["lock"].clone()))
+        .collect();
+    let lock = |pin: bool| serde_json::json!({"locked": true, "pin": pin, "failed_pins": 0});
+    let mut shared = lock(false);
+    shared["shared_with"] = owner.into();
+    assert_eq!(
+        locks,
+        [
+            (owner, lock(false)),
+            (kid, lock(false)),
+            (teen, lock(true)),
+            (guest, shared)
+        ]
+    );
+}
+
+/// A profile sharing the owner's desktop has no lock of its own: each lock route on it names
+/// whose lock it opens with.
+#[tokio::test]
+async fn a_profile_sharing_the_owner_s_desktop_takes_no_lock() {
+    let state = test_state();
+    let profiles = locked_family(&state);
+    let app = test_app(state, None);
+    let at = |tail: &str| format!("/api/v1/profiles/{FAMILY_GUEST}{tail}");
+    let null = serde_json::Value::Null;
+    for (method, tail, body) in [
+        (Method::GET, "/lock", null.clone()),
+        (Method::POST, "/lock", serde_json::json!({})),
+        (Method::DELETE, "/lock", null.clone()),
+        (Method::PUT, "/lock/pin", serde_json::json!({"pin": "2468"})),
+        (Method::DELETE, "/lock/pin", null.clone()),
+        (Method::GET, "/devices", null.clone()),
+        (
+            Method::POST,
+            "/devices",
+            serde_json::json!({"fingerprint": "ab".repeat(32)}),
+        ),
+        (Method::DELETE, "/devices", null.clone()),
+    ] {
+        let (status, body) = send(&app, json_req(method.clone(), &at(tail), body)).await;
+        assert_eq!(status, StatusCode::CONFLICT, "{method} {tail}");
+        assert_eq!(body["code"], "profile_lock_shared", "{method} {tail}");
+        assert_eq!(body["params"]["owner"], "Enrico");
+    }
+    assert!(profiles.locks().get(FAMILY_GUEST) == pf_seats::locks::Lock::default());
+}
+
 /// Enumerate marks the profile the asking device's old seat became, and only for that device.
 #[tokio::test]
 async fn enumerate_marks_the_devices_old_seat() {
@@ -528,6 +1050,16 @@ mod person {
     /// A door asking `sup`, with the owner, a profile on each row of [`ledger`], `default` the
     /// profile a device lands in, and `fps` paired with full control.
     fn door(tag: &str, sup: Arc<Fake>, fps: &[&str], default: &str) -> Router {
+        door_with(tag, sup, fps, default).0
+    }
+
+    /// [`door`], and its profile store.
+    fn door_with(
+        tag: &str,
+        sup: Arc<Fake>,
+        fps: &[&str],
+        default: &str,
+    ) -> (Router, Arc<crate::profiles::Profiles>) {
         let path = crate::test_support::scratch().join(format!("pf-mgmt-person-{tag}.json"));
         let seat = |id: &str, name: &str, row: &str| {
             serde_json::json!({"id": id, "display_name": name,
@@ -540,8 +1072,8 @@ mod person {
         ]});
         std::fs::write(&path, file.to_string()).unwrap();
         let state = test_state();
-        let profiles = crate::profiles::Profiles::load_with(Some(path), None);
-        let _ = state.profiles.set(Arc::new(profiles));
+        let profiles = Arc::new(crate::profiles::Profiles::load_with(Some(path), None));
+        let _ = state.profiles.set(profiles.clone());
         let np = crate::native_pairing::NativePairing::load_with(
             Some(crate::test_support::scratch().join(format!("pf-mgmt-person-np-{tag}.json"))),
             None,
@@ -551,7 +1083,7 @@ mod person {
         for fp in fps {
             np.add("Jane's phone", fp).unwrap();
         }
-        test_app_door(state, Some(Arc::new(np)), sup)
+        (test_app_door(state, Some(Arc::new(np)), sup), profiles)
     }
 
     /// [`send_cert`] with the answer's body.
@@ -688,15 +1220,28 @@ mod person {
         assert_eq!(
             body,
             serde_json::json!([{"fingerprint": fp, "name": "Jane's phone", "kind": "stay",
-                "added_unix": 10, "last_unix": 20}])
+                "moonlight": false, "added_unix": 10, "last_unix": 20}])
         );
         let one = format!("{devices}/{fp}");
         assert_eq!(send(&app, delete(&one)).await.0, StatusCode::NO_CONTENT);
         assert_eq!(send(&app, delete(&devices)).await.0, StatusCode::NO_CONTENT);
         let upper = format!("{devices}/{}", fp.to_uppercase());
         assert_eq!(send(&app, delete(&upper)).await.0, StatusCode::BAD_REQUEST);
+        // Any other profile answers its lock's list, and the supervisor is not asked.
         let windows = format!("/api/v1/profiles/{WINDOWS}/devices");
-        assert_eq!(send(&app, get_req(&windows)).await.0, StatusCode::CONFLICT);
+        let (status, body) = send(&app, get_req(&windows)).await;
+        assert_eq!((status, body), (StatusCode::OK, serde_json::json!([])));
+        // A person's own account opens with its password and takes no lock.
+        let add = serde_json::json!({ "fingerprint": fp });
+        for req in [
+            get_req(&format!("/api/v1/profiles/{PERSON}/lock")),
+            post(&format!("/api/v1/profiles/{PERSON}/lock")),
+            json_req(Method::POST, &devices, add),
+        ] {
+            let (status, body) = send(&app, req).await;
+            assert_eq!(status, StatusCode::CONFLICT);
+            assert_eq!(body["code"], "profile_lock_own_account");
+        }
         for req in [get_req(&devices), delete(&devices), delete(&one)] {
             assert_eq!(send_cert(&app, req, &fp).await, StatusCode::UNAUTHORIZED);
         }
@@ -745,6 +1290,48 @@ mod person {
         assert_eq!(status, StatusCode::OK, "{body}");
         assert!(sup.asked().is_empty(), "{:?}", sup.asked());
         assert!(sup.called().is_empty(), "{:?}", sup.called());
+    }
+
+    /// The console's list carries a lock for every profile but one on a person's own account.
+    #[tokio::test]
+    async fn a_person_s_own_account_lists_no_lock() {
+        let sup = Arc::new(Fake::new(ledger(), |_| Err(refused("x", "y"))));
+        let app = door("list-locks", sup, &[], OWNER);
+        let (status, body) = send(&app, get_req("/api/v1/profiles")).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        let lock = |id: &str| {
+            let mut rows = body.as_array().unwrap().iter();
+            rows.find(|r| r["id"] == id).map(|r| r.get("lock").cloned())
+        };
+        assert_eq!(lock(PERSON), Some(None), "{body}");
+        assert!(lock(OWNER).flatten().is_some(), "{body}");
+    }
+
+    /// A device's own play goes to its default profile's seat only while it may open that
+    /// profile; off a locked profile's list it stays on the door.
+    #[tokio::test]
+    async fn a_device_s_own_play_reaches_a_locked_profile_s_seat_only_from_its_list() {
+        let (listed, other) = ("ab".repeat(32), "cd".repeat(32));
+        let sup = Arc::new(Fake::new(ledger(), |_| Err(refused("x", "y"))));
+        let (app, profiles) = door_with("own-play-lock", sup.clone(), &[&listed, &other], WINDOWS);
+        let end_game = || json_req(Method::POST, "/api/v1/game/end", serde_json::json!({}));
+        let (status, _) = as_device(&app, end_game(), &other).await;
+        assert_eq!(status, StatusCode::BAD_GATEWAY, "open: sent to its seat");
+        let device = pf_seats::ipc::Device {
+            fingerprint: listed.clone(),
+            name: "listed".into(),
+        };
+        let locked = profiles.locks().edit(WINDOWS, |lock, now| {
+            lock.locked = true;
+            lock.admit(&device, now, true)
+        });
+        assert!(locked.unwrap());
+        let (status, _) = as_device(&app, end_game(), &other).await;
+        assert_ne!(status, StatusCode::BAD_GATEWAY, "answered on the door");
+        let (status, _) = as_device(&app, end_game(), &listed).await;
+        assert_eq!(status, StatusCode::BAD_GATEWAY, "sent to its seat");
+        let seat = crate::mgmt::owner::Target::Seat(WINDOWS_SEAT.into());
+        assert_eq!(sup.called(), [seat.clone(), seat]);
     }
 }
 

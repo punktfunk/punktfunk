@@ -590,3 +590,49 @@ async fn a_relayed_event_joins_the_bus() {
     let (status, _) = send(&app, req).await;
     assert_eq!(status, StatusCode::FORBIDDEN);
 }
+
+/// On a door a Moonlight device is paired with the owner's host, so adding one to a profile's
+/// lock asks that host's list, once, and takes its label; a fingerprint neither lists is refused.
+#[tokio::test]
+async fn a_door_adds_a_moonlight_device_the_owner_s_host_paired() {
+    let moonlight = "ef".repeat(32);
+    let seats = FakeSeats::new(box_snapshot(None)).answering(
+        "clients",
+        200,
+        serde_json::json!([{"fingerprint": moonlight.to_uppercase(), "label": "Living room"}]),
+    );
+    let state = test_state();
+    let path = crate::test_support::scratch().join("profiles.json");
+    let profiles = crate::profiles::Profiles::load_with(Some(path), None);
+    profiles.ensure_owner("box").unwrap();
+    let owner = profiles.owner_id().unwrap();
+    let _ = state.profiles.set(Arc::new(profiles));
+    let app = test_app_door(state, None, seats.clone());
+    let devices = format!("/api/v1/profiles/{owner}/devices");
+    let add = |fp: &str| {
+        json_req(
+            Method::POST,
+            &devices,
+            serde_json::json!({"fingerprint": fp}),
+        )
+    };
+    let (status, body) = send(&app, add(&moonlight)).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body[0]["fingerprint"], moonlight.as_str());
+    assert_eq!(body[0]["name"], "Living room");
+    assert_eq!(
+        body[0]["moonlight"], true,
+        "the list tags it from the owner's"
+    );
+    let (status, body) = send(&app, add(&"cd".repeat(32))).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(body["code"], "profile_device_not_paired");
+    let asked: Vec<_> = seats
+        .calls()
+        .into_iter()
+        .map(|(t, c)| (t, c.target))
+        .collect();
+    // The add, the list it answers, the refused add.
+    let clients = (Target::Owner, "clients".to_string());
+    assert_eq!(asked, [clients.clone(), clients.clone(), clients]);
+}

@@ -56,6 +56,13 @@ import type { Loadable } from "@/lib/query";
 import { cn } from "@/lib/utils";
 import { m } from "@/paraglide/messages";
 import {
+	LockAction,
+	type LockCard,
+	LockChip,
+	LockLines,
+	lockCard,
+} from "./lock";
+import {
 	AccentPicker,
 	type Choice,
 	ChoiceCards,
@@ -134,7 +141,7 @@ export type DoorControl = {
 };
 
 /** The page: one card per profile, the owner first, and **Add profile**. A profile on a person's
- * own account shows its signed-in devices under its row. */
+ * own account shows its signed-in devices under its row; every other card carries its lock. */
 export const ProfilesView: FC<{
 	profiles: Loadable<ProfileAdmin[]>;
 	onAdd: () => void;
@@ -149,6 +156,8 @@ export const ProfilesView: FC<{
 	door?: DoorControl;
 	/** A Linux door: the signed-in devices of a profile on a person's own account. */
 	devices?: (p: ProfileAdmin) => ReactNode;
+	/** Opens the lock dialog of `holder`, the profile whose lock a card shows. */
+	onLock?: (holder: string, locked: boolean) => void;
 }> = ({
 	profiles,
 	onAdd,
@@ -160,9 +169,16 @@ export const ProfilesView: FC<{
 	seats,
 	door,
 	devices,
+	onLock,
 }) => {
 	const list = profiles.data ?? [];
 	const ownerName = list.find((p) => p.owner)?.display_name ?? "";
+	const lockOf = (p: ProfileAdmin): LockCard | undefined => {
+		const lock = lockCard(p, list);
+		return lock && onLock
+			? { ...lock, onOpen: () => onLock(lock.holder, lock.locked) }
+			: lock;
+	};
 	return (
 		<Section maxWidth={false}>
 			<div className="flex flex-col gap-card">
@@ -196,6 +212,7 @@ export const ProfilesView: FC<{
 									seats={seats}
 									linux={door !== undefined}
 									devices={p.seat?.account ? devices?.(p) : undefined}
+									lock={lockOf(p)}
 									busy={busyId === p.id}
 									onRename={() => onRename(p)}
 									onPicture={(f) => onPicture(p, f)}
@@ -284,6 +301,7 @@ const ProfileRow: FC<{
 	linux: boolean;
 	/** Below the row: the profile's signed-in devices. */
 	devices?: ReactNode;
+	lock?: LockCard;
 	busy: boolean;
 	onRename: () => void;
 	onPicture: (file: File) => void;
@@ -295,6 +313,7 @@ const ProfileRow: FC<{
 	seats,
 	linux,
 	devices,
+	lock,
 	busy,
 	onRename,
 	onPicture,
@@ -334,6 +353,7 @@ const ProfileRow: FC<{
 								{STATE_WORD[p.seat.state]()}
 							</Badge>
 						)}
+						{lock && <LockChip lock={lock} />}
 					</div>
 					<p className="text-sm text-muted-foreground">{facts.join(" · ")}</p>
 					{p.seat?.account && (
@@ -343,6 +363,7 @@ const ProfileRow: FC<{
 								: m.profiles_seat_account_line)({ account: p.seat.account })}
 						</p>
 					)}
+					{lock && <LockLines lock={lock} />}
 				</div>
 			</div>
 			<div className="flex shrink-0 items-center justify-end gap-1">
@@ -391,6 +412,7 @@ const ProfileRow: FC<{
 						<KeyRound className="size-4" />
 					</Button>
 				)}
+				{lock && <LockAction lock={lock} disabled={busy} />}
 				<Button
 					variant="ghost"
 					size="icon"

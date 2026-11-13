@@ -165,13 +165,20 @@
 			}
 		}
 	],
+	"apierr_profile_device_not_paired": "That device isn't paired with this host.",
+	"apierr_profile_devices_full": "This profile has all the devices it can take. Sign one out first.",
+	"apierr_profile_lock_shared": "This profile shares {owner}'s desktop, so it opens with that profile's lock. Change the lock there.",
+	"apierr_profile_lock_own_account":"This profile opens with its account password, so it can't be locked.",
+	"apierr_profile_locked_already": "This profile is already locked. Add a device to let another one in.",
+	"apierr_profile_locks_unreadable":"This host couldn't read its profile locks, so every profile stays locked. Fix or remove profile-locks.json, then try again.",
 	"apierr_profile_name_missing": "A profile needs a name",
 	"apierr_profile_name_taken": "Another profile has that name",
 	"apierr_profile_no_password_to_update": "Only a profile with a desktop of its own on an existing Windows account has a password to update.",
 	"apierr_profile_not_password": "This profile doesn't open with an account password.",
 	"apierr_profile_opens_with_password": "This profile opens with its account password.",
 	"apierr_profile_owner_not_removable": "The owner profile can't be removed",
-	"apierr_profile_picture_invalid": "Couldn't save the picture. Use a PNG or JPEG under 1 MB.",
+	"apierr_profile_pin_invalid": "A PIN is 4 to 8 digits.",
+	"apierr_profile_picture_invalid":"Couldn't save the picture. Use a PNG or JPEG under 1 MB.",
 	"apierr_profile_seat_needs_door": "Turn on Reachable without logging in before adding a profile with a desktop of its own.",
 	"apierr_profile_session_settings_host": "This profile plays on the host's own desktop, so it uses the host's session settings.",
 	"apierr_profile_unknown": "That profile is gone from this host. Pick another one.",
@@ -316,6 +323,43 @@
 	"close_join_needs_hdr": "Couldn't join the shared screen — it's in HDR, and this device isn't streaming in HDR. Turn on HDR in this app's settings, or ask whoever connected first to turn it off.",
 	"close_join_other_codec": "Couldn't join the shared screen — this device streams with a video codec that can't share it. Set the same video codec on both devices, then join again.",
 	"close_join_range": "Couldn't join the shared screen — its color range is one this device can't show. Connect this device first and let the other one join it.",
+	"close_lock_full": "This profile has all the devices it can take. Ask the host's owner to sign one out.",
+	"close_lock_not_allowed": "This device can't open this profile. Ask the host's owner to add it.",
+	"close_lock_not_saved": "This host couldn't save that. Try again in a moment.",
+	"close_lock_pin_unreadable": "Couldn't read the PIN this device sent. Try again.",
+	"close_lock_pin_update": "This profile needs its PIN. Update Punktfunk on this device.",
+	"close_lock_pin_wait_minutes": [
+		{
+			"declarations": [
+				"input count",
+				"local n = count: plural"
+			],
+			"selectors": [
+				"n"
+			],
+			"match": {
+				"n=one": "Too many wrong PINs. Try again in {count} minute.",
+				"n=other": "Too many wrong PINs. Try again in {count} minutes."
+			}
+		}
+	],
+	"close_lock_pin_wait_seconds": [
+		{
+			"declarations": [
+				"input count",
+				"local n = count: plural"
+			],
+			"selectors": [
+				"n"
+			],
+			"match": {
+				"n=one": "Too many wrong PINs. Try again in {count} second.",
+				"n=other": "Too many wrong PINs. Try again in {count} seconds."
+			}
+		}
+	],
+	"close_lock_pin_wrong": "That isn't this profile's PIN.",
+	"close_lock_signed_out": "This device was signed out of this profile.",
 	"close_monitor_missing": "The host is set to stream “{monitor}”, which isn't connected. Pick another screen in its web console, under Displays.",
 	"close_monitor_none": "The host is set to capture a monitor called \"{monitor}\", and reports no monitors at all. Clear that in the host's display settings to stream a virtual display instead.",
 	"close_niri_no_outputs": "The host's niri can't create a display for this stream. Its owner can install biri; the web console shows how.",

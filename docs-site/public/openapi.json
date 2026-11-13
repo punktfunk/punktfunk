@@ -7298,7 +7298,7 @@
           "profiles"
         ],
         "summary": "List the profiles a device can pick",
-        "description": "Every profile on the box, the owner first. A client shows this as its picker. Each row's\n`unlock` says what the asking device sends with its connect: a profile on a person's own\nLinux account needs the account's password, or a key proof from a device that enrolled one,\nuntil the device is signed in to its running desktop.",
+        "description": "The profiles the asking device may open, the owner first, and the locked ones that take a\nPIN; the console lists every profile. A client shows this as its picker. Each row's `unlock`\nsays what the asking device sends with its connect: a profile on a person's own Linux account\nneeds the account's password, or a key proof from a device that enrolled one, until the\ndevice is signed in to its running desktop; a locked profile whose list lacks the device\nneeds its PIN.",
         "operationId": "enumerateProfiles",
         "responses": {
           "200": {
@@ -7831,7 +7831,7 @@
           "profiles"
         ],
         "summary": "List the devices signed in to a profile",
-        "description": "For a profile on a person's own Linux account: each device that unlocked it, and how it gets\nback on. Admin lane only.",
+        "description": "For a profile on a person's own Linux account: each device that unlocked it, and how it gets\nback on. For any other profile: the devices its lock lets in, the same rows, kept while it is\nopen. Admin lane only.",
         "operationId": "listProfileDevices",
         "parameters": [
           {
@@ -7879,7 +7879,7 @@
             }
           },
           "409": {
-            "description": "The profile doesn't open with an account password",
+            "description": "A profile on the owner's lock, or a lock file that doesn't read",
             "content": {
               "application/json": {
                 "schema": {
@@ -7901,12 +7901,107 @@
         },
         "x-scope": "box"
       },
+      "post": {
+        "tags": [
+          "profiles"
+        ],
+        "summary": "Let a paired device open a profile",
+        "description": "Puts a device paired with this host, Punktfunk or Moonlight, on the profile's list until it\nis signed out. Answers the list. Admin lane only.",
+        "operationId": "addProfileDevice",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The profile id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProfileDeviceAdd"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The profile's devices",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/SignedInDevice"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Not a device fingerprint",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such profile, or no paired device with that fingerprint",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "A person's own account, a profile on the owner's lock, or a lock file that doesn't read",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "The list is full",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "x-scope": "box"
+      },
       "delete": {
         "tags": [
           "profiles"
         ],
         "summary": "Sign every device out of a profile",
-        "description": "For a profile on a person's own Linux account: every device needs the account's password\nagain and every unlock key is forgotten. Admin lane only.",
+        "description": "For a profile on a person's own Linux account: every device needs the account's password\nagain and every unlock key is forgotten. For any other: its lock's list empties, and every\nsession on it from a device off the list ends. Admin lane only.",
         "operationId": "signOutProfileDevices",
         "parameters": [
           {
@@ -7944,7 +8039,7 @@
             }
           },
           "409": {
-            "description": "The profile doesn't open with an account password",
+            "description": "A profile on the owner's lock, or a lock file that doesn't read",
             "content": {
               "application/json": {
                 "schema": {
@@ -7973,7 +8068,7 @@
           "profiles"
         ],
         "summary": "Sign a device out of a profile",
-        "description": "For a profile on a person's own Linux account: the device needs the account's password again\nand its unlock key is forgotten. Admin lane only.",
+        "description": "For a profile on a person's own Linux account: the device needs the account's password again\nand its unlock key is forgotten. For any other: the device leaves its lock's list, and a\nsession it plays there ends. Admin lane only.",
         "operationId": "signOutProfileDevice",
         "parameters": [
           {
@@ -8030,7 +8125,7 @@
             }
           },
           "409": {
-            "description": "The profile doesn't open with an account password",
+            "description": "A profile on the owner's lock, or a lock file that doesn't read",
             "content": {
               "application/json": {
                 "schema": {
@@ -8115,6 +8210,367 @@
           },
           "503": {
             "description": "The seat's host didn't answer",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "x-scope": "box"
+      }
+    },
+    "/api/v1/profiles/{id}/lock": {
+      "get": {
+        "tags": [
+          "profiles"
+        ],
+        "summary": "Read a profile's lock",
+        "description": "Whether it is locked, whether it has a PIN, and the wrong PINs counted against it. Its\ndevices are `GET /profiles/{id}/devices`. Admin lane only.",
+        "operationId": "getProfileLock",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The profile id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The lock",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProfileLock"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No profile with that id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "A person's own account, a profile on the owner's lock, or a lock file that doesn't read",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "x-scope": "box"
+      },
+      "post": {
+        "tags": [
+          "profiles"
+        ],
+        "summary": "Lock a profile",
+        "description": "From now its list is exactly `devices`, paired devices, so a lock keeps the ones someone\nplays on, and with `pin` that is its PIN; a session from any other device ends. One step: on\nany refusal nothing changed. On a profile already locked it changes nothing and takes only\ndevices the profile lets in and no PIN, so it never widens who opens it: the device and PIN\nroutes change a locked profile. Admin lane only.",
+        "operationId": "lockProfile",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The profile id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "Its devices and PIN; an empty list and the PIN it has when absent",
+          "content": {
+            "application/json": {
+              "schema": {
+                "oneOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "$ref": "#/components/schemas/LockProfile"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Locked",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProfileLock"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Not a device fingerprint, or a PIN that isn't 4 to 8 digits",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such profile, or no paired device with a fingerprint",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "A person's own account, a profile on the owner's lock, a lock file that doesn't read, or a locked profile asked for another device or a PIN",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "x-scope": "box"
+      },
+      "delete": {
+        "tags": [
+          "profiles"
+        ],
+        "summary": "Unlock a profile",
+        "description": "Every paired device opens it again. Its list and its PIN stay for the next lock. Admin lane\nonly.",
+        "operationId": "unlockProfile",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The profile id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Open",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProfileLock"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No profile with that id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "A person's own account, a profile on the owner's lock, or a lock file that doesn't read",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "x-scope": "box"
+      }
+    },
+    "/api/v1/profiles/{id}/lock/pin": {
+      "put": {
+        "tags": [
+          "profiles"
+        ],
+        "summary": "Set a profile's PIN",
+        "description": "While it is locked, a device off its list opens it with this PIN, and the PIN puts it on the\nlist. Replaces any PIN it had. Admin lane only.",
+        "operationId": "setProfilePin",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The profile id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProfilePin"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Set",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProfileLock"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Not 4 to 8 digits",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No profile with that id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "A person's own account, a profile on the owner's lock, or a lock file that doesn't read",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "x-scope": "box"
+      },
+      "delete": {
+        "tags": [
+          "profiles"
+        ],
+        "summary": "Clear a profile's PIN",
+        "description": "While it is locked, only the devices on its list open it. Admin lane only.",
+        "operationId": "clearProfilePin",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The profile id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Cleared",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProfileLock"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No profile with that id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "A person's own account, a profile on the owner's lock, or a lock file that doesn't read",
             "content": {
               "application/json": {
                 "schema": {
@@ -8365,7 +8821,7 @@
           "profiles"
         ],
         "summary": "Get a profile's seat ready",
-        "description": "Starts a stopped seat so the next connect lands in it, and answers at once with the seat\n`starting`; poll `enumerate` until it is `ready`. A profile with no seat to start only gets\nits row back. A paired device wakes the profile it lands in when it names none; any other\nneeds its launch grant. A profile on a person's own Linux account is never woken: its\ndesktop starts when the connect brings the account's password.",
+        "description": "Starts a stopped seat so the next connect lands in it, and answers at once with the seat\n`starting`; poll `enumerate` until it is `ready`. A profile with no seat to start only gets\nits row back. A paired device wakes the profile it lands in when it names none; any other\nneeds its launch grant, and a locked one a device on its list. A profile on a person's own\nLinux account is never woken: its desktop starts when the connect brings the account's\npassword.",
         "operationId": "wakeProfile",
         "parameters": [
           {
@@ -8400,7 +8856,7 @@
             }
           },
           "403": {
-            "description": "This device may not start another profile's seat",
+            "description": "This device may not start that profile's seat",
             "content": {
               "application/json": {
                 "schema": {
@@ -15587,6 +16043,59 @@
           }
         }
       },
+      "LockProfile": {
+        "type": "object",
+        "description": "`POST /profiles/{id}/lock`, optional.",
+        "properties": {
+          "devices": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Paired devices, by certificate SHA-256 hex: the list it locks with, in place of any an\nearlier lock left. A profile already locked takes only devices it lets in."
+          },
+          "pin": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "4 to 8 digits: its PIN from now. Absent keeps the PIN it has. A profile already locked\ntakes none.",
+            "example": "2468"
+          }
+        }
+      },
+      "LockSummary": {
+        "type": "object",
+        "description": "A profile's lock, as the profile list shows it.",
+        "required": [
+          "locked",
+          "pin",
+          "failed_pins"
+        ],
+        "properties": {
+          "failed_pins": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Wrong PINs in the last 15 minutes over all devices. At 10, PIN entry waits.",
+            "minimum": 0
+          },
+          "locked": {
+            "type": "boolean",
+            "description": "Only the devices on its list, and a device that brings its PIN, open it. Also `true` for\nevery profile while the lock file doesn't read."
+          },
+          "pin": {
+            "type": "boolean",
+            "description": "It has a PIN."
+          },
+          "shared_with": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The owner profile whose lock opens it, for a profile that shares the owner's desktop:\nthe other fields are that lock's."
+          }
+        }
+      },
       "LogEntry": {
         "type": "object",
         "required": [
@@ -16592,6 +17101,26 @@
           }
         }
       },
+      "PlayingDevice": {
+        "type": "object",
+        "description": "A device playing as a profile now.",
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "fingerprint": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "SHA-256 of the device's certificate, lowercase hex. Absent when its session matches no\nsingle paired device: it can't be kept, only warned about."
+          },
+          "name": {
+            "type": "string",
+            "description": "The name it paired with, else the name its session gave."
+          }
+        }
+      },
       "PluginAccessSnapshot": {
         "type": "object",
         "description": "What an API read returns for one plugin: its entry plus its pending rows.",
@@ -17093,6 +17622,17 @@
                 ],
                 "description": "The device whose seat became this profile, lowercase hex."
               },
+              "lock": {
+                "oneOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "$ref": "#/components/schemas/LockSummary",
+                    "description": "Its lock. Absent for a profile on a person's own account, which opens with its password."
+                  }
+                ]
+              },
               "steam_home": {
                 "type": "boolean",
                 "description": "This host keeps a Steam home for it, with that Steam's sign-in and saved games. A removal\nwith `erase` deletes it."
@@ -17151,6 +17691,56 @@
               "null"
             ],
             "description": "Bind this profile to a local Windows account that takes the console in turn\n(`design/windows-take-turns.md`). When set, the profile is a take-turns profile and\n`seat` does not apply."
+          }
+        }
+      },
+      "ProfileDeviceAdd": {
+        "type": "object",
+        "description": "`POST /profiles/{id}/devices`.",
+        "required": [
+          "fingerprint"
+        ],
+        "properties": {
+          "fingerprint": {
+            "type": "string",
+            "description": "SHA-256 of a paired device's certificate, hex: a Punktfunk device or a Moonlight one."
+          }
+        }
+      },
+      "ProfileLock": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/LockSummary"
+          },
+          {
+            "type": "object",
+            "required": [
+              "playing"
+            ],
+            "properties": {
+              "playing": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/PlayingDevice"
+                },
+                "description": "The devices playing as it now, on its desktop's other profiles too: the ones a lock would\ncut off unless they are kept."
+              }
+            }
+          }
+        ],
+        "description": "A profile's lock, as the console shows it."
+      },
+      "ProfilePin": {
+        "type": "object",
+        "description": "`PUT /profiles/{id}/lock/pin`.",
+        "required": [
+          "pin"
+        ],
+        "properties": {
+          "pin": {
+            "type": "string",
+            "description": "4 to 8 digits.",
+            "example": "2468"
           }
         }
       },
@@ -18898,11 +19488,12 @@
       },
       "SignedInDevice": {
         "type": "object",
-        "description": "A device signed in to a profile on a person's own Linux account.",
+        "description": "A device signed in to a profile on a person's own Linux account, or on a locked profile's\nlist.",
         "required": [
           "fingerprint",
           "name",
           "kind",
+          "moonlight",
           "added_unix",
           "last_unix"
         ],
@@ -18924,6 +19515,10 @@
             "format": "int64",
             "description": "When it last unlocked or rejoined, unix seconds."
           },
+          "moonlight": {
+            "type": "boolean",
+            "description": "A Moonlight pairing rather than a Punktfunk one. Never on a person's own account."
+          },
           "name": {
             "type": "string",
             "description": "The name it paired with."
@@ -18936,6 +19531,7 @@
         "enum": [
           "for_now",
           "stay",
+          "added",
           "key"
         ]
       },
@@ -19504,11 +20100,12 @@
       },
       "UnlockNeed": {
         "type": "string",
-        "description": "What a device sends with its connect to open a profile on a person's own Linux account.",
+        "description": "What a device sends with its connect to open a profile: a profile on a person's own Linux\naccount, or a locked one. A client that doesn't know a word reads it as `password`.",
         "enum": [
           "none",
           "password",
-          "key"
+          "key",
+          "pin"
         ]
       },
       "UnpairAllResult": {

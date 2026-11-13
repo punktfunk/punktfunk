@@ -33,6 +33,7 @@ import { doorUnavailable, seatCheckText } from "@/lib/host-messages";
 import { useLocale } from "@/lib/i18n";
 import { m } from "@/paraglide/messages";
 import { SignedInDevices } from "./devices";
+import { useProfileLocks } from "./lock";
 import { GameExitPreference } from "./session";
 import {
 	AddProfileDialog,
@@ -114,6 +115,7 @@ export const SectionProfiles: FC = () => {
 	const [removing, setRemoving] = useState<ProfileAdmin | null>(null);
 	const [editing, setEditing] = useState<ProfileAdmin | null>(null);
 	const [passwordFor, setPasswordFor] = useState<ProfileAdmin | null>(null);
+	const locks = useProfileLocks(profiles.data ?? []);
 	const refresh = () =>
 		qc.invalidateQueries({ queryKey: getListProfilesQueryKey() });
 	const failed = (fallback: string) => (e: unknown) =>
@@ -289,7 +291,9 @@ export const SectionProfiles: FC = () => {
 				devices={
 					linux && door ? (p) => <SignedInDevices profile={p} /> : undefined
 				}
+				onLock={locks.onLock}
 			/>
+			{locks.dialogs}
 			{editing && (
 				<EditProfileDialog
 					key={editing.id}

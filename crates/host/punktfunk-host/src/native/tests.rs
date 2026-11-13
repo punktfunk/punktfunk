@@ -2381,10 +2381,12 @@ enum Sends {
     Nothing,
 }
 
-/// What it hears back: a redirect, or the host's typed close and its sentence.
+/// What it hears back: a redirect, the session starting here, or the host's typed close and its
+/// sentence.
 #[derive(Debug, PartialEq)]
 enum Heard {
     Redirect { port: u16, pin: String },
+    Played,
     Closed(punktfunk_core::reject::RejectReason, String),
 }
 
@@ -2430,10 +2432,14 @@ async fn dial_person(
             pendings += 1;
             continue;
         }
+        if ty == registry::MSG_SERVER_HELLO {
+            conn.close(0u32.into(), b"");
+            return (pendings, Heard::Played);
+        }
         assert_eq!(
             ty,
             msg::Redirect::TYPE,
-            "a person's account answers no other frame"
+            "an admission answers no other frame"
         );
         let to = msg::decode::<msg::Redirect>(ty, &body).unwrap();
         conn.close(0u32.into(), b"");
@@ -2824,4 +2830,332 @@ fn a_wrong_password_never_reaches_a_log_or_an_error() {
             "That isn't jdoe's password.".into()
         )
     );
+}
+
+const OWNER_PROFILE: &str = "4f1c3a9b0e27";
+const KID_PROFILE: &str = "c1d000000001";
+/// A profile that shares the owner's desktop.
+const SHARER_PROFILE: &str = "5a1e00000001";
+
+/// A device's dial: the profile it names, the features it offers, what it sends after its hello.
+type Dial<'a> = (
+    &'a str,
+    punktfunk_core::quic::v2::features::FeatureSet,
+    Sends,
+);
+
+/// The features of a client that follows redirects, and with `prompts` also asks for an unlock.
+fn offers(prompts: bool) -> punktfunk_core::quic::v2::features::FeatureSet {
+    use punktfunk_core::quic::v2::registry::{FEATURE_PROFILES, FEATURE_PROFILE_UNLOCK};
+    let features = punktfunk_core::quic::v2::features::FeatureSet::default().with(FEATURE_PROFILES);
+    match prompts {
+        true => features.with(FEATURE_PROFILE_UNLOCK),
+        false => features,
+    }
+}
+
+/// A box of its own on `port`: the owner on the box's own session, and [`KID_PROFILE`] on a made
+/// seat on `port + 1000` that no other test's redirect holds. `locks`, given the device's
+/// fingerprint, is the profile lock file, `null` for none. One paired device makes `dials` in
+/// turn; what it hears each time, and where the lock file is.
+fn dial_box(
+    port: u16,
+    locks: impl FnOnce(&str) -> serde_json::Value,
+    dials: Vec<Dial<'_>>,
+) -> (Vec<Heard>, std::path::PathBuf) {
+    dial_host(port, false, locks, dials)
+}
+
+/// [`dial_box`], on the kid's seat host when `seat_host`: it reads the box's files read only, as
+/// a Windows seat host reads the box's config dir.
+fn dial_host(
+    port: u16,
+    seat_host: bool,
+    locks: impl FnOnce(&str) -> serde_json::Value,
+    dials: Vec<Dial<'_>>,
+) -> (Vec<Heard>, std::path::PathBuf) {
+    use crate::native::unlock::fake::{self, Fake};
+    let dir = crate::test_support::scratch();
+    let seat_id = format!("{port:032x}");
+    let mut seat = fake::person(&seat_id, port + 1000);
+    seat.adopted_uid = None;
+    let file = serde_json::json!({"version": 1, "profiles": [
+        {"id": OWNER_PROFILE, "display_name": "Enrico", "os_account": {"kind": "operator"}},
+        {"id": KID_PROFILE, "display_name": "Kid", "os_account": {"kind": "seat", "seat": seat_id}},
+        {"id": SHARER_PROFILE, "display_name": "Guest", "os_account": {"kind": "operator"}},
+    ]});
+    std::fs::write(dir.join("profiles.json"), file.to_string()).unwrap();
+    let np = NativePairing::load_with(Some(dir.join("punktfunk1-paired.json")), None, false);
+    let np = Arc::new(np.unwrap());
+    let (cert, key) = endpoint::generate_identity().unwrap();
+    let fp = hex::encode(endpoint::fingerprint_of_pem(&cert).unwrap());
+    np.add_with_access("Kid's tablet", &fp, None).unwrap();
+    let lock_file = dir.join(pf_seats::locks::FILE);
+    let locks = locks(&fp);
+    if !locks.is_null() {
+        std::fs::write(&lock_file, locks.to_string()).unwrap();
+    }
+    let path = dir.join("profiles.json");
+    let profiles = match seat_host {
+        true => crate::profiles::Profiles::load_box(path, Some(seat_id)),
+        false => crate::profiles::Profiles::load_with(Some(path), None),
+    };
+    let sup = Fake::new(vec![seat], |_| Ok(pf_seats::ipc::CommandResult::Left));
+    let _armed = fake::arm(&fp, Arc::new(sup));
+    let host = spawn_profile_host(port, dials.len() as u32, np, Arc::new(profiles));
+    std::thread::sleep(std::time::Duration::from_millis(500));
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let heard = dials
+        .into_iter()
+        .map(|(profile, features, sends)| {
+            let dialled = dial_person(port, (&cert, &key), profile, features, sends);
+            rt.block_on(dialled).1
+        })
+        .collect();
+    host.join().unwrap().unwrap();
+    (heard, lock_file)
+}
+
+/// The kid's seat as a redirect from `port` names it.
+fn kid_seat(port: u16) -> Heard {
+    Heard::Redirect {
+        port: port + 1000,
+        pin: "5eed".repeat(16),
+    }
+}
+
+/// An open profile opens as it always has: the box's own session plays here and a seat's profile
+/// goes to its seat, with nothing asked of the device.
+#[test]
+fn an_open_profile_opens_on_every_session_path() {
+    let _registry = crate::session_status::tests::registry_lock();
+    let _serial = SESSION_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    let dials = vec![
+        (OWNER_PROFILE, offers(true), Sends::Nothing),
+        (KID_PROFILE, offers(false), Sends::Nothing),
+    ];
+    let (heard, _) = dial_box(19801, |_| serde_json::Value::Null, dials);
+    assert_eq!(heard, [Heard::Played, kid_seat(19801)]);
+}
+
+/// `fp` on a profile's list, signed in until signed out.
+fn listed(fp: &str) -> serde_json::Value {
+    serde_json::json!({"fingerprint": fp, "name": "Kid's tablet", "stay": true,
+        "added_unix": 1, "last_unix": 1})
+}
+
+/// The refusal a device hears for a locked profile it is not on the list of.
+fn not_allowed() -> Heard {
+    Heard::Closed(
+        punktfunk_core::reject::RejectReason::SeatUnavailable,
+        "This device can't open this profile. Ask the host's owner to add it.".into(),
+    )
+}
+
+/// A locked profile opens for the devices on its list alone, on both session paths: the box's
+/// own session, played here, and a seat's profile, refused before its redirect. A lock entry
+/// that isn't locked is an open profile.
+#[test]
+fn a_locked_profile_opens_only_for_its_devices() {
+    let _registry = crate::session_status::tests::registry_lock();
+    let _serial = SESSION_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    let dials = || {
+        vec![
+            (OWNER_PROFILE, offers(true), Sends::Nothing),
+            (KID_PROFILE, offers(false), Sends::Nothing),
+        ]
+    };
+    let other = |_: &str| {
+        let lock = serde_json::json!({"locked": true, "devices": [listed(&"ab".repeat(32))]});
+        serde_json::json!({"version": 1, "profiles": {OWNER_PROFILE: lock, KID_PROFILE: lock}})
+    };
+    let (heard, _) = dial_box(19802, other, dials());
+    assert_eq!(heard, [not_allowed(), not_allowed()]);
+
+    let mine = |fp: &str| {
+        let lock = serde_json::json!({"locked": true, "devices": [listed(fp)]});
+        let open = serde_json::json!({"locked": false});
+        serde_json::json!({"version": 1, "profiles": {OWNER_PROFILE: lock, KID_PROFILE: open}})
+    };
+    let (heard, _) = dial_box(19803, mine, dials());
+    assert_eq!(heard, [Heard::Played, kid_seat(19803)]);
+}
+
+/// A profile that shares the owner's desktop opens with the owner's lock: a device off the
+/// owner's list is refused, one on it goes on, and the owner's PIN puts a device on the owner's
+/// list. A seat host's view is `profiles::locks`' test.
+#[test]
+fn a_profile_sharing_the_owner_s_desktop_opens_with_the_owner_s_lock() {
+    let _registry = crate::session_status::tests::registry_lock();
+    let _serial = SESSION_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    let sharer = || vec![(SHARER_PROFILE, offers(true), Sends::Nothing)];
+    let other = |_: &str| {
+        let lock = serde_json::json!({"locked": true, "devices": [listed(&"ab".repeat(32))]});
+        serde_json::json!({"version": 1, "profiles": {OWNER_PROFILE: lock}})
+    };
+    assert_eq!(dial_box(19809, other, sharer()).0, [not_allowed()]);
+    let mine = |fp: &str| {
+        let lock = serde_json::json!({"locked": true, "devices": [listed(fp)]});
+        serde_json::json!({"version": 1, "profiles": {OWNER_PROFILE: lock}})
+    };
+    assert_eq!(dial_box(19811, mine, sharer()).0, [Heard::Played]);
+
+    let pin = serde_json::to_value(pf_seats::locks::PinHash::new("2468").unwrap()).unwrap();
+    let with_pin = |_: &str| {
+        let lock = serde_json::json!({"locked": true, "pin": pin});
+        serde_json::json!({"version": 1, "profiles": {OWNER_PROFILE: lock}})
+    };
+    let dials = vec![
+        (
+            SHARER_PROFILE,
+            offers(true),
+            Sends::Unlock(password("2468", true, None)),
+        ),
+        (OWNER_PROFILE, offers(true), Sends::Nothing),
+    ];
+    let (heard, lock_file) = dial_box(19812, with_pin, dials);
+    assert_eq!(heard, [Heard::Played, Heard::Played]);
+    let file = pf_seats::locks::Locks::parse(&std::fs::read(lock_file).unwrap()).unwrap();
+    assert_eq!(file.profiles.keys().collect::<Vec<_>>(), [OWNER_PROFILE]);
+    assert_eq!(file.profiles[OWNER_PROFILE].list.entries().len(), 1);
+}
+
+/// A seat host reads the box's own lock file, as a Windows seat host reads the box's config dir:
+/// a device not on the list is refused there and never asked for the PIN only the box takes; a
+/// device on it goes on.
+#[test]
+fn a_seat_host_checks_the_box_s_lock_file() {
+    let _registry = crate::session_status::tests::registry_lock();
+    let _serial = SESSION_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    let pin = serde_json::to_value(pf_seats::locks::PinHash::new("2468").unwrap()).unwrap();
+    let other = |_: &str| {
+        let lock = serde_json::json!({"locked": true, "pin": pin,
+            "devices": [listed(&"ab".repeat(32))]});
+        serde_json::json!({"version": 1, "profiles": {KID_PROFILE: lock}})
+    };
+    let dials = vec![(KID_PROFILE, offers(true), Sends::Nothing)];
+    let (heard, _) = dial_host(19805, true, other, dials);
+    assert_eq!(heard, [not_allowed()]);
+
+    let mine = |fp: &str| {
+        let lock = serde_json::json!({"locked": true, "devices": [listed(fp)]});
+        serde_json::json!({"version": 1, "profiles": {KID_PROFILE: lock}})
+    };
+    let dials = vec![(KID_PROFILE, offers(true), Sends::Nothing)];
+    let (heard, _) = dial_host(19806, true, mine, dials);
+    assert_eq!(heard, [kid_seat(19806)]);
+}
+
+/// A locked profile's PIN, sent as the hello's `ProfileUnlock`, opens it for a device off its
+/// list. With none the client is sent to its prompt, or told to update when it has none; a key
+/// proof is turned back to the prompt; a wrong PIN is refused and the device waits before the
+/// next. A right one puts the device on the list, so its next connect needs nothing.
+#[test]
+fn a_locked_profile_opens_with_its_pin() {
+    use punktfunk_core::reject::RejectReason::{ProfileLocked, SeatUnavailable};
+    let _registry = crate::session_status::tests::registry_lock();
+    let _serial = SESSION_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    let pin = serde_json::to_value(pf_seats::locks::PinHash::new("2468").unwrap()).unwrap();
+    let locked = |_: &str| {
+        let lock = serde_json::json!({"locked": true, "pin": pin});
+        serde_json::json!({"version": 1, "profiles": {KID_PROFILE: lock}})
+    };
+    let key = {
+        let secret = v2msg::Zeroizing::new(vec![0x30, 0x45, 0x01]);
+        v2msg::ProfileUnlock::new(v2msg::UNLOCK_KEY_PROOF, secret, false, 0, Vec::new()).unwrap()
+    };
+    let pw = |pin: &str, stay| Sends::Unlock(password(pin, stay, None));
+    let dials = vec![
+        (KID_PROFILE, offers(true), Sends::Nothing),
+        (KID_PROFILE, offers(false), Sends::Nothing),
+        (KID_PROFILE, offers(true), Sends::Unlock(key)),
+        (KID_PROFILE, offers(true), pw("1357", false)),
+        (KID_PROFILE, offers(true), pw("2468", false)),
+    ];
+    let (heard, _) = dial_host(19807, false, locked, dials);
+    let closed = |reason, sentence: &str| Heard::Closed(reason, sentence.to_string());
+    assert_eq!(
+        heard[..4],
+        [
+            closed(ProfileLocked, ""),
+            closed(
+                SeatUnavailable,
+                "This profile needs its PIN. Update Punktfunk on this device."
+            ),
+            closed(ProfileLocked, ""),
+            closed(ProfileLocked, "That isn't this profile's PIN."),
+        ]
+    );
+    let Heard::Closed(ProfileLocked, wait) = &heard[4] else {
+        panic!("the device waits: {:?}", heard[4]);
+    };
+    assert!(
+        wait.starts_with("Too many wrong PINs. Try again in "),
+        "{wait}"
+    );
+
+    let dials = vec![
+        (KID_PROFILE, offers(true), pw("2468", true)),
+        (KID_PROFILE, offers(true), Sends::Nothing),
+    ];
+    let (heard, lock_file) = dial_host(19808, false, locked, dials);
+    assert_eq!(heard, [kid_seat(19808), kid_seat(19808)]);
+    let file = pf_seats::locks::Locks::parse(&std::fs::read(lock_file).unwrap()).unwrap();
+    let entries = file.profiles[KID_PROFILE].list.entries();
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].kind, pf_seats::ipc::DeviceKind::Stay);
+    assert_eq!(entries[0].name, "Kid's tablet", "its pairing name");
+}
+
+/// A session on a locked profile ends once its device is signed out, with the sentence that says
+/// so.
+#[test]
+fn signing_a_device_out_ends_its_session() {
+    let _registry = crate::session_status::tests::registry_lock();
+    let _serial = SESSION_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    let dir = crate::test_support::scratch();
+    let owner = serde_json::json!({"id": OWNER_PROFILE, "display_name": "Enrico",
+        "os_account": {"kind": "operator"}});
+    let file = serde_json::json!({"version": 1, "profiles": [owner]});
+    std::fs::write(dir.join("profiles.json"), file.to_string()).unwrap();
+    let (cert, key) = endpoint::generate_identity().unwrap();
+    let fp = hex::encode(endpoint::fingerprint_of_pem(&cert).unwrap());
+    let lock = serde_json::json!({"locked": true, "devices": [listed(&fp)]});
+    let locks = serde_json::json!({"version": 1, "profiles": {OWNER_PROFILE: lock}});
+    std::fs::write(dir.join(pf_seats::locks::FILE), locks.to_string()).unwrap();
+    let profiles = Arc::new(crate::profiles::Profiles::load_with(
+        Some(dir.join("profiles.json")),
+        None,
+    ));
+    let np = NativePairing::load_with(Some(dir.join("punktfunk1-paired.json")), None, false);
+    let np = Arc::new(np.unwrap());
+    np.add_with_access("Kid's tablet", &fp, None).unwrap();
+    let host = spawn_profile_host(19804, 1, np, profiles.clone());
+    std::thread::sleep(std::time::Duration::from_millis(500));
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let (code, reason) = rt.block_on(async {
+        let (conn, _send, _recv, _welcome, _media) = raw_session(19804, (&cert, &key)).await;
+        let signed_out = profiles.locks().edit(OWNER_PROFILE, |lock, _| {
+            lock.list.sign_out(None);
+        });
+        signed_out.unwrap();
+        let closed = tokio::time::timeout(std::time::Duration::from_secs(10), conn.closed());
+        match closed.await.expect("the host ends the session") {
+            quinn::ConnectionError::ApplicationClosed(ac) => (
+                u64::from(ac.error_code),
+                String::from_utf8(ac.reason.to_vec()).unwrap(),
+            ),
+            other => panic!("expected the host's close, got {other:?}"),
+        }
+    });
+    host.join().unwrap().unwrap();
+    let unavailable = punktfunk_core::reject::RejectReason::SeatUnavailable.close_code();
+    assert_eq!(code, u64::from(unavailable));
+    assert_eq!(reason, "This device was signed out of this profile.");
 }

@@ -358,6 +358,67 @@ async fn a_profile_s_layer_adds_and_narrows_never_widens() {
     assert!(json[0].get("profile").is_none(), "{json}");
 }
 
+/// On every read that takes `as` and the cert lane reaches, a device that may not open a locked
+/// profile hears what an unknown id gets, and a device on its list reads it. The operator reads
+/// every profile, as before.
+#[tokio::test]
+async fn a_device_reads_only_a_profile_it_may_open() {
+    use axum::http::Method;
+    let tmp = ConfigDirOverride::new();
+    write_fixture(tmp.path());
+    let np = Arc::new(
+        crate::native_pairing::NativePairing::load_with(
+            Some(crate::test_support::scratch().join("pf-profile-view-lock.json")),
+            None,
+            false,
+        )
+        .unwrap(),
+    );
+    let (listed, other) = ("a7".repeat(32), "b8".repeat(32));
+    np.add("listed", &listed).unwrap();
+    np.add("other", &other).unwrap();
+    let state = profiles_state(tmp.path(), profiles());
+    let store = state.profiles.get().unwrap().clone();
+    let device = pf_seats::ipc::Device {
+        fingerprint: listed.clone(),
+        name: "listed".into(),
+    };
+    let locked = store.locks().edit(SEAT_P, |lock, now| {
+        lock.locked = true;
+        lock.admit(&device, now, true)
+    });
+    assert!(locked.unwrap());
+    let app = test_app_native(state, np);
+    let doc: serde_json::Value = serde_json::from_str(&crate::mgmt::openapi_json()).unwrap();
+    let mut reads = Vec::new();
+    for (path, ops) in doc["paths"].as_object().unwrap() {
+        let Some(op) = ops.get("get") else {
+            continue;
+        };
+        let takes_as = op["parameters"]
+            .as_array()
+            .is_some_and(|ps| ps.iter().any(|p| p["name"] == "as" && p["in"] == "query"));
+        if takes_as && auth::cert_may_access(&Method::GET, path) {
+            reads.push(path.clone());
+        }
+    }
+    assert!(reads.contains(&"/api/v1/library".to_string()), "{reads:?}");
+    for path in &reads {
+        // A route's own arguments name a title and an art kind the fixture has.
+        let concrete = path.replace("{kind}", "portrait").replace("{id}", "s1");
+        let at = |id: &str| format!("{concrete}?as={id}");
+        let (status, body) = get_cert(&app, &at(SEAT_P), &other).await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "{path}: {body}");
+        assert_eq!(body["code"], "profile_unknown", "{path}");
+        let (_, unknown) = get_cert(&app, &at("0123456789ab"), &other).await;
+        assert_eq!(body, unknown, "{path}: no hint that it exists");
+        let (status, body) = get_cert(&app, &at(SEAT_P), &listed).await;
+        assert_ne!(body["code"], "profile_unknown", "{path}: {status}");
+        let (status, body) = send(&app, get_req(&at(SEAT_P))).await;
+        assert_ne!(body["code"], "profile_unknown", "{path}: {status}");
+    }
+}
+
 /// A profile that shares the owner's desktop lists what the owner lists, less what it hides;
 /// the owner's view is the box's.
 #[tokio::test]
