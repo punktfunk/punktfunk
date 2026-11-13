@@ -35,11 +35,6 @@ public enum ConsoleSettings {
         return j
     }
 
-    public static func json(_ defaults: UserDefaults = .standard) -> String {
-        let data = try? JSONSerialization.data(withJSONObject: document(defaults))
-        return data.flatMap { String(data: $0, encoding: .utf8) } ?? "{}"
-    }
-
     /// The console saved a document: keep it whole as the next base, and fold every key this
     /// app owns back into its own defaults. An unknown value is left alone rather than stored.
     public static func apply(_ j: [String: Any], _ defaults: UserDefaults = .standard) {
