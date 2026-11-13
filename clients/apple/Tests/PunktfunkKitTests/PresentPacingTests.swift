@@ -285,22 +285,6 @@ final class PresentPacingTests: XCTestCase {
         XCTAssertNil(box.take(), "take empties the slot")
     }
 
-    /// `putBack` fills only an EMPTY slot: the render thread returning a drawable it took but
-    /// didn't present must never clobber a fresher one the link vended in between.
-    func testLatestBoxPutBackNeverClobbersAFresherPut() {
-        let box = LatestBox<Int>()
-        box.put(1)
-        let stale = box.take()
-        XCTAssertEqual(stale, 1)
-        box.putBack(stale!)
-        XCTAssertEqual(box.take(), 1, "putBack into a still-empty slot restores the value")
-        box.put(2)
-        let taken = box.take()
-        box.put(3) // the link vends a fresher drawable while the render thread holds `taken`
-        box.putBack(taken!)
-        XCTAssertEqual(box.take(), 3, "the fresher vend wins over the stale return")
-    }
-
     /// The render thread drops a drawable past its pick: only that one, never a fresher vend.
     func testLatestBoxTakeWhereChecksTheValueItTakes() {
         let box = LatestBox<Int>()

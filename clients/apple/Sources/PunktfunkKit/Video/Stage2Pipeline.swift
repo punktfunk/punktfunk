@@ -175,7 +175,7 @@ public final class FrameStore<Frame>: @unchecked Sendable {
     /// Cadence-driven take: hand back the oldest frame only once its DUE time has arrived, so the
     /// store's job becomes "hold what is not due yet" instead of "release one per present
     /// opportunity". `due` projects the frame's due instant on the same clock as `now`; nil (no
-    /// cadence estimate for that frame) means due immediately.
+    /// cadence estimate for that frame) means due immediately. Only the FIFO store has a cadence.
     ///
     /// The preroll gate does not apply here. It exists only to build headroom for a per-slot
     /// drain, and under cadence targeting the cushion IS the headroom — prerolling on top would
@@ -188,9 +188,7 @@ public final class FrameStore<Frame>: @unchecked Sendable {
         defer { lock.unlock() }
         guard let oldest = frames.first else { return nil }
         if let at = due(oldest), at > now { return nil } // held — not due yet
-        if isFifo { return frames.removeFirst() }
-        frames.removeAll(keepingCapacity: true)
-        return oldest
+        return frames.removeFirst()
     }
 
     /// Return a frame the render thread took but could not present (no drawable yet, or a
@@ -551,19 +549,12 @@ final class FrameHDRReporter: @unchecked Sendable {
 
 /// Newest-wins 1-slot hand-off box: deadline pacing's drawable stash — the link thread `put`s
 /// each update's vended drawable (replacing an unpresented older one, which just returns to the
-/// layer's pool), the render thread `take`s.
-/// `putBack` returns a taken value only while the slot is still empty, so a fresher `put` from
-/// the other thread is never clobbered by a stale return; `take(where:)` checks the value it
-/// takes under the same lock. Internal (not private) for unit tests. Sendable; lock-guarded.
+/// layer's pool), the render thread `take`s. `take(where:)` checks the value it takes under the
+/// same lock. Internal (not private) for unit tests. Sendable; lock-guarded.
 final class LatestBox<T>: @unchecked Sendable {
     private let lock = NSLock()
     private var value: T?
     func put(_ v: T) { lock.lock(); value = v; lock.unlock() }
-    func putBack(_ v: T) {
-        lock.lock()
-        if value == nil { value = v }
-        lock.unlock()
-    }
     func take() -> T? {
         lock.lock()
         defer { lock.unlock() }
