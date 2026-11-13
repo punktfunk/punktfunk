@@ -153,22 +153,24 @@ final class LibraryClientTests: XCTestCase {
         XCTAssertTrue(Artwork().posterCandidates.isEmpty)
     }
 
-    func testArtworkResolvedRewritesOnlyHostRelativePaths() {
-        let base = URL(string: "https://192.168.1.70:47990/api/v1/library")!
-        // Steam art now comes back as host-relative proxy paths; external CDN URLs (GOG/Heroic/Xbox)
-        // and `data:` URLs (Lutris) are untouched.
-        let art = Artwork(
-            portrait: "/api/v1/library/art/steam:3527290/portrait",
-            hero: "https://cdn.example.com/hero.jpg",
-            logo: nil,
-            header: "/api/v1/library/art/steam:3527290/header")
-        let resolved = art.resolved(against: base)
+    /// Host art stays the path the host sent, so a catalog cached before the host moved still
+    /// finds its posters: the loader asks the host where it is now, under the same cache key.
+    func testHostArtPathKeysToTheMachineAtAnyAddress() throws {
+        let json = #"{"id":"steam:570","store":"steam","title":"Dota 2","art":{"#
+            + #""portrait":"/api/v1/library/art/steam:570/portrait","#
+            + #""hero":"https://cdn.example.com/h.jpg"}}"#
+        let art = try JSONDecoder().decode(GameEntry.self, from: Data(json.utf8))
+            .art.posterCandidates
+        for address in ["192.168.1.70", "100.64.1.2"] {
+            XCTAssertTrue(LibraryArtLoader.isHostOrigin(art[0], address: address, port: 47990))
+            XCTAssertEqual(
+                LibraryArtLoader.cacheKey(
+                    for: art[0], hostAddress: address, hostPort: 47990, pin: Data([0xDE, 0xAD])),
+                "dead|/api/v1/library/art/steam:570/portrait")
+            XCTAssertFalse(LibraryArtLoader.isHostOrigin(art[1], address: address, port: 47990))
+        }
         XCTAssertEqual(
-            resolved.portrait, "https://192.168.1.70:47990/api/v1/library/art/steam:3527290/portrait")
-        XCTAssertEqual(
-            resolved.header, "https://192.168.1.70:47990/api/v1/library/art/steam:3527290/header")
-        XCTAssertEqual(resolved.hero, "https://cdn.example.com/hero.jpg") // unchanged
-        XCTAssertNil(resolved.logo)
+            LibraryArtLoader.requestPath(art[0]), "/api/v1/library/art/steam:570/portrait")
     }
 
     // MARK: - HTTP response parsing (MgmtTransport)

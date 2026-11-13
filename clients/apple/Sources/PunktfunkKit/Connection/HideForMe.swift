@@ -98,17 +98,9 @@ public enum HideForMe {
         return rows.filter(\.hidden).map(\.entry)
     }
 
-    /// ``fetchHidden(profile:_:)`` over `target`'s lanes, the art resolved against this host.
-    /// Fetched when the player asks, never cached.
+    /// ``fetchHidden(profile:_:)`` over `target`'s lanes. Fetched when the player asks, never
+    /// cached.
     public static func hidden(profile: String, on target: MgmtTarget) async throws -> [GameEntry] {
-        let base = URL(string: LibraryClient.baseURL(address: target.address, port: target.port)
-            + "/api/v1/library")
-        var games = try await fetchHidden(profile: profile) { path in
-            try await LibraryClient.send(path, to: target)
-        }
-        if let base {
-            for i in games.indices { games[i].art = games[i].art.resolved(against: base) }
-        }
-        return games
+        try await fetchHidden(profile: profile) { path in try await LibraryClient.send(path, to: target) }
     }
 }

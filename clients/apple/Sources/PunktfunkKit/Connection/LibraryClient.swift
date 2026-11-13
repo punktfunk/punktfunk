@@ -15,7 +15,7 @@ import Foundation
 // dependency-free widget extension can share them; PunktfunkKit re-exports the module.
 import PunktfunkShared
 
-/// Cover art URLs (the public Steam CDN for Steam titles, user-supplied for custom entries).
+/// Cover art: a host-relative path to the host's art proxy, or an absolute CDN or `data:` URL.
 public struct Artwork: Codable, Hashable, Sendable {
     public var portrait: String?
     public var hero: String?
@@ -706,18 +706,10 @@ public enum LibraryClient {
     private struct Coded: Decodable { let code: String? }
 
     /// The host's catalog as `profile` plays it, walked over ``send(_:to:method:body:)``'s lanes
-    /// (``catalog(as:_:)``).
+    /// (``catalog(as:_:)``). Host art keeps the host-relative path it arrives as, so a cached
+    /// catalog still names it after the host moves; ``LibraryArtLoader`` asks its own host.
     public static func fetch(_ target: MgmtTarget, as profile: String?) async throws -> Catalog {
-        guard let base = URL(
-            string: "\(baseURL(address: target.address, port: target.port))/api/v1/library")
-        else { throw LibraryError.unreachable("invalid host address") }
-        var fetched = try await catalog(as: profile) { path in try await send(path, to: target) }
-        // Art the host serves arrives as host-relative proxy paths (`/api/v1/library/art/...`).
-        // Resolve them against THIS host, so every consumer sees absolute URLs.
-        for i in fetched.games.indices {
-            fetched.games[i].art = fetched.games[i].art.resolved(against: base)
-        }
-        return fetched
+        try await catalog(as: profile) { path in try await send(path, to: target) }
     }
 
     /// The profiles on this host, from `GET /api/v1/profiles/enumerate`, in host order. nil: the
@@ -1003,25 +995,6 @@ public enum LibraryClient {
     }
 }
 
-extension Artwork {
-    /// Rewrite any host-relative field (one starting with `/`) into an absolute URL against `base`.
-    /// External CDN URLs (GOG/Heroic/Xbox) and `data:` URLs (Lutris) already don't start with `/`,
-    /// so they pass through unchanged. `internal` (not `fileprivate`) so `LibraryClientTests` can
-    /// exercise it directly without a live host.
-    func resolved(against base: URL) -> Artwork {
-        func abs(_ s: String?) -> String? {
-            guard let s, s.hasPrefix("/") else { return s }
-            return URL(string: s, relativeTo: base)?.absoluteString ?? s
-        }
-        var a = self
-        a.portrait = abs(a.portrait)
-        a.hero = abs(a.hero)
-        a.logo = abs(a.logo)
-        a.header = abs(a.header)
-        return a
-    }
-}
-
 /// Anything that answers poster bytes for a cover-art URL. The production implementation is
 /// [`LibraryArtLoader`]; the screenshot harness substitutes a canned source so store frames carry
 /// artwork without a host on the network.
@@ -1077,8 +1050,8 @@ final class ArtFlights: @unchecked Sendable {
 /// Loads cover art for the library UI, routing each URL to the transport that suits its origin.
 ///
 /// A `GameEntry`'s art candidates mix two very different things: the host's own art proxy
-/// (`/api/v1/library/art/...`, resolved to absolute URLs against this host) and public store CDN
-/// URLs carried verbatim on custom/GOG/Heroic entries. Host URLs go over [`MgmtTransport`] with
+/// (`/api/v1/library/art/...`, a host-relative path asked of this loader's host) and public
+/// store CDN URLs carried verbatim on custom/GOG/Heroic entries. Host URLs go over [`MgmtTransport`] with
 /// the paired identity and the pinned fingerprint — outside the URL loading system, so App
 /// Transport Security can stay ON app-wide. Every other origin keeps ordinary `URLSession` with
 /// full system trust evaluation and no client certificate, which is exactly what it should get.
@@ -1211,10 +1184,13 @@ public final class LibraryArtLoader: LibraryArtSource, @unchecked Sendable {
         return response.body
     }
 
-    /// Does this URL point at the host's own art proxy? Compared on host + port rather than a
-    /// string prefix, so a differently-spelled but equivalent URL still takes the pinned path.
+    /// Does this URL point at the host's own art proxy? A host-relative path does, wherever the
+    /// host is now. An absolute URL is compared on host + port rather than a string prefix, so a
+    /// differently-spelled but equivalent URL still takes the pinned path.
     static func isHostOrigin(_ url: URL, address: String, port: UInt16) -> Bool {
-        guard let host = url.host else { return false }
+        guard let host = url.host else {
+            return url.scheme == nil && url.relativeString.hasPrefix("/")
+        }
         let bare = MgmtTransport.unbracketed(address)
         let scheme = url.scheme?.lowercased()
         return host.caseInsensitiveCompare(bare) == .orderedSame
