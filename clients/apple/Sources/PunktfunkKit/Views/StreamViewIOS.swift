@@ -12,8 +12,8 @@
 // plus buttons. `gcMouseForwarding` (== locked) keeps the two apart, so a pointer reporting on both
 // never double-sends. Scroll always comes from UIKit's pan recognizers, locked or not.
 //
-// Hardware keyboards share InputCapture with macOS: engaged at stream start, ⌘⎋ toggles and
-// ⌃⌥⇧Q releases, both read from the HID stream.
+// Hardware keyboards share InputCapture with macOS: engaged at stream start, and ⌘⎋ or the
+// ⌃⌥⇧Q shortcut toggle it, both read from the HID stream.
 //
 // The public type is named StreamView like its macOS twin, so the SwiftUI layer is shared.
 
@@ -416,7 +416,7 @@ public final class StreamViewController: StreamViewControllerBase {
     /// else — including every key while the pointer is released — goes to `super` untouched, so
     /// Escape still dismisses sheets, exits full screen and does everything else it should whenever
     /// we are not holding the keyboard. The deliberate ways out are unaffected: ⌘⎋ and ⌃⌥⇧Q are
-    /// recognized on the GCKeyboard path and clear `captured` themselves.
+    /// read on the GCKeyboard path, which this leaves alone.
     public override func pressesBegan(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
         let unclaimed = presses.filter { !claimsPress($0) }
         if !unclaimed.isEmpty || presses.isEmpty {
@@ -661,12 +661,9 @@ public final class StreamViewController: StreamViewControllerBase {
             self.stepPointerLock(
                 .lockChanged(ours: scene === self.view.window?.windowScene, at: CACurrentMediaTime()))
         })
-        // The Stream menu's "Release Mouse" (⌃⌥⇧Q) posts this — the discoverable menu surface for
-        // the RELEASED state. While CAPTURED the combo is recognized from the HID stream in
-        // InputCapture (onReleaseCapture) before the menu sees it, so in practice this fires as a
-        // not-captured no-op (setCaptured guards it); wired for honesty + a non-GC fallback. Only the
-        // foreground-active scene's stream acts — the iPad analogue of macOS's key-window guard, so a
-        // second Stage Manager scene isn't released out from under the user.
+        // The Stream menu's Release Mouse posts this, and so does the session once the grants lose
+        // both pointer and keyboard (`AccessWarning.releasesCapture`). Only the foreground-active
+        // scene's stream acts, the iPad analogue of macOS's key-window guard.
         observers.append(NotificationCenter.default.addObserver(
             forName: .punktfunkReleaseCapture, object: nil, queue: .main
         ) { [weak self] _ in
