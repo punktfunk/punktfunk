@@ -130,7 +130,7 @@ public struct GameEntry: Codable, Hashable, Identifiable, Sendable {
     }
 
     /// Display name for the store badge — the same table the Rust clients use
-    /// (`pf-console-ui::library::store_label`). Before this existed the badge said "Steam" for
+    /// (`pf_client_core::library::store_label`). Before this existed the badge said "Steam" for
     /// every non-custom entry, which a Lutris or GOG title made a lie.
     public var storeLabel: String { storeName ?? String(localized: L10n.libStoreOther) }
 
