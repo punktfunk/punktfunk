@@ -18,10 +18,12 @@ import { ROW, ROW_GAP, Stagger } from "@/components/stagger";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { RowActions } from "@/components/ui/menu";
+import { usePerson } from "@/lib/person";
 import type { Loadable } from "@/lib/query";
 import { m } from "@/paraglide/messages";
 import {
 	type AccessDecision,
+	PendingAccess,
 	RecordedAccess,
 	usePluginAccess,
 } from "@/sections/PluginAccess";
@@ -84,21 +86,27 @@ const InstalledAccess: FC<{
 		decision: AccessDecision,
 	) => void;
 }> = ({ plugin, access, busy, onDecision }) => {
+	// A person's Sources page lists the box's sources, so their own plugins ask here.
+	const person = usePerson() !== null;
 	const id = plugin.plugin_id ?? plugin.entry_id;
 	const snapshot = access.find((row) => row.plugin === id);
 	if (!id || !snapshot) return null;
+	const onDecide = (paths: string[], decision: AccessDecision) =>
+		onDecision(id, paths, decision);
 	return (
-		<RecordedAccess
-			access={snapshot}
-			busy={busy}
-			onDecide={(paths, decision) => onDecision(id, paths, decision)}
-		/>
+		<>
+			{person && snapshot.pending.length > 0 && (
+				<PendingAccess access={snapshot} busy={busy} onDecide={onDecide} />
+			)}
+			<RecordedAccess access={snapshot} busy={busy} onDecide={onDecide} />
+		</>
 	);
 };
 
 /**
  * One installed-plugin row with provenance, runtime state, package actions, and recorded access.
- * Pending requests stay on the matching Library source; this list never announces them.
+ * The operator answers pending requests on the matching Library source; a person answers them
+ * here, as their Sources page lists the box's sources.
  */
 export const InstalledList: FC<{
 	installed: Loadable<InstalledView[]>;

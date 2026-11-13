@@ -53,6 +53,10 @@ export const PERSON_ROUTES: readonly PersonRoute[] = [
 	seat("GET", "store/jobs/{id}"),
 	seat("GET", "store/runtime"),
 	seat("POST", "store/runtime"),
+	// Folders for those plugins: only the seat's own plugins ask its host, never the box's.
+	seat("GET", "plugin-access"),
+	seat("POST", "plugin-access/{plugin}/decide"),
+	seat("POST", "plugin-access/{plugin}/release"),
 	view("GET", "library"),
 	view("GET", "library/page"),
 	{

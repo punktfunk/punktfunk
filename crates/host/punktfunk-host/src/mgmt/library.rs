@@ -1611,6 +1611,15 @@ pub(crate) struct OverridesAnswer {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[schema(required = false, value_type = Option<BTreeMap<String, crate::library::GameOverridesSchema>>)]
     box_sets: Option<BTreeMap<String, punktfunk_core::game_overrides::GameOverrides>>,
+    /// Beside `box_sets`: the box's entries for the games that profile's library lists, which
+    /// apply where it has none of its own.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(required = false)]
+    box_games: Option<BTreeMap<String, crate::library::OverrideEntry>>,
+    /// Beside `box_sets`: the box's entries for the sources with a title in that library.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(required = false)]
+    box_sources: Option<BTreeMap<String, crate::library::OverrideEntry>>,
 }
 
 /// Read the game overrides
@@ -1618,7 +1627,8 @@ pub(crate) struct OverridesAnswer {
 /// The shared overrides, each game's entry and each source's, as `library-overrides.json`
 /// holds them. `GET /library` carries what each title resolves to. With `as`, the profile's own
 /// file: where it has an entry for a game or its source, that entry wins over the box's. Beside
-/// it, `box_sets`: the box's shared overrides it may point at, which only the console changes.
+/// it, `box_sets`: the box's shared overrides it may point at, which only the console changes,
+/// and `box_games` and `box_sources`: the box's entries for what that profile's library lists.
 #[utoipa::path(
     get,
     path = "/library/overrides",
@@ -1637,11 +1647,21 @@ pub(crate) async fn get_library_overrides(
 ) -> Response {
     let scoped = scoped!(who, st);
     let view = &scoped.view;
-    let box_sets = view
-        .layer()
-        .map(|_| crate::library::load_overrides(&view.base()).sets);
     let doc = crate::library::load_overrides(view);
-    Json(OverridesAnswer { doc, box_sets }).into_response()
+    let mut answer = OverridesAnswer {
+        doc,
+        box_sets: None,
+        box_games: None,
+        box_sources: None,
+    };
+    if view.layer().is_some() {
+        let mut base = crate::library::load_overrides(&view.base());
+        answer.box_sets = Some(std::mem::take(&mut base.sets));
+        // Only what this profile's library lists: the box's other titles stay the box's.
+        let (games, sources) = crate::library::listed_entries(view, base);
+        (answer.box_games, answer.box_sources) = (Some(games), Some(sources));
+    }
+    Json(answer).into_response()
 }
 
 /// Create a shared override

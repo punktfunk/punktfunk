@@ -562,7 +562,7 @@
 	"ring_scroll_invert_on": "Ativado",
 	"ring_scroll_invert_off": "Desativado",
 	"ring_sheet_resolution": "Resolução",
-	"ring_sheet_refresh": "Atualização",
+	"ring_sheet_refresh": "Taxa de atualização",
 	"ring_sheet_native": "Nativa ({width}×{height})",
 	"ring_sheet_invert_scroll": "Inverter a direção da rolagem",
 	"ring_press_again": "Pressione novamente",
