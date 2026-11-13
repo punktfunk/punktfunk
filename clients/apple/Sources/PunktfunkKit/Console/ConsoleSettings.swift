@@ -35,15 +35,10 @@ public enum ConsoleSettings {
         return j
     }
 
-    public static func json(_ defaults: UserDefaults = .standard) -> String {
-        let data = try? JSONSerialization.data(withJSONObject: document(defaults))
-        return data.flatMap { String(data: $0, encoding: .utf8) } ?? "{}"
-    }
-
     /// The console saved a document: keep it whole as the next base, and fold every key this
     /// app owns back into its own defaults. An unknown value is left alone rather than stored.
     public static func apply(_ j: [String: Any], _ defaults: UserDefaults = .standard) {
-        defaults.set(j, forKey: documentKey)
+        defaults.set(j.compactMapValues(plist), forKey: documentKey)
         for field in fields { field.read(j, defaults) }
         if let name = j["compositor"] as? String, let tag = compositorTag(name) {
             defaults.set(tag, forKey: DefaultsKey.compositor)
@@ -51,10 +46,18 @@ public enum ConsoleSettings {
         if let name = j["gamepad"] as? String, let tag = padTypeTag(name) {
             defaults.set(tag, forKey: DefaultsKey.gamepadType)
         }
-        if let host = j["default_host"] as? String {
-            defaults.set(host, forKey: DefaultsKey.defaultHost)
-        } else if j["default_host"] is NSNull {
-            defaults.set("", forKey: DefaultsKey.defaultHost)
+        // The console leaves the key out when no host is the default.
+        defaults.set(j["default_host"] as? String ?? "", forKey: DefaultsKey.defaultHost)
+    }
+
+    /// `value` without its JSON nulls. A property list has none, and `UserDefaults` raises
+    /// when handed one.
+    private static func plist(_ value: Any) -> Any? {
+        switch value {
+        case is NSNull: return nil
+        case let d as [String: Any]: return d.compactMapValues(plist)
+        case let a as [Any]: return a.compactMap(plist)
+        default: return value
         }
     }
 
@@ -180,8 +183,8 @@ public enum ConsoleSettings {
         .string("host_sort", DefaultsKey.hostSort, SettingDefault.hostSort),
         .string("host_grouping", DefaultsKey.hostGrouping, SettingDefault.hostGrouping),
         .string("gamepad_ui_mode", DefaultsKey.gamepadUIMode, GamepadUIEnvironment.modeWhenConnected),
-        // `Settings::extra` (flattened, so plain top-level keys). The `android.` prefix is
-        // where these were first written; the console reads the same names here.
+        // `Settings::extra` (flattened, so plain top-level keys). The prefix is part of the
+        // cross-client key.
         .bool("android.rumble_on_phone", DefaultsKey.rumbleOnDevice, SettingDefault.rumbleOnDevice),
         .bool("android.gyro_on_phone", DefaultsKey.gyroFromDevice, SettingDefault.gyroFromDevice),
         .bool("android.sc2_capture", DefaultsKey.sc2Capture, SettingDefault.sc2Capture),

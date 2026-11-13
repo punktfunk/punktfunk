@@ -107,24 +107,6 @@ public enum AnnexB {
         }
     }
 
-    /// Split an Annex-B stream into NAL units (start codes stripped — see `forEachNAL` for
-    /// the boundary policy). Materializes a Data per NAL; the streaming paths use
-    /// `forEachNAL` directly instead.
-    static func nalUnits(in data: Data) -> [Data] {
-        var nals: [Data] = []
-        forEachNAL(in: data) { base, range in
-            nals.append(Data(bytes: base + range.lowerBound, count: range.count))
-            return true
-        }
-        return nals
-    }
-
-    /// HEVC NAL unit type (bits 1..6 of the first byte).
-    static func hevcNalType(_ nal: Data) -> UInt8 {
-        guard let first = nal.first else { return 0xFF }
-        return (first >> 1) & 0x3F
-    }
-
     /// Build a format description from an IDR AU's in-band parameter sets (HEVC: VPS/SPS/PPS;
     /// H.264: SPS/PPS). Returns nil when the AU carries no parameter sets (non-IDR). Runs per
     /// AU on the pump thread: parameter sets precede the first VCL NAL in a conforming AU, so
@@ -136,16 +118,16 @@ public enum AnnexB {
         // with different ids is what some encoders emit), and keeping only the last leaves every
         // slice that references a dropped one undecodable — a permanent decode-error loop rather
         // than a visible failure.
-        var vps: [Data] = [], sps: [Data] = [], pps: [Data] = []
+        var vps: [Range<Int>] = [], sps: [Range<Int>] = [], pps: [Range<Int>] = []
         forEachNAL(in: au, enter: { !codec.isVCL($0) }) { base, range in
             let first = base[range.lowerBound]
             switch codec.nalType(first) {
             case 32 where codec == .hevc:
-                vps.append(Data(bytes: base + range.lowerBound, count: range.count))
+                vps.append(range)
             case 33 where codec == .hevc, 7 where codec == .h264:
-                sps.append(Data(bytes: base + range.lowerBound, count: range.count))
+                sps.append(range)
             case 34 where codec == .hevc, 8 where codec == .h264:
-                pps.append(Data(bytes: base + range.lowerBound, count: range.count))
+                pps.append(range)
             default:
                 if codec.isVCL(first) { return false } // no parameter sets can follow
                 // AUD/SEI/… may precede the slices; keep scanning.
@@ -154,7 +136,7 @@ public enum AnnexB {
         }
         guard !sps.isEmpty, !pps.isEmpty else { return nil }
         // In the order VideoToolbox wants them: HEVC VPS,SPS,PPS (VPS required); H.264 SPS,PPS.
-        let sets: [Data]
+        let sets: [Range<Int>]
         switch codec {
         case .hevc:
             guard !vps.isEmpty else { return nil }
@@ -166,23 +148,15 @@ public enum AnnexB {
         }
 
         var format: CMVideoFormatDescription?
-        // Pin every parameter set's bytes for the duration of the create call, then hand
-        // VideoToolbox parallel pointer/size arrays.
-        var pointers: [UnsafePointer<UInt8>] = []
-        var sizes: [Int] = []
-        func withAll(_ i: Int, _ body: () -> Void) {
-            if i == sets.count { body(); return }
-            sets[i].withUnsafeBytes { raw in
-                pointers.append(raw.bindMemory(to: UInt8.self).baseAddress!)
-                sizes.append(sets[i].count)
-                withAll(i + 1, body)
-            }
-        }
-        var status: OSStatus = -1
-        withAll(0) {
+        // The sets are ranges of `au`, pinned once for the create call. The host decides how many
+        // there are, so nothing here may scale the stack with that count.
+        let status: OSStatus = au.withUnsafeBytes { raw in
+            guard let base = raw.bindMemory(to: UInt8.self).baseAddress else { return -1 }
+            let pointers = sets.map { UnsafePointer(base + $0.lowerBound) }
+            let sizes = sets.map(\.count)
             switch codec {
             case .hevc:
-                status = CMVideoFormatDescriptionCreateFromHEVCParameterSets(
+                return CMVideoFormatDescriptionCreateFromHEVCParameterSets(
                     allocator: kCFAllocatorDefault,
                     parameterSetCount: pointers.count,
                     parameterSetPointers: pointers,
@@ -191,7 +165,7 @@ public enum AnnexB {
                     extensions: nil,
                     formatDescriptionOut: &format)
             case .h264:
-                status = CMVideoFormatDescriptionCreateFromH264ParameterSets(
+                return CMVideoFormatDescriptionCreateFromH264ParameterSets(
                     allocator: kCFAllocatorDefault,
                     parameterSetCount: pointers.count,
                     parameterSetPointers: pointers,
@@ -199,24 +173,10 @@ public enum AnnexB {
                     nalUnitHeaderLength: 4,
                     formatDescriptionOut: &format)
             case .av1, .pyrowave:
-                break // unreachable — the arm above already returned
+                return -1 // unreachable — the arm above already returned
             }
         }
         return status == noErr ? format : nil
-    }
-
-    /// Re-pack an Annex-B AU as AVCC (4-byte big-endian length before each NAL), dropping
-    /// the parameter-set NALs (they live in the format description).
-    static func avcc(from au: Data, codec: VideoCodec) -> Data {
-        var out = Data(capacity: au.count + 16)
-        forEachNAL(in: au) { base, range in
-            if codec.isParameterSet(base[range.lowerBound]) { return true }
-            var len = UInt32(range.count).bigEndian
-            withUnsafeBytes(of: &len) { out.append(contentsOf: $0) }
-            out.append(UnsafeBufferPointer(start: base + range.lowerBound, count: range.count))
-            return true
-        }
-        return out
     }
 
     /// Wrap one AU as a decode-ready CMSampleBuffer. An AU in `pool` is rewritten where it lies
@@ -266,7 +226,8 @@ public enum AnnexB {
     /// The AVCC form written over the AU in its pool slot: each start code becomes its NAL's
     /// length, and the sample's block is the slot. Needs every start code 4 bytes long (a NAL
     /// behind a 3-byte code has no room for its length) and no parameter-set NAL (those stay
-    /// out of the sample, which only the repack can do). nil = repack.
+    /// out of the sample, which only the repack can do). nil = repack, over the AU as it came: the
+    /// sample is made before a byte changes.
     private static func sampleInPlace(
         au: AccessUnit, placed: AccessUnit.InPlace, pool: AccessUnitSlotPool,
         format: CMVideoFormatDescription, codec: VideoCodec
@@ -290,7 +251,11 @@ public enum AnnexB {
             previousEnd = range.upperBound
             return true
         }
-        guard fits, !nals.isEmpty, previousEnd == placed.count else { return nil }
+        guard fits, !nals.isEmpty, previousEnd == placed.count,
+              let sample = SamplePack.sample(
+                  in: pool, token: placed.token, offset: placed.offset, length: placed.count,
+                  ptsNs: au.ptsNs, format: format)
+        else { return nil }
         let base = pool.pointer(placed.offset)
         for range in nals {
             var len = UInt32(range.count).bigEndian
@@ -298,8 +263,6 @@ public enum AnnexB {
                 base.advanced(by: range.lowerBound - 4).copyMemory(from: $0.baseAddress!, byteCount: 4)
             }
         }
-        return SamplePack.sample(
-            in: pool, token: placed.token, offset: placed.offset, length: placed.count,
-            ptsNs: au.ptsNs, format: format)
+        return sample
     }
 }

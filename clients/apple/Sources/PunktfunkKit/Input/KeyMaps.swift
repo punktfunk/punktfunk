@@ -1,5 +1,5 @@
-// InputCapture's static keymap tables: HID usage → Windows VK (the GCKeyboard path on all
-// platforms) and, on macOS, NSEvent.keyCode → Windows VK (the NSEvent key path).
+// InputCapture's static keymap tables: HID usage → Windows VK (the GCKeyboard path off macOS,
+// and UIKit's shortcut recorder) and, on macOS, NSEvent.keyCode → Windows VK (the NSEvent path).
 
 import PunktfunkShared
 

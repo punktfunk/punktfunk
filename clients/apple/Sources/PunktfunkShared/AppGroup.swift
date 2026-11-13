@@ -14,10 +14,10 @@ import Foundation
 public enum AppGroup {
     public static let suiteName = "group.io.unom.punktfunk"
 
-    /// The shared defaults suite. Non-nil in a correctly-entitled process; falls back to
-    /// `.standard` if the group is somehow unavailable (unsigned `swift run`, a misprovisioned
-    /// build) so the app still functions single-process rather than crashing — the widget just
-    /// won't see the same store there.
+    /// The shared defaults suite. A process without the group entitlement (unsigned `swift run`,
+    /// a misprovisioned build) still gets a suite, private to it, so the widget does not see the
+    /// app's store there. `UserDefaults(suiteName:)` is nil only for the app's own bundle id or
+    /// the global domain, so `.standard` here is a type-level fallback.
     public static var defaults: UserDefaults {
         UserDefaults(suiteName: suiteName) ?? .standard
     }

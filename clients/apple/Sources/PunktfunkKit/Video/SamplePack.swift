@@ -3,8 +3,7 @@
 // a CMSampleBuffer.
 //
 // AnnexB (length-prefixed NALs) and AV1 (header + leb128-sized OBUs) differ only in the write
-// loop; everything around it — the block, the destination-length check, the timing, the sample
-// create — was duplicated line for line, so a fix to either had to be made twice.
+// loop; the block, the destination-length check, the timing and the sample create live here.
 
 import CoreMedia
 import Foundation
@@ -82,13 +81,14 @@ enum SamplePack {
         func end() { pool.unhold(token) }
     }
 
-    /// `block` as a one-sample buffer stamped `ptsNs`.
+    /// `block` as a one-sample buffer stamped `ptsNs`, which the host sets: past `Int64.max` it
+    /// clamps rather than traps.
     private static func wrap(
         _ block: CMBlockBuffer, total: Int, ptsNs: UInt64, format: CMVideoFormatDescription
     ) -> CMSampleBuffer? {
         var timing = CMSampleTimingInfo(
             duration: .invalid,
-            presentationTimeStamp: CMTime(value: Int64(ptsNs), timescale: 1_000_000_000),
+            presentationTimeStamp: CMTime(value: Int64(clamping: ptsNs), timescale: 1_000_000_000),
             decodeTimeStamp: .invalid)
         var sampleSize = total
         var sample: CMSampleBuffer?

@@ -1,7 +1,6 @@
 // The present cadence: what a steady rate looks like, how far a frame may sit from the
-// grid before it counts as late, and the running health that answers it. Split out of
-// Stage2Pipeline, which it has no dependency on — it is arithmetic over timestamps, and
-// the pipeline's own tests already drive it directly.
+// grid before it counts as late, and the running health that answers it. Arithmetic over
+// timestamps, with no dependency on Stage2Pipeline.
 
 #if canImport(Metal) && canImport(QuartzCore)
 import AVFoundation
@@ -15,11 +14,9 @@ import os
 /// throughout, so it runs identically on every client and in the offline harness, and carries no
 /// float into a present path.
 ///
-/// ⚠ **These values are provisional, and saying so is part of the design.** The plan asks for
-/// constants fitted to recorded `(src_pts, received, decoded)` traces (its spike S2), and S2 was
-/// never run. What is here is derived from first principles — a proportional time constant of tens
-/// of frames, an integral an order slower, a cushion of a few mean-absolute-deviations — and the
-/// first real trace should replace them.
+/// The values are derived from first principles, not fitted to recorded `(src_pts, received,
+/// decoded)` traces: a proportional time constant of tens of frames, an integral an order
+/// slower, a cushion of a few mean-absolute-deviations.
 ///
 /// ⚠ A hand-written port of `punktfunk_core::phase::CadenceTuning`, exactly as `AudioRing` is a
 /// port of `JitterPolicy`: this pipeline is Swift and does not link that Rust type. **Every

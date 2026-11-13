@@ -39,17 +39,16 @@ public enum GamepadWire {
     }
 
     /// Back-grip paddles (Xbox Elite P1–P4 / DualSense Edge / Steam-Deck L4-L5-R4-R5, as
-    /// R4/L4/R5/L5). `GamepadCapture.buttonMask` does not read them yet — the GameController
-    /// `paddleButton1..4` ↔ BTN_PADDLE physical correspondence needs confirming on a real Elite
-    /// pad first (see the gamepad-review-cleanup plan, G22), so they are intentionally absent
-    /// from `allButtons` until that forwarding lands.
+    /// R4/L4/R5/L5). `GamepadCapture.buttonMask` does not read them: which GameController
+    /// `paddleButton1..4` is which BTN_PADDLE is unconfirmed on a real Elite pad, so they are
+    /// absent from `allButtons` until that forwarding lands.
     public static let paddle1 = UInt32(PUNKTFUNK_BTN_PADDLE1)
     public static let paddle2 = UInt32(PUNKTFUNK_BTN_PADDLE2)
     public static let paddle3 = UInt32(PUNKTFUNK_BTN_PADDLE3)
     public static let paddle4 = UInt32(PUNKTFUNK_BTN_PADDLE4)
 
-    /// Every button `buttonMask`/`sendGuide` can set — walked by `sync`'s transition diff and by
-    /// `flush` on release. Paddles are excluded until their capture lands (see above).
+    /// Every button a capture can set — walked by `GamepadCapture.feed`'s transition diff and by
+    /// each capture's `flush` on release. Paddles stay out until their capture lands (see above).
     public static let allButtons: [UInt32] = [
         dpadUp, dpadDown, dpadLeft, dpadRight, start, back,
         leftStickClick, rightStickClick, leftShoulder, rightShoulder, guide,
@@ -88,8 +87,8 @@ public enum GamepadWire {
     /// the wire is defined in is the pad's OWN report frame, and a client that forwards its
     /// platform's axes unconverted is simply speaking a different language.
     ///
-    /// Both frames were measured on 2026-08-07 from ONE physical DualSense on one desk — the pad
-    /// read twice, over raw HID and through GameController:
+    /// Both frames, measured from one physical DualSense read over raw HID and through
+    /// GameController:
     ///
     ///   DualSense report frame: (Right, Up, Backward) — axis 0 carries pitch, 1 yaw, 2 roll
     ///   GameController frame:   (Right, Forward, Up)

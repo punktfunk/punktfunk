@@ -1,10 +1,7 @@
 // Steam Controller 2 (2026, Valve "Ibex" / SDL "Triton", wired 28DE:1302) protocol constants +
 // every piece of pure SC2 logic the client needs — framing, the per-report characteristic map,
 // the feature commands, and the light state parser. Cross-client parity: this file is the Apple
-// sibling of Android's `Sc2Device.kt`, and the transport facts are the ones proven against
-// real hardware on the bench (on-glass 2026-06-08/09: live input end-to-end
-// after the report-id prepend fix, gyro-enable forwarded over GATT, and full multi-actuator
-// haptics via the per-report characteristic map).
+// sibling of Android's `Sc2Device.kt`, and its transport facts hold on real pads.
 //
 // The GATT service is Valve's CUSTOM vendor service, NOT standard HID-over-GATT (0x1812) —
 // which is exactly why a third-party app may read it raw: iOS keeps its own 0x1812 binding (the
@@ -46,9 +43,8 @@ enum Sc2Device {
     /// (Generic Desktop 01:02, report 0x40) and keyboard (01:06, report 0x41).
     ///
     /// ⚠ Load-bearing as a DEVICE-usage-pair match (`kIOHIDDeviceUsagePageKey`), never a
-    /// primary-usage one: on real hardware (Puck, macOS 27, 2026-08-31) each controller
-    /// interface is ONE `IOHIDDevice` carrying all its collections with primary usage
-    /// `0001:0002`, so a primary match finds nothing. The pair match selects the four controller
+    /// primary-usage one: on macOS 27 each controller interface is ONE `IOHIDDevice` carrying
+    /// all its collections with primary usage `0001:0002`, so a primary match finds nothing. The pair match selects the four controller
     /// slots and excludes the Puck's management interface, whose only pair is `ff00:02` —
     /// opening that one is actively wrong (feature-report-2 queries; see
     /// `pf_driver_proto::triton`).
@@ -57,10 +53,9 @@ enum Sc2Device {
 
     /// The Puck hosts up to four pads on USB interfaces 2…5, one HID interface each, and there
     /// is no way to know in advance which slot a controller bonded to. The link therefore opens
-    /// EVERY matched collection and lets whichever one streams state become the write target —
-    /// Android learned this on glass (claiming only interface 2 read silence). Kept as
-    /// documentation of the dongle's layout; the usage-pair match already excludes its CDC pair
-    /// on interfaces 0/1, which is not HID at all.
+    /// EVERY matched collection and lets whichever one streams state become the write target.
+    /// Kept as documentation of the dongle's layout; the usage-pair match already excludes its
+    /// CDC pair on interfaces 0/1, which is not HID at all.
     static let dongleIfaces = 2...5
 
     // MARK: - GATT topology (Valve vendor service; cf. Android's `Sc2BleLink.kt`)
@@ -68,15 +63,9 @@ enum Sc2Device {
     /// The custom Valve service every SC2 exposes over BLE.
     static let serviceUUID = "100F6C32-1735-4313-B402-38567131E5F3"
     /// Input characteristic (notify): report 0x45, a bare 45-byte state payload — the
-    /// characteristic VALUE carries NO report-id byte (the id is implied by the UUID), which is
-    /// the framing root cause debugged on-glass 2026-06-09: without re-prepending 0x45 an
-    /// id-keyed consumer drops ~every frame. See `frameIncoming`.
+    /// characteristic VALUE carries NO report-id byte (the id is implied by the UUID): without
+    /// re-prepending 0x45 an id-keyed consumer drops every frame. See `frameIncoming`.
     static let inputCharUUID = "100F6C7A-1735-4313-B402-38567131E5F3"
-    /// Timestamp characteristic (notify): report 0x47. Deliberately NOT subscribed — the bench
-    /// stack subscribed it and then ignored every 0x47, Android never subscribes it, and the gyro is
-    /// hardware-proven NOT to ride it (the IMU streams inside the SAME 0x45 report once enabled,
-    /// bench 2026-06-08). The constant stays for the connect-time characteristic census log.
-    static let timestampCharUUID = "100F6C7C-1735-4313-B402-38567131E5F3"
     /// Report/feature characteristic (write/read; notify on some firmware): where FEATURE
     /// commands land — the hardware-proven gyro-enable/lizard-off path. Props 0x0a on-device.
     static let reportCharUUID = "100F6C34-1735-4313-B402-38567131E5F3"
@@ -84,8 +73,7 @@ enum Sc2Device {
     /// Per-OUTPUT-report characteristic: Valve routes each output report id 0xNN to its OWN
     /// characteristic `100F6C<NN+0x35>` (the id only SELECTS the characteristic and is stripped
     /// from the written payload). Lowercase, the form CoreBluetooth's `CBUUID.uuidString` is
-    /// compared against case-insensitively. Verified per-actuator on-device 2026-06-09 — the
-    /// 0x82 test buzz failed while mis-routed to the 0x80 characteristic.
+    /// compared against case-insensitively.
     static func outputCharUUID(id: UInt8) -> String {
         String(format: "100f6c%02x-1735-4313-b402-38567131e5f3", (Int(id) + 0x35) & 0xFF)
     }
@@ -114,13 +102,13 @@ enum Sc2Device {
     static let idState: UInt8 = 0x42
     static let idBattery: UInt8 = 0x43
     /// The WIRELESS state shape, not a BLE-only one: the Puck dongle delivers `0x45` (46 B,
-    /// id-first) over USB too — measured on-glass 2026-08-31. Only a cabled pad emits `0x42`.
+    /// id-first) over USB too. Only a cabled pad emits `0x42`.
     static let idStateBLE: UInt8 = 0x45
     static let idWirelessX: UInt8 = 0x46
     static let idStateTimestamp: UInt8 = 0x47
     static let idWireless: UInt8 = 0x79
 
-    // MARK: - Feature commands (Sc2Device.kt; hardware-confirmed 2026-06-08)
+    // MARK: - Feature commands (Sc2Device.kt)
 
     /// The feature report that turns lizard mode (built-in keyboard/mouse emulation) off:
     /// `[report id 1][ID_SET_SETTINGS_VALUES 0x87][length 3][SETTING_LIZARD_MODE 9]
@@ -174,48 +162,6 @@ enum Sc2Device {
     static let wirelessDisconnect: UInt8 = 1
     /// The Puck reports a controller bonded to one of its slots.
     static let wirelessConnect: UInt8 = 2
-
-    // MARK: - Engraved serial (feature report 2 on a controller slot; macOS `Sc2UsbLink` only)
-
-    /// The feature report whose plain GET a slot node answers with the pad's ENGRAVED serial —
-    /// no SET first, unlike the `0xAE` GET_STRING_ATTRIBUTE dance every other string query
-    /// rides on feature report 1 (`steam_proto::ID_GET_STRING_ATTRIBUTE`). The reply is a
-    /// small binary header followed by the serial as printable ASCII (13 chars, `FXA…` —
-    /// `triton_proto.rs`), the only per-unit identity a Puck exposes: the dongle's own USB
-    /// serial is shared by every slot. Feature report 2 is declared by the controller
-    /// descriptor itself, for the Puck's connection/bond queries (`triton_proto.rs`); this GET
-    /// is one of them, proven on real hardware by the splitscreen project's bench. Read once
-    /// per live pad, never per report (the blocking-GET rule `HidUsbLink.kt` pins).
-    static let featureSerial: UInt8 = 0x02
-
-    /// Pull the serial out of a feature-2 reply: the longest ASCII-alphanumeric run, accepted
-    /// only at 8–20 characters (the header is binary; the engraved serial is the one printable
-    /// token that length; ties keep the first). Nil otherwise — a reply this cannot read
-    /// degrades to no-serial, never to a garbage identity, which is why an over-long run (an
-    /// all-ASCII error string, say) is rejected whole rather than truncated into one.
-    static func parseSerial(_ reply: [UInt8]) -> String? {
-        var best: ArraySlice<UInt8> = []
-        var runStart: Int?
-        for (i, b) in reply.enumerated() {
-            let alnum = (0x30 ... 0x39).contains(b) || (0x41 ... 0x5A).contains(b)
-                || (0x61 ... 0x7A).contains(b)
-            if alnum {
-                if runStart == nil { runStart = i }
-            } else if let s = runStart {
-                if i - s > best.count { best = reply[s ..< i] }
-                runStart = nil
-            }
-        }
-        if let s = runStart, reply.count - s > best.count { best = reply[s...] }
-        guard (8 ... 20).contains(best.count) else { return nil }
-        return String(decoding: best, as: UTF8.self)
-    }
-
-    /// The gyro-enable Steam itself sends — WRITE_REGISTER, reg 0x30 (GYRO_MODE), value 0x0018
-    /// (raw accel | raw gyro); confirmed both ways on real hardware 2026-06-08. Kept ONLY for
-    /// logging and tests: the client must NEVER self-enable the gyro (a permanent enable re-flies
-    /// the desktop cursor) — Steam's own forwarded write is what opens core's IMU gate.
-    static let gyroEnableReference: [UInt8] = [0x01, 0x87, 0x03, 0x30, 0x18, 0x00]
 
     /// SDL's lizard-off refresh cadence.
     static let lizardRefreshSeconds: TimeInterval = 3.0

@@ -15,7 +15,7 @@ public enum SessionEndRoute: Equatable {
     case message(Message)
     /// Back to the shelf the session started from.
     case library
-    /// Nothing to say: the player quit a game that came off no shelf.
+    /// Nothing to say: the player quit a game that came off no shelf, or this client closed it.
     case none
 
     public enum Message: Equatable {
@@ -57,7 +57,8 @@ public enum SessionEndRoute: Equatable {
         if let rejection { return .message(.rejected(rejection, said: said)) }
         switch reason {
         case .gameExited: return shelf ? .library : .none
-        case .hostEnded, .local: return .message(.endedByHost)
+        case .local: return .none
+        case .hostEnded: return .message(.endedByHost)
         case .hostError: return .message(.hostError)
         case .lost: return .message(.lost)
         case .none: return .message(.unknown)

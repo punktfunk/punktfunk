@@ -293,8 +293,8 @@ pub unsafe extern "C" fn punktfunk_console_free(c: *mut PunktfunkConsole) {
 }
 
 /// Draw one frame into `mtl_texture` (`width`×`height`) and submit it to the queue.
-/// `scale` is design units per pixel; `0` takes the shell's own formula. `false` = nothing
-/// drawn (idle, or the texture could not be wrapped): present nothing.
+/// `scale` is device pixels per design unit; `0` takes the shell's own formula. `false` =
+/// nothing drawn (idle, or the texture could not be wrapped): present nothing.
 ///
 /// # Safety
 /// `c` is live. `mtl_texture` is an `id<MTLTexture>` from the console's device, render-target

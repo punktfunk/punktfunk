@@ -9,31 +9,23 @@
 // change (the first new-mode AU is an IDR with fresh parameter sets).
 //
 // The trigger discipline is the shared cross-client one (mirrors the session binary's
-// `resize_decision`): physical pixels rounded DOWN to even (the host rejects odd dimensions) and
-// clamped ≥ 320×200; debounce to resize-end; ≥ 1 s between requests; skip a size and view equal to
-// the live ones; and request each distinct one at most once — which both stops re-asking a rejected
+// `resize_decision`): debounce to resize-end; ≥ 1 s between requests; skip a size and view equal to
+// the live ones; and skip an ask equal to the last one sent — which both stops re-asking a rejected
 // size and keeps a host-side rollback (accepted, rebuild failed, corrective ack restored the old
-// mode) from looping request → rollback → request. A clamped mode still moves its view.
+// mode) from looping request → rollback → request. The size is `RenderScale.apply`'s: rounded
+// DOWN to even (the host rejects odd dimensions), ≥ 320×200, within the codec ceiling. A clamped
+// mode still moves its view.
 
 import Foundation
 import PunktfunkShared
 
-/// The pure, side-effect-free core of the Match-window trigger — so the normalize/skip discipline
-/// is unit-tested without a live connection or a UI (`MatchWindowTests`).
+/// The pure, side-effect-free core of the Match-window trigger — so the skip discipline is
+/// unit-tested without a live connection or a UI (`MatchWindowTests`).
 public enum MatchWindow {
-    /// Even-floor + clamp a physical-pixel size to a host-valid mode dimension: the host's
-    /// `validate_dimensions` rejects odd sizes, and we never ask below 320×200.
-    public static func normalize(widthPx: Int, heightPx: Int) -> (width: UInt32, height: UInt32) {
-        let evenClamp: (Int, UInt32) -> UInt32 = { px, minimum in
-            let even = UInt32(max(px, 0)) / 2 * 2
-            return max(even, minimum)
-        }
-        return (evenClamp(widthPx, 320), evenClamp(heightPx, 200))
-    }
-
     /// Whether to request `target` now (the debounce has already settled; spacing is the caller's
-    /// timer): `nil` to skip — equal to the live mode and view, or already requested once (a
-    /// rejected size / a host rollback must not loop). `target` is expected already-[normalize]d.
+    /// timer): `nil` to skip — equal to the live mode and view, or to the last ask sent (a
+    /// rejected size / a host rollback must not loop). `target` is expected host-valid already
+    /// (`RenderScale.apply`).
     public static func request(
         target: Ask, current: Ask, lastRequested: Ask?
     ) -> Ask? {
@@ -71,11 +63,14 @@ public typealias ResizeTarget = (
 @MainActor
 public final class MatchWindowFollower {
     private weak var connection: PunktfunkConnection?
-    private let debounce: TimeInterval
-    private let minSpacing: TimeInterval
+    /// Quiet time after the last size event before requesting (Win32 gets `WM_EXITSIZEMOVE` for
+    /// free; we debounce). The other clients use the same two numbers.
+    private let debounce: TimeInterval = 0.4
+    /// Floor between accepted requests (a full host pipeline rebuild each).
+    private let minSpacing: TimeInterval = 1.0
     /// Render-scale multiplier applied to the live window size before it's requested, so the
     /// match-window path supersamples/undersamples exactly like the fixed-mode connect. 1.0 = the
-    /// window's native pixels (the prior behaviour). `maxDimension` is the codec's per-axis ceiling.
+    /// window's native pixels. `maxDimension` is the codec's per-axis ceiling.
     private let renderScale: Double
     private let maxDimension: Int
     private var enabled: Bool
@@ -85,7 +80,8 @@ public final class MatchWindowFollower {
     private var lastRequested: MatchWindow.Ask?
     /// The view the host scales the live mode to, as this side last asked it.
     private var liveView: (width: UInt32, height: UInt32)?
-    private var lastRequestAt: Date?
+    /// `systemUptime` of the last request, so a wall-clock step never stretches the spacing.
+    private var lastRequestAt: TimeInterval?
     /// The last size we reported via [`onResizeTarget`] — dedups the per-layout stream of a drag so
     /// the UI is notified once per distinct target, and reset to `nil` when the window is back in
     /// sync with the live mode (so a later resize re-reports).
@@ -102,29 +98,22 @@ public final class MatchWindowFollower {
     /// can run at different rates, and a session streaming the native rate follows the screen.
     public var refreshHz: (() -> UInt32?)?
 
-    /// `debounce` = quiet time after the last size event before requesting (Win32 gets
-    /// `WM_EXITSIZEMOVE` for free; we debounce). `minSpacing` = floor between accepted requests
-    /// (a full host pipeline rebuild each). Defaults match the other clients.
     public init(
         connection: PunktfunkConnection,
         enabled: Bool,
         renderScale: Double = 1.0,
-        maxDimension: Int = 8192,
-        debounce: TimeInterval = 0.4,
-        minSpacing: TimeInterval = 1.0
+        maxDimension: Int = 8192
     ) {
         self.connection = connection
         self.liveView = connection.connectView
         self.enabled = enabled
         self.renderScale = RenderScale.sanitize(renderScale)
         self.maxDimension = maxDimension
-        self.debounce = debounce
-        self.minSpacing = minSpacing
     }
 
     /// The host-valid mode for a live window size: the window's physical pixels × the render scale,
     /// aspect-preserved, even, and clamped to the codec ceiling — the match-window twin of
-    /// `EffectiveSettings.streamMode`. Reduces to `MatchWindow.normalize` when the scale is 1.0.
+    /// `EffectiveSettings.streamMode`.
     private func targetMode(widthPx: Int, heightPx: Int) -> (width: UInt32, height: UInt32) {
         RenderScale.apply(
             baseWidth: widthPx, baseHeight: heightPx,
@@ -193,7 +182,7 @@ public final class MatchWindowFollower {
         // ≥ 1 s spacing: a request went out recently → re-arm the debounce and retry later rather
         // than fire early (keeps at most ~one request outstanding — the accept ack round-trips in
         // milliseconds, ahead of the host's rebuild).
-        if let last = lastRequestAt, Date().timeIntervalSince(last) < minSpacing {
+        if let last = lastRequestAt, ProcessInfo.processInfo.systemUptime - last < minSpacing {
             schedule()
             return
         }
@@ -212,6 +201,6 @@ public final class MatchWindowFollower {
             view: view)
         lastRequested = req
         liveView = view
-        lastRequestAt = Date()
+        lastRequestAt = ProcessInfo.processInfo.systemUptime
     }
 }

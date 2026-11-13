@@ -3,33 +3,20 @@
 // result metadata), resolves each service to a connectable IP:port with a throwaway
 // NWConnection, and publishes the live set.
 //
-// The advertised `fp` (host cert SHA-256) is ADVISORY: mDNS is unauthenticated, so TOFU /
-// pinning still verifies the host on connect — it's surfaced only so a picker can show it and
-// pre-fill. `pair=required` lets the UI route straight to the pairing ceremony.
+// The advertised `fp` (host cert SHA-256) is ADVISORY: mDNS is unauthenticated, so pinning
+// still verifies the host on connect. iOS/tvOS browse only with `_punktfunk._udp` listed in
+// Info.plist `NSBonjourServices` (Config/Info.plist).
 //
-// iOS/tvOS gate Bonjour browsing on Info.plist `NSBonjourServices` listing `_punktfunk._udp`
-// (Config/Info.plist) — without it the system blocks the browse and nothing is returned.
-//
-// SELF-HEALING is what the bookkeeping below is for. Neither Network.framework primitive
-// recovers on its own, and all three failure modes read as "the host isn't there":
-//
-//   - `browseResultsChangedHandler` fires only when the result SET changes. A service that is
-//     found but whose resolve fails is never re-offered — from the browser's point of view
-//     nothing changed — so one unlucky resolve hid that host for the life of the process.
-//   - `NWConnection` has no timeout. A resolve that cannot complete (v6-only advert against our
-//     IPv4 pin, Wi-Fi still associating, host mid-reboot) parks in `.preparing`/`.waiting`
-//     forever instead of failing, so the retry path above was never even reached.
-//   - `NWBrowser` parks in `.waiting` when the browse is blocked. On iOS that is where the LOCAL
-//     NETWORK PRIVACY gate lands the first launch after install: the browse starts, the system
-//     puts up its "find and connect to devices on your local network" prompt, and the browser
-//     waits. Granting permission does NOT revive that browser — only a new one sees the grant.
-//
-// Every one of those presented as "restarting the app fixes it", which is what field reports
-// described. A 1 Hz `sweep` therefore times out stuck resolves, retries failed ones on a backoff
-// and re-arms a browser that stopped working; `refresh()` forces the same recovery immediately,
-// behind the UI's pull-to-refresh and Refresh button.
+// SELF-HEALING: neither Network.framework primitive recovers on its own.
+//   - `browseResultsChangedHandler` fires only when the result SET changes, so a service whose
+//     resolve failed is never re-offered.
+//   - `NWConnection` has no timeout: a resolve that cannot complete (v6-only advert against our
+//     IPv4 pin, Wi-Fi still associating) parks in `.preparing`/`.waiting` forever.
+//   - `NWBrowser` parks in `.waiting` while the browse is blocked, as by iOS's local-network
+//     prompt on first launch, and a grant does NOT revive it: only a new browser sees it.
+// A 1 Hz `sweep` times out stuck resolves, retries failed ones on a backoff and re-arms a browser
+// that stopped working; `refresh()` (pull-to-refresh, the Refresh button) does so at once.
 
-#if canImport(Network)
 import Foundation
 import Network
 import PunktfunkShared
@@ -65,11 +52,9 @@ public struct DiscoveredHost: Identifiable, Sendable, Equatable {
     /// `port`, which is the native QUIC plane. nil when not advertised (older host), and the
     /// client then assumes `punktfunkDefaultMgmtPort`.
     ///
-    /// Persisted onto the saved host like the MACs and the OS chain, and for a sharper reason:
-    /// `StoredHost.mgmtPort` has existed all along but nothing ever wrote it, so
-    /// `effectiveMgmtPort` always resolved to 47990. A host that moved its mgmt port off 47990 —
-    /// the supported way to share a machine with a Sunshine fork, whose web UI owns that port —
-    /// therefore had no working library on any Apple client at all.
+    /// Persisted onto the saved host like the MACs and the OS chain: without it
+    /// `StoredHost.effectiveMgmtPort` falls back to 47990, and a host that moved its mgmt port
+    /// (to share a machine with a Sunshine fork, whose web UI owns 47990) shows no library.
     public let mgmtPort: UInt16?
 }
 
@@ -268,14 +253,16 @@ public final class HostDiscovery: ObservableObject {
         let browser = NWBrowser(
             for: .bonjourWithTXTRecord(type: "_punktfunk._udp", domain: nil),
             using: NWParameters())
-        browser.browseResultsChangedHandler = { results, _ in
-            MainActor.assumeIsolated { [weak self] in
+        // `[weak self]` sits on the handler itself: on the inner closure it would make the handler
+        // hold `self` strongly, and the running browser keeps its handlers.
+        browser.browseResultsChangedHandler = { [weak self] results, _ in
+            MainActor.assumeIsolated {
                 guard let self, generation == self.generation else { return }
                 self.reconcile(results)
             }
         }
-        browser.stateUpdateHandler = { state in
-            MainActor.assumeIsolated { [weak self] in
+        browser.stateUpdateHandler = { [weak self] state in
+            MainActor.assumeIsolated {
                 guard let self, generation == self.generation else { return }
                 self.browserStateChanged(state)
             }
@@ -286,9 +273,8 @@ public final class HostDiscovery: ObservableObject {
 
     /// A browser that stops working never recovers on its own, and it has two ways to stop:
     /// `.failed` (dead) and `.waiting` (blocked — a network change, or the iOS local-network
-    /// permission gate described in the file header). Schedule a re-arm for both, on a backoff:
-    /// re-arming synchronously on `.failed` alone both missed the permission case entirely and
-    /// could spin the main queue on a browser that fails instantly every time.
+    /// permission gate described in the file header). Schedule a re-arm for both, on a backoff,
+    /// so a browser that fails at once every time never spins the main queue.
     private func browserStateChanged(_ state: NWBrowser.State) {
         switch state {
         case .ready:
@@ -366,8 +352,8 @@ public final class HostDiscovery: ObservableObject {
         connections[key] = conn
         deadlines[key] = Date().addingTimeInterval(Self.resolveTimeout)
         let generation = self.generation
-        conn.stateUpdateHandler = { state in
-            MainActor.assumeIsolated { [weak self] in
+        conn.stateUpdateHandler = { [weak self] state in
+            MainActor.assumeIsolated {
                 // Look the connection back up rather than capturing it — capturing it here would
                 // retain the connection through its own handler.
                 guard let self, generation == self.generation,
@@ -521,4 +507,3 @@ public final class HostDiscovery: ObservableObject {
         }
     }
 }
-#endif

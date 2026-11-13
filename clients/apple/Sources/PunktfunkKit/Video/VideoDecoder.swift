@@ -4,8 +4,8 @@
 // Stage-1 hands compressed samples to AVSampleBufferDisplayLayer, which decodes AND presents
 // internally with no per-frame callback — so neither decode-completion nor present can be
 // stamped, and frames can't be hand-paced. Here we drive VTDecompressionSession ourselves: the
-// output callback delivers a decoded CVPixelBuffer, we stamp decode-completion, and push it into
-// a ready ring the presenter's display link drains. See docs apple-stage2-presenter.md.
+// output callback delivers a decoded CVPixelBuffer, we stamp decode-completion and hand the frame
+// to `onDecoded`. Stage2Pipeline's header describes where it goes from there.
 
 import CoreMedia
 import CoreVideo
@@ -34,10 +34,9 @@ public struct ReadyFrame: @unchecked Sendable {
     public let ptsNs: UInt64
     /// Client `CLOCK_REALTIME` instant the AU left `nextAU` (`AccessUnit.pulledNs`, threaded
     /// through the decode via the frame refcon), in nanoseconds — the decode stage's start
-    /// point. (Named for its historical role; since the ABI v9 receipt split the true
-    /// reassembly receipt lives on `AccessUnit.receivedNs`, and receipt→pull is the HUD's own
-    /// client-queue term.) 0 when unknown (a caller that didn't stamp) — the decode-stage meter
-    /// then drops the sample via its sanity guard.
+    /// point. Not the reassembly receipt, which is `AccessUnit.receivedNs`. 0 when unknown (a
+    /// caller that didn't stamp) — the decode-stage meter then drops the sample via its sanity
+    /// guard.
     public let receivedNs: Int64
     /// Client `CLOCK_REALTIME` instant decode completed, in nanoseconds.
     public let decodedNs: Int64
@@ -53,33 +52,19 @@ public struct ReadyFrame: @unchecked Sendable {
     /// latency intent, which has no clock and presents on arrival. May be in the PAST: that is a
     /// late frame, and the contract is "already due ⇒ present at the next opportunity".
     public var dueMediaTime: CFTimeInterval?
-
-    /// The VideoToolbox path's buffer; nil for a PyroWave planar frame. (Kept as the accessor
-    /// the decode round-trip tests assert against.)
-    public var pixelBuffer: CVPixelBuffer? {
-        if case .video(let buffer, _) = image { return buffer }
-        return nil
-    }
-
-    /// Whether this frame presents on the HDR path. PyroWave planar frames are 8-bit SDR by
-    /// contract.
-    public var isHDR: Bool {
-        if case .video(_, let hdr) = image { return hdr }
-        return false
-    }
 }
 
-/// Per-frame context threaded through the VideoToolbox frame refcon: the AU's receipt instant (for
+/// Per-frame context threaded through the VideoToolbox frame refcon: the AU's pull instant (for
 /// the decode-stage meter) and its wire `user_flags` (for the re-anchor gate). Retained across the
 /// async decode and reclaimed exactly once — by the output callback for every frame VideoToolbox
 /// accepts, or by `decode`'s error branch for a frame `DecodeFrame` rejected outright (the callback
 /// then never fires). A tiny per-frame allocation, the price of smuggling two values (a 64-bit
 /// instant plus the flags) through the single `void*` a bit-pattern scalar can't hold.
 private final class FrameContext {
-    let receivedNs: Int64
+    let pulledNs: Int64
     let flags: UInt32
-    init(receivedNs: Int64, flags: UInt32) {
-        self.receivedNs = receivedNs
+    init(pulledNs: Int64, flags: UInt32) {
+        self.pulledNs = pulledNs
         self.flags = flags
     }
 }
@@ -87,7 +72,7 @@ private final class FrameContext {
 /// The C output callback can't capture context, so VideoToolbox hands it the refcon we set at
 /// session creation — a pointer back to the owning `VideoDecoder`. The per-frame refcon is the
 /// retained `FrameContext` set at submit; reclaim it here (balancing `passRetained`) and unpack the
-/// AU's receipt instant (for the decode stage) and wire flags (for the re-anchor gate).
+/// AU's pull instant (for the decode stage) and wire flags (for the re-anchor gate).
 private let decoderOutputCallback: VTDecompressionOutputCallback = {
     refcon, frameRefcon, status, infoFlags, imageBuffer, pts, _ in
     guard let refcon else { return }
@@ -96,7 +81,7 @@ private let decoderOutputCallback: VTDecompressionOutputCallback = {
         .takeUnretainedValue()
         .handleDecoded(
             status: status, imageBuffer: imageBuffer, pts: pts,
-            receivedNs: ctx?.receivedNs ?? 0, flags: ctx?.flags ?? 0,
+            pulledNs: ctx?.pulledNs ?? 0, flags: ctx?.flags ?? 0,
             dropped: infoFlags.contains(.frameDropped))
 }
 
@@ -115,18 +100,18 @@ public final class VideoDecoder: @unchecked Sendable {
     /// pump can re-gate on the next IDR.
     private let onDecodeError: @Sendable (OSStatus) -> Void
 
-    /// Whether the negotiated stream is full-chroma 4:4:4 (`connection.isChroma444`), set once at
-    /// session start before any decode. Selects the 4:4:4 decode pixel format (orthogonal to bit
-    /// depth / HDR). Read inside `createSessionLocked` under `lock`.
+    /// Whether the stream is full-chroma 4:4:4 (`connection.isChroma444`). Selects the 4:4:4
+    /// decode pixel format (orthogonal to bit depth / HDR). Read inside `createSessionLocked`
+    /// under `lock`.
     private var chroma444 = false
 
-    /// The negotiated codec (`connection.videoCodec`), set once at session start. Drives the
-    /// bitstream framing (H.264/HEVC NAL parsing vs AV1 OBU repack). Read under `lock`.
+    /// The stream's codec (`connection.videoCodec`). Drives the bitstream framing (H.264/HEVC NAL
+    /// parsing vs AV1 OBU repack). Read under `lock`.
     private var codec: VideoCodec = .hevc
 
-    /// The negotiated encode depth (`connection.bitDepth`), set once at session start. 10 asks
-    /// the decoder for a 10-bit buffer whether or not the stream is HDR: 10-bit SDR is Main10
-    /// under BT.709. Read inside `createSessionLocked` under `lock`.
+    /// The stream's encode depth (`connection.bitDepth`). 10 asks the decoder for a 10-bit buffer
+    /// whether or not the stream is HDR: 10-bit SDR is Main10 under BT.709. Read inside
+    /// `createSessionLocked` under `lock`.
     private var bitDepth: UInt8 = 8
 
     /// Where the core assembles the AUs, for samples over the AU itself. PUMP THREAD, which is
@@ -143,26 +128,25 @@ public final class VideoDecoder: @unchecked Sendable {
 
     deinit { teardown() }
 
-    /// Select the chroma subsampling of the decode output (4:2:0 vs full-chroma 4:4:4). Call once at
-    /// session start, before decoding, from `connection.isChroma444`. Takes effect on the next
-    /// session (re)build. Thread-safe.
+    /// Select the chroma subsampling of the decode output (4:2:0 vs full-chroma 4:4:4) from
+    /// `connection.isChroma444`, at session start and on each new-format AU. Takes effect on the
+    /// next session (re)build. Thread-safe.
     public func setChroma444(_ on: Bool) {
         lock.lock()
         chroma444 = on
         lock.unlock()
     }
 
-    /// Select the negotiated codec (H.264 / HEVC / AV1). Call once at session start, before
-    /// decoding, from `connection.videoCodec`. Thread-safe.
+    /// Select the codec (H.264 / HEVC / AV1) from `connection.videoCodec`, at session start and on
+    /// each new-format AU. Thread-safe.
     public func setCodec(_ c: VideoCodec) {
         lock.lock()
         codec = c
         lock.unlock()
     }
 
-    /// Select the decode bit depth from the session's negotiated depth (`connection.bitDepth`,
-    /// 8 or 10). Call once at session start, before decoding. Takes effect on the next session
-    /// (re)build. Thread-safe.
+    /// Select the decode bit depth from `connection.bitDepth` (8 or 10), at session start and on
+    /// each new-format AU. Takes effect on the next session (re)build. Thread-safe.
     public func setBitDepth(_ bits: UInt8) {
         lock.lock()
         bitDepth = bits
@@ -200,13 +184,11 @@ public final class VideoDecoder: @unchecked Sendable {
               let sample = codec.sampleBuffer(au: au, format: newFormat, in: accessUnitMemory)
         else { lock.unlock(); return false }
         var infoOut = VTDecodeInfoFlags()
-        // The AU's receipt instant + wire flags ride through as a retained context; the output
-        // callback reclaims it. Retain immediately before submit so no early return can leak it.
-        // The decode stage starts at the PULL (the AU leaving nextAU), not the reassembly
-        // receipt: both consumers — the decode-stage meter and the ABR decode signal — are
-        // specified from the pull, and the receipt→pull wait is the HUD's separate client-queue
+        // The AU's pull instant + wire flags ride through as a retained context, which the output
+        // callback reclaims; retained immediately before submit so no early return can leak it.
+        // The decode stage starts at the pull: the receipt→pull wait is the HUD's client-queue
         // term (see AccessUnit.pulledNs).
-        let ctx = FrameContext(receivedNs: au.pulledNs, flags: au.flags)
+        let ctx = FrameContext(pulledNs: au.pulledNs, flags: au.flags)
         let refcon = Unmanaged.passRetained(ctx).toOpaque()
         let status = VTDecompressionSessionDecodeFrame(
             session,
@@ -342,11 +324,11 @@ public final class VideoDecoder: @unchecked Sendable {
         return true
     }
 
-    /// VT thread. Stamp decode-completion and enqueue, or report the error. `receivedNs` is the
-    /// AU's receipt instant and `flags` its wire `user_flags`, both threaded through the frame refcon
-    /// (0 = unknown).
+    /// VT thread. Stamp decode-completion and enqueue, or report the error. `pulledNs` is the AU's
+    /// pull instant and `flags` its wire `user_flags`, both threaded through the frame refcon
+    /// (0 = unknown). `ReadyFrame.receivedNs` carries the pull instant on.
     fileprivate func handleDecoded(
-        status: OSStatus, imageBuffer: CVImageBuffer?, pts: CMTime, receivedNs: Int64,
+        status: OSStatus, imageBuffer: CVImageBuffer?, pts: CMTime, pulledNs: Int64,
         flags: UInt32, dropped: Bool
     ) {
         guard status == noErr, let imageBuffer else {
@@ -358,22 +340,16 @@ public final class VideoDecoder: @unchecked Sendable {
             return
         }
         let decodedNs = realtimeNowNs()
-        // pts was stamped at timescale 1e9 (AnnexB.sampleBuffer); normalize defensively.
+        // pts was stamped at timescale 1e9 (SamplePack.wrap); normalize defensively.
         let p = CMTimeConvertScale(pts, timescale: 1_000_000_000, method: .default)
         let ptsNs = p.value > 0 ? UInt64(p.value) : 0
         // HDR is the transfer function, never the depth: 10-bit SDR decodes to P010 too, and
         // calling that HDR paints the layer PQ and blows the picture out. A buffer carrying no
-        // transfer attachment falls back to depth, as this did before.
-        let fmt = CVPixelBufferGetPixelFormatType(imageBuffer)
-        let tenBitBuffer =
-            fmt == kCVPixelFormatType_420YpCbCr10BiPlanarVideoRange
-            || fmt == kCVPixelFormatType_420YpCbCr10BiPlanarFullRange
-            || fmt == kCVPixelFormatType_444YpCbCr10BiPlanarVideoRange
-            || fmt == kCVPixelFormatType_444YpCbCr10BiPlanarFullRange
-        let isHDR = Self.transferIsHDR(imageBuffer) ?? tenBitBuffer
+        // transfer attachment falls back to its depth.
+        let isHDR = Self.transferIsHDR(imageBuffer) ?? MetalVideoPresenter.tenBitBuffer(imageBuffer)
         onDecoded(
             ReadyFrame(
-                ptsNs: ptsNs, receivedNs: receivedNs, decodedNs: decodedNs,
+                ptsNs: ptsNs, receivedNs: pulledNs, decodedNs: decodedNs,
                 image: .video(imageBuffer, isHDR: isHDR), flags: flags))
     }
 }

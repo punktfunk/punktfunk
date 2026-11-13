@@ -1,31 +1,13 @@
-// The Match-window trigger discipline (design/midstream-resolution-resize.md D2), as pure
-// functions — the same rules the session binary's `resize_decision` unit-tests: physical pixels
-// even-floored and clamped ≥ 320×200, skip a size equal to the live mode, and request each
-// distinct size at most once (so a rejected size / a host rollback can't loop).
+// The Match-window skip discipline (design/midstream-resolution-resize.md D2), as a pure
+// function — the same rules the session binary's `resize_decision` unit-tests: skip a size equal
+// to the live mode, and skip an ask equal to the last one sent (so a rejected size / a host
+// rollback can't loop). The size itself is `RenderScale.apply`, held by the shared vectors.
 
 import XCTest
 
 @testable import PunktfunkKit
 
 final class MatchWindowTests: XCTestCase {
-    func testNormalizeEvenFloorsAndClamps() {
-        // Odd pixels floor to even (the host rejects odd dimensions).
-        let a = MatchWindow.normalize(widthPx: 1001, heightPx: 601)
-        XCTAssertEqual(a.width, 1000)
-        XCTAssertEqual(a.height, 600)
-        // Already-even sizes pass through.
-        let b = MatchWindow.normalize(widthPx: 2560, heightPx: 1440)
-        XCTAssertEqual(b.width, 2560)
-        XCTAssertEqual(b.height, 1440)
-        // Tiny / zero clamp to the host floor.
-        let c = MatchWindow.normalize(widthPx: 100, heightPx: 80)
-        XCTAssertEqual(c.width, 320)
-        XCTAssertEqual(c.height, 200)
-        let z = MatchWindow.normalize(widthPx: 0, heightPx: -4)
-        XCTAssertEqual(z.width, 320)
-        XCTAssertEqual(z.height, 200)
-    }
-
     func testRequestSkipsEqualAndAlreadyRequested() {
         typealias Ask = MatchWindow.Ask
         // A new size (different from the live mode, not yet requested) → request it.
@@ -36,7 +18,7 @@ final class MatchWindowTests: XCTestCase {
         // Equal to the live mode → nothing to do.
         XCTAssertNil(MatchWindow.request(
             target: Ask((1280, 720)), current: Ask((1280, 720)), lastRequested: nil))
-        // Already requested once → don't re-ask (covers a rejected size AND a host rollback:
+        // Same as the last ask → don't re-ask (covers a rejected size AND a host rollback:
         // accepted → rebuild failed → corrective ack restored the old mode must not loop).
         XCTAssertNil(MatchWindow.request(
             target: Ask((1000, 600)), current: Ask((1280, 720)), lastRequested: Ask((1000, 600))))

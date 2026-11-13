@@ -17,8 +17,7 @@ private let osIconTokensShipped: Set<String> = [
 ]
 
 /// The mark for an OS-identity chain (`linux/fedora/bazzite`, ...), or nil — no view at
-/// all — when the host doesn't advertise one / nothing in the chain is recognized, so
-/// those cards render exactly as they did before the field existed.
+/// all — when the host doesn't advertise one or nothing in the chain is recognized.
 public func osIconImage(for chain: String?) -> Image? {
     osIconTokens(chain)
         .first(where: osIconTokensShipped.contains)

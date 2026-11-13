@@ -6,9 +6,10 @@
 // `Shortcuts.Engine`, off the hardware buttons and before any gating: the exit hold's contract
 // is that no client-side gate can hide the way out.
 //
-// The typed plane carries what the engine forwards; core gates the raw plane by its own fixed
-// rule (`PunktfunkConnection.setSc2Gate`), which only knows Select then A. While the ring is up a
-// button held now stays off the typed plane until the hardware releases it.
+// The typed plane carries what the engine forwards. Core gates the raw plane as
+// `Sc2Capture.pushGateLocked` sets it (`PunktfunkConnection.setSc2Gate`): the open ring, and
+// Select then A when that opens it; no other chord. While the ring is up a button held now
+// stays off the typed plane until the hardware releases it.
 //
 // Call order per state report is `read` then `apply` — `read` sees the hardware, `apply` decides
 // what is left of it. Every report ticks the engine, so no timer runs here.
@@ -50,9 +51,19 @@ final class Sc2RingGate {
         let changed = held ^ hardware
         hardware = held
         var outs = engine.tick(now)
-        let bits = (0..<32).map { UInt32(1) << $0 }.filter { changed & $0 != 0 }
-        for bit in bits where held & bit == 0 { outs += engine.step(.release(bit), at: now) }
-        for bit in bits where held & bit != 0 { outs += engine.step(.press(bit), at: now) }
+        // Releases, then presses, each lowest bit first.
+        var released = changed & ~held
+        while released != 0 {
+            let bit = released & (~released &+ 1)
+            outs += engine.step(.release(bit), at: now)
+            released &= ~bit
+        }
+        var pressed = changed & held
+        while pressed != 0 {
+            let bit = pressed & (~pressed &+ 1)
+            outs += engine.step(.press(bit), at: now)
+            pressed &= ~bit
+        }
         var events: [Event] = []
         let was = forwarded
         for out in outs {

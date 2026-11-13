@@ -93,9 +93,9 @@ final class UIKitPasteboard: ClipboardPasteboard {
         return pb.changeCount
     }
 
-    /// Backgrounding the app ends the session (see `ContentView`'s scenePhase driver), and with it
-    /// any hope of answering a promise — so an offer the user has not pasted yet is pulled down to
-    /// real bytes while the connection is still open.
+    /// Backgrounding the app ends the session, at once or when the keep-alive runs out
+    /// (`BackgroundPolicy`), and with it any hope of answering a promise — so an offer the user has
+    /// not pasted yet is pulled down to real bytes while the connection is still open.
     let resolvesPendingOfferOnTeardown = true
 
     func startObserving(onActivate: @escaping () -> Void) {

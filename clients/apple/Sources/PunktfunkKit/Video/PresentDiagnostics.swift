@@ -16,22 +16,17 @@ private let presentLog = ClientLog(category: "present")
 
 /// The deadline link's frame-latency ASK and property READBACK, published for the HUD to render.
 ///
-/// ⚠ A readback is NOT a grant. `preferredFrameLatency` is a plain read-write float
+/// A readback is NOT a grant. `preferredFrameLatency` is a plain read-write float
 /// (CAMetalDisplayLink.h carries no doc contract), so reading it returns whatever we last
-/// stored unless the system actively clamps the setter — and the 2026-08-13 field run proved
-/// how misleading that is: it read 1.00 while the measured vend lead sat at 1.95 refresh
-/// periods. The number that tells the truth about scheduling is the vend lead (the HUD's
-/// `os present` floor), never this property. The line still earns its place twice over: a
-/// readback that DIFFERS from the ask is the one clamp signal the API can give, and the ask
-/// must be visible on screen because **on tvOS no log is reachable** — `log stream --device`
-/// is gone from modern macOS, `log collect --device-name` needs root and then fails "Device
-/// not configured" because an Apple TV has no USB to fall back to, and the libimobiledevice
-/// pairing is a different database from Xcode's. Console.app is a GUI.
+/// stored unless the system clamps the setter. The number that tells the truth about scheduling
+/// is the vend lead (the HUD's `os present` floor), never this property. A readback that DIFFERS
+/// from the ask is the one clamp signal the API gives, and the ask must be visible on screen
+/// because on tvOS no log is reachable.
 ///
-/// A process-global rather than a sixth parameter threaded through SessionModel → StreamView →
+/// A process-global rather than a parameter threaded through SessionModel → StreamView →
 /// controller → SessionPresenter → Stage2Pipeline → delegate: it is write-once-per-session
-/// diagnostics, and this file already keeps `presentDebug`/`presentLog` at file scope. Reset by
-/// `clear()` at session start so a stale session's answer can never be read as this one's.
+/// diagnostics. Reset by `clear()` at session start so a stale session's answer is never read
+/// as this one's.
 public final class PresentLinkInfo: @unchecked Sendable {
     public static let shared = PresentLinkInfo()
     private let lock = NSLock()
@@ -300,8 +295,8 @@ final class PresentFlight: @unchecked Sendable {
 /// on a Metal callback thread, the tvOS video plane's on main.
 final class PresentDebugStats: @unchecked Sendable {
     /// The session's cadence loop, for the line's `cadence` segment — `nil` under the latency
-    /// intent. `late` is the number WP8 gates on: a due time already past when the frame became
-    /// presentable is the direct signal that the cushion is too small.
+    /// intent. `late` counts frames whose due time had already passed when they became
+    /// presentable: the direct signal that the cushion is too small.
     private let cadence: CadenceClock?
     private let lock = NSLock()
     private var last = CACurrentMediaTime()
@@ -470,7 +465,6 @@ final class PresentDebugStats: @unchecked Sendable {
         let now = CACurrentMediaTime()
         guard now - last >= 1 else { lock.unlock(); return }
         last = now
-        _ = ring.drainSubmitted() // the window's store submits; `decoded=` counts decoder output
         let smoothing = ring.drainSmoothing()
         let deltas = glassDeltasMs.sorted()
         let p50 = deltas.isEmpty ? 0 : deltas[deltas.count / 2]
@@ -493,7 +487,7 @@ final class PresentDebugStats: @unchecked Sendable {
             display.p50, display.p95, cadErr.p50, cadErr.p95, cadenceErrMs.count,
             panel.minInterval * 1000, hist, judder, glitch.repeats, glitch.skips,
             decodedRepeats, shownRepeats, panel.description)
-        // Loop health, appended only where a loop exists — `late`/`frames` is WP8's cushion
+        // Loop health, appended only where a loop exists — `late`/`frames` is the cushion
         // criterion and `reanchor` says whether the estimate is tracking at all.
         let loop = cadence?.health()
         let cadenceLine =

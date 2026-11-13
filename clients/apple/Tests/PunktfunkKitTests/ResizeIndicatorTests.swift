@@ -24,7 +24,7 @@ final class ResizeIndicatorTests: XCTestCase {
     }
 
     func testTimeoutClearsWhenTargetNeverArrives() {
-        var r = ResizeIndicator(timeout: 2.5)
+        var r = ResizeIndicator()
         r.steering(width: 2560, height: 1440, now: 10)
         r.tick(now: 12) // 2 s < timeout — still up
         XCTAssertTrue(r.active)
@@ -33,7 +33,7 @@ final class ResizeIndicatorTests: XCTestCase {
     }
 
     func testDragReArmsTimeoutOnEachNewTarget() {
-        var r = ResizeIndicator(timeout: 2.5)
+        var r = ResizeIndicator()
         r.steering(width: 2000, height: 1200, now: 0)
         r.steering(width: 2200, height: 1200, now: 2) // target changed → since re-armed to 2
         r.tick(now: 4) // only 2 s since the last change — still up (drag isn't a timeout)
@@ -56,7 +56,7 @@ final class ResizeIndicatorTests: XCTestCase {
     }
 
     func testSteadyDragDoesNotResetTimeout() {
-        var r = ResizeIndicator(timeout: 2.5)
+        var r = ResizeIndicator()
         r.steering(width: 2560, height: 1440, now: 0)
         r.steering(width: 2560, height: 1440, now: 1) // SAME target → since stays 0
         r.tick(now: 2.6) // 2.6 s since the ORIGINAL steer → clears (not reset by the repeat)

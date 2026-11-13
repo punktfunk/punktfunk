@@ -1,6 +1,6 @@
 // DualSense adaptive-trigger effect parsing: the host forwards the raw 11-byte trigger
 // parameter block a game wrote to its virtual DualSense (output report 0x02, bytes 11–21
-// for L2 / 22–32 for R2: one mode byte + 10 parameter bytes). The mode values and layouts
+// for R2 / 22–32 for L2: one mode byte + 10 parameter bytes). The mode values and layouts
 // follow the community-established conventions (Nielk1's TriggerEffectGenerator, ds5w,
 // inputtino) — Sony has never documented them. Parsing is TOTAL: any unknown or short
 // block degrades to `.off`, never traps, so a game using an exotic raw mode can't break

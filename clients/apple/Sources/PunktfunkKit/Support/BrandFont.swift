@@ -1,8 +1,7 @@
 // Geist — the punktfunk brand typeface (the same family the website ships). Bundled as static
 // OTF weights in this kit's resources and registered with Core Text at first use, so it works
 // identically in the Xcode app and the `swift run` dev shell (Bundle.module resolves to the
-// package resource bundle in both). Geist Sans carries titles/UI; Geist Mono carries the technical
-// readouts — host addresses, status labels, the stream-stats HUD — for the industrial look.
+// package resource bundle in both). Only Geist Sans ships, in four weights.
 //
 // Licensed under the SIL Open Font License 1.1 (Resources/Fonts/Geist-OFL.txt).
 

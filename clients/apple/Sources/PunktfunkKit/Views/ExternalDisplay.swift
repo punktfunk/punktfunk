@@ -8,7 +8,6 @@
 
 #if os(iOS)
 import AVFoundation
-import PunktfunkShared
 import UIKit
 
 /// The monitor scene's delegate. The app assigns it the `windowExternalDisplayNonInteractive` role.
@@ -88,14 +87,6 @@ public final class ExternalDisplay {
         let px = screen.currentMode?.size ?? screen.nativeBounds.size
         guard px.width > 0, px.height > 0 else { return nil }
         return (Int(px.width), Int(px.height), screen.maximumFramesPerSecond)
-    }
-
-    /// The mode to stream while the picture is on the monitor: the session's own, with
-    /// `nativeMode` as Native. A picked resolution or refresh stays. nil with no monitor.
-    public static func streamMode(
-        _ settings: EffectiveSettings
-    ) -> (width: UInt32, height: UInt32, hz: UInt32)? {
-        nativeMode.map { settings.streamMode(native: $0) }
     }
 }
 

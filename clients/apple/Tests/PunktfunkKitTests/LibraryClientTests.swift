@@ -38,13 +38,10 @@ final class LibraryClientTests: XCTestCase {
 
         let steam = games[0]
         XCTAssertEqual(steam.id, "steam:570")
-        XCTAssertFalse(steam.isCustom)
-        XCTAssertEqual(steam.launch?.kind, "steam_appid")
-        XCTAssertEqual(steam.launch?.value, "570")
+        XCTAssertEqual(steam.art.posterCandidates.count, 3)
 
         let custom = games[1]
-        XCTAssertTrue(custom.isCustom)
-        XCTAssertNil(custom.launch)
+        XCTAssertEqual(custom.store, "custom")
         XCTAssertNil(custom.art.portrait)
         // `platform` is the host's flattened `GameMeta.platform`: present on a rom-manager entry,
         // absent (nil) on a store-front title — the field the library's collections group by.
@@ -139,36 +136,43 @@ final class LibraryClientTests: XCTestCase {
             LibraryClient.pagePath(cursor: "a+b="), "/api/v1/library/page?limit=200&cursor=a%2Bb%3D")
     }
 
+    /// An id stays one segment: a `/` or `?` in it can't reach another route.
+    func testAnIdIsOnePathSegment() {
+        XCTAssertEqual(LibraryClient.pathSegment("steam:570"), "steam:570")
+        XCTAssertEqual(LibraryClient.pathSegment("../a b/c?d"), "..%2Fa%20b%2Fc%3Fd")
+    }
+
     func testPosterCandidatesPreferPortraitThenHeader() {
         let full = Artwork(
-            portrait: "https://x/p.jpg", hero: "https://x/hero.jpg",
-            logo: "https://x/logo.png", header: "https://x/h.jpg")
+            portrait: "https://x/p.jpg", hero: "https://x/hero.jpg", header: "https://x/h.jpg")
         XCTAssertEqual(full.posterCandidates.map(\.absoluteString),
                        ["https://x/p.jpg", "https://x/h.jpg", "https://x/hero.jpg"])
 
         // No portrait → header leads; absent fields are skipped, not nil-padded.
-        let sparse = Artwork(portrait: nil, hero: nil, logo: nil, header: "https://x/h.jpg")
+        let sparse = Artwork(portrait: nil, hero: nil, header: "https://x/h.jpg")
         XCTAssertEqual(sparse.posterCandidates.map(\.absoluteString), ["https://x/h.jpg"])
 
         XCTAssertTrue(Artwork().posterCandidates.isEmpty)
     }
 
-    func testArtworkResolvedRewritesOnlyHostRelativePaths() {
-        let base = URL(string: "https://192.168.1.70:47990/api/v1/library")!
-        // Steam art now comes back as host-relative proxy paths; external CDN URLs (GOG/Heroic/Xbox)
-        // and `data:` URLs (Lutris) are untouched.
-        let art = Artwork(
-            portrait: "/api/v1/library/art/steam:3527290/portrait",
-            hero: "https://cdn.example.com/hero.jpg",
-            logo: nil,
-            header: "/api/v1/library/art/steam:3527290/header")
-        let resolved = art.resolved(against: base)
+    /// Host art stays the path the host sent, so a catalog cached before the host moved still
+    /// finds its posters: the loader asks the host where it is now, under the same cache key.
+    func testHostArtPathKeysToTheMachineAtAnyAddress() throws {
+        let json = #"{"id":"steam:570","store":"steam","title":"Dota 2","art":{"#
+            + #""portrait":"/api/v1/library/art/steam:570/portrait","#
+            + #""hero":"https://cdn.example.com/h.jpg"}}"#
+        let art = try JSONDecoder().decode(GameEntry.self, from: Data(json.utf8))
+            .art.posterCandidates
+        for address in ["192.168.1.70", "100.64.1.2"] {
+            XCTAssertTrue(LibraryArtLoader.isHostOrigin(art[0], address: address, port: 47990))
+            XCTAssertEqual(
+                LibraryArtLoader.cacheKey(
+                    for: art[0], hostAddress: address, hostPort: 47990, pin: Data([0xDE, 0xAD])),
+                "dead|/api/v1/library/art/steam:570/portrait")
+            XCTAssertFalse(LibraryArtLoader.isHostOrigin(art[1], address: address, port: 47990))
+        }
         XCTAssertEqual(
-            resolved.portrait, "https://192.168.1.70:47990/api/v1/library/art/steam:3527290/portrait")
-        XCTAssertEqual(
-            resolved.header, "https://192.168.1.70:47990/api/v1/library/art/steam:3527290/header")
-        XCTAssertEqual(resolved.hero, "https://cdn.example.com/hero.jpg") // unchanged
-        XCTAssertNil(resolved.logo)
+            LibraryArtLoader.requestPath(art[0]), "/api/v1/library/art/steam:570/portrait")
     }
 
     // MARK: - HTTP response parsing (MgmtTransport)
@@ -212,6 +216,19 @@ final class LibraryClientTests: XCTestCase {
             raw("HTTP/1.1 401 Unauthorized\r\nContent-Length: 0\r\n\r\n"))
         XCTAssertEqual(response.status, 401)
         XCTAssertTrue(response.body.isEmpty)
+    }
+
+    /// A 204 has no framing header and no body: it ends at its header block. Read as framed by
+    /// close, a kept-alive connection waits out the request timeout for a hang-up.
+    func testANoContentResponseEndsAtItsHeaders() throws {
+        let answer = raw("HTTP/1.1 204 No Content\r\ndate: Fri, 13 Nov 2026 10:00:00 GMT\r\n\r\n")
+        XCTAssertEqual(try HTTPResponseParser.messageLength(in: answer), answer.count)
+        let response = try HTTPResponseParser.parse(answer)
+        XCTAssertEqual(response.status, 204)
+        XCTAssertTrue(response.body.isEmpty)
+        // What follows is the next response's.
+        XCTAssertEqual(
+            try HTTPResponseParser.messageLength(in: answer + raw("HTTP/1.1 200")), answer.count)
     }
 
     func testBodyRunsToEOFWithoutFramingHeaders() throws {
@@ -387,12 +404,6 @@ final class LibraryClientTests: XCTestCase {
                 pin: Data([0xBE, 0xEF])),
             key)
 
-        // Unpinned has no machine to key by — the address stands in (TOFU semantics).
-        XCTAssertEqual(
-            LibraryArtLoader.cacheKey(
-                for: art, hostAddress: "192.168.1.70", hostPort: 47990, pin: nil),
-            "tofu|192.168.1.70:47990|/api/v1/library/art/steam:570/portrait")
-
         // A query is part of the path — art endpoints that take one don't collide.
         let queried = URL(
             string: "https://192.168.1.70:47990/api/v1/library/art/steam:570/portrait?v=2")!
@@ -511,6 +522,14 @@ final class LibraryClientTests: XCTestCase {
         XCTAssertEqual(status(401), "unauthorized")
         XCTAssertEqual(status(403), "unauthorized")
         XCTAssertEqual(status(500), "http(500)")
+    }
+
+    /// A cancelled caller is not an unreachable host.
+    func testACancelledRequestStaysCancelled() {
+        XCTAssertTrue(LibraryClient.transportFailure(CancellationError()) is CancellationError)
+        XCTAssertEqual(
+            "\(LibraryClient.transportFailure(MgmtTransportError.timedOut))",
+            #"unreachable("timed out")"#)
     }
 
     /// The host refuses an install in its `ApiError` envelope; the player reads its sentence.

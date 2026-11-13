@@ -27,7 +27,7 @@ private let log = ClientLog(category: "gamepad")
 /// A caller that owns a particular pad passes the location id it wants (see
 /// `open(preferringLocationID:)`); the renderer takes that from the `GCController` it is bound to,
 /// so with two DualSenses attached each renderer drives its own device. Without a preference the
-/// lowest location id wins — an arbitrary but *stable* choice, where `Set.first` was neither.
+/// lowest location id wins: arbitrary, but stable across calls.
 final class DualSenseHID {
     private let manager: IOHIDManager
     private var device: IOHIDDevice?
@@ -77,13 +77,9 @@ final class DualSenseHID {
     /// Which attached device to drive, as an index into `ids` — the whole selection rule, pure so
     /// it can be tested without an `IOHIDDevice` (which cannot be constructed).
     ///
-    /// `IOHIDManagerCopyDevices` returns an unordered `Set`, so the previous `Set.first` was not
-    /// merely arbitrary — it can differ between two calls in one process. With two DualSenses that
-    /// made each renderer's pad→device binding a coin flip: both could land on the same device
-    /// (one pad's rumble coming out of the other, and the two per-instance write dedupes fighting
-    /// over it) or split by luck. An explicit location id makes the binding deterministic; the
-    /// lowest-id fallback at least makes it stable. `nil` ids sort last so a device IOKit cannot
-    /// place never displaces one it can.
+    /// `IOHIDManagerCopyDevices` returns an unordered `Set` whose order can differ between calls,
+    /// so the wanted location id decides, else the lowest id. `nil` ids sort last so a device
+    /// IOKit cannot place never displaces one it can.
     static func preferredIndex(among ids: [UInt32?], preferring wanted: UInt32?) -> Int? {
         if let wanted, let hit = ids.firstIndex(where: { $0 == wanted }) { return hit }
         return ids.indices.min { (ids[$0] ?? .max) < (ids[$1] ?? .max) }
@@ -134,12 +130,8 @@ final class DualSenseHID {
     /// Drive the motors. `low` = left/heavy (low-frequency), `high` = right/light (high-frequency),
     /// each 0...255. (0, 0) stops.
     ///
-    /// Returns whether the write reached the device. The caller needs this: it used to be logged
-    /// and swallowed, so a failed write still counted as a successful render. That matters most
-    /// for a **stop**, which has nothing behind it — the renderer stamps its write clock even on
-    /// failure, the keepalive re-write only fires for non-zero levels, and the ticker is cancelled
-    /// once the target is `(0, 0)`. On USB there is no firmware timeout either, so a swallowed
-    /// stop left the motors running with nothing scheduled to try again.
+    /// Returns whether the write reached the device. A failed stop has nothing behind it (no
+    /// keepalive for zero, no USB firmware timeout), so the caller must not count it as rendered.
     @discardableResult
     func rumble(low: UInt8, high: UInt8) -> Bool {
         send(bluetooth

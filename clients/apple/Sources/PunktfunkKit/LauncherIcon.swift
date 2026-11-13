@@ -8,9 +8,8 @@
 
 import SwiftUI
 
-/// The icon tokens this client ships art for. A token outside this set draws nothing and the tile
-/// falls back to naming its launcher — which is what every launcher tile looked like before icons
-/// existed, so an unknown mark degrades to the old design rather than to a hole.
+/// The icon tokens this client ships art for. A token outside this set draws nothing, and the
+/// tile names its launcher instead.
 ///
 /// Checked against rather than interpolated: `Image(named:)` is a name lookup, and the set is the
 /// only thing that decides which names it can ever see.

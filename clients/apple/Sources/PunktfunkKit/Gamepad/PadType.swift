@@ -16,17 +16,9 @@ extension PunktfunkConnection.GamepadType {
         return Self.ringCycle[(i + 1) % Self.ringCycle.count]
     }
 
-    /// The Controller type slot's state word.
+    /// The Controller type slot's state word: the type's name, or "Other" outside the cycle.
     public var ringLabel: String {
-        switch self {
-        case .auto: return String(localized: L10n.ringPadTypeAutomatic)
-        case .xbox360: return "Xbox 360"
-        case .xboxOne: return "Xbox One"
-        case .dualSense: return "DualSense"
-        case .dualShock4: return "DualShock 4"
-        case .steamDeck: return "Steam Deck"
-        default: return String(localized: L10n.ringPadTypeOther)
-        }
+        Self.ringCycle.contains(self) ? padName : String(localized: L10n.ringPadTypeOther)
     }
 
     /// Every type by name, the words pf-client-core's `pad_name` prints.

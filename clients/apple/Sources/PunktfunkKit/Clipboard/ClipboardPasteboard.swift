@@ -4,9 +4,9 @@
 // The sync logic above this protocol — the drain thread, the offer sequence numbers, the pending
 // fetches a blocked paste waits on, echo suppression — is identical on macOS and iOS and is worth
 // having exactly one copy of. What genuinely differs is small and lives in the two adapters:
-// AppKit fulfils a paste by BLOCKING a provider thread, UIKit by answering an asynchronous load
-// handler; AppKit transcodes images through NSImage, UIKit through UIImage; and only UIKit has to
-// worry about the process being suspended out from under an offer it promised to serve.
+// AppKit fulfils a paste by BLOCKING the thread it asks on, UIKit by answering an asynchronous
+// load handler; AppKit transcodes images through NSImage, UIKit through UIImage; and only UIKit
+// has to worry about the process being suspended out from under an offer it promised to serve.
 #if !os(tvOS)
 import Foundation
 
@@ -17,10 +17,11 @@ typealias ClipboardFetch = (_ wire: String, _ completion: @escaping (Data?) -> V
 
 /// The system pasteboard, as much of it as the shared clipboard needs.
 ///
-/// Calls arrive from the drain thread, the serve queue, and the thread tearing the sync down;
-/// `ClipboardSync` serializes them with its own lock, so an adapter need not be internally
-/// synchronized. It must not, however, block on the **main** queue: that lock is also taken from
-/// main, and a `main.sync` under it would deadlock.
+/// Calls arrive from the drain thread, the serve queue and the thread starting or stopping the
+/// sync, and `ClipboardSync` does not serialize them: the system pasteboards take calls from any
+/// thread. The writes that touch an adapter's own state, `installLazy` and `clear`, come from the
+/// drain thread or after it has joined. No call may block on the **main** queue: main can be
+/// waiting in an AppKit paste for bytes only the drain thread delivers.
 protocol ClipboardPasteboard: AnyObject {
     /// Monotonic per pasteboard write, by anyone. Reading it must never count as reading the
     /// pasteboard's *contents* — on iOS that distinction is the difference between a silent poll
@@ -54,10 +55,11 @@ protocol ClipboardPasteboard: AnyObject {
     ///
     /// This is the difference between the two platforms' idea of how long a promise lives. A Mac
     /// keeps running long after a session ends, but the promise dies with the sync either way, so
-    /// AppKit clears it and the user loses nothing they had before. On iOS the teardown IS the
-    /// user leaving — backgrounding ends the session — and "copy on the host, then paste into
-    /// Safari" is the whole point of the feature on a tablet, so those bytes have to be made real
-    /// while the connection that can still supply them is open.
+    /// AppKit clears it and the user loses nothing they had before. On iOS the teardown is mostly
+    /// the user leaving — backgrounding ends the session, at once or when the keep-alive runs
+    /// out — and "copy on the host, then paste into Safari" is the whole point of the feature on a
+    /// tablet, so those bytes have to be made real while the connection that can still supply them
+    /// is open.
     var resolvesPendingOfferOnTeardown: Bool { get }
 
     /// Start watching for the user coming back to the app. The case that matters is "copied
@@ -105,6 +107,14 @@ extension ClipboardPasteboard {
         let types = typeIdentifiers
         guard !ClipboardFormats.isConcealed(types) else { return nil }
         return ClipboardFormats.offerKinds(forTypes: types)
+    }
+
+    /// `read(wire:)`, or nil when the pasteboard is no longer at `count` once the read returns.
+    /// The read can wait on a user decision (iOS's paste alert), and what it then returns is
+    /// whatever is on the pasteboard by that time: a newer copy, even a concealed one.
+    func read(wire: String, unchangedSince count: Int) -> Data? {
+        guard let data = read(wire: wire), changeCount == count else { return nil }
+        return data
     }
 }
 #endif

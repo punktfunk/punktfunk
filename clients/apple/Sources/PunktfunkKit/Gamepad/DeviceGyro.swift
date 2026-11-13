@@ -13,16 +13,11 @@
 //    host's virtual pad never keeps integrating an angular velocity this device stopped
 //    producing (the gyro-sweep "stale angular velocity re-sent forever" failure mode).
 //
-// Samples are CMDeviceMotion (sensor-fused: bias-corrected rotation rate, gravity split from
-// user acceleration) at the ~100 Hz CoreMotion ceiling — below a DualSense's 250 Hz, but the
-// host's motion plane is event-driven, not cadence-locked, so a slower producer just means
-// fewer samples. Units and axis semantics match `GamepadCapture.forwardMotion` exactly (the
-// `GamepadWire` constants; accel = gravity + user acceleration — the same convention, so a
-// future sign/scale correction lands in one place for both sources). The one thing the phone
-// adds is a frame remap: CoreMotion reports in the device's portrait frame, while the wire
-// wants the controller frame the player sees (x right, y up, z out of the screen), so each
-// sample is rotated by the current interface orientation — a phone clipped landscape must yaw
-// when the player yaws, not roll.
+// Samples are CMDeviceMotion (bias-corrected rotation, gravity split from user acceleration)
+// at CoreMotion's ~100 Hz ceiling; the host's motion plane is event-driven, so fewer is fine.
+// Units match `GamepadCapture.forwardMotion` (the `GamepadWire` scales, accel negated); the
+// frame does not. CoreMotion's portrait frame, turned by the interface orientation, is (right,
+// up, out of the screen): the wire's frame already, so `appleMotionToWire` is not applied.
 
 import Foundation
 
@@ -75,8 +70,7 @@ extension DeviceGyroRemap {
 public final class DeviceGyro {
     /// Whether this device can source motion at all — gates the settings rows (a device
     /// without an IMU would make the toggle a silent no-op, the rumble mirror's rule).
-    /// One shared probe: Apple recommends a single `CMMotionManager` per app, and the
-    /// settings UI asking per-render must not allocate one each time.
+    /// Probed once: the settings UI asks per render, and must not allocate a manager each time.
     public static let isAvailable: Bool = CMMotionManager().isDeviceMotionAvailable
 
     /// Everything the sample thread touches, behind one lock: the orientation remap (written
@@ -179,31 +173,15 @@ public final class DeviceGyro {
         state.lock.unlock()
         let rot = r.apply(
             x: Float(m.rotationRate.x), y: Float(m.rotationRate.y), z: Float(m.rotationRate.z))
-        // Total acceleration, NEGATED — the same convention as GamepadCapture.forwardMotion, which
-        // this file's header promises to track. Apple reports the gravity VECTOR (pointing down);
-        // an accelerometer measures proper acceleration (pointing up at rest), and the wire carries
-        // the latter. Without the minus a still phone told the host it was accelerating downward at
-        // 1 g.
+        // Total acceleration, NEGATED: Apple reports the gravity vector (down), the wire carries
+        // proper acceleration (up at rest), as `GamepadCapture.forwardMotion` does.
         let acc = r.apply(
             x: -Float(m.gravity.x + m.userAcceleration.x),
             y: -Float(m.gravity.y + m.userAcceleration.y),
             z: -Float(m.gravity.z + m.userAcceleration.z))
-        // NO frame conversion here, and that is not an oversight — `GamepadCapture.forwardMotion`
-        // applies `GamepadWire.appleMotionToWire` and this deliberately does not.
-        //
-        // The trap is that two different frames are both called "the controller frame". GCMotion
-        // reports a CONTROLLER in (Right, Forward, Up) — measured on a real DualSense — which is
-        // not the wire's frame, hence the conversion over there. `r` above resolves THIS DEVICE
-        // into the frame the header describes: x right, y up, z out of the screen. For the pose
-        // this mirror exists to serve — a phone clipped upright, screen facing the player — "out of
-        // the screen" points AT the player, so that frame is (Right, Up, Backward), which IS the
-        // wire's frame. Straight through is already correct.
-        //
-        // Applying the controller path's conversion here was tried and was WRONG: a phone at rest
-        // would have reported gravity as −1 g on the roll axis instead of +1 g up, i.e. lying on
-        // its edge. Caught by measuring the Android twin, which does the same thing straight
-        // through and reads +1 g on the up axis end to end. If a future capture path needs a
-        // conversion, decide it from that source's OWN measured frame rather than by analogy.
+        // No `appleMotionToWire` here: that converts GCMotion's (Right, Forward, Up). `r` gives
+        // (right, up, out of the screen), and with the screen facing the player that is
+        // (Right, Up, Backward), the wire's frame. Android's twin measures +1 g up this way.
         let gs = GamepadWire.gyroLSBPerRadS
         let as_ = GamepadWire.accelLSBPerG
         let gyro = (

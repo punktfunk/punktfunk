@@ -283,8 +283,9 @@ public enum AV1 {
     }
 
     /// The temporal unit as the sample, where it lies in its pool slot: only the leading
-    /// temporal delimiter is left out, by offset. Needs every OBU to carry its size field and
-    /// no padding OBU (dropping one would move bytes). nil = repack.
+    /// temporal delimiter is left out, by offset. Needs every OBU to carry its size field, no
+    /// padding OBU (dropping one would move bytes) and the walk to end at the AU's last byte, as
+    /// the repack keeps no torn tail. nil = repack.
     private static func sampleInPlace(
         au: AccessUnit, placed: AccessUnit.InPlace, pool: AccessUnitSlotPool,
         format: CMVideoFormatDescription
@@ -295,7 +296,9 @@ public enum AV1 {
         var skip = 0
         var fits = true
         var kept = 0
+        var end = 0
         forEachOBU(in: au.data) { base, header, payload, type in
+            end = payload.upperBound
             guard base[header.lowerBound] & 0x02 != 0, type != OBUType.padding else {
                 fits = false
                 return false
@@ -311,7 +314,7 @@ public enum AV1 {
             }
             return true
         }
-        guard fits, kept > 0 else { return nil }
+        guard fits, kept > 0, end == placed.count else { return nil }
         return SamplePack.sample(
             in: pool, token: placed.token, offset: placed.offset + skip,
             length: placed.count - skip, ptsNs: au.ptsNs, format: format)

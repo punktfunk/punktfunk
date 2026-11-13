@@ -46,9 +46,6 @@ public final class ClipboardSync: NSObject {
 
     private let connection: PunktfunkConnection
     private let pasteboard: any ClipboardPasteboard
-    /// `CLIP_FLAG_*` sent with the enable (`CLIP_FLAG_FILES` when the session permits files —
-    /// always 0 in Phase 1).
-    private let controlFlags: UInt8
 
     /// Host `.state` updates, delivered on the main queue — drives the toggle/footnote UI.
     public var onState: ((_ enabled: Bool, _ policy: UInt8, _ reason: UInt8) -> Void)?
@@ -120,25 +117,11 @@ public final class ClipboardSync: NSObject {
     private let drainDone = DispatchSemaphore(value: 0)
     private var started = false
 
-    /// - Parameter allowFiles: reserved for Phase 2; `CLIP_FLAG_FILES` is never set yet.
-    public convenience init(connection: PunktfunkConnection, allowFiles: Bool = false) {
-        self.init(connection: connection, pasteboard: SystemPasteboard(), allowFiles: allowFiles)
-    }
-
-    /// Designated init, taking the pasteboard so tests can drive the whole state machine against a
-    /// stub without an AppKit/UIKit pasteboard in the way.
-    init(
-        connection: PunktfunkConnection, pasteboard: any ClipboardPasteboard,
-        allowFiles: Bool = false
-    ) {
+    public init(connection: PunktfunkConnection) {
         self.connection = connection
-        self.pasteboard = pasteboard
-        self.controlFlags = 0 // CLIP_FLAG_FILES rides Phase 2
-        _ = allowFiles
+        self.pasteboard = SystemPasteboard()
         super.init()
     }
-
-    deinit { stopped.raise() }
 
     // MARK: - Lifecycle
 
@@ -147,7 +130,7 @@ public final class ClipboardSync: NSObject {
     public func start() {
         guard !started else { return }
         started = true
-        connection.clipControl(enabled: true, flags: controlFlags)
+        connection.clipControl(enabled: true)
         // Baseline: whatever is on the pasteboard when sync starts is announced immediately — the
         // "copy first, then connect and paste" flow must work.
         stateLock.lock()
@@ -161,7 +144,8 @@ public final class ClipboardSync: NSObject {
     }
 
     /// Disable sync and join the drain thread. Called off-main before `connection.close()` (the
-    /// same discipline as the audio/feedback drains).
+    /// same discipline as the audio/feedback drains). The drain holds the sync for its loop, so
+    /// only this or the connection closing ends it: dropping the sync does not.
     ///
     /// A host offer still sitting on the local pasteboard as a promise has to be dealt with here,
     /// because after this returns nothing can answer it: either it is pulled down to real bytes
@@ -371,8 +355,8 @@ public final class ClipboardSync: NSObject {
     /// Pull the host's offer down to concrete bytes, replacing the promise on the pasteboard.
     ///
     /// A lazy promise is only as good as the ability to answer it, and on iOS that ability ends
-    /// with the session: backgrounding the app disconnects it. Without this, "copy on the host,
-    /// then paste into Safari on the iPad" would hand Safari an empty promise. Everything else
+    /// with the session, which backgrounding ends (`BackgroundPolicy`). Without this, "copy on the
+    /// host, then paste into Safari on the iPad" would hand Safari an empty promise. Everything else
     /// about the design stays lazy — a user who copies on the host, pastes nothing, and stays in
     /// the app moves no clipboard bytes at all; this runs once, at the end, for content that is
     /// still on the pasteboard and still unclaimed.
@@ -425,17 +409,20 @@ public final class ClipboardSync: NSObject {
     /// clipboard changed since that announce) is cancelled — never serve mismatched bytes.
     ///
     /// Runs on `serves`, not the drain thread: reading the pasteboard can block on a user decision
-    /// (iOS's paste permission alert), and the drain thread has to stay live throughout.
+    /// (iOS's paste permission alert), and the drain thread has to stay live throughout. The
+    /// pasteboard and the session can both change under that wait, so both are checked again
+    /// once the read returns.
     private func serveFetch(reqId: UInt32, seq: UInt32, mime: String) {
         stateLock.lock()
+        let count = pasteboard.changeCount
         // `installedRemote == nil` matters: installing the HOST's offer on our own pasteboard
         // updates the change count too, so without it a fetch for our promise would be served by
         // reading that promise — which fetches back from the host and blocks this queue on it.
-        let fresh = seq == offerSeq && pasteboard.changeCount == lastSeenChangeCount
-            && installedRemote == nil
+        let fresh = seq == offerSeq && count == lastSeenChangeCount && installedRemote == nil
         stateLock.unlock()
-        guard fresh, !stopped.isRaised, let data = pasteboard.read(wire: mime),
-              data.count <= Self.maxTransferBytes
+        guard fresh, !stopped.isRaised,
+              let data = pasteboard.read(wire: mime, unchangedSince: count),
+              !stopped.isRaised, data.count <= Self.maxTransferBytes
         else {
             connection.clipCancel(id: reqId)
             return

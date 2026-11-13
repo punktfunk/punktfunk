@@ -6,28 +6,21 @@ import PunktfunkShared
 import SwiftUI
 
 public enum WakePolicy {
-    /// A wake can reach this host: the platform sends one and the host's MACs are known. Gates
-    /// the explicit Wake Host action.
-    public static func canWake(
-        _ macs: [String], available: Bool = PunktfunkConnection.wakeOnLANAvailable
-    ) -> Bool {
-        available && !macs.isEmpty
+    /// A wake can reach this host: its MACs are known (iOS and tvOS broadcast through the
+    /// multicast entitlement in `Config/Punktfunk.entitlements`). Gates the explicit Wake Host
+    /// action.
+    public static func canWake(_ macs: [String]) -> Bool {
+        !macs.isEmpty
     }
 
     /// With Auto-wake on, a connect or a library open wakes this host before it asks.
-    public static func autoWakes(
-        _ macs: [String], autoWake: Bool,
-        available: Bool = PunktfunkConnection.wakeOnLANAvailable
-    ) -> Bool {
-        autoWake && canWake(macs, available: available)
+    public static func autoWakes(_ macs: [String], autoWake: Bool) -> Bool {
+        autoWake && canWake(macs)
     }
 
     /// A connect sends Auto-wake's packet before it dials, unless the last probe reached the host.
-    public static func wakesFirst(
-        _ macs: [String], autoWake: Bool, probedOnline: Bool,
-        available: Bool = PunktfunkConnection.wakeOnLANAvailable
-    ) -> Bool {
-        autoWakes(macs, autoWake: autoWake, available: available) && !probedOnline
+    public static func wakesFirst(_ macs: [String], autoWake: Bool, probedOnline: Bool) -> Bool {
+        autoWakes(macs, autoWake: autoWake) && !probedOnline
     }
 }
 

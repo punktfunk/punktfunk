@@ -10,8 +10,7 @@ import GameController
 /// a passing test exercises the exact code a session runs.
 @MainActor
 public final class ControllerTester: ObservableObject {
-    // `.manual`: the panel's toggles hold a level until changed — no session wire refreshes
-    // exist here to keep the renderer's staleness watchdog fed.
+    // The panel's toggles hold a level until changed: the renderer never ends one on its own.
     private let renderer = RumbleRenderer()
     private weak var controller: GCController?
 
@@ -47,8 +46,6 @@ public final class ControllerTester: ObservableObject {
         func u16(_ v: Float) -> UInt16 { UInt16((min(max(v, 0), 1) * 65535).rounded()) }
         renderer.apply(low: u16(low), high: u16(high))
     }
-
-    public func stopRumble() { renderer.apply(low: 0, high: 0) }
 
     /// Replay an adaptive-trigger effect on a DualSense via the real `DualSenseTriggerEffect`
     /// renderer. `right == false` → L2, `true` → R2. No-op on a non-DualSense pad.

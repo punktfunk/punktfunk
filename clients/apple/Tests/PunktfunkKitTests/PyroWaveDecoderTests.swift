@@ -132,6 +132,14 @@ final class PyroWaveParserTests: XCTestCase {
         XCTAssertNil(WaveletBitstream.parse(au: Data(au), chunkAligned: false, windowSize: 0))
     }
 
+    /// The header's size fields reach 16384 a side. Past the host's 8192 wall the frame is
+    /// dropped, before a ring of planes that size is asked of the GPU.
+    func testAnOversizedSOFIsDropped() {
+        let word0 = UInt32(16384 - 1) | (UInt32(16384 - 1) << 14) | (1 << 28) | (1 << 31)
+        let au = le32(word0) + le32(UInt32(1) | (1 << 30)) + packet(blockIndex: 0)
+        XCTAssertNil(WaveletBitstream.parse(au: Data(au), chunkAligned: false, windowSize: 0))
+    }
+
     func testTruncatedPacketIsRejected() {
         var au = sof(totalBlocks: 1)
         // Claims 4 payload words but only the 8-byte header follows.
@@ -328,6 +336,45 @@ final class PyroWaveGoldenTests: XCTestCase {
         let ref = try fixture("ref-chunked-y")
         let db = psnr(decoded.y, [UInt8](ref))
         XCTAssertGreaterThan(db, 25.0, "lossy frame should still resemble the source (\(db) dB)")
+    }
+
+    /// A frame's planes stay its own while it is held: the ring steps past its slot. Decoded
+    /// into again, a frame waiting in the present store would show a later picture. With
+    /// every slot held, the next frame is dropped.
+    func testAHeldFramesSlotIsNotDecodedInto() throws {
+        try XCTSkipIf(!MetalWaveletDecoder.supported, "no capable Metal device")
+        let au = try fixture("au-dense")
+        let device = try XCTUnwrap(MTLCreateSystemDefaultDevice())
+        let queue = try XCTUnwrap(device.makeCommandQueue())
+        let decoder = try XCTUnwrap(MetalWaveletDecoder(device: device, queue: queue, ringDepth: 4))
+        // One decode, waited for; nil when the decoder dropped the frame.
+        func decodeOne() -> WaveletPlanes? {
+            let done = DispatchSemaphore(value: 0)
+            let box = ResultBox()
+            guard decoder.decode(au: au, chunkAligned: false, windowSize: 0, completion: { planes in
+                box.lock.lock()
+                box.planes = planes
+                box.lock.unlock()
+                done.signal()
+            }) else { return nil }
+            XCTAssertEqual(done.wait(timeout: .now() + 10), .success, "the decode completes")
+            box.lock.lock()
+            defer { box.lock.unlock() }
+            return box.planes
+        }
+
+        let first = try XCTUnwrap(decodeOne())
+        for _ in 0..<6 {
+            let next = try XCTUnwrap(decodeOne())
+            XCTAssertFalse(next.y === first.y, "the held frame's slot was decoded into")
+        }
+        // Metal lets go of a completed decode's handler a moment after it ran: retry.
+        var held = [first]
+        for _ in 0..<50 where held.count < 4 {
+            if let planes = decodeOne() { held.append(planes) } else { usleep(5_000) }
+        }
+        XCTAssertEqual(Set(held.map { ObjectIdentifier($0.y) }).count, 4, "one slot per held frame")
+        XCTAssertNil(decodeOne(), "no slot is free")
     }
 }
 #endif

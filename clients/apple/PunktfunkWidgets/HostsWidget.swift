@@ -3,7 +3,7 @@
 // session via `punktfunk://connect/<uuid>` — the app's onOpenURL routes it through the normal
 // connect path (trust policy / WoL / approval all apply).
 //
-// No reachability probing in v1 (a UDP check has no place in a timeline build; WoL handles offline
+// No reachability probing (a UDP check has no place in a timeline build; WoL handles offline
 // hosts on tap). The timeline steps the "2 hr. ago" line over an hour of entries, then reloads;
 // the app also pushes reloads on store changes (HostStore → WidgetCenter.reloadTimelines).
 

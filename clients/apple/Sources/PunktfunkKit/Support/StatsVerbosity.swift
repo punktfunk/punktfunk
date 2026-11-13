@@ -41,11 +41,6 @@ public enum StatsVerbosity: String, CaseIterable, Sendable {
         StatsVerbosity(rawValue: EffectiveSettings.storedStatsVerbosity(.standard)) ?? .normal
     }
 
-    /// Persist a tier (the Settings pickers write the same key via @AppStorage).
-    public static func store(_ tier: StatsVerbosity) {
-        UserDefaults.standard.set(tier.rawValue, forKey: DefaultsKey.statsVerbosity)
-    }
-
     /// Ask `connection`'s session to advance its overlay one tier. nil asks every session, for
     /// the touch and remote paths, which run one session and hold no connection.
     public static func requestCycle(for connection: AnyObject?) {
