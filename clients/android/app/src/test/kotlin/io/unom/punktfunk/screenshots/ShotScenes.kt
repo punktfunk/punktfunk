@@ -195,21 +195,6 @@ internal fun HostsScene() {
             horizontalArrangement = Arrangement.spacedBy(8.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            item(span = { GridItemSpan(maxLineSpan) }) {
-                Column(
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    modifier = Modifier.fillMaxWidth(),
-                ) {
-                    Spacer(Modifier.height(8.dp))
-                    Text("Punktfunk", style = MaterialTheme.typography.headlineLarge)
-                    Text(
-                        stringResource(io.unom.punktfunk.kit.R.string.hosts_tagline),
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                    Spacer(Modifier.height(24.dp))
-                }
-            }
             item(span = { GridItemSpan(maxLineSpan) }) { SectionLabel(stringResource(io.unom.punktfunk.kit.R.string.hosts_section_saved)) }
             // A pinned card is its OWN grid cell right after its host — the same flat list the
             // connect screen builds, not a second card crammed into the host's cell.

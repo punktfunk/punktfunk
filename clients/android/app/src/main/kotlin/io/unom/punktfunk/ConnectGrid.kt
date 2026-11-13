@@ -258,7 +258,9 @@ internal fun ConnectGrid(
             horizontalArrangement = Arrangement.spacedBy(8.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            item(span = { GridItemSpan(maxLineSpan) }) { GridHeader(notice, status) }
+            if (notice != null || status != null) {
+                item(span = { GridItemSpan(maxLineSpan) }) { GridHeader(notice, status) }
+            }
 
             if (!lnpGranted) {
                 item(span = { GridItemSpan(maxLineSpan) }) { LocalNetworkBanner(onAskLocalNetwork) }
@@ -369,18 +371,10 @@ internal fun ConnectGrid(
     }
 }
 
-/** The grid's masthead plus the two result banners: a confirmation, then the failure line. */
+/** The two result banners above the grid: a confirmation, then the failure line. */
 @Composable
 private fun GridHeader(notice: String?, status: String?) {
     Column(horizontalAlignment = Alignment.CenterHorizontally) {
-        Spacer(Modifier.height(8.dp))
-        Text("Punktfunk", style = MaterialTheme.typography.headlineLarge)
-        Text(
-            stringResource(R.string.hosts_tagline),
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        Spacer(Modifier.height(24.dp))
         notice?.let {
             Banner(it, error = false)
             Spacer(Modifier.height(16.dp))
