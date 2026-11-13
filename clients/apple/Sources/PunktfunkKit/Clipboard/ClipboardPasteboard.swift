@@ -17,10 +17,11 @@ typealias ClipboardFetch = (_ wire: String, _ completion: @escaping (Data?) -> V
 
 /// The system pasteboard, as much of it as the shared clipboard needs.
 ///
-/// Calls arrive from the drain thread, the serve queue, and the thread tearing the sync down;
-/// `ClipboardSync` serializes them with its own lock, so an adapter need not be internally
-/// synchronized. It must not, however, block on the **main** queue: that lock is also taken from
-/// main, and a `main.sync` under it would deadlock.
+/// Calls arrive from the drain thread, the serve queue and the thread starting or stopping the
+/// sync, and `ClipboardSync` does not serialize them: the system pasteboards take calls from any
+/// thread. The writes that touch an adapter's own state, `installLazy` and `clear`, come from the
+/// drain thread or after it has joined. No call may block on the **main** queue: main can be
+/// waiting in an AppKit paste for bytes only the drain thread delivers.
 protocol ClipboardPasteboard: AnyObject {
     /// Monotonic per pasteboard write, by anyone. Reading it must never count as reading the
     /// pasteboard's *contents* — on iOS that distinction is the difference between a silent poll
