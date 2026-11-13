@@ -30,10 +30,12 @@ use ::windows::Win32::System::Memory::{
 use ::windows::Win32::System::Ole::{CF_DIB, CF_UNICODETEXT};
 use ::windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetMessageW,
-    GetWindowLongPtrW, PostMessageW, PostQuitMessage, RegisterClassW, SetWindowLongPtrW,
-    TranslateMessage, GWLP_USERDATA, HWND_MESSAGE, MSG, WINDOW_EX_STYLE, WINDOW_STYLE, WM_APP,
-    WM_CLIPBOARDUPDATE, WM_DESTROY, WM_RENDERFORMAT, WNDCLASSW,
+    GetWindowLongPtrW, KillTimer, PostMessageW, PostQuitMessage, RegisterClassW, SetTimer,
+    SetWindowLongPtrW, TranslateMessage, GWLP_USERDATA, HWND_MESSAGE, MSG, WINDOW_EX_STYLE,
+    WINDOW_STYLE, WM_APP, WM_CLIPBOARDUPDATE, WM_DESTROY, WM_RENDERFORMAT, WM_TIMER, WNDCLASSW,
 };
+
+use punktfunk_core::clipboard::CLIP_FETCH_CAP;
 
 use super::winfmt;
 use super::{
@@ -47,6 +49,11 @@ const RENDER_TIMEOUT: Duration = Duration::from_secs(10);
 /// Clipboard managers hold the clipboard briefly; 20 tries × 5 ms before giving up.
 const OPEN_RETRIES: u32 = 20;
 const OPEN_RETRY_DELAY: Duration = Duration::from_millis(5);
+/// A client offer the clipboard was too busy to take is tried again this many times, every
+/// [`OFFER_RETRY_MS`], on [`OFFER_RETRY_TIMER`].
+const OFFER_RETRIES: u32 = 5;
+const OFFER_RETRY_MS: u32 = 200;
+const OFFER_RETRY_TIMER: usize = 1;
 
 /// `RegisterClassW` error 1410: class already exists. Expected on a 2nd session; we never unregister.
 const ERROR_CLASS_ALREADY_EXISTS: u32 = 1410;
@@ -80,6 +87,8 @@ struct WinClip {
     fmt_gif: u32,
     /// Delayed-render wires. Synthesized `CF_DIB` picks the richest image among them.
     offered_wires: RefCell<Vec<String>>,
+    /// Client offer waiting for the clipboard to free up, with its retries left.
+    pending_offer: RefCell<Option<(Vec<String>, u32)>>,
     own_hwnd: HWND,
 }
 
@@ -90,6 +99,8 @@ impl WinClip {
         if owner.0 == hwnd.0 {
             return;
         }
+        // A host copy made while the client's offer waited is the newer one.
+        *self.pending_offer.borrow_mut() = None;
         let mimes = self.available_wire_mimes();
         *self.current_wire.lock().unwrap() = mimes.clone();
         let _ = self.clip_tx.send(ClipEvent::Selection { mimes });
@@ -134,7 +145,7 @@ impl WinClip {
         }
         for c in cmds {
             match c {
-                Cmd::SetOffer(wire) => self.apply_offer(hwnd, &wire),
+                Cmd::SetOffer(wire) => self.apply_offer(hwnd, &wire, OFFER_RETRIES),
                 Cmd::Clear => self.clear(hwnd),
                 Cmd::Read { wire, resp } => {
                     let _ = resp.send(self.read(&wire));
@@ -152,14 +163,24 @@ impl WinClip {
         }
     }
 
-    fn apply_offer(&self, hwnd: HWND, wire: &[String]) {
+    /// Promise the offer's formats. A clipboard still held by another app after the open retries
+    /// parks the offer for `retries` more tries on [`OFFER_RETRY_TIMER`].
+    fn apply_offer(&self, hwnd: HWND, wire: &[String], retries: u32) {
+        *self.pending_offer.borrow_mut() = None;
         let fmts = self.formats_for_offer(wire);
         if fmts.is_empty() {
             self.clear(hwnd);
             return;
         }
         let Ok(_open) = open_clipboard_retry(hwnd) else {
-            tracing::debug!("clipboard: OpenClipboard for set_offer failed");
+            tracing::debug!(retries, "clipboard: OpenClipboard for set_offer failed");
+            if retries > 0 {
+                *self.pending_offer.borrow_mut() = Some((wire.to_vec(), retries - 1));
+                // SAFETY: our own live window; the timer posts WM_TIMER to this thread.
+                unsafe {
+                    SetTimer(Some(hwnd), OFFER_RETRY_TIMER, OFFER_RETRY_MS, None);
+                }
+            }
             return;
         };
         // SAFETY: the clipboard is open until `_open` drops; EmptyClipboard makes us the owner,
@@ -174,8 +195,19 @@ impl WinClip {
         *self.offered_wires.borrow_mut() = wire.to_vec();
     }
 
+    /// `WM_TIMER`: try the parked offer again.
+    fn retry_offer(&self, hwnd: HWND) {
+        // SAFETY: our own live window and timer id.
+        let _ = unsafe { KillTimer(Some(hwnd), OFFER_RETRY_TIMER) };
+        let pending = self.pending_offer.borrow_mut().take();
+        if let Some((wire, retries)) = pending {
+            self.apply_offer(hwnd, &wire, retries);
+        }
+    }
+
     /// Empty the clipboard only if we still own it.
     fn clear(&self, hwnd: HWND) {
+        *self.pending_offer.borrow_mut() = None;
         let had = {
             let mut o = self.offered.borrow_mut();
             let was = !o.is_empty();
@@ -215,27 +247,38 @@ impl WinClip {
         if unsafe { GetClipboardOwner() }.unwrap_or_default().0 == self.own_hwnd.0 {
             anyhow::bail!("clipboard currently held by our own offer");
         }
-        let _open = open_clipboard_retry(self.own_hwnd)?;
-        // SAFETY: the clipboard is open until `_open` drops. GetClipboardData hands back a
-        // clipboard-owned HGLOBAL (we must NOT free it); GlobalLock/Size/Unlock are balanced and we
-        // copy exactly GlobalSize bytes out before the lock is released.
-        let raw = unsafe {
-            let handle = GetClipboardData(fmt).context("GetClipboardData")?;
-            let hg = HGLOBAL(handle.0);
-            let p = GlobalLock(hg);
-            if p.is_null() {
-                anyhow::bail!("GlobalLock failed");
+        // Only the copy holds the clipboard open; the conversion runs after it closes.
+        let raw = {
+            let _open = open_clipboard_retry(self.own_hwnd)?;
+            // SAFETY: the clipboard is open until `_open` drops. GetClipboardData hands back a
+            // clipboard-owned HGLOBAL (we must NOT free it); GlobalLock/Size/Unlock are balanced and
+            // we copy exactly GlobalSize bytes out before the lock is released.
+            unsafe {
+                let handle = GetClipboardData(fmt).context("GetClipboardData")?;
+                let hg = HGLOBAL(handle.0);
+                let n = GlobalSize(hg);
+                // A bitmap is capped as the PNG it becomes: raw, a multi-monitor screenshot
+                // is over the cap.
+                if !via_dib {
+                    within_cap(n)?;
+                }
+                let p = GlobalLock(hg);
+                if p.is_null() {
+                    anyhow::bail!("GlobalLock failed");
+                }
+                let mut buf = vec![0u8; n];
+                std::ptr::copy_nonoverlapping(p as *const u8, buf.as_mut_ptr(), n);
+                let _ = GlobalUnlock(hg);
+                buf
             }
-            let n = GlobalSize(hg);
-            let mut buf = vec![0u8; n];
-            std::ptr::copy_nonoverlapping(p as *const u8, buf.as_mut_ptr(), n);
-            let _ = GlobalUnlock(hg);
-            buf
         };
-        if via_dib {
-            return winfmt::dib_to_png(&raw).context("CF_DIB -> PNG conversion failed");
-        }
-        Ok(convert_from_win(wire, &raw))
+        let out = if via_dib {
+            winfmt::dib_to_png(&raw).context("convert CF_DIB to PNG")?
+        } else {
+            convert_from_win(wire, raw)
+        };
+        within_cap(out.len())?;
+        Ok(out)
     }
 
     /// `WM_RENDERFORMAT`: block this thread (bounded) for client bytes, then `SetClipboardData`.
@@ -495,12 +538,21 @@ fn open_clipboard_retry(hwnd: HWND) -> anyhow::Result<ClipboardGuard> {
     anyhow::bail!("open the clipboard: still held after {OPEN_RETRIES} tries")
 }
 
-fn convert_from_win(wire: &str, raw: &[u8]) -> Vec<u8> {
+/// A selection over [`CLIP_FETCH_CAP`] is an error, as on the Linux backends, never a truncation.
+fn within_cap(len: usize) -> anyhow::Result<()> {
+    anyhow::ensure!(
+        len <= CLIP_FETCH_CAP,
+        "clipboard selection exceeds the {CLIP_FETCH_CAP}-byte transfer cap"
+    );
+    Ok(())
+}
+
+fn convert_from_win(wire: &str, raw: Vec<u8>) -> Vec<u8> {
     match wire {
-        WIRE_TEXT => winfmt::text_from_utf16(raw),
-        WIRE_HTML => winfmt::html_from_cf(raw),
-        WIRE_RTF => winfmt::rtf_from_cf(raw),
-        _ => raw.to_vec(), // PNG and unknown: identity
+        WIRE_TEXT => winfmt::text_from_utf16(&raw),
+        WIRE_HTML => winfmt::html_from_cf(&raw),
+        WIRE_RTF => winfmt::rtf_from_cf(&raw),
+        _ => raw, // PNG and unknown: identity
     }
 }
 
@@ -580,6 +632,7 @@ fn pump_thread(
         cmd_rx: RefCell::new(cmd_rx),
         offered: RefCell::new(Vec::new()),
         offered_wires: RefCell::new(Vec::new()),
+        pending_offer: RefCell::new(None),
         fmt_html,
         fmt_rtf,
         fmt_png,
@@ -660,6 +713,10 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM)
             st.drain_commands(hwnd);
             LRESULT(0)
         }
+        WM_TIMER if wparam.0 == OFFER_RETRY_TIMER => {
+            st.retry_offer(hwnd);
+            LRESULT(0)
+        }
         WM_DESTROY => {
             // SAFETY: ends the GetMessageW pump by posting WM_QUIT to this thread's queue.
             unsafe {
@@ -681,5 +738,11 @@ mod tests {
     #[test]
     fn a_block_the_clipboard_refuses_is_an_error() {
         assert!(publish(CF_UNICODETEXT.0 as u32, b"x").is_err());
+    }
+
+    #[test]
+    fn a_selection_over_the_cap_is_an_error() {
+        assert!(within_cap(CLIP_FETCH_CAP).is_ok());
+        assert!(within_cap(CLIP_FETCH_CAP + 1).is_err());
     }
 }
