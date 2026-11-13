@@ -347,6 +347,12 @@ public enum LibraryError: LocalizedError {
     }
 }
 
+/// The host's own sentence for a request it refused.
+struct HostRefused: LocalizedError {
+    let reason: String
+    var errorDescription: String? { reason }
+}
+
 /// One game the host currently has launched, from `/api/v1/status`.
 ///
 /// A deliberately partial mirror of the host's `ActiveGame`: only the fields a client can act on.
@@ -906,8 +912,13 @@ public enum LibraryClient {
         let response = try await send(
             "/api/v1/actions/\(escaped)", to: target, method: "POST",
             body: (Data(), "application/json"))
+        try expectAccepted(response)
+    }
+
+    /// ``expectOK(_:_:)`` for an action: a refusal the host words throws its sentence.
+    static func expectAccepted(_ response: HTTPResponse) throws {
         if ![200, 202, 401, 403].contains(response.status), let why = hostReason(response.body) {
-            throw LibraryError.unreachable(why)
+            throw HostRefused(reason: why)
         }
         try expectOK(response, [200, 202])
     }

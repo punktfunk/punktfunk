@@ -465,12 +465,6 @@ public struct HostScreenChoice: Hashable, Sendable {
     }
 }
 
-/// The host's own sentence for a refused pick.
-struct ScreenPickRefused: LocalizedError {
-    let reason: String
-    var errorDescription: String? { reason }
-}
-
 extension LibraryClient {
     /// `GET /api/v1/display/targets`. nil on any miss, like ``actions(_:)`` is empty: a host
     /// without the route has no Screen section.
@@ -491,7 +485,7 @@ extension LibraryClient {
             "/api/v1/display/clients/\(MgmtTransport.hex(device))", to: target, method: "PUT",
             body: (body, "application/json"))
         if ![200, 204, 401].contains(response.status), let why = hostReason(response.body) {
-            throw ScreenPickRefused(reason: why)
+            throw HostRefused(reason: why)
         }
         try expectOK(response, [200, 204])
     }
