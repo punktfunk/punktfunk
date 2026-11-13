@@ -1439,7 +1439,7 @@ mod pick_slot_tests {
         pick_slot(held.iter().copied(), kept, reference, wire)
     }
 
-    /// An H.264 1080p60 ring of three slots, no acks: wire 0 is the candidate, rotates to the
+    /// A ring of three slots, no acks: wire 0 is the candidate, rotates to the
     /// pin at wire 8, and wire 10 finds the reference, the pin and the candidate in all three.
     #[test]
     fn three_slots_give_up_the_candidate_and_keep_the_pin() {
