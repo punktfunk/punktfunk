@@ -71,7 +71,7 @@
       ]
     },
     {
-      "name": "a no-output streak inside the window is re-asked by its own backstop",
+      "name": "a no-output streak inside the window re-asks 500 ms after the ask that shut it",
       "steps": [
         {"at_ms": 0, "ev": "arrived", "index": 100, "want": {}},
         {"at_ms": 0, "ev": "arrived", "index": 102, "want": {"gap": 1, "hold": true, "ask": [101, 101]}},
@@ -79,8 +79,8 @@
         {"at_ms": 20, "ev": "no_output", "want": {"hold": true}},
         {"at_ms": 30, "ev": "no_output", "want": {"hold": true}},
         {"at_ms": 120, "ev": "tick", "frames_dropped": 1, "want": {"hold": true}},
-        {"at_ms": 529, "ev": "tick", "frames_dropped": 1, "want": {"hold": true}},
-        {"at_ms": 530, "ev": "tick", "frames_dropped": 1, "want": {"hold": true, "ask": "keyframe"}}
+        {"at_ms": 499, "ev": "tick", "frames_dropped": 1, "want": {"hold": true}},
+        {"at_ms": 500, "ev": "tick", "frames_dropped": 1, "want": {"hold": true, "ask": "keyframe"}}
       ]
     },
     {

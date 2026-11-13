@@ -5,7 +5,9 @@
 //! (`FeedbackOut`).
 
 use crate::quic::v2::dgram::Feedback;
-use crate::reanchor::{AnchorEvidence, GateVerdict, LocalRecovery, ReanchorGate};
+use crate::reanchor::{
+    AnchorEvidence, GateVerdict, LocalRecovery, ReanchorGate, REANCHOR_FREEZE_MAX,
+};
 use std::time::{Duration, Instant};
 
 /// One ask per window so a burst of gaps cannot storm the control stream. A lift ends the
@@ -485,9 +487,13 @@ impl RecoveryDriver {
         (forgive, want_keyframe)
     }
 
-    /// A keyframe through the one window. Shut: dropped, and the backstop re-asks.
+    /// A keyframe through the one window. Shut: held back, and the gate re-asks
+    /// [`REANCHOR_FREEZE_MAX`] after the ask that shut it, should the freeze still hold.
     fn keyframe(&mut self, now: Instant) -> RecoveryAsk {
         if !self.rfi.window_open(now) {
+            if let (Some(g), Some(last)) = (&mut self.gate, self.rfi.last_req) {
+                g.hasten(last + REANCHOR_FREEZE_MAX);
+            }
             return RecoveryAsk::None;
         }
         self.rfi.keyframe_sent(now);
@@ -1484,6 +1490,30 @@ mod driver_tests {
             replay(&mut engaged(), &repaired, 2_000),
             [(0, RecoveryAsk::Rfi(101, 101))]
         );
+    }
+
+    /// The decoder asks for an IDR 5 ms after an RFI the anchor does not lift: the ask goes
+    /// 500 ms after the RFI, not after itself. A no-output streak is the same ask; its re-arm
+    /// does not push the wait.
+    #[test]
+    fn a_held_keyframe_ask_goes_500_ms_after_the_rfi() {
+        let need = [(0, au(104)), (0, au(106)), (5, E::NeedKeyframe)];
+        let silent = [
+            (0, au(104)),
+            (0, au(106)),
+            (10, E::NoOutput),
+            (18, E::NoOutput),
+            (26, E::NoOutput),
+        ];
+        for script in [&need[..], &silent[..]] {
+            assert_eq!(
+                replay(&mut engaged(), script, 999),
+                [
+                    (0, RecoveryAsk::Rfi(105, 105)),
+                    (500, RecoveryAsk::Keyframe)
+                ]
+            );
+        }
     }
 
     /// A starved decoder's ask and the backstop's re-ask of its freeze are counted apart; a

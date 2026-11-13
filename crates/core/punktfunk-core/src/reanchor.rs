@@ -227,6 +227,14 @@ impl ReanchorGate {
         }
     }
 
+    /// The client held a keyframe ask back: re-ask by `at` instead, unless a wave mark since
+    /// the arm says the picture is healing.
+    pub fn hasten(&mut self, at: Instant) {
+        if self.awaiting && self.marks == 0 {
+            self.deadline = Some(self.deadline.map_or(at, |d| d.min(at)));
+        }
+    }
+
     /// Monotonic arm count. Every arm site moves it, including [`Self::on_no_output`] and
     /// [`Self::poll`]; the overdue backstop re-asks without re-arming and must not move it
     /// (re-stamping would discard a heal already in flight).
@@ -992,6 +1000,26 @@ mod tests {
         assert_eq!(g.on_decoded(POINT, false, t), GateVerdict::Hold);
         assert!(!g.poll(0, t + Duration::from_millis(1)));
         assert!(g.is_holding());
+    }
+
+    #[test]
+    fn a_held_ask_brings_the_reask_forward_unless_a_wave_heals() {
+        let ms = Duration::from_millis;
+        let start = t0();
+        let mut g = ReanchorGate::new(0);
+        g.arm(start);
+        g.hasten(start + ms(600));
+        g.hasten(start + ms(100));
+        assert!(!g.poll(0, start + ms(99)));
+        assert!(g.poll(0, start + ms(100)));
+        let mut g = ReanchorGate::new(0);
+        g.arm(start);
+        g.on_decoded(POINT, false, start + ms(10));
+        g.hasten(start + ms(100));
+        assert!(
+            !g.poll(0, start + ms(100)),
+            "a wave mark keeps the backstop"
+        );
     }
 
     use AnchorEvidence::{ReferencesClean, ReferencesDamaged, Unavailable};
