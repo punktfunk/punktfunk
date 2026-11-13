@@ -172,7 +172,10 @@ mod tests {
         _: *const vk::SemaphoreWaitInfo<'_>,
         _: u64,
     ) -> vk::Result {
-        LOG.lock().unwrap().push("wait".into());
+        // No unwrap here: a panic in an extern fn aborts. A poisoned log fails the assert below.
+        if let Ok(mut log) = LOG.lock() {
+            log.push("wait".into());
+        }
         vk::Result::SUCCESS
     }
 
