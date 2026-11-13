@@ -245,8 +245,8 @@ public final class SessionAudio: @unchecked Sendable {
     private var wireFrameMS: Int { max(1, (wireFrameUs + 999) / 1000) }
 
     /// IO quantum asked of `AVAudioSession` on iOS/tvOS, every session, mic on or off. Two wire
-    /// packets: the playback ring's floor is one quantum plus one packet, so this sets that floor
-    /// at 15 ms. Best-effort — `activateAudioSession` logs the granted value.
+    /// packets: the ring aims for at least one quantum plus one packet, which this keeps under
+    /// `JitterPolicy.baseTargetMS`. Best-effort — `activateAudioSession` logs the granted value.
     static let preferredIOBufferSeconds: Double = 0.010
 
     #if !os(macOS)
