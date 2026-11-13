@@ -367,8 +367,9 @@ impl Shell {
                         }
                         tracing::warn!(error = %format!("{e:#}"),
                             "overlay frame failed — disabling the console UI");
-                        // The overlay's drop frees images the last present may still sample.
-                        self.presenter.wait_idle();
+                        // The overlay's drop frees images its submits and the last present may
+                        // still use. The pump decodes on: no device-wide idle.
+                        self.presenter.quiesce_queue();
                         self.overlay = None;
                         self.overlay_frame = None;
                     }
