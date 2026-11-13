@@ -81,9 +81,6 @@ public final class FrameStore<Frame>: @unchecked Sendable {
     private let keepsTwo: Bool
     private var frames: [Frame] = []
     private var prerolled = false
-    /// Submissions since the last `drainSubmitted`. The pf-present line drains it unread; its
-    /// `decoded=` counts decoder output.
-    private var submitted = 0
     /// Every submission this session, for the render thread's own rate measure.
     private var total = 0
     /// Smoothness accounting for the pf-present line: frames dropped by a full buffer, and
@@ -122,7 +119,6 @@ public final class FrameStore<Frame>: @unchecked Sendable {
         } else {
             frames = [f] // newest wins; the replaced frame is the intended drop point
         }
-        submitted += 1
         total += 1
         lock.unlock()
     }
@@ -131,14 +127,6 @@ public final class FrameStore<Frame>: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         return total
-    }
-
-    func drainSubmitted() -> Int {
-        lock.lock()
-        defer { lock.unlock() }
-        let n = submitted
-        submitted = 0
-        return n
     }
 
     /// Take-and-reset the smoothness counters (the pf-present `qDrop`/`qDry` stats).

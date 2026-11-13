@@ -119,7 +119,7 @@ final class PresentPacingTests: XCTestCase {
         store.submit(8) // a fresh decode beats the putBack
         store.putBack(7)
         XCTAssertEqual(store.take(), 8)
-        XCTAssertEqual(store.drainSubmitted(), 3)
+        XCTAssertEqual(store.submittedTotal(), 3)
         let smoothing = store.drainSmoothing()
         XCTAssertEqual(smoothing.overflowDrops, 0)
         XCTAssertEqual(smoothing.underflows, 0)

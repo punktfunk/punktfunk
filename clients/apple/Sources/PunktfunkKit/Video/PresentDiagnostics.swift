@@ -465,7 +465,6 @@ final class PresentDebugStats: @unchecked Sendable {
         let now = CACurrentMediaTime()
         guard now - last >= 1 else { lock.unlock(); return }
         last = now
-        _ = ring.drainSubmitted() // the window's store submits; `decoded=` counts decoder output
         let smoothing = ring.drainSmoothing()
         let deltas = glassDeltasMs.sorted()
         let p50 = deltas.isEmpty ? 0 : deltas[deltas.count / 2]
