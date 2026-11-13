@@ -23,7 +23,8 @@ use pf_console_ui::bridge::{
     self, CreateOptions, EntryJson, GamesPush, MenuCode, PadsJson, PhasePush, PresetJson,
 };
 use pf_console_ui::{
-    HostRow, Insets, PairStatus, Platform, ProfilesAnswer, SpeedPhase, Stale, WakeStatus,
+    HiddenAnswer, HideAnswer, HostRow, Insets, PairStatus, Platform, ProfilesAnswer, SpeedPhase,
+    Stale, WakeStatus,
 };
 use punktfunk_core::quic::v2::msg::UNLOCK_PASSWORD;
 use std::time::Duration;
@@ -527,6 +528,40 @@ pub extern "system" fn Java_io_unom_punktfunk_kit_NativeBridge_nativeConsoleSetP
     })
     .resolve::<LogErrorAndDefault>()
 }
+
+/// `NativeBridge.nativeConsoleSetHiddenList(handle, fpHex, profile, json)` — the answer to
+/// `ConsoleCmd::FetchHidden` for `profile` on the host pinned to `fpHex`: `{"Listed": [games]}`
+/// or `{"Failed": "why"}`. The posters follow through `nativeConsoleLibraryArt`.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_io_unom_punktfunk_kit_NativeBridge_nativeConsoleSetHiddenList(
+    mut env: EnvUnowned,
+    _this: JObject,
+    handle: jlong,
+    fp_hex: JString,
+    profile: JString,
+    json: JString,
+) {
+    env.with_env(|env| -> jni::errors::Result<()> {
+        if let (Some(h), Ok(fp), Ok(p), Some(a)) = (
+            CONSOLES.get(handle),
+            fp_hex.try_to_string(env),
+            profile.try_to_string(env),
+            json_arg::<HiddenAnswer>(env, &json),
+        ) {
+            h.handles.console.set_hidden_list(&fp, &p, a);
+        }
+        Ok(())
+    })
+    .resolve::<LogErrorAndDefault>()
+}
+
+json_pusher!(
+/// `NativeBridge.nativeConsoleSetHideAnswer(handle, json)` — what a `ConsoleCmd::SetHidden` came
+/// to, echoing its host, profile, title and `hidden`. The console shows the notice.
+    Java_io_unom_punktfunk_kit_NativeBridge_nativeConsoleSetHideAnswer,
+    HideAnswer,
+    |h, a| h.handles.console.set_hide_answer(a)
+);
 
 /// `NativeBridge.nativeConsoleNotice(handle, text)` — a one-shot toast from a service worker.
 #[unsafe(no_mangle)]
