@@ -37,10 +37,9 @@ func audioMsToSamples(rateHz: Int, channels: Int, ms: Int) -> Int {
     ms * audioInterleavedPerSec(rateHz: rateHz, channels: channels) / 1_000
 }
 
-/// Interleaved samples back to whole milliseconds — the exact inverse of [`audioMsToSamples`], and
-/// the reason `depthMS(target)` round-trips to `targetMS` at every rate on the ladder. §4.1 names
-/// that round trip as the tell that this rework is incomplete, so it is also the shape of the test
-/// that guards it (`testTheShippingRateLadderRoundTripsMsToSamplesExactly`).
+/// Interleaved samples back to whole milliseconds, the inverse of [`audioMsToSamples`]: the ring's
+/// target reads back in the ms it was set in at every rate on the ladder
+/// (`testTheShippingRateLadderRoundTripsMsToSamplesExactly`).
 ///
 /// `samples` arrives from a caller and nothing bounds it — `setSyncTarget(Int.max / 2)` is a real
 /// call this file's own tests make — and `samples * 1_000` on that would TRAP, taking the process
