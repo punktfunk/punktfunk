@@ -45,10 +45,9 @@ enum RumbleTuning {
 
     /// Wire amplitude (0...0xFFFF) → CoreHaptics intensity (0...1).
     static func amplitude(_ wire: UInt16) -> Float { Float(wire) / 65535 }
-    /// Wire amplitude → DualSense HID motor byte. A nonzero command never collapses to silence:
-    /// the top byte of anything below 0x0100 is 0, so a weak-but-real rumble used to render as
-    /// nothing at all on this path. Floored at 1 — imperceptibly light, but moving. (Android's
-    /// `toAmplitude` has always done this; this was the odd one out.)
+    /// Wire amplitude → DualSense HID motor byte, floored at 1 for a nonzero command: the top
+    /// byte of a level below 0x0100 is 0, and a weak rumble must still move. Android's
+    /// `toAmplitude` floors the same way.
     static func hidByte(_ wire: UInt16) -> UInt8 {
         let b = UInt8(wire >> 8)
         return wire != 0 && b == 0 ? 1 : b
@@ -69,38 +68,24 @@ enum RumbleTuning {
 }
 
 /// Rumble → the active physical controller (CoreHaptics; a DualSense on macOS goes over raw HID
-/// instead, see `DualSenseHID`), built around one principle: **rumble is idempotent state on a
-/// lossy channel, and the actuator's divergence from that state must be bounded** — not
-/// best-effort. The previous renderer drove infinite-duration players torn down and rebuilt per
-/// wire update; one asynchronous `stop` dropped inside CoreHaptics left an unstoppable player
-/// buzzing with its handle discarded, which no later (0,0) could reach — the "walked into the
-/// menu and the rumble never stopped" bug.
-///
-/// The invariants that bound divergence now:
+/// instead, see `DualSenseHID`). Rumble is idempotent state on a lossy channel, and the
+/// actuator's divergence from that state is bounded:
 ///  1. **No infinite events.** A motor plays finite `segmentSeconds` segments; while the level
-///     holds, the successor is scheduled ON the engine timeline to start exactly when the
-///     current segment expires (seamless — no stop/start race in steady state). A leaked player
-///     therefore self-silences in ≤ `segmentSeconds`.
+///     holds, the successor is scheduled on the engine timeline to start exactly when the
+///     current segment expires. A leaked player therefore self-silences in ≤ `segmentSeconds`.
 ///  2. **Idempotent targets.** An update equal to the current target (the host re-sends rumble
-///     state every 500 ms as its loss heal) is a liveness stamp, never a player rebuild.
+///     state every 500 ms) is a liveness stamp, never a player rebuild.
 ///  3. **Zero is immediate, ramps are throttled.** (0,0) stops players the moment it lands;
-///     nonzero→nonzero changes rebuild at most every `minRebakeSeconds` per motor (the ticker
-///     lands the newest value once the window opens).
-///  4. **Escalating stop.** A throwing `player.stop` means the engine's state is unknown — the
-///     whole engine is stopped (silencing every player it hosts) and lazily rebuilt behind the
-///     exponential backoff.
-///  5. **No staleness watchdog here.** There was one, keyed off a `Policy` type and a
-///     `sessionStaleSeconds`; both are gone. Every liveness decision — lease expiry, legacy-host
-///     staleness, session close — now belongs to punktfunk-core's shared policy engine
-///     (`client/rumble.rs`), which emits explicit zero commands, so this renderer applies what it
-///     is told and never decides on its own when a level should end.
+///     nonzero→nonzero changes rebuild at most every `minRebakeSeconds` per motor.
+///  4. **Escalating stop.** A throwing `player.stop` stops the whole engine, which is rebuilt
+///     lazily behind the exponential backoff.
+///  5. **No deadlines here.** punktfunk-core's policy engine (`rumble.rs`) owns lease expiry,
+///     staleness and session close, and ends each level with an explicit zero command.
 ///
 /// Engines are created lazily on the first nonzero amplitude and torn down on retarget;
-/// failures (pads without haptics, engine resets) downgrade to silence — rumble is best-effort
-/// by design, but *staying silent* when told to stop is not.
+/// failures downgrade to silence, but staying silent when told to stop is not best-effort.
 ///
-/// `@unchecked Sendable` is sound because every property is read and written only inside
-/// `queue` closures — the serial queue is the synchronization.
+/// `@unchecked Sendable`: every property is read and written only inside `queue` closures.
 final class RumbleRenderer: @unchecked Sendable {
     /// Which physical actuator this renderer drives: the forwarded controller's haptics engine
     /// (the default), or THIS device's own Taptic Engine (`CHHapticEngine()`) — the opt-in
@@ -297,16 +282,10 @@ final class RumbleRenderer: @unchecked Sendable {
             let mixed = RumbleTuning.combined(low: target.low, high: target.high)
             ok = reconcile(&low, to: RumbleTuning.amplitude(mixed))
         }
-        // Impulse triggers: rendered ONLY where the hardware has the actuators, never folded into
-        // the handles. `reconcile` on a nil slot is a no-op returning true, so a pad without them
-        // silently drops the levels — which is the correct degrade and the common case.
-        //
-        // Their outcome is deliberately kept OUT of `ok`: a trigger engine erroring must not tear
-        // down the handle engines (which are what the pad's rumble mostly is) nor flip
-        // `preferCombined`, which is a statement about the handle split and nothing else. Nothing
-        // is orphaned by that — a failed reconcile leaves the slot's Motor in place, so the next
-        // tick simply retries it, and an engine that is genuinely dead fires its
-        // stopped/reset handler, which tears down all four slots for a lazy rebuild.
+        // Impulse triggers render only on their own actuators (a nil slot drops the level), and
+        // stay out of `ok`: a trigger engine error must not tear down the handles or flip
+        // `preferCombined`. A failed slot keeps its Motor for the next tick; a dead engine's
+        // stopped/reset handler tears all four down.
         _ = reconcile(&leftTrigger, to: RumbleTuning.amplitude(target.leftTrigger))
         _ = reconcile(&rightTrigger, to: RumbleTuning.amplitude(target.rightTrigger))
         if !ok {
@@ -497,14 +476,9 @@ final class RumbleRenderer: @unchecked Sendable {
         if split {
             low = makeMotor(haptics, .leftHandle, sharpness: RumbleTuning.sharpnessLow)
             high = makeMotor(haptics, .rightHandle, sharpness: RumbleTuning.sharpnessHigh)
-            // HALF a split is worse than none, and it used to pass silently: only the all-nil case
-            // below counts as failure, so one surviving handle left `ok` true and `reportHealth(nil)`
-            // announced HEALTHY. What actually rendered was wrong in a direction that depends on
-            // which handle died — lose `high` and `render` falls to the combined branch (selected
-            // purely by `high != nil`), playing max(low, high) on the LEFT handle at the combined
-            // sharpness; lose `low` and the split branch's reconcile no-ops on the nil slot, so the
-            // heavy motor is discarded outright. Tear the survivor down and take the combined path,
-            // which at least renders both motors somewhere.
+            // Half a split renders wrong (no `high` plays the mix on the left handle, no `low`
+            // drops the heavy motor) yet reads healthy: tear the survivor down and fall to the
+            // combined engine below.
             if low == nil || high == nil {
                 log.warning("rumble: only one split-handle engine came up — falling back to combined")
                 teardown() // disarms handlers, stops the survivor's players + engine, nils both
@@ -527,15 +501,9 @@ final class RumbleRenderer: @unchecked Sendable {
             // one of them).
             return
         }
-        // Impulse-trigger motors, built last and best-effort. Independent of the handle split —
-        // the localities are separate and a pad can offer either, both or neither — and NOT part
-        // of the failure test above: nil here is the ordinary state of every pad that is not an
-        // Xbox One/Series/Elite, so it must not read as "engine setup failed", back off the handle
-        // engines, or produce a log line on a path that runs per controller attach.
-        //
-        // Whether a given pad + OS pair actually reports these localities is UNVERIFIED on glass.
-        // The degrade needs no code: `createEngine(withLocality:)` returns nil, the slots stay nil,
-        // and `reconcile` no-ops on them.
+        // Impulse-trigger motors, best-effort and outside the failure test above: nil is the
+        // normal state of every pad but an Xbox One/Series/Elite, so it never backs off the
+        // handles or logs. A locality the pad lacks leaves the slot nil and `reconcile` no-ops.
         if localities.contains(.leftTrigger) {
             leftTrigger = makeMotor(haptics, .leftTrigger, sharpness: RumbleTuning.sharpnessHigh)
         }
