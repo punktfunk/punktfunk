@@ -223,16 +223,14 @@ public final class StreamViewController: StreamViewControllerBase {
     private weak var fittedScene: UIWindowScene?
     #endif
 
-    /// Whether the scene's pointer is locked right now; nil with no scene yet, and always on
-    /// tvOS. Only while this is true does GCMouse deliver relative deltas; otherwise the
-    /// absolute pointer path carries the mouse.
+    #if os(iOS) || os(visionOS)
+    /// Whether the scene's pointer is locked right now; nil with no scene yet. Only while this is
+    /// true does GCMouse deliver relative deltas; otherwise the absolute pointer path carries the
+    /// mouse.
     private func pointerLockEngaged() -> Bool? {
-        #if os(iOS) || os(visionOS)
-        return view.window?.windowScene?.pointerLockState?.isLocked
-        #else
-        return nil
-        #endif
+        view.window?.windowScene?.pointerLockState?.isLocked
     }
+    #endif
 
     var onCaptureChange: ((Bool) -> Void)?
     /// A keyboard shortcut that fired (see `StreamView.init`).
