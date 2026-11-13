@@ -44,11 +44,8 @@ public final class SiriRemotePointer {
     /// When Back/Menu went down; a release after `disconnectHold` fires the exit.
     private var menuDownAt: Date?
     /// Counts a held Play/Pause down to `statsHold`; nil when the button is up or already
-    /// resolved. See `playPauseChanged`.
+    /// resolved. Only a release that finds it running right-clicks. See `playPauseChanged`.
     private var playPauseTimer: Timer?
-    /// The held Play/Pause has already been spent on a stats cycle, so its release must not also
-    /// right-click.
-    private var statsHoldFired = false
     /// Trails a delivered right-click tap by `tapPress` to release it — see `deliverRightClick`.
     private var rightReleaseTimer: Timer?
 
@@ -290,7 +287,6 @@ public final class SiriRemotePointer {
             return
         }
         if pressed {
-            statsHoldFired = false
             let timer = Timer(timeInterval: Self.statsHold, repeats: false) { [weak self] _ in
                 MainActor.assumeIsolated { self?.statsHoldElapsed() }
             }
@@ -299,13 +295,11 @@ public final class SiriRemotePointer {
             playPauseTimer = timer
             return
         }
-        playPauseTimer?.invalidate()
+        // No timer: the hold spent this press on a cycle, or it went down with the ring up, or
+        // a reset dropped it. Its release clicks nothing.
+        guard let timer = playPauseTimer else { return }
+        timer.invalidate()
         playPauseTimer = nil
-        // The hold already spent this press on a cycle — its release clicks nothing.
-        guard !statsHoldFired else {
-            statsHoldFired = false
-            return
-        }
         deliverRightClick()
     }
 
@@ -313,7 +307,6 @@ public final class SiriRemotePointer {
     /// The same cycle as ⌃⌥⇧S, the three-finger tap and the controller's Select + X.
     private func statsHoldElapsed() {
         playPauseTimer = nil
-        statsHoldFired = true
         StatsVerbosity.requestCycle(for: connection)
     }
 
@@ -347,7 +340,6 @@ public final class SiriRemotePointer {
         playPauseTimer = nil
         rightReleaseTimer?.invalidate()
         rightReleaseTimer = nil
-        statsHoldFired = false
     }
 
     private func menuChanged(pressed: Bool) {
