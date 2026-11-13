@@ -795,10 +795,13 @@ const RESEND_BYTES: usize = 4 << 20;
 
 /// The plaintext of the last few frames' packets, as the session staged them
 /// ([`punktfunk_core::session::Session::tap_plaintext`]), for a client that names the shards
-/// one of them lacks. Buffers are reused frame to frame.
+/// one of them lacks. The ring keeps the tap's own buffers and hands the tap those of the frame
+/// it overwrites, so a packet is never copied twice. At most three frames' buffers exist.
 #[derive(Default)]
 pub(super) struct ResendRing {
     frames: std::collections::VecDeque<RingFrame>,
+    /// Frames shed over [`RESEND_BYTES`], empty, their buffers kept for [`Self::begin`].
+    shed: Vec<RingFrame>,
     bytes: usize,
 }
 
@@ -840,23 +843,28 @@ fn place(p: &[u8], index: u32) -> Option<Place> {
 }
 
 impl ResendRing {
-    /// Frame `index` starts; its packets follow through [`Self::note`].
+    /// Frame `index` starts in the oldest frame's buffers, or a shed frame's; its packets
+    /// follow through [`Self::note`].
     pub(super) fn begin(&mut self, index: u32) {
         let mut f = if self.frames.len() >= RESEND_FRAMES {
-            self.frames.pop_front().unwrap_or_default()
+            self.frames.pop_front()
         } else {
-            RingFrame::default()
-        };
+            self.shed.pop()
+        }
+        .unwrap_or_default();
         self.bytes -= f.bytes();
         (f.index, f.sent, f.used) = (index, Some(std::time::Instant::now()), 0);
         self.frames.push_back(f);
     }
 
-    /// A copy of one packet the current frame staged.
-    pub(super) fn note(&mut self, plaintext: &[u8]) {
+    /// One packet the current frame staged: the ring keeps `plaintext`'s buffer and leaves
+    /// one it no longer needs in its place.
+    pub(super) fn note(&mut self, plaintext: &mut Vec<u8>) {
         while self.bytes > RESEND_BYTES && self.frames.len() > 1 {
-            let old = self.frames.pop_front().expect("more than one");
+            let mut old = self.frames.pop_front().expect("more than one");
             self.bytes -= old.bytes();
+            old.used = 0;
+            self.shed.push(old);
         }
         let Some(f) = self.frames.back_mut() else {
             return;
@@ -865,10 +873,9 @@ impl ResendRing {
             f.wires.push(Vec::new());
         }
         let slot = &mut f.wires[f.used];
-        slot.clear();
-        slot.extend_from_slice(plaintext);
+        std::mem::swap(slot, plaintext);
         f.used += 1;
-        self.bytes += plaintext.len();
+        self.bytes += slot.len();
     }
 
     /// Frame `index`'s packets the client named, and how long ago the frame went out;
@@ -1539,7 +1546,7 @@ mod resend_ring_tests {
     fn frame(r: &mut ResendRing, index: u32, packets: usize, len: usize) {
         r.begin(index);
         for s in 0..packets as u16 {
-            r.note(&packet(index, 0, s, packets as u16, 0, len));
+            r.note(&mut packet(index, 0, s, packets as u16, 0, len));
         }
     }
 
@@ -1554,7 +1561,7 @@ mod resend_ring_tests {
         assert!(r.pick(1, &[0]).is_none());
         assert_eq!(r.pick(4, &[0, 1]).unwrap().0.len(), 2);
         frame(&mut r, 9, 80, 64 * 1024);
-        r.note(&packet(9, 0, 80, 81, 0, 10));
+        r.note(&mut packet(9, 0, 80, 81, 0, 10));
         assert!(
             r.pick(3, &[0]).is_none() && r.pick(4, &[0]).is_none(),
             "over the cap"
@@ -1574,15 +1581,138 @@ mod resend_ring_tests {
         r.begin(7);
         // Block 0: 4 data + 2 parity; block 1 at base 4: 3 data + 2 parity. 7 data in all.
         for s in 0..6 {
-            r.note(&packet(7, 0, s, 4, 2, 40));
+            r.note(&mut packet(7, 0, s, 4, 2, 40));
         }
         for s in 0..5 {
-            r.note(&packet(7, 4, s, 3, 2, 40));
+            r.note(&mut packet(7, 4, s, 3, 2, 40));
         }
-        r.note(&packet(8, 0, 2, 4, 2, 40));
+        r.note(&mut packet(8, 0, 2, 4, 2, 40));
         let (picked, _) = r.pick(7, &[2, 8, 9]).unwrap();
         let at = |p: &[u8]| (p[18], p[22]);
         let got: Vec<(u8, u8)> = picked.iter().map(|p| at(p)).collect();
         assert_eq!(got, [(0, 2), (0, 5), (4, 3)]);
+    }
+
+    /// A sealed host session that taps its plaintext, as the send loop runs it.
+    fn tapped_session() -> punktfunk_core::session::Session {
+        use punktfunk_core::config::{Config, FecConfig, FecScheme, Role};
+        use punktfunk_core::crypto::{MediaKeys, MediaSuite};
+        let cfg = Config {
+            role: Role::Host,
+            fec: FecConfig {
+                scheme: FecScheme::Gf16,
+                fec_percent: 10,
+                max_data_per_block: 64,
+            },
+            shard_payload: 1408,
+            max_frame_bytes: 8 << 20,
+            loopback_drop_period: 0,
+        };
+        let media = punktfunk_core::session::MediaV2 {
+            clock_origin_ns: 0,
+            keys: Some(MediaKeys::derive(&[7; 32], MediaSuite::Aes128Gcm)),
+            clock: None,
+            clear_placement: false,
+        };
+        let (tp, _) = punktfunk_core::transport::loopback_pair(0, 0);
+        let mut s = punktfunk_core::session::Session::new(cfg, media, Box::new(tp)).unwrap();
+        s.tap_plaintext(true);
+        s
+    }
+
+    /// A NACK resend from the ring, which keeps the tap's own buffers, matches one resealed
+    /// from copies taken as the frame was drained: a one-chunk frame, a pipelined one, and
+    /// after the ring wrapped and shed many times.
+    #[test]
+    fn a_resend_from_moved_buffers_matches_one_from_copies() {
+        let (mut host, mut twin) = (tapped_session(), tapped_session());
+        let mut pacer = crate::send_pacing::Pacer::new(Default::default(), None);
+        let (mut ring, mut copies) = (ResendRing::default(), ResendRing::default());
+        // 400 KB crosses the pipelined seal's 256 data shards; 4.6 MB sheds older frames.
+        let sizes = [8 << 10, 400 << 10, 30 << 10, 4600 << 10, 600 << 10];
+        let names: Vec<u16> = (0..400).step_by(37).collect();
+        let mut resent = 0;
+        for i in 0..30u32 {
+            let len = sizes[i as usize % sizes.len()];
+            let au: Vec<u8> = (0..len).map(|b| (b as u32 ^ (i * 97)) as u8).collect();
+            let r = Some(&mut ring);
+            super::super::paced_submit(&mut host, &au, i.into(), 0, i, &mut pacer, r).unwrap();
+            copies.begin(i);
+            twin.seal_frame_chunks_at(&au, i.into(), 0, i, &mut |_, _| Ok(()))
+                .unwrap();
+            twin.drain_plaintext(|p| copies.note(&mut p.clone()));
+            for f in i.saturating_sub(2)..=i {
+                let resend = |s: &mut punktfunk_core::session::Session, r: &ResendRing| {
+                    let (plain, _) = r.pick(f, &names)?;
+                    Some(
+                        plain
+                            .iter()
+                            .map(|p| s.reseal(p).unwrap())
+                            .collect::<Vec<_>>(),
+                    )
+                };
+                let ours = resend(&mut host, &ring);
+                assert_eq!(ours, resend(&mut twin, &copies), "frame {f} after {i}");
+                resent += ours.map_or(0, |p| p.len());
+            }
+        }
+        assert!(resent > 100, "{resent} packets resent");
+    }
+
+    /// Buffers circulate between the tap and the ring and are not allocated again: across
+    /// frames of mixed sizes, ones the byte cap sheds included, every buffer the ring holds
+    /// after the warm-up is one it held before, at the same capacity.
+    #[test]
+    fn the_tap_and_the_ring_reuse_their_buffers() {
+        let mut session = tapped_session();
+        let mut r = ResendRing::default();
+        // Four sizes against three frame slots, so each slot holds each size in turn.
+        let sizes = [100 << 10, 4600 << 10, 1 << 20, 20 << 10];
+        let mut warm = std::collections::HashSet::new();
+        for i in 0..40u32 {
+            let au = vec![0x5a; sizes[i as usize % sizes.len()]];
+            r.begin(i);
+            session
+                .seal_frame_chunks_at(&au, 0, 0, i, &mut |_, _| Ok(()))
+                .unwrap();
+            session.drain_plaintext(|p| r.note(p));
+            let held = r.frames.iter().chain(&r.shed).flat_map(|f| &f.wires);
+            let held = held.map(|w| (w.as_ptr(), w.capacity()));
+            if i < 24 {
+                warm.extend(held);
+            } else {
+                for b in held {
+                    assert!(
+                        warm.contains(&b),
+                        "frame {i}: a buffer new since the warm-up"
+                    );
+                }
+            }
+        }
+        assert!(r.frames.len() + r.shed.len() <= 3);
+    }
+
+    /// p50 µs to hand a frame's tapped plaintext to the ring, at 100 KB, 1 MB and 4 MB:
+    /// `cargo test -p punktfunk-host --release ring_note_cost -- --ignored --nocapture`.
+    #[test]
+    #[ignore = "prints a timing"]
+    fn ring_note_cost() {
+        let mut session = tapped_session();
+        let mut r = ResendRing::default();
+        for kb in [100, 1024, 4096] {
+            let frame = vec![0x5a; kb * 1024];
+            let mut ns = Vec::new();
+            for i in 0..200u32 {
+                r.begin(i);
+                session
+                    .seal_frame_chunks_at(&frame, 0, 0, i, &mut |_, _| Ok(()))
+                    .unwrap();
+                let t0 = std::time::Instant::now();
+                session.drain_plaintext(|p| r.note(p));
+                ns.push(t0.elapsed().as_nanos());
+            }
+            ns.sort_unstable();
+            println!("{kb} KB: note p50 {:.1} us", ns[ns.len() / 2] as f64 / 1e3);
+        }
     }
 }
