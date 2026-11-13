@@ -140,5 +140,24 @@ final class ConsoleABITests: XCTestCase {
             device: device, queue: queue))
         XCTAssertNil(bridge.takeUnlock())
     }
+
+    /// The last reference can drop off the main thread: a detached task keeps the model alive
+    /// across a hop. The handle is still freed on main, and nothing traps.
+    @MainActor
+    func testTheLastReleaseOffTheMainThreadFreesOnMain() async throws {
+        let device = try XCTUnwrap(device)
+        let queue = try XCTUnwrap(queue)
+        let built = await Task.detached { () -> Bool in
+            let bridge = await MainActor.run {
+                ConsoleBridge(
+                    options: #"{"device_name": "Test", "gpu_cache_bytes": 0, "settings": {}}"#,
+                    device: device, queue: queue)
+            }
+            return bridge != nil
+        }.value
+        XCTAssertTrue(built)
+        // The deinit's hop to main runs once this test yields it.
+        await Task.yield()
+    }
 }
 #endif
