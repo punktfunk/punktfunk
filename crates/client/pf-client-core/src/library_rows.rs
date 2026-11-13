@@ -27,6 +27,24 @@ pub enum Caption {
     PlayTime,
 }
 
+impl Caption {
+    /// The line under `g`'s title at `now_ms` (Unix): when it was last played, or for how
+    /// long. Nothing for a title never played here.
+    pub fn text(self, g: &GameEntry, now_ms: u64) -> Option<String> {
+        let s = g.stats.as_ref()?;
+        match self {
+            Caption::LastPlayed if s.last_played_unix_ms > 0 => Some(crate::library_layout::ago(
+                now_ms.saturating_sub(s.last_played_unix_ms),
+            )),
+            Caption::PlayTime if s.play_time_ms > 0 => Some(match s.play_time_ms / 3_600_000 {
+                0 => client::lib_played_under_hour().into(),
+                h => client::lib_played_hours_short(h),
+            }),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum Row {
     Heading(String),
@@ -390,6 +408,25 @@ mod tests {
         assert_eq!(tiles.len(), 3, "every hidden title, no desktop: {tiles:?}");
         assert!(!tiles.contains(&Tile::Desktop));
         assert!(hidden(&games, SortKey::HostOrder, "zzz", 2, "h".into()).is_empty());
+    }
+
+    #[test]
+    fn a_caption_says_when_or_how_long() {
+        let mut g = game("a", "A", 1_000);
+        g.stats.as_mut().unwrap().play_time_ms = 5 * 3_600_000;
+        let now = 1_000 + 2 * 3_600_000;
+        assert_eq!(
+            Caption::LastPlayed.text(&g, now).as_deref(),
+            Some("2 h ago")
+        );
+        assert_eq!(Caption::PlayTime.text(&g, now).as_deref(), Some("5 h"));
+        assert_eq!(Caption::None.text(&g, now), None);
+        g.stats.as_mut().unwrap().play_time_ms = 60_000;
+        assert_eq!(
+            Caption::PlayTime.text(&g, now).as_deref(),
+            Some("Under an hour")
+        );
+        assert_eq!(Caption::LastPlayed.text(&game("b", "B", 0), now), None);
     }
 
     #[test]

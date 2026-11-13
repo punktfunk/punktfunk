@@ -64,6 +64,35 @@ pub(crate) fn mark_button(mark: &str, name: &str) -> Button {
         .automation_name(name)
 }
 
+/// One group of a header flyout: a heading over radio buttons, the choice in force picked.
+/// `on_pick` runs for a pick that changes it.
+pub(crate) fn choice_group(
+    heading: &str,
+    labels: Vec<String>,
+    picked: Option<usize>,
+    on_pick: impl Fn(usize) + 'static,
+) -> View {
+    RadioButtons::new()
+        .header(text(heading).font_weight(FontWeight::SEMI_BOLD))
+        .items_source(labels)
+        .selected_index(picked)
+        .on_selection_changed(move |i: Option<usize>| {
+            if let Some(i) = i.filter(|i| Some(*i) != picked) {
+                on_pick(i);
+            }
+        })
+        .into()
+}
+
+/// A page header's Sort and group button over its [`choice_group`]s. A flyout, not a menu: a
+/// button's menu opens upward, over the title bar, and has no placement to set.
+pub(crate) fn arrange_flyout(name: &str, groups: Vec<View>) -> View {
+    let body = vstack(groups).spacing(16.0).min_width(200.0);
+    mark_button("arrow-up-down", name)
+        .flyout_with(Flyout::rich(body).placement(FlyoutPlacement::BottomEdgeAlignedRight))
+        .tooltip(name)
+}
+
 /// A rounded, bordered surface in the theme's card colours.
 pub(crate) fn card(child: impl Into<View>) -> Border {
     Border::new()
@@ -511,24 +540,33 @@ pub(crate) enum Pill {
     Info,
     Good,
     Neutral,
+    /// Over artwork: white on [`ART_SCRIM`].
+    OnArt,
 }
+
+/// The veil behind a badge drawn over artwork. A cover is any colour, so a theme fill gives
+/// no contrast there: white ink on this reads on all of them.
+pub(crate) const ART_SCRIM: Color = Color::argb(160, 0, 0, 0);
+pub(crate) const ART_INK: Color = Color::rgb(255, 255, 255);
 
 /// A small rounded status chip (paired/PIN/HDR/etc.) — subtle tinted fills with matching
 /// system foregrounds (the InfoBar palette), never solid accent (white-on-bright is unreadable).
 pub(crate) fn pill(pal: &Palette, label: &str, kind: Pill) -> Border {
+    let tokens = |bg, fg| (pal.get(bg), pal.get(fg));
     let (bg, fg) = match kind {
-        Pill::Info => (Token::SystemAttentionBackground, Token::SystemAttention),
-        Pill::Good => (Token::SystemSuccessBackground, Token::SystemSuccess),
-        Pill::Neutral => (Token::SubtleFill, Token::SecondaryText),
+        Pill::Info => tokens(Token::SystemAttentionBackground, Token::SystemAttention),
+        Pill::Good => tokens(Token::SystemSuccessBackground, Token::SystemSuccess),
+        Pill::Neutral => tokens(Token::SubtleFill, Token::SecondaryText),
+        Pill::OnArt => (ART_SCRIM.into(), ART_INK.into()),
     };
     Border::new()
         .content(
             text(label)
                 .font_size(11.0)
                 .font_weight(FontWeight::SEMI_BOLD)
-                .foreground(pal.get(fg)),
+                .foreground(fg),
         )
-        .background(pal.get(bg))
+        .background(bg)
         .border_brush(ThemeBrush::CardStroke)
         .border_thickness(uniform(1.0))
         .corner_radius(10.0)

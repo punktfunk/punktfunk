@@ -65,9 +65,17 @@ connects.
 ## Windows desktop client
 
 A WinUI 3 app for x64 and Arm64 with hardware decode (Vulkan Video or D3D11VA), HDR, WASAPI audio
-and SDL3 controllers. **Punktfunk Console** in the Start menu is the controller interface for a TV or
-HTPC, on x64; the Arm64 build has no console yet. **Controller interface** opens it when a
-controller connects.
+and SDL3 controllers. It adds:
+
+- **Hosts** and **Library** in a pane on the left, which narrows to icons in a small window. The
+  Library has a chip for each paired host and pinned preset, a search box in the title bar, and
+  sections you arrange with **Customize**.
+- A host page behind each card's ⓘ: name, address, port, Wake-on-LAN MAC, presets, pairing, power
+  and a network speed test.
+- Keys for the window: **Keyboard shortcuts** in the pane lists them.
+
+**Punktfunk Console** in the Start menu is the controller interface for a TV or HTPC, on x64; the
+Arm64 build has no console yet. **Controller interface** opens it when a controller connects.
 
 ## Android app (phone + Android TV)
 

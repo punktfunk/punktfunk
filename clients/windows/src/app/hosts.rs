@@ -445,11 +445,10 @@ impl<A: 'static> MenuRows<A> {
     }
 }
 
-/// The header's Sort and Group menu over the device's `host_sort` and `host_grouping` keys,
-/// the order the GTK shell and the console show. The one in force carries a check.
+/// The header's Sort and Group flyout over the device's `host_sort` and `host_grouping` keys,
+/// the order the GTK shell and the console show.
 fn arrange_button(props: &HostsProps, settings: &Settings) -> View {
-    let mut rows = MenuRows::<(&'static str, &'static str)>::new();
-    for (title, key, current, values) in [
+    let groups = [
         (
             client::hosts_sort(),
             host_order::HOST_SORT_KEY,
@@ -462,30 +461,31 @@ fn arrange_button(props: &HostsProps, settings: &Settings) -> View {
             host_order::grouping(settings),
             &host_order::HOST_GROUPINGS,
         ),
-    ] {
-        let mut leaves = Vec::new();
-        for (value, label) in values {
-            let label = if *value == current {
-                format!("{} \u{2713}", label())
-            } else {
-                label().to_string()
-            };
-            leaves.push(rows.row(label, (key, *value)));
-        }
-        rows.items
-            .push(MenuItem::submenu(format!("sub:{key}"), title, leaves));
-    }
-    let bump = props.svc.bump_hosts.clone();
-    let menu = rows.build(move |(key, value)| {
-        Settings::update(|s| {
-            s.extra.insert((*key).into(), (*value).into());
-            true
-        });
-        bump.call(());
-    });
-    mark_button("arrow-up-down", client::hosts_arrange())
-        .menu(menu)
-        .tooltip(client::hosts_arrange())
+    ]
+    .into_iter()
+    .map(|(title, key, current, values)| {
+        let bump = props.svc.bump_hosts.clone();
+        choice_group(
+            title,
+            values
+                .iter()
+                .map(|(_, label)| label().to_string())
+                .collect(),
+            values.iter().position(|(value, _)| *value == current),
+            move |i| {
+                let Some((value, _)) = values.get(i) else {
+                    return;
+                };
+                Settings::update(|s| {
+                    s.extra.insert(key.into(), (*value).into());
+                    true
+                });
+                bump.call(());
+            },
+        )
+    })
+    .collect();
+    arrange_flyout(client::hosts_arrange(), groups)
 }
 
 /// A preset as the cards read it.
@@ -511,6 +511,16 @@ impl CardPreset {
                 host_screen: p.overrides.host_screen,
             })
             .collect()
+    }
+
+    #[cfg(test)]
+    pub(super) fn named(id: &str, name: &str) -> CardPreset {
+        CardPreset {
+            id: id.into(),
+            name: name.into(),
+            accent: None,
+            host_screen: None,
+        }
     }
 
     /// This preset as core's Screen rows read it, when it pins the host screen.

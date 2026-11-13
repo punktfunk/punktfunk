@@ -49,7 +49,7 @@ mod unlock;
 
 use crate::trust::{KnownHosts, Settings};
 use hosts::HostRef;
-use pf_client_core::collate::SortKey;
+use pf_client_core::collate::{GroupBy, SortKey};
 use pf_client_core::discovery::{self, DiscoveredHost};
 use pf_client_core::gamepad::GamepadService;
 use pf_client_core::orchestrate::{self, HostTarget};
@@ -63,6 +63,7 @@ use speed::{SpeedProps, SpeedState};
 use std::collections::HashMap;
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 use windows_reactor::*;
 
 #[derive(Clone, Debug, PartialEq)]
@@ -144,9 +145,6 @@ pub(crate) fn saved<R, E: std::fmt::Display>(
 #[derive(Default)]
 pub(crate) struct Shared {
     pub(crate) target: Mutex<Target>,
-    /// The host whose library the Library shows, with the preset its titles launch with. Its
-    /// own slot: a connect from the host list moves `target`.
-    pub(crate) shelf: Mutex<Target>,
     /// Forces the app's single LAN browse to re-query — the hosts page's Refresh. Installed by
     /// the discovery effect below; `None` until then (and if the browse never started, in which
     /// case Refresh is simply inert rather than a second, competing browse).
@@ -239,15 +237,14 @@ pub(crate) struct Svc {
     /// The hosts page resets the speed test to `Running` before navigating; the probe worker
     /// completes it.
     pub(crate) set_speed: AsyncSetState<SpeedState>,
-    /// The hosts page starts a library fetch before navigating; the worker and the art
-    /// stream complete it.
-    pub(crate) set_library: AsyncSetState<library::LibraryState>,
     /// Home's destination.
     pub(crate) set_dest: AsyncSetState<Dest>,
     /// The host whose page is up; `None` is the host list.
     pub(crate) set_host_page: AsyncSetState<Option<HostRef>>,
     /// Bumped when a store write changes what the host pages show.
     pub(crate) bump_hosts: AsyncSetState<()>,
+    /// Shows the Library on the shelf with this key ([`library::shelf_key`]).
+    pub(crate) open_shelf: AsyncSetState<String>,
 }
 
 impl Svc {
@@ -297,6 +294,20 @@ pub(crate) enum Msg {
     EndGame(library::EndGameUi),
     Hide(library::HideEdit),
     LibrarySort(SortKey),
+    LibraryGroup(Option<GroupBy>),
+    LibrarySearch(String),
+    /// A pick among the shelf chips.
+    Shelf(String),
+    /// Show the Library on this shelf, from anywhere.
+    OpenShelf(String),
+    /// Ask the shelf's host again.
+    Reload,
+    /// A settings write changed what the Library shows: favorites, sections.
+    LibraryBump,
+    /// The title whose details sheet is up.
+    Details(Option<String>),
+    /// Put the caret in the Library's search box.
+    FocusSearch,
     Dest(Dest),
     HostPage(Option<HostRef>),
     /// A pick in the navigation pane, by the item's tag.
@@ -384,6 +395,18 @@ pub(crate) struct Shell {
     library: library::LibraryState,
     end_game: library::EndGameUi,
     hide: library::HideUi,
+    /// The shelf's titles as they stand: the catalog with what `hide` took and gave back.
+    shelf_games: Arc<Vec<pf_client_core::library::GameEntry>>,
+    /// The shelf picked this run; empty rests on the remembered one.
+    library_shelf: String,
+    library_search: String,
+    /// The grid's grouping, this run's.
+    library_group: Option<GroupBy>,
+    details: Option<String>,
+    /// The Library's search box, for the shortcut that focuses it.
+    search: ElementRef<AutoSuggestBox>,
+    /// Fires `FocusSearch` once the box is on screen.
+    focus_search: Option<ComponentTimer>,
     /// The shelf's order: the shared `library_sort`, read at start and written on each pick.
     library_sort: SortKey,
     show_add: bool,
@@ -433,10 +456,10 @@ impl Shell {
             set_status: self.set(Msg::Status),
             set_note: self.set(Msg::Note),
             set_speed: self.set(Msg::Speed),
-            set_library: self.set(Msg::Library),
             set_dest: self.set(Msg::Dest),
             set_host_page: self.set(Msg::HostPage),
             bump_hosts: self.set(|()| Msg::HostsBump),
+            open_shelf: self.set(Msg::OpenShelf),
         }
     }
 }
@@ -468,6 +491,13 @@ impl Component for Shell {
             library: library::LibraryState::default(),
             end_game: library::EndGameUi::default(),
             hide: library::HideUi::default(),
+            shelf_games: Arc::default(),
+            library_shelf: String::new(),
+            library_search: String::new(),
+            library_group: None,
+            details: None,
+            search: ElementRef::new(),
+            focus_search: None,
             library_sort,
             show_add: false,
             hosts_rev: 0,
@@ -521,8 +551,13 @@ impl Component for Shell {
         match msg {
             Msg::Screen(s) => {
                 if s != self.screen {
+                    // Back from a stream: what the host has up has changed.
+                    let played = self.screen == Screen::Stream && s == Screen::Home;
                     self.screen = s;
                     self.enter = Tween::start(0.0, 1.0, ENTER_FRAMES, Msg::Tick(Anim::Screen), cx);
+                    if played {
+                        self.sync_library(true);
+                    }
                 }
             }
             Msg::Status(s) => {
@@ -540,24 +575,50 @@ impl Component for Shell {
             Msg::Hud(h) => self.hud = *h,
             Msg::Speed(s) => self.speed = s,
             Msg::Library(l) => {
-                // A fetch starts the shelf afresh: what it lists already says what is hidden.
-                if l.phase == library::LibraryPhase::Loading {
-                    self.hide = library::HideUi::default();
+                // A worker's answer for a shelf that is no longer the one shown is dropped.
+                if l.shelf == self.library.shelf {
+                    self.library = l;
+                    self.shelf_games = self.hide.shelf(&self.library.games);
                 }
-                self.library = l;
             }
             Msg::EndGame(e) => self.end_game = e,
-            Msg::Hide(edit) => edit(&mut self.hide),
+            Msg::Hide(edit) => {
+                edit(&mut self.hide);
+                self.shelf_games = self.hide.shelf(&self.library.games);
+            }
             Msg::LibrarySort(k) => self.library_sort = k,
+            Msg::LibraryGroup(g) => self.library_group = g,
+            Msg::LibrarySearch(s) => self.library_search = s,
+            Msg::Shelf(key) => {
+                // The pick is this device's, kept under the key the GTK shell keeps it under.
+                Settings::update(|s| {
+                    let name = pf_client_core::settings::LIBRARY_SHELF_KEY;
+                    s.extra.insert(name.into(), key.as_str().into());
+                    true
+                });
+                self.library_shelf = key;
+                self.sync_library(false);
+            }
+            Msg::OpenShelf(key) => {
+                self.update(Msg::Screen(Screen::Home), cx);
+                self.update(Msg::Dest(Dest::Library), cx);
+                self.update(Msg::Shelf(key), cx);
+            }
+            Msg::Reload => self.sync_library(true),
+            Msg::LibraryBump => {}
+            Msg::Details(d) => self.details = d,
+            Msg::FocusSearch => {
+                self.focus_search = None;
+                // `false` when the box is not on screen: nothing to focus.
+                let _ = self.search.request_focus();
+            }
             Msg::Dest(d) => {
-                if d == Dest::Library && !library::opened(&self.ctx) {
-                    library::open_default(&self.svc());
-                }
                 if d != self.dest {
                     self.dest = d;
                     self.pane_over = false;
                     self.page_enter =
                         Tween::start(0.0, 1.0, ENTER_FRAMES, Msg::Tick(Anim::Page), cx);
+                    self.sync_library(false);
                 }
             }
             Msg::HostPage(h) => {
@@ -610,7 +671,11 @@ impl Component for Shell {
                     };
                 }
             }
-            Msg::HostsBump => self.hosts_rev += 1,
+            Msg::HostsBump => {
+                self.hosts_rev += 1;
+                // A host paired, renamed or removed changes the shelves there are.
+                self.sync_library(false);
+            }
             Msg::SettingsNav(tag) => {
                 // The content column slides in on a section switch; the sidebar stays put.
                 if tag != self.settings_nav {
@@ -667,6 +732,8 @@ impl Component for Shell {
                 } else if self.settings_edit {
                     self.settings_edit = false;
                     self.settings_rev += 1;
+                } else if self.details.is_some() {
+                    self.details = None;
                 } else {
                     self.update(Msg::ShowAdd(false), cx);
                 }
@@ -742,6 +809,16 @@ impl Component for Shell {
             .is_pane_toggle_button_visible(self.screen == Screen::Home)
             .on_back_requested(cx.callback(|()| Msg::Back))
             .on_pane_toggle_requested(cx.callback(|()| Msg::PaneToggle));
+        // The Library's search sits in the title bar, where the page under it scrolls past.
+        let searching = self.screen == Screen::Home
+            && self.dest == Dest::Library
+            && !self.library.shelf.is_empty();
+        // Always a content: the bar stands 48 px with one and 32 px without, and everything
+        // under it would jump 16 px between the Library and the other pages.
+        let caption = caption.content(match searching {
+            true => library::search_box(self),
+            false => Border::new().into(),
+        });
         let (escape, sheet_open) = (cx.callback(|()| Msg::Escape), self.sheet_open());
         // The shell's shortcuts act on Home with no sheet up; Back wherever it leads.
         let (key, keys_on, back_on) = (
@@ -830,7 +907,7 @@ impl Shell {
             || self.seat.is_some()
             || self.picker.is_some()
             || (self.screen == Screen::Settings && self.settings_edit)
-            || (self.screen == Screen::Home && self.show_add)
+            || (self.screen == Screen::Home && (self.show_add || self.details.is_some()))
     }
 
     /// A pick in the navigation pane. The footer's items leave Home, so the pane comes back
@@ -859,17 +936,52 @@ impl Shell {
         use rules::Shortcut as K;
         match key {
             K::Hosts => self.update(Msg::HostPage(None), cx),
-            K::Library | K::Search => self.update(Msg::Dest(Dest::Library), cx),
+            K::Library => self.update(Msg::Dest(Dest::Library), cx),
+            K::Search => {
+                self.update(Msg::Dest(Dest::Library), cx);
+                // The box mounts with the Library: give it a frame.
+                let wait = Duration::from_millis(80);
+                self.focus_search = Some(cx.set_timeout(wait, Msg::FocusSearch));
+            }
             K::AddHost => {
                 self.update(Msg::HostPage(None), cx);
                 self.update(Msg::ShowAdd(true), cx);
             }
             K::Reload => match self.dest {
                 Dest::Hosts => hosts::rescan(&self.svc()),
-                Dest::Library => library::start_fetch(&self.ctx, &self.set(Msg::Library)),
+                Dest::Library => self.sync_library(true),
             },
             K::Settings => self.nav("settings", cx),
             K::Back => self.update(Msg::Back, cx),
+        }
+    }
+
+    /// Point the Library at its shelf and load it: on showing the Library, on a pick, on a
+    /// change to the hosts. `forced` asks the host again for the shelf already shown, which
+    /// stays on screen meanwhile.
+    fn sync_library(&mut self, forced: bool) {
+        if self.dest != Dest::Library {
+            return;
+        }
+        let known = KnownHosts::load();
+        let shelves = library::shelves(&known, &hosts::CardPreset::catalog());
+        let Some(shelf) = library::resting(&shelves, &self.library_shelf, &known) else {
+            self.library = library::LibraryState::default();
+            self.shelf_games = Arc::default();
+            return;
+        };
+        let other = self.library.shelf != shelf.key;
+        if other {
+            // Another shelf: what was hidden, asked or open belongs to the one before.
+            self.hide = library::HideUi::default();
+            self.end_game = library::EndGameUi::default();
+            self.details = None;
+        }
+        if other || forced {
+            let shown = (!other).then_some(&self.library);
+            let set = self.set(Msg::Library);
+            self.library = library::start_fetch(&self.ctx, shelf, &set, shown);
+            self.shelf_games = self.hide.shelf(&self.library.games);
         }
     }
 
