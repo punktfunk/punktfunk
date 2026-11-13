@@ -1,25 +1,19 @@
 // HTTPS transport for the host's management REST API, built on Network.framework rather than
 // URLSession.
 //
-// WHY NOT URLSession. App Transport Security governs the URL loading system, and its default
-// policy exempts only "local" destinations — `.local` names, unqualified names, and RFC1918 /
-// link-local IP literals. Everything else must present a certificate that passes system trust
-// evaluation. A punktfunk host is self-signed by construction (there is no CA that could vouch
-// for a box on someone's LAN), so the library worked at 192.168.x and died at the TLS layer on
-// every other address: a Tailscale peer (100.64/10 is CGNAT, NOT RFC1918), a WireGuard peer, or a
-// public IP. No ATS key can express "any address the user typed" — the exception keys are
-// domain-scoped — so the only ways out were disabling ATS app-wide (which also drops the TLS
-// floor and the cleartext block on third-party cover-art fetches, the one surface we did NOT want
-// to open) or leaving the URL loading system for this one origin. This is that second option.
+// WHY NOT URLSession. App Transport Security governs the URL loading system and exempts only
+// "local" destinations — `.local` names, unqualified names, RFC1918 / link-local IP literals.
+// A Punktfunk host is self-signed by construction, so ATS refuses it at every other address: a
+// Tailscale peer (100.64/10 is CGNAT, not RFC1918), a WireGuard peer, a public IP. No ATS key
+// can say "any address the user typed", and turning ATS off app-wide would also drop its TLS
+// floor and cleartext block for the third-party cover-art fetches.
 //
-// Network.framework is not subject to ATS, and `sec_protocol_options_set_verify_block` lets us
-// state the trust rule we actually mean: the leaf certificate must hash to the fingerprint the
-// user pinned during PIN pairing. That is a stronger check than CA trust here, not a weaker one,
-// and it is the same rule the QUIC stream plane has always applied via punktfunk-core — which is
-// precisely why streaming kept working over Tailscale while the library did not.
+// Network.framework is not subject to ATS, and `sec_protocol_options_set_verify_block` states
+// the trust rule we mean: the leaf certificate must hash to the fingerprint pinned at pairing,
+// the rule the QUIC stream plane applies too.
 //
 // Connections are POOLED and kept alive: a library screen fetches one JSON payload and then a
-// poster per title, and giving each its own TLS handshake was pure latency. `MgmtConnectionPool`
+// poster per title, and a TLS handshake each would be pure latency. `MgmtConnectionPool`
 // keeps a small number of connections per host, hands them out one request at a time, and makes
 // callers wait rather than opening an unbounded number.
 
