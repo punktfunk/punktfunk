@@ -2797,3 +2797,59 @@ fn an_explainer_reaches_the_shells_tray_in() {
     assert_eq!(pin.view().foot(&ctx), None);
     assert_eq!(pin.pinned(1.0, &ctx), (0.0, 0.0));
 }
+
+/// A toast over the Games tab sits above the focused title's band, never on its lines.
+#[test]
+fn a_toast_clears_the_focused_titles_band() {
+    let (mut s, _console, library) = shell(vec![
+        Screen::Home(HomeScreen::new()),
+        Screen::Library(LibraryScreen::new(&hosts()[0])),
+    ]);
+    s.fake_clock = Some((100.0, 0.4));
+    let game = crate::library::LibraryGame {
+        id: "steam:570".into(),
+        title: "Dota 2".into(),
+        store: "steam".into(),
+        launcher: false,
+        icon: String::new(),
+        platform: Some("PC".into()),
+        developer: None,
+        year: None,
+        genres: Vec::new(),
+        stats: None,
+        running: false,
+        endable: false,
+        install: None,
+        overrides: None,
+    };
+    library.set_games(&library.req(), vec![game]);
+    s.show_toast("Dota 2 is hidden for Kid".into());
+    let fonts = crate::theme::build_fonts().unwrap();
+    let viewport = crate::console::Viewport {
+        width: 1280,
+        height: 800,
+        insets: crate::console::Insets::default(),
+        scale: Some(1.0),
+    };
+    let mut surface = skia_safe::surfaces::raster_n32_premul((1280, 800)).unwrap();
+    for _ in 0..3 {
+        s.render_in(surface.canvas(), &viewport, &fonts, None, None, &[]);
+    }
+    crate::textprobe::begin();
+    s.render_in(surface.canvas(), &viewport, &fonts, None, None, &[]);
+    let runs = crate::textprobe::end();
+    let band_top = (800.0 - BOTTOM_BAND - crate::widgets::FOOT_TITLE_H) as f32;
+    let toast = runs
+        .iter()
+        .find(|r| r.text == "Dota 2 is hidden for Kid")
+        .expect("the toast is drawn");
+    assert!(
+        runs.iter()
+            .any(|r| r.text != toast.text && r.y0 >= band_top),
+        "the focused title's band shows: {runs:?}"
+    );
+    assert!(
+        toast.y1 <= band_top,
+        "{toast:?} reaches into the band at {band_top}"
+    );
+}
