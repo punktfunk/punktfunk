@@ -1,7 +1,6 @@
-// Unit tests for LatencyMeter (one instance per unified-stats stage — see
-// design/stats-unification.md): percentiles, the skew-corrected flag, reset-on-drain, the
-// absurd-value guard, and the explicit-instant stage form (record(ptsNs:atNs:offsetNs:), used for
-// the client-local decode/display stages and the at-present end-to-end stamp). Receipt-path
+// Unit tests for LatencyMeter: the median, reset-on-drain, the absurd-value guard, and the
+// explicit-instant stage form (record(ptsNs:atNs:offsetNs:), used for the client-local
+// decode/display stages and the at-present end-to-end stamp). Receipt-path
 // latencies are constructed by stamping a pts a known interval in the past, so the result is that
 // interval plus the (tiny) clock advance between reads — asserted with tolerance; the explicit
 // form is exact.
@@ -20,24 +19,14 @@ final class LatencyMeterTests: XCTestCase {
         XCTAssertNil(LatencyMeter().drain())
     }
 
-    func testRecordsPercentilesAndResets() {
+    func testRecordsTheMedianAndResets() {
         let m = LatencyMeter()
         let now = nowRealtimeNs()
         // Each frame "captured" 5 ms ago, no skew offset → latency ≈ 5 ms.
         for _ in 0..<50 { m.record(ptsNs: now - 5_000_000, offsetNs: 0) }
         guard let s = m.drain() else { return XCTFail("expected samples") }
-        XCTAssertEqual(s.count, 50)
-        XCTAssertFalse(s.skewCorrected, "offset 0 ⇒ not skew-corrected")
         XCTAssertEqual(s.p50Ms, 5.0, accuracy: 2.0)
-        XCTAssertGreaterThanOrEqual(s.p99Ms, s.p50Ms)
         XCTAssertNil(m.drain(), "drain resets the window")
-    }
-
-    func testSkewCorrectedFlagSetByNonZeroOffset() {
-        let m = LatencyMeter()
-        let now = nowRealtimeNs()
-        m.record(ptsNs: now - 1_000_000, offsetNs: 250_000) // 1 ms ago, +0.25 ms offset
-        XCTAssertEqual(m.drain()?.skewCorrected, true)
     }
 
     func testExplicitStageRecordIsExact() {
@@ -45,10 +34,7 @@ final class LatencyMeterTests: XCTestCase {
         // A client-local stage (decode: received→decoded) — start instant as ptsNs, offset 0.
         let receivedNs: Int64 = 1_000_000_000_000
         m.record(ptsNs: UInt64(receivedNs), atNs: receivedNs + 3_000_000, offsetNs: 0)
-        guard let s = m.drain() else { return XCTFail("expected a sample") }
-        XCTAssertEqual(s.count, 1)
-        XCTAssertEqual(s.p50Ms, 3.0, "explicit instants make the sample exact")
-        XCTAssertFalse(s.skewCorrected, "local stages record with offset 0")
+        XCTAssertEqual(m.drain()?.p50Ms, 3.0, "explicit instants make the sample exact")
     }
 
     func testExplicitStageDropsNonPositiveInterval() {
@@ -134,10 +120,10 @@ final class LatencyMeterTests: XCTestCase {
     func testAnUndrainedMeterStopsGrowingButKeepsItsLevel() {
         let m = LatencyMeter()
         let atNs: Int64 = 1_700_000_000_000_000_000
-        for i in 0..<5000 {
-            m.record(ptsNs: UInt64(atNs - 1_000_000 - Int64(i)), atNs: atNs, offsetNs: 0)
-        }
-        XCTAssertEqual(m.latestSample(asOfNs: atNs, maxAgeMs: 500), 1_004_999)
-        XCTAssertEqual(m.drain()?.count, 4096)
+        // 4096 samples fill the window; the 5000 after them reach only the level.
+        for _ in 0..<4096 { m.record(ptsNs: UInt64(atNs - 9_000_000), atNs: atNs, offsetNs: 0) }
+        for _ in 0..<5000 { m.record(ptsNs: UInt64(atNs - 1_000_000), atNs: atNs, offsetNs: 0) }
+        XCTAssertEqual(m.latestSample(asOfNs: atNs, maxAgeMs: 500), 1_000_000)
+        XCTAssertEqual(m.drain()?.p50Ms, 9.0, "samples past the cap stayed out of the window")
     }
 }
