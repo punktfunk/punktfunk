@@ -23,6 +23,20 @@ final class HideForMeTests: XCTestCase {
         }
     }
 
+    /// The library's "Hidden for <name>" button exists exactly where the offer does: a host or
+    /// profile without the flag keeps today's toolbar.
+    func testTheHiddenButtonFollowsTheOffer() throws {
+        let cases = try XCTUnwrap(SharedVector.load("hide-for-me-vectors.json")["offer"] as? [[String: Any]])
+        for c in cases {
+            let listed = try (c["listed"] as? [Any]).map {
+                try JSONDecoder().decode([ListedProfile].self, from: json($0))
+            }
+            let button = HideForMe.hiddenEntry(HideForMe.offer(listed: listed, pick: c["pick"] as? String))
+            let want = (c["offered"] as? String).map { "Hidden for \($0)" }
+            XCTAssertEqual(button, want, c["name"] as? String ?? "")
+        }
+    }
+
     func testAHideFollowsTheSharedVectors() throws {
         let cases = try XCTUnwrap(
             SharedVector.load("hide-for-me-vectors.json")["set_hidden"] as? [[String: Any]])

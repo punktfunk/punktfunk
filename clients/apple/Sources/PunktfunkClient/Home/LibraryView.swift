@@ -139,6 +139,8 @@ struct LibraryView: View {
     #if os(tvOS)
     /// The focused tile's key: a hidden title hands focus to its neighbour.
     @FocusState private var focusedTile: String?
+    /// The hidden titles' button, which takes focus back when they close.
+    @FocusState private var hiddenFocused: Bool
     #endif
 
     /// The host this shelf belongs to — every fetch, every poster URL and the launch itself address
@@ -216,6 +218,10 @@ struct LibraryView: View {
                         onShown: { moved($0, hidden: false) })
                 }
             }
+            #if os(tvOS)
+            // Back from the hidden titles, focus returns to the button that opened them.
+            .onChange(of: showHidden) { _, shown in if !shown { hiddenFocused = true } }
+            #endif
             // Percentages move while a download runs and the shelf is up.
             .task(id: shelf.polls) {
                 while shelf.polls, !Task.isCancelled {
@@ -239,6 +245,7 @@ struct LibraryView: View {
                 #if os(macOS)
                 ToolbarItemGroup {
                     sortMenu
+                    hiddenButton
                     if inTab { customizeButton }
                     reloadButton
                 }
@@ -246,6 +253,9 @@ struct LibraryView: View {
                 if !tvTab {
                     ToolbarItem(placement: .primaryAction) { reloadButton }
                     ToolbarItem(placement: .primaryAction) { sortMenu }
+                    if HideForMe.hiddenEntry(hidesFor) != nil {
+                        ToolbarItem(placement: .primaryAction) { hiddenButton }
+                    }
                 }
                 #if os(iOS) || os(visionOS)
                 if inTab {
@@ -595,13 +605,26 @@ struct LibraryView: View {
         #endif
     }
 
+    /// Opens what this shelf's profile hides. Only where the host lets this device hide its
+    /// titles (`HideForMe.hiddenEntry`); anywhere else the toolbar is as it was.
+    @ViewBuilder private var hiddenButton: some View {
+        if let label = HideForMe.hiddenEntry(hidesFor) {
+            Button { showHidden = true } label: { Label(label, systemImage: "eye.slash") }
+                .help(label)
+                #if os(tvOS)
+                .focused($hiddenFocused)
+                #endif
+        }
+    }
+
     #if os(tvOS)
-    /// Sort, Customize and Reload over the shelf, named: the TV's tab has no navigation bar, and
-    /// focus doesn't cross from the tab bar to its row's end. A full-width target, so a move down
-    /// from the tab bar lands here.
+    /// Sort, the hidden titles, Customize and Reload over the shelf, named: the TV's tab has no
+    /// navigation bar, and focus doesn't cross from the tab bar to its row's end. A full-width
+    /// target, so a move down from the tab bar lands here.
     private var tvActions: some View {
         HStack(spacing: 24) {
             sortMenu
+            hiddenButton
             customizeButton
             reloadButton
         }
@@ -980,8 +1003,7 @@ struct LibraryView: View {
     /// Sort and group for the plain grid — the console's bar, as a menu. The sort is the shared
     /// key (Default · A–Z · Platform · Store); the grouping is this grid's own (sections stand in
     /// for the console's Collections place). Each list sits under its heading (`MenuChoices`): a
-    /// menu lists a picker's options without its title. Where this device may hide the profile's
-    /// titles, the last entry opens the hidden ones.
+    /// menu lists a picker's options without its title.
     private var sortMenu: some View {
         Menu {
             MenuChoices(
@@ -996,13 +1018,6 @@ struct LibraryView: View {
                     MenuChoice(label: String(localized: L10n.libGroupStore), tag: "store"),
                 ],
                 selection: $groupByRaw)
-            if let hidesFor {
-                Section {
-                    Button(L10n.libHiddenFor(name: hidesFor.displayName), systemImage: "eye.slash") {
-                        showHidden = true
-                    }
-                }
-            }
         } label: {
             Label(L10n.libSortGroup, systemImage: "line.3.horizontal.decrease.circle")
         }

@@ -13,6 +13,11 @@ public enum HideForMe {
         return listed?.first { $0.id == pick && $0.person }
     }
 
+    /// The label of the library's "Hidden for <name>" button for `offer`, or nil: no button.
+    public static func hiddenEntry(_ offer: ListedProfile?) -> String? {
+        offer.map { L10n.libHiddenFor(name: $0.displayName) }
+    }
+
     /// The path and JSON body of the `PUT` that hides (`hidden`) or shows title `id` for
     /// `profile`. The id is one path segment: unreserved characters and `:` stay.
     static func request(profile: String, id: String, hidden: Bool) -> (path: String, body: Data) {

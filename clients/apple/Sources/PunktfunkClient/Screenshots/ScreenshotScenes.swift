@@ -247,13 +247,16 @@ enum ShotScenes {
         })
         #endif
         #if os(iOS) || os(tvOS)
-        // Hide for me: a title's menu with its entry, the sort menu's way to the hidden titles,
-        // and those titles.
+        // Hide for me: a title's menu with its entry, the button to the hidden titles, those
+        // titles, and a shelf without the action, whose toolbar is as it was.
         scenes.append(ShotScene(name: "15g-library-hide-menu", orientation: .natural, colorScheme: .dark) {
-            AnyView(ShotHideForMe(opens: .title))
+            AnyView(ShotHideForMe(opensMenu: true))
         })
         scenes.append(ShotScene(name: "15h-library-hidden-entry", orientation: .natural, colorScheme: .dark) {
-            AnyView(ShotHideForMe(opens: .sortMenu))
+            AnyView(ShotHideForMe())
+        })
+        scenes.append(ShotScene(name: "15j-library-no-hide", orientation: .natural, colorScheme: .dark) {
+            AnyView(ShotHideForMe(hides: false))
         })
         scenes.append(ShotScene(name: "15i-library-hidden", orientation: .natural, colorScheme: .dark) {
             AnyView(NavigationStack {
