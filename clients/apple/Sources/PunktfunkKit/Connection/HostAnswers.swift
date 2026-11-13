@@ -1,7 +1,6 @@
 // `/actions` and `/display/targets` as an answer or a miss, for the stores that keep the last
-// answer through a miss (`TTLCache`). `actions(_:)` and `targets(_:)` read every miss as an
-// empty answer, which a cache would then keep for its whole TTL. Pure halves for
-// `HostAnswersTests`.
+// answer through a miss (`TTLCache`). A miss is nil, never an empty answer: a cache would keep
+// that for its whole TTL. Pure halves for `HostAnswersTests`.
 
 import Foundation
 
@@ -10,7 +9,9 @@ extension LibraryClient {
     /// a refused certificate. Anything else short of a readable 200 is a miss.
     static let refusals: Set<Int> = [401, 403, 404]
 
-    /// ``actions(_:)``, or nil when the host didn't answer.
+    /// What this host lets THIS device do to it (sleep, restart, shut down) from
+    /// `GET /api/v1/actions`, or nil when the host didn't answer. Only the permitted rows: the
+    /// host alone judges whether this device's access carries the Host-power grant.
     public static func actionsIfAnswered(_ target: MgmtTarget) async -> [HostAction]? {
         actionsAnswer(try? await send("/api/v1/actions", to: target))
     }
@@ -25,8 +26,8 @@ extension LibraryClient {
         return list.actions.filter(\.permitted)
     }
 
-    /// ``targets(_:)``, or nil when the host didn't answer. `.some(nil)`: it answered with no
-    /// screens for this device.
+    /// `GET /api/v1/display/targets`, or nil when the host didn't answer. `.some(nil)`: it
+    /// answered with no screens for this device.
     public static func targetsIfAnswered(_ target: MgmtTarget) async -> DisplayTargets?? {
         targetsAnswer(try? await send("/api/v1/display/targets", to: target))
     }

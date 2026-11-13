@@ -2,9 +2,9 @@
 //
 // macOS takes mouse motion and buttons from StreamLayerView's NSEvent monitor under cursor
 // disassociation, as the mouse's own counts before macOS acceleration: the host applies its
-// pointer curve once. GCMouse there can stay silent and never sees a trackpad, so its motion
-// and button handlers are not installed. iOS keeps GCMouse, raw under pointer lock.
-// GCKeyboard gives HID keycodes, mapped to the Windows VK space the host's tables consume.
+// pointer curve once. Its keys come from NSEvent too. GCMouse there can stay silent and never
+// sees a trackpad, so macOS installs no GameController handlers. iOS and tvOS keep GCMouse (raw
+// under pointer lock) and GCKeyboard, whose HID keycodes map to the host's Windows VKs.
 // Fractional motion carries per axis so slow, sub-pixel moves survive the integer wire.
 //
 // GC delivers only while the app is active, so everything held is released on
@@ -13,8 +13,8 @@
 // the responder chain. GC handlers and notifications fire on the main queue, so the state
 // here needs no locking.
 //
-// GCMouse.current and GCKeyboard.coalesced have one handler slot each, so one InputCapture
-// is live per process. `activeCapture` keeps a stale capture's stop() off a newer one's handlers.
+// Each GCMouse and GCKeyboard.coalesced has one handler slot, so one InputCapture is live per
+// process. `activeCapture` keeps a stale capture's stop() off a newer one's handlers.
 
 #if os(macOS)
 import AppKit
@@ -41,8 +41,10 @@ public final class InputCapture {
 
     private let connection: PunktfunkConnection
     private var observers: [NSObjectProtocol] = []
+    #if !os(macOS)
     private var mice: [GCMouse] = []
     private var keyboards: [GCKeyboard] = []
+    #endif
     #if os(macOS)
     private var keyEventMonitor: Any?
     /// This capture holds `SystemHotKeys` off (see `holdSystemShortcuts`).
@@ -72,8 +74,8 @@ public final class InputCapture {
     /// reaches GCKeyboard, racing the NSEvent monitor — latched here so it can't type
     /// an Escape into the host in either toggle direction.
     private var suppressedVK: UInt32?
-    /// Physical ⌘ keys currently held (tracked even while released — the ⌘⎋ toggle and
-    /// its Esc suppression need it in both states).
+    /// Physical ⌘ keys currently held. Off macOS the GC handler tracks them in both capture
+    /// states, for the ⌘⎋ toggle; macOS tracks them only while forwarding, for the chord flush.
     private var cmdKeysDown: Set<UInt32> = []
 
     #if os(macOS)
@@ -112,8 +114,8 @@ public final class InputCapture {
     /// LOCKED, so this is true then and the GCMouse handlers forward. When the scene can't
     /// lock (Stage Manager, not frontmost, iPhone) the iPad routes the mouse through UIKit's
     /// pointer path as ABSOLUTE moves (`sendMouseAbs`) instead — so this goes false, gating
-    /// GCMouse off and enabling the absolute path, the two never double-sending. Moot on
-    /// macOS (no GCMouse handlers installed; `sendMouseAbs` is never called there). Main-queue.
+    /// GCMouse off and enabling the absolute path, the two never double-sending. macOS installs
+    /// no GCMouse handlers and leaves this false. Main-queue.
     public var gcMouseForwarding = false
 
     /// Fired on ⌘⎋ (the capture toggle — detected here so it works in both states; the
@@ -179,12 +181,13 @@ public final class InputCapture {
         return down ? fired : firedVKs.remove(vk) != nil
     }
 
-    /// The keyboard engine forgets every key: GC delivers nothing while inactive, so a key
-    /// released in another app would otherwise stay down here.
+    /// The keyboard engine and the ⌘ tracking forget every key: GC delivers nothing while
+    /// inactive, so a key released in another app would otherwise stay down here.
     private func forgetShortcutKeys() {
         _ = keyEngine.flush()
         shortcutKeys.removeAll()
         firedVKs.removeAll()
+        cmdKeysDown.removeAll()
     }
 
     /// Fired when a newer InputCapture takes the process-global GC handler slots (the
@@ -234,20 +237,19 @@ public final class InputCapture {
         if let previous = Self.activeCapture, previous !== self {
             // Drop the previous owner's device lists first: its stop() must not be able
             // to nil out the handler slots this capture is about to claim.
+            #if !os(macOS)
             previous.mice.removeAll()
             previous.keyboards.removeAll()
+            #endif
             previous.onPreempted?()
         }
         Self.activeCapture = self
         keyEngine = Shortcuts.Engine(
             connection.settings.resolvedShortcuts.runnable(dial: onShortcut != nil), device: .keyboard)
         forgetShortcutKeys()
-        // Attach EVERY connected mouse, not just GCMouse.current. With two pointing devices (e.g.
-        // the iPad's own Magic Keyboard trackpad AND a Universal Control "V-UC Automouse"), only one
-        // is `current` at a time; attaching just that one left the OTHER device's motion handler
-        // uninstalled, so moving it did nothing. Each GCMouse delivers its own deltas through its own
-        // handler, so handling all of them lets either device drive. New arrivals are caught by the
-        // GCMouseDidConnect observer below.
+        #if !os(macOS)
+        // Every connected mouse, not just `GCMouse.current`: each delivers through its own
+        // handler, and only one is current at a time. New ones arrive via GCMouseDidConnect.
         for mouse in GCMouse.mice() { attach(mouse: mouse) }
         if let keyboard = GCKeyboard.coalesced { attach(keyboard: keyboard) }
         observers.append(NotificationCenter.default.addObserver(
@@ -272,7 +274,6 @@ public final class InputCapture {
                 MainActor.assumeIsolated { self?.attach(keyboard: k) }
             }
         })
-        #if !os(macOS)
         // A device that drops mid-press never sends its releases, and the repeat ticker would
         // keep typing a held key.
         observers.append(NotificationCenter.default.addObserver(
@@ -353,7 +354,7 @@ public final class InputCapture {
             // Every OTHER ⌘ chord is the HOST's while captured, or the menu takes ⌘Q first. It is
             // sent from here, since returning nil also skips StreamLayerView's keyDown; a chord
             // with no host VK is swallowed. The ⌘ itself already went out as a flagsChanged.
-            if self.forwarding, flags.contains(.command), Self.forwardsCommandChord(
+            if Self.forwardsCommandChord(
                 keyCode: event.keyCode, flags: flags, forwarding: self.forwarding,
                 inhibitShortcuts: self.connection.settings.inhibitShortcuts
             ) {
@@ -394,6 +395,7 @@ public final class InputCapture {
         #endif
         // Don't clobber the handlers if a newer capture has taken the global devices.
         if Self.activeCapture === self || Self.activeCapture == nil {
+            #if !os(macOS)
             for mouse in mice {
                 guard let input = mouse.mouseInput else { continue }
                 input.mouseMovedHandler = nil
@@ -406,25 +408,26 @@ public final class InputCapture {
             for keyboard in keyboards {
                 keyboard.keyboardInput?.keyChangedHandler = nil
             }
+            #endif
             Self.activeCapture = nil
         }
+        #if !os(macOS)
         mice.removeAll()
         keyboards.removeAll()
-        #if !os(macOS)
         stopAutoRepeat()
         #endif
     }
 
     isolated deinit { stop() }
 
-    /// Send release events for everything currently held, and drop the motion residuals
-    /// and modifier/latch tracking (GC delivers nothing while inactive, so a ⌘ released
-    /// in another app would otherwise stay "held" here forever — hijacking Esc).
+    /// Send release events for everything currently held, and drop the motion residuals and
+    /// the one-shot latches.
     private func releaseAll() {
-        #if !os(macOS)
+        #if os(macOS)
+        cmdKeysDown.removeAll() // tracked only while forwarding (`handleFlagsChanged`)
+        #else
         stopAutoRepeat() // before the releases below, so the ticker can't outlive the key-up
         #endif
-        cmdKeysDown.removeAll()
         // The shortcut engine keeps its keys: Release input itself lands here, with its
         // modifiers still held. A lost device forgets them (`forgetShortcutKeys`).
         suppressedVK = nil
@@ -641,7 +644,7 @@ public final class InputCapture {
     /// 16 bits, NX_DEVICE*KEYMASK) disambiguate the two same-class keys, but some
     /// keyboards ship flagsChanged WITHOUT them — only the device-independent class
     /// bit (NX_CONTROLMASK & co.) is set. A pure diff of the device bits silently drops
-    /// those keys (seen live: Control never forwarded), so this is keyCode-driven with the
+    /// those keys, so this is keyCode-driven with the
     /// flags as evidence: class bit clear → the key went up; device bits present → they
     /// say which side is held now; class bit set with NO device bits → flip the held state
     /// we track (`isDown`, from pressedVKs — SDL ships the same fallback). Each keyCode
@@ -682,10 +685,8 @@ public final class InputCapture {
 
     /// The four modifiers a client chord is ever spelled with, isolated from the incidental bits
     /// `deviceIndependentFlagsMask` also carries: Caps Lock, and the `.function`/`.numericPad`
-    /// pair every arrow and F-key sets. Equality against the raw masked flags meant a chord
-    /// stopped being recognized the moment Caps Lock was on — ⌘⎋ and ⌃⌥⇧Q, both escape hatches,
-    /// included. That was survivable while the monitor claimed six chords; it is not, now that it
-    /// swallows every ⌘ chord there is.
+    /// pair every arrow and F-key sets. Compared raw, no chord matches while Caps Lock is on,
+    /// ⌘⎋ included.
     nonisolated static let chordFlagMask: NSEvent.ModifierFlags = [.command, .control, .option, .shift]
 
     /// One event's chord modifiers (see `chordFlagMask`).
@@ -768,6 +769,7 @@ public final class InputCapture {
     }
     #endif
 
+    #if !os(macOS)
     /// A preempted capture keeps its connect observers; the guard stops a reconnect there from
     /// taking the global handler slots back from the live one.
     private func attach(mouse: GCMouse) {
@@ -776,33 +778,9 @@ public final class InputCapture {
               !mice.contains(where: { $0 === mouse }) // re-delivered on wake — attach once
         else { return }
         mice.append(mouse)
-        // macOS drives motion + buttons from NSEvent (StreamLayerView's local monitor →
-        // sendMotion/sendMouseButton) because GCMouse's handlers proved unreliable there;
-        // installing them too would double-send. iOS keeps GCMouse (raw deltas under
-        // pointer lock). See the file header.
-        #if !os(macOS)
         input.mouseMovedHandler = { [weak self] _, dx, dy in
-            guard let self, self.forwarding, self.gcMouseForwarding else { return }
-            // GC gives +y up; the host expects screen-space (+y down).
-            let fx = dx + self.residualX
-            let fy = -dy + self.residualY
-            let ix = fx.rounded(.towardZero)
-            let iy = fy.rounded(.towardZero)
-            self.residualX = fx - ix
-            self.residualY = fy - iy
-            if ix != 0 || iy != 0 {
-                self.connection.send(.mouseMove(dx: Int32(ix), dy: Int32(iy)))
-                if inputDebug {
-                    self.motionDebugCount += 1
-                    let now = Date()
-                    if now.timeIntervalSince(self.motionDebugTick) >= 1 {
-                        inputLog.debug(
-                            "motion forwarded: \(self.motionDebugCount, privacy: .public) events, last dx \(Int(ix), privacy: .public) dy \(Int(iy), privacy: .public)")
-                        self.motionDebugCount = 0
-                        self.motionDebugTick = now
-                    }
-                }
-            }
+            guard let self, self.gcMouseForwarding else { return }
+            self.sendMotion(dx: dx, dy: -dy) // GC gives +y up; the host expects +y down
         }
         // Buttons take the GCMouse path only while the scene is pointer-locked; when it
         // isn't, the UIKit indirect-pointer path carries them (gcMouseForwarding gates here
@@ -840,13 +818,13 @@ public final class InputCapture {
                 source: PUNKTFUNK_SCROLL_SOURCE_WHEEL, phase: PUNKTFUNK_SCROLL_PHASE_NONE)
         }
         #endif
-        #endif
     }
+    #endif
 
-    /// Forward relative mouse motion (macOS), fed by StreamLayerView's NSEvent monitor while
-    /// the cursor is disassociated: the mouse's own counts, +y down as the host expects, so
-    /// unlike the iOS GCMouse path they are not y-negated. Fractional remainders accumulate
-    /// so slow, sub-pixel motion isn't truncated away.
+    /// Forward relative mouse motion, +y down as the host expects: macOS StreamLayerView's
+    /// NSEvent monitor while the cursor is disassociated (the mouse's own counts), and the
+    /// GCMouse handler off macOS. Fractional remainders accumulate so slow, sub-pixel motion
+    /// isn't truncated away.
     public func sendMotion(dx: Float, dy: Float) {
         guard forwarding else { return }
         let fx = dx + residualX
@@ -870,12 +848,11 @@ public final class InputCapture {
         }
     }
 
-    /// Forward an ABSOLUTE cursor position (iPad pointer fallback). Fed by the iOS stream
-    /// view's hover / indirect-pointer path when the scene can't pointer-lock: the host
-    /// places its cursor at this client-surface pixel — the same letterbox mapping the touch
-    /// path uses. Gated by `forwarding` AND `!gcMouseForwarding` (the relative GCMouse path
-    /// owns motion while locked), so absolute and relative motion never both fire. No residual
-    /// accumulation — the value is absolute, not a delta.
+    /// Forward an ABSOLUTE cursor position: the iPad pointer when the scene can't pointer-lock,
+    /// and the Mac's desktop mouse model (the stream view and each further screen's window).
+    /// The host places its cursor at this client-surface pixel. Gated by `forwarding` AND
+    /// `!gcMouseForwarding` (the relative GCMouse path owns motion while locked), so absolute
+    /// and relative motion never both fire. No residual: the value is absolute, not a delta.
     public func sendMouseAbs(
         x: Int32, y: Int32, surfaceWidth: UInt32, surfaceHeight: UInt32, screen: UInt8 = 0
     ) {
@@ -901,18 +878,11 @@ public final class InputCapture {
         }
     }
 
+    #if !os(macOS)
     private func attach(keyboard: GCKeyboard) {
         guard Self.activeCapture === self, !keyboards.contains(where: { $0 === keyboard })
         else { return }
         keyboards.append(keyboard)
-        // macOS sends keys from NSEvent (StreamLayerView's keyDown/keyUp/flagsChanged →
-        // sendKey/handleFlagsChanged) because GCKeyboard delivery proved unreliable there —
-        // the same GameController quirk that killed GCMouse motion (fixed in e414ec0).
-        // Installing this handler too would double-send, so on macOS we leave the keyboard
-        // tracked (for stop()'s cleanup) but attach no send handler: NSEvent is the only
-        // key path. iOS keeps the GCKeyboard path (and detects the ⌘⎋ toggle from the HID
-        // stream, since there's no NSEvent monitor there). See the file header.
-        #if !os(macOS)
         keyboard.keyboardInput?.keyChangedHandler = { [weak self] _, _, keyCode, pressed in
             guard let self, let vk = Self.hidToVK[keyCode.rawValue] else { return }
             if vk == 0x5B || vk == 0x5C { // physical ⌘ state, tracked in both states
@@ -961,8 +931,8 @@ public final class InputCapture {
                 self.stopAutoRepeat()
             }
         }
-        #endif
     }
+    #endif
 }
 
 #if os(macOS)

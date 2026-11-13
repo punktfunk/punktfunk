@@ -19,10 +19,9 @@ public enum HideForMe {
     }
 
     /// The path and JSON body of the `PUT` that hides (`hidden`) or shows title `id` for
-    /// `profile`. The id is one path segment: unreserved characters and `:` stay.
+    /// `profile`. The id is one path segment (``LibraryClient/pathSegment(_:)``).
     static func request(profile: String, id: String, hidden: Bool) -> (path: String, body: Data) {
-        let segment = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "-._~:"))
-        let escaped = id.addingPercentEncoding(withAllowedCharacters: segment) ?? id
+        let escaped = LibraryClient.pathSegment(id)
         let profile = LibraryClient.queryValue(profile) ?? profile
         return ("/api/v1/library/hidden/\(escaped)?as=\(profile)", Data(#"{"hidden":\#(hidden)}"#.utf8))
     }
@@ -63,7 +62,7 @@ public enum HideForMe {
                 path, to: target, method: "PUT", body: (body, "application/json"))
             return .from(status: response.status, body: response.body)
         } catch {
-            return .failed((error as? LocalizedError)?.errorDescription ?? error.localizedDescription)
+            return .failed(error.localizedDescription)
         }
     }
 
@@ -98,17 +97,9 @@ public enum HideForMe {
         return rows.filter(\.hidden).map(\.entry)
     }
 
-    /// ``fetchHidden(profile:_:)`` over `target`'s lanes, the art resolved against this host.
-    /// Fetched when the player asks, never cached.
+    /// ``fetchHidden(profile:_:)`` over `target`'s lanes. Fetched when the player asks, never
+    /// cached.
     public static func hidden(profile: String, on target: MgmtTarget) async throws -> [GameEntry] {
-        let base = URL(string: LibraryClient.baseURL(address: target.address, port: target.port)
-            + "/api/v1/library")
-        var games = try await fetchHidden(profile: profile) { path in
-            try await LibraryClient.send(path, to: target)
-        }
-        if let base {
-            for i in games.indices { games[i].art = games[i].art.resolved(against: base) }
-        }
-        return games
+        try await fetchHidden(profile: profile) { path in try await LibraryClient.send(path, to: target) }
     }
 }

@@ -4,6 +4,7 @@
 // dials `port` pinned to `fingerprint` like any saved host.
 
 import Foundation
+import os
 import PunktfunkCore
 
 public final class DemoHost: @unchecked Sendable {
@@ -25,7 +26,7 @@ public final class DemoHost: @unchecked Sendable {
     private let scene = DemoScene()
     /// The generation whose AUs may reach the core. The encoder's output arrives on a
     /// VideoToolbox thread, and a superseded encoder's flush must not land in the new session.
-    private let liveGeneration = Locked<UInt32>(0)
+    private let liveGeneration = OSAllocatedUnfairLock<UInt32>(initialState: 0)
 
     /// Start listening on a free loopback port. Nil if the core could not bind one.
     public init?(titles: [String: String]) {
@@ -93,7 +94,7 @@ public final class DemoHost: @unchecked Sendable {
     /// A new session or mode: fresh encoder at the negotiated size, opening on an IDR.
     private func begin(_ info: PunktfunkDemoSession) {
         generation = info.generation
-        liveGeneration.set(info.generation)
+        liveGeneration.withLock { $0 = info.generation }
         encoder = nil
         let gen = info.generation
         let (handle, live) = (handle, liveGeneration)
@@ -101,7 +102,7 @@ public final class DemoHost: @unchecked Sendable {
             width: Int(info.width), height: Int(info.height), fps: Int(info.refresh_hz),
             bitrateKbps: Int(info.bitrate_kbps)
         ) { au, keyframe in
-            guard live.get() == gen else { return }
+            guard live.withLock({ $0 }) == gen else { return }
             au.withUnsafeBytes { raw in
                 _ = punktfunk_demo_host_submit_video(
                     handle, raw.bindMemory(to: UInt8.self).baseAddress, UInt(raw.count), keyframe)
@@ -118,25 +119,5 @@ public final class DemoHost: @unchecked Sendable {
         guard n > 0, n < UInt(buf.count) else { return "Desktop" }
         let id = String(cString: buf)
         return titles[id] ?? id
-    }
-}
-
-/// A value behind a lock, for the one field the encoder's thread reads.
-private final class Locked<Value>: @unchecked Sendable {
-    private let lock = NSLock()
-    private var value: Value
-
-    init(_ value: Value) { self.value = value }
-
-    func get() -> Value {
-        lock.lock()
-        defer { lock.unlock() }
-        return value
-    }
-
-    func set(_ new: Value) {
-        lock.lock()
-        value = new
-        lock.unlock()
     }
 }

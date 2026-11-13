@@ -31,9 +31,9 @@ public struct ResizeIndicator {
     /// When the current `active` span began — the timeout is measured from here.
     private var since: TimeInterval?
     /// How long to keep the overlay up if the target frame never arrives (rejected / capped switch).
-    public var timeout: TimeInterval
+    private let timeout: TimeInterval = 2.5
 
-    public init(timeout: TimeInterval = 2.5) { self.timeout = timeout }
+    public init() {}
 
     /// The follower is steering toward `width`×`height`, shown at `view` — a resize is under way.
     /// Show the overlay now (instant feedback). Called only for a genuine change (the follower skips

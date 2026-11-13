@@ -2,9 +2,8 @@
 //
 // We speak HTTP ourselves because the management API has to be reached OUTSIDE the URL loading
 // system: App Transport Security applies to URLSession and cannot be relaxed for the arbitrary,
-// user-supplied addresses a punktfunk host lives at (see MgmtTransport for the full story). What
-// we need is GETs against one host, so this covers exactly that and nothing more — no redirects,
-// no request bodies, no content negotiation.
+// user-supplied addresses a punktfunk host lives at (see MgmtTransport). It parses what one
+// host's management API answers and nothing more: no redirects, no content negotiation.
 //
 // It does need to find where a response ENDS without waiting for the peer to hang up, because the
 // connection is reused across a grid's worth of poster fetches (`messageLength`). Both framings
@@ -43,9 +42,9 @@ enum HTTPParseError: Error, Sendable {
 enum HTTPResponseParser {
     /// Byte length of the first complete response in `raw`, or nil when more bytes are needed.
     ///
-    /// Also nil when the response carries no framing header at all, since then the body runs
-    /// until the peer closes and has no knowable length — a connection that answers that way
-    /// cannot be reused.
+    /// Also nil when a response that may carry a body has no framing header at all, since then
+    /// the body runs until the peer closes and has no knowable length — a connection that
+    /// answers that way cannot be reused.
     ///
     /// Reads `raw` in place: this runs once per receive, and a copy each time is quadratic in
     /// the size of the response.
@@ -57,6 +56,7 @@ enum HTTPResponseParser {
 
     private static func messageLength(_ b: Bytes) throws -> Int? {
         guard let head = try parseHead(b) else { return nil }
+        if head.hasNoBody { return head.bodyStart }
         if head.headers["transfer-encoding"]?.lowercased().contains("chunked") == true {
             return try chunkedEnd(b, from: head.bodyStart)
         }
@@ -64,10 +64,8 @@ enum HTTPResponseParser {
             guard let length = Int(field.trimmingCharacters(in: .whitespaces)), length >= 0 else {
                 throw HTTPParseError.malformedHeader
             }
-            // A malicious host can send Content-Length = Int.max; `bodyStart + length` would then
-            // overflow, and Swift integer overflow TRAPS (uncatchable crash), not throws. Add
-            // reporting overflow and reject instead. security-review 2026-08-15 (low: HTTPResponse
-            // Int overflow).
+            // A host can send Content-Length = Int.max, and `+` traps on overflow where it
+            // should throw.
             let (end, overflow) = head.bodyStart.addingReportingOverflow(length)
             if overflow { throw HTTPParseError.malformedHeader }
             return b.count >= end ? end : nil
@@ -85,7 +83,9 @@ enum HTTPResponseParser {
         guard let head = try parseHead(b) else { throw HTTPParseError.truncated }
         let rest = Bytes(rebasing: b[head.bodyStart...])
         let body: Data
-        if head.headers["transfer-encoding"]?.lowercased().contains("chunked") == true {
+        if head.hasNoBody {
+            body = Data()
+        } else if head.headers["transfer-encoding"]?.lowercased().contains("chunked") == true {
             body = try decodeChunked(rest)
         } else if let field = head.headers["content-length"] {
             guard let length = Int(field.trimmingCharacters(in: .whitespaces)), length >= 0 else {
@@ -104,6 +104,9 @@ enum HTTPResponseParser {
         let headers: [String: String]
         /// Offset of the first body byte (just past the CRLFCRLF).
         let bodyStart: Int
+        /// 1xx, 204 and 304 end at the header block, whatever framing headers they carry
+        /// (RFC 9112 §6.3). A 204 has none, so without this it reads as framed by close.
+        var hasNoBody: Bool { (100..<200).contains(status) || status == 204 || status == 304 }
     }
 
     /// Status line + header block, or nil if the block hasn't fully arrived.

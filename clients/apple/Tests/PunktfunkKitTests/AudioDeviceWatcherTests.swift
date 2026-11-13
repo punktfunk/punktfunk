@@ -110,6 +110,17 @@ final class AudioDeviceWatcherTests: XCTestCase {
             "the session was never told the default output device moved")
     }
 
+    /// A device list change batched with a default output move must not read as the list alone:
+    /// an unpinned session ignores the list and would miss the move.
+    func testABatchedDefaultOutputMoveIsNotReadAsAListChange() {
+        let list = kAudioHardwarePropertyDevices
+        let output = kAudioHardwarePropertyDefaultOutputDevice
+        XCTAssertEqual(AudioDeviceWatcher.reason([list, output]), .defaultOutputDevice)
+        XCTAssertEqual(AudioDeviceWatcher.reason([output, list]), .defaultOutputDevice)
+        XCTAssertEqual(AudioDeviceWatcher.reason([list]), .deviceList)
+        XCTAssertEqual(AudioDeviceWatcher.reason([output]), .defaultOutputDevice)
+    }
+
     /// Test-local on purpose: nothing in the app ever changes the user's device, it only follows it.
     private static func setDefaultOutput(_ id: AudioDeviceID) -> OSStatus {
         var address = AudioObjectPropertyAddress(

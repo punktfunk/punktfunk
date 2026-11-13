@@ -14,7 +14,7 @@ import {
 	sendWebResponse,
 	setResponseStatus,
 } from "h3";
-import { personPluginPage, personUiCredential } from "../../util/personPlugins";
+import { personPluginPage, personReach } from "../../util/personPlugins";
 import { pluginPage } from "../../util/pluginPage";
 import { callPlugin, injectThemeReceiver } from "../../util/pluginProxy";
 
@@ -46,7 +46,7 @@ export default defineEventHandler(async (event) => {
 		id,
 		`${rest}${search}`,
 		{ method, headers, body, redirect: "manual" },
-		person ? (o) => personUiCredential(person.session, id, o) : undefined,
+		person ? personReach(person.session, id) : undefined,
 	);
 	if (!resp) {
 		setResponseStatus(event, 502);

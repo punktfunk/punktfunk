@@ -1,10 +1,8 @@
 // The Siri Remote as a pointing device during a tvOS streaming session — the remote's touch
 // surface drives the HOST cursor (relative deltas, like a laptop trackpad), a surface press
-// clicks (left button), and Play/Pause right-clicks. It also owns the remote's DELIBERATE
-// session exit: hold Back/Menu ≥ `disconnectHold`. A short Back press does nothing — the
-// UIKit menu press it also generates is swallowed by ContentView's session branch, so neither
-// a trackpad fumble nor a game-controller B press can end the session (the pad's exit is the
-// L1+R1+Start+Select chord in GamepadCapture).
+// clicks (left button), and Play/Pause right-clicks. Back/Menu held ≥ `disconnectHold` ends
+// the session; a short press opens the quick-action ring (`onShortBack`). Neither reaches the
+// host, and ContentView's session branch swallows the UIKit menu press Back also generates.
 //
 // The remote is read through GameController as a GCMicroGamepad with
 // `reportsAbsoluteDpadValues = true`: the dpad axes then report the finger's ABSOLUTE position
@@ -44,16 +42,12 @@ public final class SiriRemotePointer {
     /// When Back/Menu went down; a release after `disconnectHold` fires the exit.
     private var menuDownAt: Date?
     /// Counts a held Play/Pause down to `statsHold`; nil when the button is up or already
-    /// resolved. See `playPauseChanged`.
+    /// resolved. Only a release that finds it running right-clicks. See `playPauseChanged`.
     private var playPauseTimer: Timer?
-    /// The held Play/Pause has already been spent on a stats cycle, so its release must not also
-    /// right-click.
-    private var statsHoldFired = false
     /// Trails a delivered right-click tap by `tapPress` to release it — see `deliverRightClick`.
     private var rightReleaseTimer: Timer?
 
-    /// Hold Back/Menu at least this long (then release) to end the session. Shorter than the
-    /// controller chord's 1.5 s — the remote has no way to trip this during gameplay.
+    /// Hold Back/Menu at least this long (then release) to end the session.
     private static let disconnectHold: TimeInterval = 1.0
     /// Hold Play/Pause this long to cycle the stats overlay instead of right-clicking. It is the
     /// remote's only spare button, and on an Apple TV with no controller in the room this is the
@@ -290,7 +284,6 @@ public final class SiriRemotePointer {
             return
         }
         if pressed {
-            statsHoldFired = false
             let timer = Timer(timeInterval: Self.statsHold, repeats: false) { [weak self] _ in
                 MainActor.assumeIsolated { self?.statsHoldElapsed() }
             }
@@ -299,13 +292,11 @@ public final class SiriRemotePointer {
             playPauseTimer = timer
             return
         }
-        playPauseTimer?.invalidate()
+        // No timer: the hold spent this press on a cycle, or it went down with the ring up, or
+        // a reset dropped it. Its release clicks nothing.
+        guard let timer = playPauseTimer else { return }
+        timer.invalidate()
         playPauseTimer = nil
-        // The hold already spent this press on a cycle — its release clicks nothing.
-        guard !statsHoldFired else {
-            statsHoldFired = false
-            return
-        }
         deliverRightClick()
     }
 
@@ -313,7 +304,6 @@ public final class SiriRemotePointer {
     /// The same cycle as ⌃⌥⇧S, the three-finger tap and the controller's Select + X.
     private func statsHoldElapsed() {
         playPauseTimer = nil
-        statsHoldFired = true
         StatsVerbosity.requestCycle(for: connection)
     }
 
@@ -347,7 +337,6 @@ public final class SiriRemotePointer {
         playPauseTimer = nil
         rightReleaseTimer?.invalidate()
         rightReleaseTimer = nil
-        statsHoldFired = false
     }
 
     private func menuChanged(pressed: Bool) {

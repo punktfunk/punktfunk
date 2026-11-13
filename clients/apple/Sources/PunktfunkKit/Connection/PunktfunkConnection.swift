@@ -1,11 +1,11 @@
 // Swift wrapper around the punktfunk-core C ABI's punktfunk/1 connection API.
 //
 // Threading contract (mirrors the C header): each plane has one puller thread. Video pulls
-// nextAU() and nextHdrMeta(); audio pulls nextAudioPcm()/audioPlc(); feedback pulls
-// nextRumbleCommand() and nextHidOutput() in turn; cursor
-// pulls nextCursorShape()/nextCursorState(); nextClipboard(), nextHostTiming() and nextHdrMeta()
-// each have their own. The core keeps per-plane borrow
-// slots, so the planes never alias. send() is enqueue-only and safe alongside all of them.
+// nextAU() and nextHdrMeta(); each further screen's pump pulls nextScreenAU(); audio pulls
+// nextAudioPcm()/audioPlc(); feedback pulls nextRumbleCommand() and nextHidOutput() in turn;
+// cursor pulls nextCursorShape()/nextCursorState(); nextClipboard() and nextHostTiming() each
+// have their own. The core keeps per-plane borrow slots, so the planes never alias. send() is
+// enqueue-only and safe alongside all of them.
 // A borrowed pointer is valid only until the next call of the same kind, so every puller
 // copies into an owned value.
 //
@@ -31,7 +31,6 @@ private let statusOK: Int32 = PUNKTFUNK_STATUS_OK.rawValue
 private let statusNoFrame: Int32 = PUNKTFUNK_STATUS_NO_FRAME.rawValue
 private let statusClosed: Int32 = PUNKTFUNK_STATUS_CLOSED.rawValue
 
-/// One reassembled, FEC-recovered, decrypted access unit (Annex-B HEVC from the host).
 /// The screens a connect asks the host for, screen 0 first; none for one picture. `views` holds
 /// the size each is shown at when smaller than its mode, zero for none.
 public struct ScreenAsk: Sendable {
@@ -40,6 +39,8 @@ public struct ScreenAsk: Sendable {
     public static let none = ScreenAsk(records: [], views: [])
 }
 
+/// One reassembled, FEC-recovered, decrypted access unit in the session's codec
+/// (`PunktfunkConnection.videoCodec`).
 public struct AccessUnit: Sendable {
     /// The AU's bytes: a copy, or with `inPlace` a view of the lender's slot that holds until
     /// the next pull.
@@ -58,10 +59,9 @@ public struct AccessUnit: Sendable {
     public let frameIndex: UInt32
     public let flags: UInt32
     /// Client `CLOCK_REALTIME` instant the AU finished reassembly in the core (post-FEC,
-    /// decrypted — `PunktfunkFrame.received_ns`, ABI v9) — the **received** measurement point of
-    /// design/stats-unification.md. NOT the pull instant: stamping at the pull folded the
-    /// pre-decode hand-off wait into the network term, which is how the 2026-07 two-pair
-    /// standing-latency plateau hid as "network". The decode stage is `decodedNs - receivedNs`,
+    /// decrypted — `PunktfunkFrame.received_ns`) — the **received** measurement point of
+    /// design/stats-unification.md. NOT the pull instant, which would fold the pre-decode
+    /// hand-off wait into the network term. The decode stage is `decodedNs - receivedNs`,
     /// both client-local (no skew offset applies).
     public let receivedNs: Int64
     /// Client `CLOCK_REALTIME` instant this pull returned. `pulledNs - receivedNs` is the
@@ -243,14 +243,12 @@ public enum HostRejection: Sendable {
     /// at the handshake so the user gets a sentence, not a bare desktop they didn't ask for.
     case launchNotPermitted
     /// A host power action (`design/host-actions.md`) is ending every session: the host is
-    /// going to sleep or shutting down, deliberately. Without this case the close reads as a
-    /// transport failure, and sleeping your own host from the couch looks like a crash.
+    /// going to sleep or shutting down, deliberately, not failing.
     case hostPower
     /// The host accepted the connection and then failed to bring the stream up — no encoder
     /// for the codec, pf-vdisplay missing, capture open failed. Everything host-side funnels
-    /// here, so the cause is in the host's log, not on this device. Missing this case sent the
-    /// connect down the untyped path, where a reachable host reads as unreachable and the app
-    /// answers with Wake-on-LAN.
+    /// here, so the cause is in the host's log, not on this device. The host is reachable:
+    /// nothing here calls for Wake-on-LAN.
     case setupFailed
     /// The hello named a profile the host doesn't list. The saved pick is stale: the app drops it.
     case profileUnknown
@@ -347,13 +345,6 @@ private final class PendingCallback {
 }
 
 public extension PunktfunkConnection {
-    /// Whether the Wake-on-LAN broadcast path is usable on this platform/build. macOS can always
-    /// broadcast (its App Sandbox network entitlements cover it). iOS/tvOS need the managed
-    /// `com.apple.developer.networking.multicast` entitlement — now approved and enabled (see
-    /// `Config/Punktfunk.entitlements`), so wake is available on every platform. Kept as the single
-    /// switch every call site gates on, should a future build ever need to disable it.
-    static var wakeOnLANAvailable: Bool { true }
-
     /// Send a Wake-on-LAN magic packet to wake a sleeping host. `macs` are the host's NIC MAC(s)
     /// (`aa:bb:cc:dd:ee:ff`, learned from its mDNS `mac` TXT while awake); malformed entries are
     /// skipped. `lastKnownIP`, when an IPv4 address, is additionally unicast. The core broadcasts to every
@@ -406,12 +397,10 @@ public extension PunktfunkConnection {
 /// tasks and raw pump threads, which the Swift 6 checker will require this to state.
 public final class PunktfunkConnection: @unchecked Sendable {
     /// One-shot ABI version-equality gate (`static let` = dispatch_once), touched before the
-    /// first C call a connection makes. This enforces the guard the v27 `PunktfunkHidOutput`
-    /// widening's safety argument rests on: `punktfunk_abi_version()` mismatch has always meant
-    /// "incompatible core", and a mismatched header/library pairing must fail HERE, loudly —
-    /// not later as a 19-vs-85-byte memory write when the core poll-fills the hidout out-slot.
-    /// In-tree the xcframework bundles header + staticlib from one build, so this can only fire
-    /// on a stale or hand-assembled bundle; out-of-tree embedders keep the documented checklist.
+    /// first C call a connection makes. A header and library from different builds must fail
+    /// HERE, loudly, not later as an out-of-bounds write when the core fills an out-struct the
+    /// header sized differently. In-tree the xcframework bundles header + staticlib from one
+    /// build, so this can only fire on a stale or hand-assembled bundle.
     private static let abiVersionGate: Void = {
         let linked = punktfunk_abi_version()
         let built = UInt32(PUNKTFUNK_ABI_VERSION)
@@ -530,34 +519,33 @@ public final class PunktfunkConnection: @unchecked Sendable {
 
     /// Which virtual gamepad the host creates for this session's pads (the
     /// `PUNKTFUNK_GAMEPAD_*` ABI values). `.auto` lets the host decide (its env var, else
-    /// X-Box 360); `.dualSense` / `.dualShock4` are honored only on hosts with UHID (Linux) —
-    /// games then see a real PlayStation pad and its lightbar (and, on a DualSense,
-    /// adaptive-trigger / player-LED) writes come back on the HID-output plane
-    /// (`nextHidOutput`). `.xboxOne` is an X-Box-Series-glyph variant of `.xbox360` (same
-    /// buttons/sticks/triggers + rumble, no touchpad/motion/lightbar). The host's actual
-    /// choice is `resolvedGamepad`. `clients/shared/gamepad-kind-vectors.json` pins every case
-    /// against core's `GamepadPref`; a test pins the raw values to the header.
+    /// X-Box 360). A host builds the kinds its OS can (the host's `pick_gamepad`) and folds the
+    /// rest, most to `.xbox360`; `resolvedGamepad` is what it built. A PlayStation pad's lightbar
+    /// (and, on a DualSense, adaptive-trigger / player-LED) writes come back on the HID-output
+    /// plane (`nextHidOutput`). `.xboxOne` is an X-Box-Series-glyph variant of `.xbox360` (same
+    /// buttons/sticks/triggers + rumble, no touchpad/motion/lightbar).
+    /// `clients/shared/gamepad-kind-vectors.json` pins every case against core's `GamepadPref`;
+    /// a test pins the raw values to the header.
     public enum GamepadType: UInt32, CaseIterable, Sendable {
         case auto = 0
         case xbox360 = 1
         case dualSense = 2
         case xboxOne = 3
         case dualShock4 = 4
-        // Valve Steam Controller / Steam Deck (Linux UHID hid-steam hosts). Parity only on Apple —
-        // GameController never surfaces a 0x28DE HID device, so the client can't capture one; these
-        // exist so the resolved type round-trips and name parsing matches the host.
+        // Valve Steam Controller and Steam Deck. `Sc2Capture` declares a classic Steam Controller
+        // it opens itself; GameController never surfaces one.
         case steamController = 5
         case steamDeck = 6
-        /// DualSense Edge (Linux UHID / Windows UMDF hosts): the DualSense plus native back/Fn
-        /// buttons. GameController exposes the Edge as a `GCDualSenseGamepad` with its own
-        /// product category; paddle CAPTURE is still gated on G22, but the declared identity +
-        /// rich planes match the physical pad.
+        /// DualSense Edge: the DualSense plus native back/Fn buttons. GameController exposes the
+        /// Edge as a `GCDualSenseGamepad` with its own product category. The capture does not
+        /// forward its paddles yet (`GamepadWire.paddle1`); the declared identity + rich planes
+        /// match the physical pad.
         case dualSenseEdge = 7
-        /// Nintendo Switch Pro Controller (Linux UHID hid-nintendo hosts): correct Nintendo
-        /// glyphs + positional layout on the host side.
+        /// Nintendo Switch Pro Controller: correct Nintendo glyphs + positional layout on the
+        /// host side.
         case switchPro = 8
-        /// New Steam Controller (2026, `28DE:1302`), passed through as-is on Linux hosts (raw
-        /// report mirroring; Steam Input is the consumer). CAPTURABLE over BLE everywhere
+        /// New Steam Controller (2026, `28DE:1302`), passed through as-is (raw report
+        /// mirroring; Steam Input is the consumer). CAPTURABLE over BLE everywhere
         /// (`Sc2BleLink`) and on macOS over USB (`Sc2UsbLink`) — GameController never surfaces
         /// the raw Valve device, so `Sc2Capture` opens it directly and declares this kind.
         case steamController2 = 9
@@ -567,13 +555,11 @@ public final class PunktfunkConnection: @unchecked Sendable {
         /// kind rather than a flag on `.steamController2`.
         ///
         /// Declared ONLY by a capture that owns the physical Puck (macOS `Sc2UsbLink`); a wired
-        /// or BLE SC2 stays `.steamController2`. The practical difference on the client side is
-        /// that a Puck's wireless connect/disconnect reports are AUTHORITATIVE — see
-        /// `Sc2Capture`, where acting on a wired pad's (truthful, but irrelevant) "no radio link"
-        /// once tore the wire slot down 255 ms after it was created.
+        /// or BLE SC2 stays `.steamController2`. A Puck's wireless connect/disconnect reports are
+        /// AUTHORITATIVE; a wired pad's "no radio link" is not (`Sc2Capture`).
         case steamController2Puck = 10
-        /// Xbox Elite Series 2 (Windows UMDF hosts; other hosts fold it to `.xbox360`). No picker
-        /// offers it; it exists so the host's echo and the dev hook's name round-trip.
+        /// Xbox Elite Series 2. No picker offers it; it exists so the host's echo and the dev
+        /// hook's name round-trip.
         case xboxElite = 11
         // The host-built pads below are never captured here. They exist so the echo and the dev
         // hook's name round-trip and the motion answer matches the host's.
@@ -740,9 +726,8 @@ public final class PunktfunkConnection: @unchecked Sendable {
 
     /// The compositor the host actually resolved for this session's virtual output (the
     /// Welcome's echo of the requested `compositor`, with `.auto` resolved to a concrete
-    /// backend). `.auto` = an older host that didn't say. Clients use it to decide
-    /// client-side cursor behavior: `.gamescope`'s PipeWire capture carries no cursor, so
-    /// the client draws its own (a visible system cursor over the stream).
+    /// backend). `.auto` = an older host that didn't say. The stream view pins the capture
+    /// mouse model on `.gamescope`, whose input socket takes only relative pointer motion.
     public private(set) var resolvedCompositor: Compositor = .auto
 
     /// Host clock minus client clock (nanoseconds) — LIVE: the connect-time skew handshake's
@@ -769,14 +754,12 @@ public final class PunktfunkConnection: @unchecked Sendable {
     /// (20 000) when 0 was requested. `0` = an older host that didn't report it.
     public private(set) var resolvedBitrateKbps: UInt32 = 0
 
-    /// What the stream decodes as: the codec, CICP colour, depth and chroma of the newest AU
-    /// `nextAU` handed out. The connect-time format until an AU with `newFormat` moves it, read
-    /// live from the core; the last connect-time value once the session closed.
+    /// What the stream decodes as: the CICP transfer, depth and chroma of the newest AU `nextAU`
+    /// handed out. The connect-time format until an AU with `newFormat` moves it, read live from
+    /// the core; the last connect-time value once the session closed. The decoders read primaries,
+    /// matrix and range off the bitstream.
     public struct StreamFormat: Sendable, Equatable {
-        public var primaries: UInt8 = 1
         public var transfer: UInt8 = 1
-        public var matrix: UInt8 = 1
-        public var fullRange = false
         public var bitDepth: UInt8 = 8
         public var chromaFormat: UInt8 = 1
     }
@@ -791,23 +774,16 @@ public final class PunktfunkConnection: @unchecked Sendable {
     }
 
     private static func readFormat(_ h: OpaquePointer) -> StreamFormat {
-        var prim: UInt8 = 1, trc: UInt8 = 1, mtx: UInt8 = 1, fullRange: UInt8 = 0, depth: UInt8 = 8
-        _ = punktfunk_connection_color_info(h, &prim, &trc, &mtx, &fullRange, &depth)
+        var trc: UInt8 = 1, depth: UInt8 = 8
+        _ = punktfunk_connection_color_info(h, nil, &trc, nil, nil, &depth)
         var chroma: UInt8 = 1
         _ = punktfunk_connection_chroma_format(h, &chroma)
-        return StreamFormat(
-            primaries: prim, transfer: trc, matrix: mtx, fullRange: fullRange != 0,
-            bitDepth: depth, chromaFormat: chroma)
+        return StreamFormat(transfer: trc, bitDepth: depth, chromaFormat: chroma)
     }
 
-    /// The colour signalling the host encodes with now (CICP code points): `colorPrimaries`
-    /// (1=BT.709, 9=BT.2020), `colorTransfer` (1=BT.709, 16=PQ, 18=HLG), `colorMatrix`
-    /// (1=BT.709, 9=BT.2020-NCL), `colorFullRange`. BT.709 limited SDR for an older host. Configure
-    /// the decoder/presenter from these; mastering metadata arrives via `nextHdrMeta`.
-    public var colorPrimaries: UInt8 { streamFormat.primaries }
+    /// The transfer the host encodes with now (CICP: 1=BT.709, 16=PQ, 18=HLG); BT.709 for an
+    /// older host.
     public var colorTransfer: UInt8 { streamFormat.transfer }
-    public var colorMatrix: UInt8 { streamFormat.matrix }
-    public var colorFullRange: Bool { streamFormat.fullRange }
     /// Encoded bit depth (8 or 10).
     public var bitDepth: UInt8 { streamFormat.bitDepth }
     /// The chroma subsampling the host encodes now, as the HEVC `chroma_format_idc`: `1` = 4:2:0
@@ -883,26 +859,22 @@ public final class PunktfunkConnection: @unchecked Sendable {
         let opened = AudioFormat(
             channels: resolvedAudioChannels, rateHz: resolvedAudioRateHz,
             frameUs: resolvedAudioFrameUs)
-        return withLiveHandle(or: opened) { h in
-            var channels = opened.channels, rate = opened.rateHz, frameUs = opened.frameUs
-            _ = punktfunk_connection_audio_channels(h, &channels)
-            _ = punktfunk_connection_audio_sample_rate(h, &rate)
-            _ = punktfunk_connection_audio_frame_us(h, &frameUs)
-            return AudioFormat(
-                channels: channels, rateHz: rate,
-                frameUs: frameUs == 0 ? opened.frameUs : frameUs)
-        }
+        return withLiveHandle(or: opened) { Self.readAudioFormat($0, or: opened) }
     }
 
-    /// True when this session resolved the LOSSLESS `0xD3` plane (`HOST_CAP_AUDIO_HIRES`) rather
-    /// than Opus — the one honest answer to "is this bit-exact?", which the rate and depth alone
-    /// cannot give (48 kHz/16-bit is a legal resolution on both planes).
-    public var isLosslessAudio: Bool {
-        hostCaps & UInt8(PUNKTFUNK_HOST_CAP_AUDIO_HIRES) != 0
+    /// The audio format the core reports. A field it does not fill keeps `fallback`'s, and so does
+    /// a zero frame length, which means the host stated none: the protocol's default frame.
+    private static func readAudioFormat(_ h: OpaquePointer, or fallback: AudioFormat) -> AudioFormat {
+        var channels = fallback.channels, rate = fallback.rateHz, frameUs = fallback.frameUs
+        _ = punktfunk_connection_audio_channels(h, &channels)
+        _ = punktfunk_connection_audio_sample_rate(h, &rate)
+        _ = punktfunk_connection_audio_frame_us(h, &frameUs)
+        return AudioFormat(
+            channels: channels, rateHz: rate, frameUs: frameUs == 0 ? fallback.frameUs : frameUs)
     }
 
     /// The video codec the host encodes now (`PUNKTFUNK_CODEC_*`): `2` = HEVC (default / older
-    /// host), `1` = H.264, `4` = AV1, `8` = PyroWave (only when this client opted in). Build the
+    /// host), `1` = H.264, `4` = AV1, `8` = PyroWave (see `codecPyroWave`). Build the
     /// decoder from THIS. It honours the client's `preferredCodec` when the host could emit it,
     /// and moves with `streamFormat`.
     public var resolvedCodec: UInt8 {
@@ -1147,7 +1119,7 @@ public final class PunktfunkConnection: @unchecked Sendable {
         return grants & bit != 0
     }
 
-    /// One forwarded host-cursor shape (the cursor channel, ABI v11): straight-alpha RGBA,
+    /// One forwarded host-cursor shape (the cursor channel): straight-alpha RGBA,
     /// `rgba.count == width * height * 4`, hotspot within the bitmap. Cache by `serial` —
     /// states reference shapes by it and a re-shown serial never resends pixels.
     public struct CursorShapeEvent: Sendable {
@@ -1201,7 +1173,7 @@ public final class PunktfunkConnection: @unchecked Sendable {
         }
     }
 
-    /// Tell the host who renders the pointer (the §8 mid-stream mouse-model flip, ABI v12):
+    /// Tell the host who renders the pointer (the §8 mid-stream mouse-model flip):
     /// `clientDraws = true` — this client draws it locally (the desktop mouse model; the host
     /// excludes the pointer from the video and forwards shape/state); `false` — the host
     /// composites it into the video (the capture model, full fidelity). Idempotent,
@@ -1215,8 +1187,8 @@ public final class PunktfunkConnection: @unchecked Sendable {
         }
     }
 
-    /// The resolved codec as a `VideoCodec` (H.264 / HEVC / AV1) — drives the bitstream framing
-    /// (Annex-B NAL parsing vs the AV1 OBU repack).
+    /// The resolved codec as a `VideoCodec` (H.264, HEVC, AV1 or PyroWave): picks the decoder and
+    /// the bitstream framing.
     public var videoCodec: VideoCodec { VideoCodec(wire: resolvedCodec) }
 
     /// Connect and start a session at the requested mode: the host makes a virtual output at
@@ -1287,14 +1259,9 @@ public final class PunktfunkConnection: @unchecked Sendable {
         // ("denied in the console", "approval timed out", "host busy") surface as
         // `.rejected` instead of the undifferentiated `.connectFailed`.
         var connectStatus: Int32 = 0
-        // `videoCaps` advertises decode/present capability (PUNKTFUNK_VIDEO_CAP_10BIT | _HDR): the
-        // host upgrades to a 10-bit / BT.2020 PQ stream only when set. 0 = 8-bit BT.709 SDR.
-        // `launchID` (a host library id like "steam:570") asks the host to launch that title in
-        // the session; the host resolves it against its own library — nil = the host's default.
-        // `label` is what an unpaired knock shows up as in the host's approval list (and the web
-        // console's outstanding-pairings view): this device's OS name unless the caller overrode
-        // it. Without it the core falls back to environment variables no Apple app has, and every
-        // device pending approval reads "This device".
+        // `videoCaps` gates a 10-bit or PQ stream (0: 8-bit BT.709 SDR); `launchID` (a host
+        // library id like "steam:570") asks the host to launch that title. `label` is the name an
+        // unpaired knock shows in the host's approval list: `DeviceName.current` unless overridden.
         let override = deviceName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let label = override.isEmpty ? DeviceName.current : override
         // LOAD-BEARING: the pair goes out as `0`/`0` unless a non-default format is asked for.
@@ -1433,27 +1400,16 @@ public final class PunktfunkConnection: @unchecked Sendable {
         _ = punktfunk_connection_bitrate(opened, &br)
         resolvedBitrateKbps = br
         openedFormat = Self.readFormat(opened)
-        var ac: UInt8 = 2
-        _ = punktfunk_connection_audio_channels(opened, &ac)
-        resolvedAudioChannels = ac
         // The format the host RESOLVED, which may be below what `audioRateHz`/`audioBits` asked
         // for — the five-condition gate declines to Opus 48 kHz rather than failing the connect.
-        // The defaults survive a status the accessors never fill (an older core), which is the
-        // right answer: every session such a core can run IS 48 kHz/16-bit.
-        var rate: UInt32 = 48_000
-        _ = punktfunk_connection_audio_sample_rate(opened, &rate)
-        resolvedAudioRateHz = rate
+        let audio = Self.readAudioFormat(opened, or: AudioFormat(
+            channels: 2, rateHz: 48_000, frameUs: UInt16(PUNKTFUNK_AUDIO_FRAME_MS * 1000)))
+        resolvedAudioChannels = audio.channels
+        resolvedAudioRateHz = audio.rateHz
+        resolvedAudioFrameUs = audio.frameUs
         var bits: UInt8 = 16
         _ = punktfunk_connection_audio_bits(opened, &bits)
         resolvedAudioBits = bits
-        // `0` is the accessor's "the host stated nothing" — an older host, or an Opus session that
-        // never needed to say. Both mean the protocol's default frame, so map it here rather than
-        // letting a zero reach the ring, where it would be a zero-length shed unit.
-        var frameUs: UInt16 = 0
-        _ = punktfunk_connection_audio_frame_us(opened, &frameUs)
-        resolvedAudioFrameUs = frameUs == 0
-            ? UInt16(PUNKTFUNK_AUDIO_FRAME_MS * 1000)
-            : frameUs
         _ = punktfunk_connection_codec(opened, &openedCodec)
         var shard: UInt32 = 1408
         _ = punktfunk_connection_shard_payload(opened, &shard)
@@ -1528,7 +1484,8 @@ public final class PunktfunkConnection: @unchecked Sendable {
     /// `targetKbps` of goodput for `durationMs` (clamped host-side to ≤ 10 Gbit/s / ≤ 5 s)
     /// beside the video it is already sending. Non-blocking — poll `probeResult()` until
     /// `done`. Starting a probe resets any prior measurement. Silently dropped after close.
-    public func startSpeedTest(targetKbps: UInt32, durationMs: UInt32) {
+    /// Tests only: the loopback test drives one burst end to end; the app runs `networkCheck`.
+    func startSpeedTest(targetKbps: UInt32, durationMs: UInt32) {
         withLiveHandle(or: ()) { h in
             _ = punktfunk_connection_speed_test(h, targetKbps, durationMs)
         }
@@ -1826,7 +1783,13 @@ public final class PunktfunkConnection: @unchecked Sendable {
     /// `advanced`. Empty after close.
     public func hudLines(tier: StatsVerbosity, advanced: Bool, facts: HudFacts) -> [HudLine] {
         return withLiveHandle(or: []) { h in
-            let index = UInt32(StatsVerbosity.allCases.firstIndex(of: tier) ?? 2)
+            // The C ABI's tier numbers, 0 off to 3 detailed.
+            let index: UInt32 = switch tier {
+            case .off: 0
+            case .compact: 1
+            case .normal: 2
+            case .detailed: 3
+            }
             let extras = facts.extras.map { "\($0.role.rawValue)\t\($0.text)\n" }.joined()
             return (facts.preset ?? "").withCString { preset in
                 extras.withCString { extrasPtr in
@@ -1893,10 +1856,9 @@ public final class PunktfunkConnection: @unchecked Sendable {
                 ? Data(bytes: base, count: count)
                 : Data(bytesNoCopy: UnsafeMutableRawPointer(mutating: base), count: count, deallocator: .none)
             let pulledNs = realtimeNowNs()
-            // Receipt = the core's reassembly-completion stamp (ABI v9); the pull instant is
-            // kept separately so the client-queue wait is its own measured term. 0 would mean a
-            // pre-v9 core — impossible here (core and Kit ship in one binary), but fall back to
-            // the pull instant rather than record a 1970 receipt.
+            // Receipt = the core's reassembly-completion stamp; the pull instant is kept
+            // separately so the client-queue wait is its own measured term. A zero stamp falls
+            // back to the pull instant rather than record a 1970 receipt.
             let receivedNs = frame.received_ns > 0 ? Int64(frame.received_ns) : pulledNs
             return AccessUnit(
                 data: data, ptsNs: frame.pts_ns,
@@ -2081,9 +2043,8 @@ public final class PunktfunkConnection: @unchecked Sendable {
 
     /// One HID-output feedback event a game wrote to the host's virtual pad — replay it on the
     /// real controller (GCDeviceLight, GCControllerPlayerIndex, GCDualSenseAdaptiveTrigger for
-    /// the DualSense kinds; the SC2 capture's GATT writes for `.hidRaw`). Only a `.dualSense`
-    /// session emits the first three; only an as-is Steam Controller 2 passthrough pad emits
-    /// `.hidRaw`.
+    /// the DualSense kinds; the SC2 capture's GATT writes for `.hidRaw`). Which kinds a pad's
+    /// virtual device emits is the host's: see `nextHidOutput`.
     public enum HidOutputEvent: Sendable, Equatable {
         /// Lightbar color.
         case led(pad: UInt8, r: UInt8, g: UInt8, b: UInt8)
@@ -2106,9 +2067,8 @@ public final class PunktfunkConnection: @unchecked Sendable {
     /// Pull the next HID-output feedback event (lightbar / player LEDs / adaptive triggers —
     /// or a raw `.hidRaw` report on an SC2 passthrough pad); nil on timeout, throws `.closed`
     /// once the session ended. Drain from the (single) feedback thread, alongside
-    /// `nextRumbleCommand`. Nothing arrives unless a pad's virtual device is a DualSense (the
-    /// first three), a DualShock 4 (lightbar only), or an as-is Steam Controller 2 (`.hidRaw`)
-    /// — poll with a short timeout, never spin.
+    /// `nextRumbleCommand`. Only a pad whose virtual device takes output writes (a PlayStation,
+    /// Nintendo or Steam pad, as the host builds it) sends any: poll with a short timeout.
     public func nextHidOutput(timeoutMs: UInt32 = 0) throws -> HidOutputEvent? {
         var out = PunktfunkHidOutput()
         return try poll(feedbackLock) { h in
@@ -2125,7 +2085,7 @@ public final class PunktfunkConnection: @unchecked Sendable {
                 let effect = withUnsafeBytes(of: out.effect) { Array($0.prefix(len)) }
                 return .triggerEffect(pad: out.pad, which: out.which, effect: effect)
             case PUNKTFUNK_HIDOUT_HID_RAW:
-                // Same tuple-copy idiom for the raw report body (ABI v27).
+                // Same tuple-copy idiom for the raw report body.
                 let len = Int(min(out.raw_len, UInt8(PUNKTFUNK_HID_REPORT_MAX)))
                 let data = withUnsafeBytes(of: out.raw) { Array($0.prefix(len)) }
                 return .hidRaw(pad: out.pad, kind: out.hid_kind, data: data)
@@ -2162,9 +2122,9 @@ public final class PunktfunkConnection: @unchecked Sendable {
     public static let codecH264: UInt8 = UInt8(PUNKTFUNK_CODEC_H264)
     public static let codecHEVC: UInt8 = UInt8(PUNKTFUNK_CODEC_HEVC)
     public static let codecAV1: UInt8 = UInt8(PUNKTFUNK_CODEC_AV1)
-    /// PyroWave (opt-in wired-LAN wavelet codec, 8-bit SDR): the host only ever resolves it
-    /// when the client both advertises the bit AND names it `preferredCodec` — never
-    /// auto-selected. Decoded by the Metal wavelet decoder, not VideoToolbox.
+    /// PyroWave (opt-in wired-LAN wavelet codec): never auto-selected. The host resolves it only
+    /// for a client that advertises the bit, when that client names it `preferredCodec` or names
+    /// none and the host's encoder is pinned to it. Decoded by the Metal wavelet decoder.
     public static let codecPyroWave: UInt8 = UInt8(PUNKTFUNK_CODEC_PYROWAVE)
 
     /// `clientCaps` bit: ask the host to leave ITS OWN audio devices alone for this session —
@@ -2369,6 +2329,19 @@ public final class PunktfunkConnection: @unchecked Sendable {
     public func setAccessUnitMemory(_ memory: AccessUnitMemory?) {
         pumpLock.lock()
         defer { pumpLock.unlock() }
+        installAccessUnitMemory(memory)
+    }
+
+    /// `setAccessUnitMemory(nil)`, unless a later call replaced `memory`: a pump that exits after
+    /// its successor started must not take the successor's lender away.
+    public func releaseAccessUnitMemory(_ memory: AccessUnitMemory) {
+        pumpLock.lock()
+        defer { pumpLock.unlock() }
+        if accessUnitMemory === memory { installAccessUnitMemory(nil) }
+    }
+
+    /// Under `pumpLock`.
+    private func installAccessUnitMemory(_ memory: AccessUnitMemory?) {
         let installed = withLiveHandle(or: false) { h -> Bool in
             guard let memory else { return punktfunk_connection_set_au_memory(h, nil) == statusOK }
             return accessUnitLenders.lend(memory) {
@@ -2721,12 +2694,11 @@ public final class PunktfunkConnection: @unchecked Sendable {
         }
     }
 
-    /// Why a stream session ended — the Swift mirror of `PunktfunkEndReason` (ABI v17).
+    /// Why a stream session ended — the Swift mirror of `PunktfunkEndReason`.
     ///
     /// The distinction that matters to a UI is normal vs alarming, and it is not a spectrum: a
     /// player quitting their game and a host falling off the network both arrive as "the session
-    /// ended". Without this every client wrote one message for all of them, and every client chose
-    /// an error.
+    /// ended", and only this tells them apart.
     public enum SessionEndReason: UInt8, Sendable {
         /// Not ended, or ended before a reason could be observed. Also the fallback for an
         /// unrecognized value — the core may be newer than this code.
@@ -2744,15 +2716,10 @@ public final class PunktfunkConnection: @unchecked Sendable {
         /// and only this — is the "the host may be asleep" case.
         case lost = 5
 
-        /// Is this an ordinary outcome rather than something to alarm the user about? `.none`
-        /// counts as normal: no evidence of trouble is not evidence of it.
-        public var isNormal: Bool { self != .hostError && self != .lost }
-
         /// How long to wait before redial `attempt` (0-based) of a session that ended this way,
         /// on the schedule every client shares; nil means stay ended. Only `.lost` redials.
         public func redialDelay(attempt: UInt32) -> Duration? {
-            let ms = punktfunk_redial_delay_ms(rawValue, attempt)
-            return ms < 0 ? nil : .milliseconds(ms)
+            PunktfunkConnection.delay(ms: punktfunk_redial_delay_ms(rawValue, attempt))
         }
     }
 
@@ -2768,9 +2735,6 @@ public final class PunktfunkConnection: @unchecked Sendable {
             return SessionEndReason(rawValue: out) ?? .none
         }
     }
-
-    /// Shorthand for the single most actionable reason: the host's launched game exited.
-    public var endedBecauseGameExited: Bool { sessionEndReason == .gameExited }
 
     /// The typed rejection a MID-SESSION close carried, if any — an access expiry being the
     /// case this exists for: `sessionEndReason` can only file that deliberate close under
@@ -2810,8 +2774,7 @@ public final class PunktfunkConnection: @unchecked Sendable {
         after error: Error, autoWake: Bool, sinceFirst: Duration?
     ) -> Duration? {
         guard case .rejected(let rejection, _)? = error as? PunktfunkClientError else { return nil }
-        return redialDelay(
-            ms: punktfunk_wake_redial_delay_ms(autoWake, rejection.status, ms(sinceFirst)))
+        return delay(ms: punktfunk_wake_redial_delay_ms(autoWake, rejection.status, ms(sinceFirst)))
     }
 
     /// The same for how this session ended: its typed close counts only before any frame. Same
@@ -2821,7 +2784,7 @@ public final class PunktfunkConnection: @unchecked Sendable {
             var out: Int64 = -1
             guard punktfunk_connection_wake_redial_delay_ms(h, autoWake, Self.ms(sinceFirst), &out)
                     == statusOK else { return nil }
-            return Self.redialDelay(ms: out)
+            return Self.delay(ms: out)
         }
     }
 
@@ -2830,7 +2793,8 @@ public final class PunktfunkConnection: @unchecked Sendable {
             ?? -1
     }
 
-    private static func redialDelay(ms: Int64) -> Duration? { ms < 0 ? nil : .milliseconds(ms) }
+    /// A core redial answer in ms as a wait; negative means stay ended.
+    private static func delay(ms: Int64) -> Duration? { ms < 0 ? nil : .milliseconds(ms) }
 
     /// The host's sentence when this session's launch did not give the player their game:
     /// refused, died on the spot, or picked up without the host seeing it. In the app's language

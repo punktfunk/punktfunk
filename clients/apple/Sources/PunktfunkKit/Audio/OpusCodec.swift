@@ -1,20 +1,13 @@
-// Opus ⇄ PCM through CoreAudio's built-in codec (kAudioFormatOpus, macOS 10.13+ / iOS
-// 11+) — no bundled libopus. The host's audio plane is raw Opus packets (48 kHz stereo,
-// one frame per packet); the mic uplink is 48 kHz MONO packets (one microphone bus —
-// the host's decoder upmixes, so duplicating it into a second channel only cost bits).
-// AVAudioConverter handles both as single-packet AVAudioCompressedBuffers with explicit
-// packet descriptions.
+// The mic uplink's Opus encoder, through CoreAudio's built-in codec (kAudioFormatOpus): 48 kHz
+// MONO packets, one microphone bus (the host's decoder upmixes). AVAudioConverter emits them into
+// an AVAudioCompressedBuffer with explicit packet descriptions.
 //
 // ⚠ **The 48 kHz in this file is CORRECT and must not be "fixed" for hi-res.** Opus is 48 kHz by
-// construction — it has no other internal rate — which is the whole reason the lossless plane
-// exists (design/hi-res-audio.md §2). Nothing on that plane comes through here: `0xD3` frames are
-// unpacked in core and arrive as f32 via `nextAudioPcm`, and the only surviving user of this file
-// in the app is `OpusEncoder` on the mic UPLINK, which §3 keeps at 48 kHz deliberately (voice,
-// 10 ms frames, unchanged). `OpusDecoder` is exercised by the codec tests; the playback path stopped
-// using it when decoding moved into core.
+// construction, which is why the lossless plane exists (design/hi-res-audio.md §2), and the uplink
+// stays 48 kHz Opus whatever the playback plane negotiated (§3). Host audio never comes through
+// here: core decodes both planes and hands back f32 through `nextAudioPcm`.
 //
-// Both classes are single-threaded by contract (one per direction, owned by their
-// drain/capture pipelines).
+// Single-threaded by contract: the mic uplink's worker owns its encoder.
 
 import AVFoundation
 
@@ -24,16 +17,9 @@ enum OpusCodecError: Error {
     case convertFailed(String)
 }
 
-/// 48 kHz stereo float32 interleaved — the decoder's PCM side (the host plane's shape).
-func opusPCMFormat() -> AVAudioFormat? {
-    AVAudioFormat(
-        commonFormat: .pcmFormatFloat32, sampleRate: 48_000, channels: 2, interleaved: true)
-}
-
-/// The compressed side: raw Opus, `framesPerPacket` nominal samples per packet at 48 kHz
-/// (240 = the host's 5 ms audio plane; 480 = the 10 ms packets the encoder emits) and
-/// `channels` (2 = the host plane, 1 = the mic uplink).
-private func opusFormat(framesPerPacket: UInt32, channels: UInt32) -> AVAudioFormat? {
+/// The compressed side: raw Opus, `framesPerPacket` nominal samples per packet at 48 kHz,
+/// `channels` wide.
+func opusFormat(framesPerPacket: UInt32, channels: UInt32) -> AVAudioFormat? {
     var desc = AudioStreamBasicDescription(
         mSampleRate: 48_000,
         mFormatID: kAudioFormatOpus,
@@ -47,67 +33,10 @@ private func opusFormat(framesPerPacket: UInt32, channels: UInt32) -> AVAudioFor
     return AVAudioFormat(streamDescription: &desc)
 }
 
-final class OpusDecoder {
-    private let converter: AVAudioConverter
-    private let inBuf: AVAudioCompressedBuffer
-    private let opus: AVAudioFormat
-    let pcmFormat: AVAudioFormat
-
-    /// `framesPerPacket`: the sender's packet duration in samples (host audio = 240).
-    init(framesPerPacket: UInt32) throws {
-        guard let pcm = opusPCMFormat(),
-              let opus = opusFormat(framesPerPacket: framesPerPacket, channels: 2),
-              let converter = AVAudioConverter(from: opus, to: pcm)
-        else { throw OpusCodecError.unavailable }
-        self.converter = converter
-        self.opus = opus
-        self.pcmFormat = pcm
-        inBuf = AVAudioCompressedBuffer(
-            format: opus, packetCapacity: 1, maximumPacketSize: 1500)
-    }
-
-    /// Decode one Opus packet into `out` (whose format must be `pcmFormat`); returns the
-    /// number of frames written. Empty packets (DTX) decode to 0 frames.
-    func decode(_ packet: Data, into out: AVAudioPCMBuffer) throws -> AVAudioFrameCount {
-        guard !packet.isEmpty else { return 0 }
-        guard packet.count <= Int(inBuf.maximumPacketSize) else {
-            throw OpusCodecError.convertFailed("packet larger than maximumPacketSize")
-        }
-        packet.withUnsafeBytes { raw in
-            inBuf.data.copyMemory(from: raw.baseAddress!, byteCount: raw.count)
-        }
-        inBuf.byteLength = UInt32(packet.count)
-        inBuf.packetCount = 1
-        inBuf.packetDescriptions![0] = AudioStreamPacketDescription(
-            mStartOffset: 0, mVariableFramesInPacket: 0, mDataByteSize: UInt32(packet.count))
-
-        out.frameLength = 0
-        var fed = false
-        var convError: NSError?
-        let status = converter.convert(to: out, error: &convError) { [inBuf] _, outStatus in
-            if fed {
-                outStatus.pointee = .noDataNow
-                return nil
-            }
-            fed = true
-            outStatus.pointee = .haveData
-            return inBuf
-        }
-        if status == .error {
-            throw OpusCodecError.convertFailed(convError?.localizedDescription ?? "decode")
-        }
-        return out.frameLength
-    }
-}
-
 final class OpusEncoder {
-    /// The encoder's packet duration in samples: 480 = 10 ms, halving the packetization
-    /// latency of the old 20 ms framing. CoreAudio honors it — mFramesPerPacket 480/mono
-    /// creates a converter that truly emits 10 ms CELT packets (TOC config 30), one per
-    /// 480-frame chunk, verified by inspection of the emitted TOC bytes and per-packet
-    /// frame accounting. 960 stays as the fallback should an older codec refuse 480.
-    /// The host's mic service decodes any Opus frame size up to 120 ms, so either is
-    /// wire-compatible.
+    /// The encoder's packet duration in samples: 480 = 10 ms, which CoreAudio emits as one 10 ms
+    /// CELT packet (TOC config 30) per 480-frame chunk. 960 is the fallback for a codec that
+    /// refuses 480; the host's mic service decodes any Opus frame size up to 120 ms.
     let framesPerPacket: AVAudioFrameCount
 
     /// 48 kHz MONO float32 interleaved — the uplink carries one microphone bus.
@@ -130,8 +59,7 @@ final class OpusEncoder {
             }
         }
         guard let made else { throw OpusCodecError.unavailable }
-        // 48 kbps: transparent for mono voice — the old 96 kbps budget was sized for
-        // the duplicated-stereo framing this encoder no longer emits.
+        // 48 kbps: transparent for mono voice.
         made.converter.bitRate = 48_000
         converter = made.converter
         framesPerPacket = made.fpp

@@ -41,7 +41,7 @@ final class HostFormDraftTests: XCTestCase {
         XCTAssertEqual(host.address, "192.168.1.5")
         XCTAssertEqual(host.port, 47989)
         XCTAssertEqual(HostFormDraft(address: "192。168。1。5").trimmedAddress, "192.168.1.5")
-        XCTAssertEqual(HostFormDraft(address: "［ｆｄ７ａ：：１］：９７７７").trimmedAddress, "[fd7a::1]")
+        XCTAssertEqual(HostFormDraft(address: "［ｆｄ７ａ：：１］：９７７７").trimmedAddress, "fd7a::1")
     }
 
     func testIdnHostAndNameAreNotMapped() {
@@ -66,8 +66,20 @@ final class HostFormDraftTests: XCTestCase {
 
     func testBracketedIPv6WithAPortSplits() {
         let draft = HostFormDraft(address: "[fd7a:115c::1]:9777")
-        XCTAssertEqual(draft.trimmedAddress, "[fd7a:115c::1]")
+        XCTAssertEqual(draft.trimmedAddress, "fd7a:115c::1")
         XCTAssertEqual(draft.resolvedPort, 9777)
+    }
+
+    /// A stored address is bare: the deep link brackets an IPv6 literal itself, and a record that
+    /// kept its brackets made `[[fd7a:115c::1]]:7777`, which the parser refuses.
+    func testBracketedIPv6IsStoredBareAndSurvivesALink() throws {
+        for typed in ["[fd7a:115c::1]", "[fd7a:115c::1]:7777"] {
+            var host = StoredHost(name: "", address: "")
+            HostFormDraft(address: typed, port: "7777").apply(to: &host)
+            XCTAssertEqual(host.address, "fd7a:115c::1", typed)
+            let link = try DeepLink.parse(DeepLink.forHost(host).urlString)
+            XCTAssertEqual(link.host, DeepLinkAddress("fd7a:115c::1", 7777), typed)
+        }
     }
 
     func testApplyLeavesEverythingTheFormDoesNotShow() {

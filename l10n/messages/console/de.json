@@ -28,6 +28,8 @@
 	"console_profile_title_games": "Host und Profil",
 	"console_unlock_password_empty_a11y": "Passwort, leer",
 	"console_unlock_password_entered_a11y": "Passwort, eingegeben",
+	"console_unlock_pin_empty_a11y": "PIN, leer",
+	"console_unlock_pin_entered_a11y": "PIN, eingegeben",
 	"console_unlock_stay_signed_in_off_a11y": "Auf diesem Gerät angemeldet bleiben, aus",
 	"console_unlock_stay_signed_in_on_a11y": "Auf diesem Gerät angemeldet bleiben, an",
 	"console_home_title": "Host auswählen",

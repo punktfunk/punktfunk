@@ -28,7 +28,7 @@ public enum Licenses {
             + apache
     }
 
-    /// The bundled brand typeface (Geist Sans + Geist Mono) — SIL Open Font License 1.1. The
+    /// The bundled brand typeface (Geist Sans) — SIL Open Font License 1.1. The
     /// license file ships alongside the OTFs in `Resources/Fonts/`, satisfying the OFL's
     /// distribution requirement; this surfaces it in the Acknowledgements screen too.
     public static var fontLicense: String {
@@ -56,9 +56,9 @@ public enum Licenses {
         return text.isEmpty ? String(localized: L10n.aboutNoticesUnavailable) : text
     }
 
-    /// `thirdPartyNotices` pre-split into render-sized line chunks. The full notices are ~885 KB /
-    /// 16k lines; a single SwiftUI `Text` that large overshoots CoreText/CoreAnimation's max
-    /// renderable height — it lays out for ages and draws blank past the limit — so the
+    /// `thirdPartyNotices` pre-split into render-sized line chunks. The full notices run to
+    /// thousands of lines; a single SwiftUI `Text` that large overshoots CoreText/CoreAnimation's
+    /// max renderable height — it lays out for ages and draws blank past the limit — so the
     /// Acknowledgements screen renders these chunks in a `LazyVStack` (only on-screen chunks lay
     /// out, and no chunk is tall enough to clip). Split at line boundaries and joined with "\n";
     /// the inter-chunk break is the `LazyVStack` row boundary, so no text is lost. Computed once.

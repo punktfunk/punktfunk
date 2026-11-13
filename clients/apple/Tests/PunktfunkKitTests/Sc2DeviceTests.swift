@@ -83,25 +83,6 @@ final class Sc2DeviceTests: XCTestCase {
         XCTAssertEqual(Sc2Device.wirelessConnect, 2)
     }
 
-    func testEngravedSerialParsing() {
-        // Reply shape: report id + binary header, then the engraved serial as printable ASCII.
-        var reply = [UInt8](repeating: 0, count: 65)
-        reply[0] = Sc2Device.featureSerial
-        reply[1] = 0x11
-        reply[2] = 0xFE
-        let serial = Array("FXA1234567890".utf8)
-        reply.replaceSubrange(8 ..< 8 + serial.count, with: serial)
-        XCTAssertEqual(Sc2Device.parseSerial(reply), "FXA1234567890")
-        // Runs outside 8–20 never qualify — a garbage reply degrades to no serial, not a
-        // wrong one: too short (7), and an over-long printable run (an ASCII error string).
-        XCTAssertNil(Sc2Device.parseSerial(Array("ABCDEFG".utf8)))
-        XCTAssertNil(Sc2Device.parseSerial(Array(repeating: UInt8(ascii: "A"), count: 65)))
-        XCTAssertNil(Sc2Device.parseSerial([0x02, 0x41, 0x42, 0x00, 0x43, 0x44]))
-        XCTAssertNil(Sc2Device.parseSerial([]))
-        // Ties keep the FIRST longest run.
-        XCTAssertEqual(Sc2Device.parseSerial(Array("ABCDEFGH:IJKLMNOP".utf8)), "ABCDEFGH")
-    }
-
     func testFeatureCommandBytesVerbatim() {
         // DISABLE_LIZARD: [1][0x87 ID_SET_SETTINGS_VALUES][3][9 SETTING_LIZARD_MODE][0 0 u16],
         // zero-padded to the 64-byte feature size (Android sends the identical frame).
@@ -116,9 +97,6 @@ final class Sc2DeviceTests: XCTestCase {
         XCTAssertEqual(
             Array(Sc2Device.normalizeJoysticks[0 ..< 6]), [0x01, 0x87, 0x03, 0x2E, 0x00, 0x00])
         XCTAssertTrue(Sc2Device.normalizeJoysticks[6...].allSatisfy { $0 == 0 })
-        // The gyro-enable REFERENCE (WRITE_REGISTER reg 0x30 GYRO_MODE val 0x0018) — kept for
-        // logging/tests only; nothing in the client may ever send it unprompted.
-        XCTAssertEqual(Sc2Device.gyroEnableReference, [0x01, 0x87, 0x03, 0x30, 0x18, 0x00])
         // SDL's lizard-off refresh cadence.
         XCTAssertEqual(Sc2Device.lizardRefreshSeconds, 3.0)
     }

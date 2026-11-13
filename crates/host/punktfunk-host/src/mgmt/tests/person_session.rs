@@ -289,7 +289,28 @@ fn the_person_lane_reaches_what_is_pinned() {
     assert_eq!(boxed, rows(BOX_REACH), "a person session on the box");
     assert!(!may_reach(&Method::GET, "/api/v1/library/../profiles"));
     assert!(!may_reach(&Method::GET, "/api/v1/profiles/x/proxy/hooks"));
-    assert!(!may_reach(&Method::GET, "/api/v1/plugins/x/ui/index.html"));
+    // Their plugins' pages through the relay, on either seat host; never the plugin's attach.
+    for windows in [false, true] {
+        for (method, path) in [
+            (Method::GET, "/api/v1/plugins/quest/ui/"),
+            (Method::POST, "/api/v1/plugins/quest/ui/api/save"),
+        ] {
+            assert!(reaches(windows, &method, path), "{windows} {method} {path}");
+        }
+        for path in [
+            "/api/v1/plugins/quest/ui/../../profiles",
+            "/api/v1/plugins/quest/ui/./x",
+            "/api/v1/plugins/a%2fb/ui/x",
+            "/api/v1/plugins//ui/x",
+        ] {
+            assert!(!reaches(windows, &Method::GET, path), "{windows} {path}");
+        }
+    }
+    assert!(!reaches(
+        true,
+        &Method::GET,
+        "/api/v1/plugins/quest/ui/attach"
+    ));
 }
 
 /// Through the router, a session's call to a route off its lane is refused and runs nothing.
@@ -315,6 +336,10 @@ async fn a_route_off_the_lane_answers_403() {
         let (status, _) = bare(&app, with_bearer(req, &token)).await;
         assert_eq!(status, StatusCode::FORBIDDEN, "{path}");
     }
+    // A plugin page passes the lane to the relay, which knows no such plugin here.
+    let page = get_req("/api/v1/plugins/quest/ui/index.html");
+    let (status, _) = bare(&app, with_bearer(page, &token)).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
 }
 
 /// The box asks the seat host whose a session is, on the admin lane alone.

@@ -34,5 +34,6 @@
 	"common_disconnect": "Desconectar",
 	"common_dismiss": "Dispensar",
 	"common_next": "Avançar",
-	"common_retry": "Tentar novamente"
+	"common_retry": "Tentar novamente",
+	"common_undo": "Desfazer"
 }

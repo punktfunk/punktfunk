@@ -1,9 +1,7 @@
 // On-disk cache for library cover art.
 //
-// Posters are the bulk of what the library screen transfers and they essentially never change, so
-// re-fetching them on every visit is pure waste — the Windows client has cached them on disk for
-// this reason and Apple did not. It matters more now that host art rides `MgmtTransport`: a cache
-// hit costs no connection at all.
+// Posters are the bulk of what the library screen transfers and essentially never change, so they
+// stay on disk: a hit costs no connection at all.
 //
 // Lives in the CACHES directory on purpose: every byte here is re-derivable from the host, so the
 // system is welcome to evict it under storage pressure. Entries are keyed by a caller-chosen
@@ -75,7 +73,7 @@ actor ArtCache {
         } catch {
             return // a cache that can't write is a slow cache, not a broken app
         }
-        // Amortised: prune once per budget's worth of new bytes. The budget is a ceiling on
+        // Amortised: prune once per `pruneInterval` of new bytes. The budget is a ceiling on
         // steady-state size, not a per-write invariant, so overshooting it between prunes by at
         // most one pruneInterval is the whole cost.
         writtenSincePrune += data.count
@@ -113,7 +111,7 @@ actor ArtCache {
         }
         guard total > maxBytes else { return }
 
-        // Oldest first — `data(for:)` touches on read, so this is least-recently-USED.
+        // Oldest first — `data(forKey:)` touches on read, so this is least-recently-USED.
         for file in files.sorted(by: { $0.date < $1.date }) {
             guard total > maxBytes else { break }
             try? fileManager.removeItem(at: file.url)

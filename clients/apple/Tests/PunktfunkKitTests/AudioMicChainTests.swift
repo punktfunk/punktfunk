@@ -57,5 +57,18 @@ final class AudioMicChainTests: XCTestCase {
         XCTAssertEqual(second.monoFormat.sampleRate, 44_100)
         XCTAssertGreaterThan(second.staging.frameCapacity, first.staging.frameCapacity)
     }
+
+    /// The 10 s level verdict comes once, when the window fills, with the loudest sample seen.
+    func testTheLevelCheckGivesOneVerdictWhenTheWindowFills() {
+        var check = SessionAudio.MicLevelCheck(rate: 100) // a 1 000-sample window
+        let quiet = [Float](repeating: 0, count: 600)
+        let loud: [Float] = [0, -0.5, 0.25]
+        quiet.withUnsafeBufferPointer { XCTAssertNil(check.note($0.baseAddress!, count: 600)) }
+        loud.withUnsafeBufferPointer { XCTAssertNil(check.note($0.baseAddress!, count: 3)) }
+        quiet.withUnsafeBufferPointer {
+            XCTAssertEqual(check.note($0.baseAddress!, count: 600), 0.5)
+        }
+        quiet.withUnsafeBufferPointer { XCTAssertNil(check.note($0.baseAddress!, count: 600)) }
+    }
 }
 #endif

@@ -432,7 +432,7 @@ A row with one answer holds on both. Every other row is a difference the section
 | A device as its person, on `mgmt_routes::PERSON` | The door decides, the owner's host writes | The box host decides and writes |
 | Its own titles, with a command and `prep` | On its seat host; the owner's host stores the list | On its seat host; the box host stores the list |
 | [The person's own session](#the-persons-own-session) | On a seat's own host, made or on their own account; the ticket from a `0600` file | The same; the ticket from the seat host's person pipe |
-| What that session reaches on the seat host | Every `profile-data` and `profile-exec` route | Their hooks, their own titles, the store, their runner and folder decisions |
+| What that session reaches on the seat host | Every `profile-data` and `profile-exec` route, and their plugins' pages | Their hooks, their own titles, the store, their runner, their plugins' pages and folder decisions |
 | Hooks on a made seat | The operator and the person | The operator and the person |
 | Hooks on a person's own account | The person, in their session | The person, in their session |
 | Plugins on a made seat | The seat account's own runner | The seat's own runner, as the seat's account; its person installs from the built-in source alone |
@@ -441,7 +441,8 @@ A row with one answer holds on both. Every other row is a difference the section
 | Emulators | Installed box-wide; config and saves are the account's | The box's copies; saves and firmware through the box host's `?profile=` |
 | A seat on an existing account | Yes, opened by its password or a device key | On Windows Server |
 
-Open on Windows: a plugin's page for a seat.
+A plugin with no listener of its own, as every Windows seat's is, serves its page through its seat
+host's relay, which the person's session reaches.
 
 ## Checking a seat can actually stream
 

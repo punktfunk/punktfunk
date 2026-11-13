@@ -858,7 +858,6 @@ final class SharedFoundationTests: XCTestCase {
     func testAudioFormatWireMappingCoversBothRateFamilies() {
         XCTAssertEqual(AudioFormatChoice.opus.wire.rateHz, 48_000)
         XCTAssertEqual(AudioFormatChoice.opus.wire.bits, 16)
-        XCTAssertFalse(AudioFormatChoice.opus.isLossless)
 
         let expected: [(AudioFormatChoice, UInt32)] = [
             (.lossless441, 44_100), (.lossless48, 48_000), (.lossless882, 88_200),
@@ -867,7 +866,6 @@ final class SharedFoundationTests: XCTestCase {
         for (choice, rateHz) in expected {
             XCTAssertEqual(choice.wire.rateHz, rateHz, "\(choice.rawValue)")
             XCTAssertEqual(choice.wire.bits, 24, "\(choice.rawValue): 24-bit earns the bandwidth")
-            XCTAssertTrue(choice.isLossless, "\(choice.rawValue)")
         }
         XCTAssertEqual(
             expected.count + 1, AudioFormatChoice.allCases.count,

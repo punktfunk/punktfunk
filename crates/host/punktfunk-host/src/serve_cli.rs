@@ -238,8 +238,11 @@ pub(crate) fn prepare_serve(args: ServeArgs) -> Result<(mgmt::Options, native::N
     let runner = crate::plugins::runtime_status();
     let (mints, may_restart) = runner_token(pf_paths::seat::role());
     if runner.installed && mints {
-        // A seat's own runner is started by its host alone, at each start it is on.
+        // A seat's runner starts again at each start of its host: its own is started by the host
+        // alone, and a made seat's, up since its account's login, predates the credentials this
+        // start rewrote, which its unit hides only as they were when it started.
         opts.restart_runner = crate::plugins::seat_runner()
+            || role.follows_contract()
             || (may_restart
                 && !pf_paths::config_dir()
                     .join(crate::mgmt_token::PLUGIN_FILE)

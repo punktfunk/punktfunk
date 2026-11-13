@@ -101,6 +101,7 @@
 		}
 	}],
 	"decky_host_asleep": "suspenso",
+	"decky_host_awake": "O host {host} está ativo",
 	"decky_play_stream": "Transmitir",
 	"decky_play_stop": "Parar",
 	"decky_update_server_unreachable": "Não foi possível alcançar o servidor de atualizações — você está online?",

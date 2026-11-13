@@ -483,30 +483,8 @@ final class SessionModel: ObservableObject {
         let showsScreens = false
         let screenAsk = ScreenAsk.none
         #endif
-        // Capability gate (main-actor — screen APIs): only advertise HDR when this display can
-        // actually present it, so the host sends a proper SDR stream to an SDR display rather than
-        // BT.2020 PQ the panel would mis-tone-map. The display self-tone-maps HDR from the mastering
-        // metadata we apply (Step 2) when it IS HDR.
-        let displayHDR: Bool = {
-            #if os(macOS)
-                // The potential headroom, not the current one: macOS allocates EDR only when content
-                // asks, so the current value reads 1.0 on an idle desktop and an HDR monitor would
-                // never be advertised at connect.
-                return (NSScreen.main?.maximumPotentialExtendedDynamicRangeColorComponentValue ?? 1.0) > 1.0
-            #elseif os(tvOS)
-                // NOT the EDR headroom here: on tvOS that reflects the CURRENT output mode, and
-                // Apple's recommended setup runs an SDR home screen with Match Content — an
-                // HDR-capable TV would read 1.0 at connect time and never be advertised. The
-                // session switches the display to HDR10 itself once streaming (AVDisplayManager —
-                // see StreamViewIOS), so gate on the TV's mode-independent capability; if the
-                // switch never lands, the presenter's in-shader tone-map keeps PQ safe anyway.
-                return AVPlayer.eligibleForHDRPlayback
-            #elseif os(visionOS)
-                return true // every Vision Pro display presents HDR
-            #else
-                return NativeDisplay.screen.potentialEDRHeadroom > 1.0
-            #endif
-        }()
+        // Main actor: a screen read. HDR is advertised only to a display that presents it.
+        let displayHDR = NativeDisplay.presentsHDR
         let unlocking = unlock != nil
         Task.detached(priority: .userInitiated) {
             // PunktfunkConnection.init blocks on the QUIC handshake — keep it off the main

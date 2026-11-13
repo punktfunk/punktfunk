@@ -81,14 +81,18 @@ pub(crate) const WINDOWS_SEAT: &[(&str, &str)] = &[
 ];
 
 /// Whether the person lane reaches `method` `path` on its seat host: a profile's data or
-/// execution, or one of [`SEAT_READS`]; on Windows [`WINDOWS_SEAT`] alone of the profile's.
-/// A route with no scope stays closed.
+/// execution, or one of [`SEAT_READS`]; on Windows [`WINDOWS_SEAT`] alone of the profile's; and
+/// their plugins' pages through this host's relay ([`page_relay`]). A route with no scope stays
+/// closed.
 pub(crate) fn may_reach(method: &Method, path: &str) -> bool {
     reaches(cfg!(windows), method, path)
 }
 
 /// [`may_reach`] on a `windows` seat host or a Linux one.
 pub(crate) fn reaches(windows: bool, method: &Method, path: &str) -> bool {
+    if page_relay(path) {
+        return true;
+    }
     match scope_of(method, path) {
         Some(Scope::ProfileData | Scope::ProfileExec) if windows => {
             listed(WINDOWS_SEAT, method, path)
@@ -97,6 +101,26 @@ pub(crate) fn reaches(windows: bool, method: &Method, path: &str) -> bool {
         Some(_) => listed(SEAT_READS, method, path),
         None => false,
     }
+}
+
+/// A plugin page through this host's relay, `/api/v1/plugins/{id}/ui/…` in any method, for a
+/// plugin with no listener (every Windows seat's). Not the plugin's own `ui/attach`, and no dot
+/// segment. The person already reads that plugin's `ui-credential`.
+fn page_relay(path: &str) -> bool {
+    let Some((id, page)) = path
+        .strip_prefix("/api/v1/plugins/")
+        .and_then(|rest| rest.split_once('/'))
+    else {
+        return false;
+    };
+    let id_ok = !id.is_empty()
+        && id
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_');
+    id_ok
+        && page.starts_with("ui/")
+        && page != "ui/attach"
+        && !page.split('/').any(|s| s == "." || s == "..")
 }
 
 /// Whether a person session reaches `method` `path` on the box: `PERSON`, and [`BOX_READS`].

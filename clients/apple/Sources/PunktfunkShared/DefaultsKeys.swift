@@ -133,12 +133,6 @@ public enum DefaultsKey {
     /// discrete channel, and the default N→stereo downmix grabs channels 0/1 (silence when the mic
     /// is higher up), so we fold to mono ourselves. Only meaningful for multi-channel devices.
     public static let micChannel = "punktfunk.micChannel"
-    /// LEGACY (2026-07 presentation rebuild — design/apple-presentation-rebuild.md): the old
-    /// user-visible stage picker's key. No longer read — the presenter is resolved from
-    /// `presentPriority` below; the stage ladder survives only as the
-    /// PUNKTFUNK_PRESENTER=stage1|stage2|stage3|stage4 debug env lever. Kept so a synced old
-    /// value is documented, not mysterious.
-    public static let presenter = "punktfunk.presenter"
     /// The user's presentation intent: "latency" (default — every frame shows as soon as the
     /// display can; jitter appears as the occasional repeat/drop) or "smooth" (a small client
     /// jitter buffer evens the cadence at the cost of added, visible display latency).
@@ -186,9 +180,7 @@ public enum DefaultsKey {
     /// is absent, and left as it was for an older build.
     public static let legacyPresets = "punktfunk.profiles"
     /// Physical-mouse model (macOS): "capture" (pointer lock + relative, the default) or
-    /// "desktop" (uncaptured absolute pointer) — the cross-client `mouse_mode`. Replaces the
-    /// never-shipped "punktfunk.cursorMode" (auto/always/never client-side-cursor setting,
-    /// which was hidden while disabled and had no readers).
+    /// "desktop" (uncaptured absolute pointer) — the cross-client `mouse_mode`.
     public static let mouseMode = "punktfunk.mouseMode"
     /// Invert the scroll-wheel / two-finger-scroll direction sent to the host (both axes). Off by
     /// default: the local (natural-scrolling) sign passes through untouched. When on, the sign is

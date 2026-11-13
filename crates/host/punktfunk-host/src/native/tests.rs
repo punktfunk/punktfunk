@@ -1,6 +1,47 @@
 use super::*;
 use punktfunk_core::quic::v2::msg::V2Message;
 
+/// A dial holds on the seat its unlock started until that seat runs with its host's pin, and
+/// lets go once a seat it saw starting is down again.
+#[test]
+fn a_dial_holds_until_its_seat_runs_or_falls_back() {
+    use pf_seats::RuntimeState::{Failed, Running, Starting, Stopped};
+    let seat = |state: pf_seats::RuntimeState, pin: Option<&str>| -> pf_seats::Seat {
+        serde_json::from_value(serde_json::json!({
+            "id": "0123456789abcdef0123456789abcdef",
+            "name": "Kid",
+            "account": "pf_seat1",
+            "display_slot": 12,
+            "native_port": 9778,
+            "mgmt_port": 47991,
+            "runtime": { "state": state },
+            "fingerprint": pin,
+        }))
+        .unwrap()
+    };
+    let pin = Some("5eed5eed00000000000000000000000000000000000000000000000000005eed");
+    let mut moved = false;
+    assert!(
+        !start_settled(Some(&seat(Stopped, None)), &mut moved),
+        "not yet started"
+    );
+    assert!(
+        !start_settled(Some(&seat(Failed, None)), &mut moved),
+        "an old failure"
+    );
+    assert!(!start_settled(Some(&seat(Starting, None)), &mut moved));
+    assert!(
+        !start_settled(Some(&seat(Running, None)), &mut moved),
+        "its pin isn't listed yet"
+    );
+    assert!(start_settled(Some(&seat(Running, pin)), &mut moved));
+    assert!(
+        start_settled(Some(&seat(Failed, None)), &mut moved),
+        "down again after it moved"
+    );
+    assert!(start_settled(None, &mut false), "a row the ledger dropped");
+}
+
 /// Two sessions on one profile at once: `<seat>` then `<seat>-2`, each with its own sink,
 /// and the id frees when its session ends.
 #[cfg(target_os = "linux")]

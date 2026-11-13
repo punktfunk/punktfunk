@@ -18,7 +18,7 @@ public struct ClientIdentity: Sendable {
 
     /// SHA-256 of the certificate's DER: the fingerprint a host knows this device by.
     public var fingerprint: Data? {
-        ClientTLS.derFromPEM(certPEM, type: "CERTIFICATE").map { Data(SHA256.hash(data: $0)) }
+        ClientTLS.certificateDER(fromPEM: certPEM).map { Data(SHA256.hash(data: $0)) }
     }
 
     /// The code this device shows while it waits for approval, and the host's web console

@@ -34,5 +34,6 @@
 	"common_disconnect": "Trennen",
 	"common_dismiss": "Ausblenden",
 	"common_next": "Weiter",
-	"common_retry": "Erneut versuchen"
+	"common_retry": "Erneut versuchen",
+	"common_undo": "Rückgängig"
 }

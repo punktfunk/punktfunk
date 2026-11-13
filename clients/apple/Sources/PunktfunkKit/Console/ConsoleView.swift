@@ -32,7 +32,8 @@ let consoleDrawable: MTLPixelFormat = {
 /// What the view hands back to its owner. The view itself knows nothing about hosts.
 @MainActor
 public protocol ConsoleViewDelegate: AnyObject {
-    /// A frame is about to be drawn: the moment to drain what the shell raised.
+    /// The frame call returned, drawn or idle: the moment to drain what the shell raised. Not
+    /// called on a tick with no drawable.
     func consoleDidDrawFrame()
     /// The console asked to quit — a Back the shell did not take (tvOS Menu at the root).
     func consoleDidRequestQuit()
@@ -162,7 +163,7 @@ public final class ConsoleMetalView: ConsolePlatformView {
         #endif
     }
 
-    /// Design units per pixel. A TV takes the shell's own couch formula (`0`). A phone or
+    /// Device pixels per design unit. A TV takes the shell's own couch formula (`0`). A phone or
     /// tablet in the hand takes the device scale alone, rather than stretching the Deck's
     /// 800-unit field over an iPad's height: a unit is 0.75 pt on a phone and a point on a
     /// tablet, which sits further from the eye. A Mac or visionOS window takes the larger of
@@ -465,12 +466,13 @@ public final class ConsoleMetalView: ConsolePlatformView {
             rect: .zero, options: [.mouseMoved, .activeInKeyWindow, .inVisibleRect], owner: self))
     }
 
+    /// The shell takes one scroll step per wheel event, in the sign of its delta (+ = up).
     public override func scrollWheel(with event: NSEvent) {
         let scale = window?.backingScaleFactor ?? 2
         let p = convert(event.locationInWindow, from: nil)
         bridge.pointer(
             .wheel, x: Float(p.x * scale), y: Float((bounds.height - p.y) * scale),
-            wheel: Float(event.scrollingDeltaY / 10))
+            wheel: Float(event.scrollingDeltaY))
     }
 
     private func send(_ kind: ConsoleBridge.Pointer, _ event: NSEvent) {

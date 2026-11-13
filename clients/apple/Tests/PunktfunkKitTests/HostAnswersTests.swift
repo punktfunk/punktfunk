@@ -51,4 +51,17 @@ final class HostAnswersTests: XCTestCase {
         let answer = try XCTUnwrap(LibraryClient.targetsAnswer(response(200, #"{"locked":true}"#)))
         XCTAssertEqual(answer?.locked, true)
     }
+
+    /// A refusal the host words is its sentence alone, never an unreachable host.
+    func testARefusedActionSaysTheHostsSentence() {
+        let refusal = response(409, #"{"error":"another device is streaming from this host right now"}"#)
+        XCTAssertThrowsError(try LibraryClient.expectAccepted(refusal)) {
+            XCTAssertEqual(
+                $0.localizedDescription, "another device is streaming from this host right now")
+        }
+        XCTAssertNoThrow(try LibraryClient.expectAccepted(response(202, "")))
+        XCTAssertThrowsError(try LibraryClient.expectAccepted(response(403, #"{"error":"no"}"#))) {
+            guard case LibraryError.unauthorized = $0 else { return XCTFail("\($0)") }
+        }
+    }
 }

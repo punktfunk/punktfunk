@@ -256,6 +256,8 @@
 		}
 	}],
 	"setup_win_app_runtime_failed": "Impossible d’installer le Windows App Runtime — installez-le manuellement : {url}",
+	"setup_win_data_dir_failed": "Impossible de rendre {dir} accessible en écriture aux seuls administrateurs. Si un autre compte y a placé des éléments avant l’installation de Punktfunk, supprimez ce dossier, puis relancez l’installation — {cause}",
+	"setup_win_install_dir_failed": "Impossible de rendre {dir} accessible en écriture aux seuls administrateurs. Choisissez un autre dossier, puis relancez l’installation — {cause}",
 	"wizard_step_welcome": "Bienvenue",
 	"wizard_step_configure": "Configuration",
 	"wizard_step_network": "Réseau",

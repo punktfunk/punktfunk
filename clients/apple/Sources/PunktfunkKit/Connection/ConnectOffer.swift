@@ -33,6 +33,12 @@ public struct ConnectOffer: Equatable, Sendable {
     public static let onMac = false
     #endif
 
+    /// Whether a connect asks for 10 bits. HDR carries the depth on a display that shows it;
+    /// `tenBitSdr` adds it where HDR is off or the display can't.
+    public static func tenBit(_ effective: EffectiveSettings, displayHDR: Bool) -> Bool {
+        (effective.hdrEnabled && displayHDR) || effective.tenBitSdr
+    }
+
     /// The offer for `effective` at `mode`. The decoder probes are lazy: PyroWave's runs only for
     /// the PyroWave codec, the 10-bit 4:4:4 one only for a 10-bit offer. The caller keeps them off
     /// the main actor. `mac` picks the client caps: the Mac draws the host cursor itself in the
@@ -53,8 +59,7 @@ public struct ConnectOffer: Equatable, Sendable {
         // or Automatic (0); the host pins the player's quality under the operator's ceiling.
         let pyroWave = preferredCodec == PunktfunkConnection.codecPyroWave && pyroWaveDecodes()
         let hdr = effective.hdrEnabled && displayHDR
-        // HDR carries the depth; `tenBitSdr` adds it where HDR is off or the display can't show it.
-        let tenBit = hdr || effective.tenBitSdr
+        let tenBit = Self.tenBit(effective, displayHDR: displayHDR)
         // 4:4:4 needs a real-time decoder: PyroWave's Metal one, or hardware HEVC 4:4:4 at both
         // depths when 10-bit is asked for, since the host may still send 8-bit.
         let decode444 = pyroWave || (hw444EightBit() && (!tenBit || hw444TenBit()))

@@ -1,7 +1,6 @@
-// The Opus codec through CoreAudio (kAudioFormatOpus): a real encode → decode round
-// trip. This is the load-bearing assumption of the whole audio feature (no bundled
-// libopus) — if AVAudioConverter can't handle raw Opus packets, fail HERE, not in the
-// app.
+// The mic uplink's Opus encoder through CoreAudio (kAudioFormatOpus): a real encode → decode
+// round trip, with CoreAudio's own decoder as the oracle. If AVAudioConverter can't handle raw
+// Opus packets, fail HERE, not in the app.
 
 import AVFoundation
 import XCTest
@@ -9,8 +8,8 @@ import XCTest
 @testable import PunktfunkKit
 
 final class OpusCodecTests: XCTestCase {
-    /// Encode a 440 Hz mono tone (the uplink's shape), decode it back through the
-    /// STEREO-configured decoder (the host-plane shape — Opus upmixes mono packets), and
+    /// Encode a 440 Hz mono tone (the uplink's shape), decode it back through a stereo
+    /// decoder (Opus upmixes mono packets), and
     /// require the result to be recognizably the same signal (Opus is lossy — check
     /// correlation, not bytes).
     func testEncodeDecodeRoundTripPreservesTone() throws {
@@ -69,17 +68,56 @@ final class OpusCodecTests: XCTestCase {
         // A clean sine at amplitude a yields correlation a/2 (≈0.25 here); noise ≈ 0.
         XCTAssertGreaterThan(correlation, 0.15, "440 Hz tone must survive the round trip")
     }
+}
 
-    /// The host's audio plane is 5 ms (240-frame) packets — make sure a 240-frame
-    /// decoder accepts packets that small (encoder-side we can't force 5 ms out of
-    /// CoreAudio, so this decodes the 20 ms packets with a mismatched nominal fpp,
-    /// which the packet descriptions override).
-    func testDecoderHandlesDTXAndOversizedPackets() throws {
-        let decoder = try OpusDecoder(framesPerPacket: 240)
-        let out = AVAudioPCMBuffer(pcmFormat: decoder.pcmFormat, frameCapacity: 5760)!
-        XCTAssertEqual(try decoder.decode(Data(), into: out), 0, "DTX decodes to silence/0")
-        XCTAssertThrowsError(
-            try decoder.decode(Data(repeating: 0, count: 2000), into: out),
-            "oversized packet must throw, not crash")
+/// CoreAudio's Opus decoder, 48 kHz stereo float32 interleaved out: the oracle for the encoder's
+/// packets here and for a host's raw Opus plane in `RemoteFirstLightTests`. Opus upmixes a mono
+/// packet into both channels.
+final class OpusDecoder {
+    private let converter: AVAudioConverter
+    private let inBuf: AVAudioCompressedBuffer
+    let pcmFormat: AVAudioFormat
+
+    init(framesPerPacket: UInt32) throws {
+        guard let pcm = AVAudioFormat(
+                commonFormat: .pcmFormatFloat32, sampleRate: 48_000, channels: 2,
+                interleaved: true),
+              let opus = opusFormat(framesPerPacket: framesPerPacket, channels: 2),
+              let converter = AVAudioConverter(from: opus, to: pcm)
+        else { throw OpusCodecError.unavailable }
+        self.converter = converter
+        self.pcmFormat = pcm
+        inBuf = AVAudioCompressedBuffer(format: opus, packetCapacity: 1, maximumPacketSize: 1500)
+    }
+
+    /// Decode one packet into `out` (in `pcmFormat`); returns the frames written.
+    func decode(_ packet: Data, into out: AVAudioPCMBuffer) throws -> AVAudioFrameCount {
+        guard !packet.isEmpty else { return 0 }
+        guard packet.count <= Int(inBuf.maximumPacketSize) else {
+            throw OpusCodecError.convertFailed("packet larger than maximumPacketSize")
+        }
+        packet.withUnsafeBytes { raw in
+            inBuf.data.copyMemory(from: raw.baseAddress!, byteCount: raw.count)
+        }
+        inBuf.byteLength = UInt32(packet.count)
+        inBuf.packetCount = 1
+        inBuf.packetDescriptions![0] = AudioStreamPacketDescription(
+            mStartOffset: 0, mVariableFramesInPacket: 0, mDataByteSize: UInt32(packet.count))
+        out.frameLength = 0
+        var fed = false
+        var convError: NSError?
+        let status = converter.convert(to: out, error: &convError) { [inBuf] _, outStatus in
+            if fed {
+                outStatus.pointee = .noDataNow
+                return nil
+            }
+            fed = true
+            outStatus.pointee = .haveData
+            return inBuf
+        }
+        if status == .error {
+            throw OpusCodecError.convertFailed(convError?.localizedDescription ?? "decode")
+        }
+        return out.frameLength
     }
 }

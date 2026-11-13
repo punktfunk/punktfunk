@@ -50,6 +50,7 @@ enum PointerLockChain {
 
     /// Ensure `cls`'s `childViewControllerForPointerLock` getter consults the per-instance forced
     /// child first, falling back to the class's original implementation. Idempotent per class.
+    /// A class that only inherits the getter gets its own copy, so no superclass is patched.
     private static func ensureSwizzled(_ cls: AnyClass) {
         let id = ObjectIdentifier(cls)
         guard !swizzledClasses.contains(id) else { return }
@@ -63,7 +64,10 @@ enum PointerLockChain {
             if let forced = forcedChild(of: vc) { return forced }
             return original(vc, selector)
         }
-        method_setImplementation(method, imp_implementationWithBlock(forwarding))
+        let imp = imp_implementationWithBlock(forwarding)
+        if !class_addMethod(cls, selector, imp, method_getTypeEncoding(method)) {
+            method_setImplementation(method, imp)
+        }
     }
 
     /// Force every ancestor of `anchor` to forward pointer-lock resolution toward it, then ask the

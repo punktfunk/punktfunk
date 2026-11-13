@@ -25,8 +25,9 @@ public enum LibraryShelf {
     static let recentLimit = 12
 
     /// `games` collated by the shared rules: launchers lead, then one section per group under
-    /// `groupBy` (none: one section of games), each in `sort`. A running title leads its group
-    /// (`LibraryOrder`); the desktop tile is never a section's.
+    /// `groupBy` (none: one section of games), each in `sort`. Under `hostOrder` a running title
+    /// leads its group (`LibraryOrder`); any other sort places it by its key. The desktop tile is
+    /// never a section's.
     public static func grid(
         _ games: [GameEntry], sort: LibrarySortKey, groupBy: LibraryGroupBy?,
         running: Set<String>

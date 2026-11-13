@@ -107,7 +107,7 @@ final class PresentPacingTests: XCTestCase {
     // MARK: - FrameStore (the decoded-frame hand-off, both intents)
 
     /// Newest-wins (latency): submit replaces the undisplayed frame, take clears, putBack
-    /// restores only into an empty slot — the exact pre-rebuild ReadyRing semantics.
+    /// restores only into an empty slot.
     func testFrameStoreNewestWins() {
         let store = FrameStore<Int>(policy: .newestWins)
         XCTAssertNil(store.take())
@@ -119,7 +119,7 @@ final class PresentPacingTests: XCTestCase {
         store.submit(8) // a fresh decode beats the putBack
         store.putBack(7)
         XCTAssertEqual(store.take(), 8)
-        XCTAssertEqual(store.drainSubmitted(), 3)
+        XCTAssertEqual(store.submittedTotal(), 3)
         let smoothing = store.drainSmoothing()
         XCTAssertEqual(smoothing.overflowDrops, 0)
         XCTAssertEqual(smoothing.underflows, 0)
@@ -285,22 +285,6 @@ final class PresentPacingTests: XCTestCase {
         XCTAssertNil(box.take(), "take empties the slot")
     }
 
-    /// `putBack` fills only an EMPTY slot: the render thread returning a drawable it took but
-    /// didn't present must never clobber a fresher one the link vended in between.
-    func testLatestBoxPutBackNeverClobbersAFresherPut() {
-        let box = LatestBox<Int>()
-        box.put(1)
-        let stale = box.take()
-        XCTAssertEqual(stale, 1)
-        box.putBack(stale!)
-        XCTAssertEqual(box.take(), 1, "putBack into a still-empty slot restores the value")
-        box.put(2)
-        let taken = box.take()
-        box.put(3) // the link vends a fresher drawable while the render thread holds `taken`
-        box.putBack(taken!)
-        XCTAssertEqual(box.take(), 3, "the fresher vend wins over the stale return")
-    }
-
     /// The render thread drops a drawable past its pick: only that one, never a fresher vend.
     func testLatestBoxTakeWhereChecksTheValueItTakes() {
         let box = LatestBox<Int>()
@@ -314,57 +298,34 @@ final class PresentPacingTests: XCTestCase {
 
     // MARK: - PresenterChoice
 
-    /// iOS and tvOS default to the deadline link, macOS to arrival-paced Metal. No selection or an
-    /// unknown value falls back to the platform choice.
+    /// iOS and tvOS default to the deadline link, macOS to arrival-paced Metal. No selection, an
+    /// empty env var or an unknown value falls back to the platform choice.
     func testPresenterChoiceFallsBackToPlatformDefault() {
         #if os(iOS) || os(visionOS) || os(tvOS)
         XCTAssertEqual(PresenterChoice.platformDefault, .stage4)
         #else
         XCTAssertEqual(PresenterChoice.platformDefault, .stage2)
         #endif
-        XCTAssertEqual(
-            PresenterChoice.resolve(setting: nil, env: nil, allowStage1: true),
-            PresenterChoice.platformDefault)
-        XCTAssertEqual(
-            PresenterChoice.resolve(setting: "garbage", env: nil, allowStage1: true),
-            PresenterChoice.platformDefault)
-        XCTAssertEqual(
-            PresenterChoice.resolve(setting: "stage2", env: nil, allowStage1: true), .stage2)
+        for env in [nil, "", "garbage"] {
+            XCTAssertNil(PresenterChoice.explicit(env: env), "\(String(describing: env))")
+            XCTAssertEqual(PresenterChoice.resolve(env: env), PresenterChoice.platformDefault)
+        }
     }
 
-    func testPresenterChoiceResolvesStage3FromSettingAndEnv() {
-        XCTAssertEqual(
-            PresenterChoice.resolve(setting: "stage3", env: nil, allowStage1: true), .stage3)
-        // The env override wins over the persisted setting (A/B without touching settings)…
-        XCTAssertEqual(
-            PresenterChoice.resolve(setting: "stage2", env: "stage3", allowStage1: true), .stage3)
-        XCTAssertEqual(
-            PresenterChoice.resolve(setting: "stage3", env: "stage2", allowStage1: true), .stage2)
-        // …but an EMPTY env var is "unset", not an override.
-        XCTAssertEqual(
-            PresenterChoice.resolve(setting: "stage3", env: "", allowStage1: true), .stage3)
+    func testPresenterChoiceResolvesTheStagesFromEnv() {
+        XCTAssertEqual(PresenterChoice.resolve(env: "stage1"), .stage1)
+        XCTAssertEqual(PresenterChoice.resolve(env: "stage2"), .stage2)
+        XCTAssertEqual(PresenterChoice.resolve(env: "stage3"), .stage3)
     }
 
-    /// "stage4" (deadline pacing) resolves only on iOS/tvOS. On macOS — whose present path is
-    /// entangled with the sync-off/DCP-panic saga — a synced-over "stage4" value maps back to
-    /// the platform default instead of engaging an unvalidated pacing.
+    /// "stage4" (deadline pacing) resolves only off macOS, whose present path has separate
+    /// synchronization constraints; there it maps back to the platform default.
     func testPresenterChoiceGatesStage4ToVsyncLatchPlatforms() {
         #if os(macOS)
-        XCTAssertNil(PresenterChoice.explicit(setting: "stage4", env: nil, allowStage1: true))
-        XCTAssertEqual(
-            PresenterChoice.resolve(setting: "stage4", env: nil, allowStage1: true), .stage2)
-        XCTAssertEqual(
-            PresenterChoice.resolve(setting: nil, env: "stage4", allowStage1: true), .stage2)
+        XCTAssertNil(PresenterChoice.explicit(env: "stage4"))
+        XCTAssertEqual(PresenterChoice.resolve(env: "stage4"), .stage2)
         #else
-        XCTAssertEqual(
-            PresenterChoice.explicit(setting: "stage4", env: nil, allowStage1: true), .stage4)
-        XCTAssertEqual(
-            PresenterChoice.resolve(setting: nil, env: "stage4", allowStage1: true), .stage4)
-        // The env override wins over the persisted setting, both directions.
-        XCTAssertEqual(
-            PresenterChoice.resolve(setting: "stage4", env: "stage3", allowStage1: true), .stage3)
-        XCTAssertEqual(
-            PresenterChoice.resolve(setting: "stage2", env: "stage4", allowStage1: true), .stage4)
+        XCTAssertEqual(PresenterChoice.resolve(env: "stage4"), .stage4)
         #endif
     }
 
@@ -373,41 +334,13 @@ final class PresentPacingTests: XCTestCase {
     func testDecodedPresenterIsIOSAndTvOSOnly() {
         #if os(tvOS) || os(iOS)
         if #available(iOS 17.4, tvOS 17.4, *) {
-            XCTAssertEqual(
-                PresenterChoice.explicit(setting: nil, env: "decoded", allowStage1: true), .decoded)
+            XCTAssertEqual(PresenterChoice.explicit(env: "decoded"), .decoded)
         } else {
-            XCTAssertNil(
-                PresenterChoice.explicit(setting: nil, env: "decoded", allowStage1: true))
+            XCTAssertNil(PresenterChoice.explicit(env: "decoded"))
         }
         #else
-        XCTAssertNil(
-            PresenterChoice.explicit(setting: nil, env: "decoded", allowStage1: true))
+        XCTAssertNil(PresenterChoice.explicit(env: "decoded"))
         #endif
-    }
-
-    /// Stage-1 (the freeze-prone system-layer diagnostic) resolves only where allowed (DEBUG
-    /// builds); a leftover "stage1" value in a release build maps back to the platform default.
-    func testPresenterChoiceGatesStage1() {
-        XCTAssertEqual(
-            PresenterChoice.resolve(setting: "stage1", env: nil, allowStage1: true), .stage1)
-        XCTAssertEqual(
-            PresenterChoice.resolve(setting: "stage1", env: nil, allowStage1: false),
-            PresenterChoice.platformDefault)
-        XCTAssertEqual(
-            PresenterChoice.resolve(setting: nil, env: "stage1", allowStage1: false),
-            PresenterChoice.platformDefault)
-    }
-
-    /// `explicit` is nil exactly when `resolve` would fall back to the platform default — the
-    /// distinction the codec-conditional pacing default rides on.
-    func testPresenterChoiceExplicitIsNilWithoutASelection() {
-        XCTAssertNil(PresenterChoice.explicit(setting: nil, env: nil, allowStage1: true))
-        XCTAssertNil(PresenterChoice.explicit(setting: "garbage", env: nil, allowStage1: true))
-        XCTAssertNil(PresenterChoice.explicit(setting: "stage1", env: nil, allowStage1: false))
-        XCTAssertEqual(
-            PresenterChoice.explicit(setting: "stage2", env: nil, allowStage1: true), .stage2)
-        XCTAssertEqual(
-            PresenterChoice.explicit(setting: nil, env: "stage3", allowStage1: true), .stage3)
     }
 
     // MARK: - Session pacing

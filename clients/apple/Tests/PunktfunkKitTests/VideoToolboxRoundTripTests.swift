@@ -29,12 +29,19 @@ final class VideoToolboxRoundTripTests: XCTestCase {
         XCTAssertEqual(Int(dims.height), height)
 
         // 2) Annex-B → AVCC re-pack must reproduce the encoder's own sample bytes.
-        XCTAssertEqual(AnnexB.avcc(from: annexB, codec: .hevc), avccSample)
-
-        // 3) Sample buffer → real decoder → pixels.
         let au = AccessUnit(
             data: annexB, ptsNs: 1_000_000, frameIndex: 0, flags: 0, receivedNs: 0)
         let sample = try XCTUnwrap(AnnexB.sampleBuffer(au: au, format: rebuilt, codec: .hevc))
+        let block = try XCTUnwrap(CMSampleBufferGetDataBuffer(sample))
+        var packed = Data(count: CMBlockBufferGetDataLength(block))
+        let copied = packed.withUnsafeMutableBytes {
+            CMBlockBufferCopyDataBytes(
+                block, atOffset: 0, dataLength: $0.count, destination: $0.baseAddress!)
+        }
+        XCTAssertEqual(copied, noErr)
+        XCTAssertEqual(packed, avccSample)
+
+        // 3) Sample buffer → real decoder → pixels.
 
         var session: VTDecompressionSession?
         XCTAssertEqual(
@@ -130,7 +137,9 @@ final class VideoToolboxRoundTripTests: XCTestCase {
             data: annexB, ptsNs: 42_000_000, frameIndex: 0, flags: 0, receivedNs: 41_000_000)
 
         let ready = try decodeOnce(au, format: format)
-        let buffer = try XCTUnwrap(ready.pixelBuffer, "a VT decode delivers a .video frame")
+        guard case .video(let buffer, _) = ready.image else {
+            return XCTFail("a VT decode delivers a .video frame")
+        }
         XCTAssertEqual(CVPixelBufferGetWidth(buffer), width)
         XCTAssertEqual(CVPixelBufferGetHeight(buffer), height)
         XCTAssertNotNil(CVPixelBufferGetIOSurface(buffer), "decoded output must be IOSurface-backed")
@@ -206,7 +215,7 @@ final class VideoToolboxRoundTripTests: XCTestCase {
                 parameterSetSizeOut: nil, parameterSetCountOut: &psCount,
                 nalUnitHeaderLengthOut: &nalHeaderLen),
             noErr)
-        XCTAssertEqual(nalHeaderLen, 4, "AnnexB.avcc assumes 4-byte NAL length prefixes")
+        XCTAssertEqual(nalHeaderLen, 4, "the repack writes 4-byte NAL length prefixes")
         for i in 0..<psCount {
             var ptr: UnsafePointer<UInt8>?
             var size = 0

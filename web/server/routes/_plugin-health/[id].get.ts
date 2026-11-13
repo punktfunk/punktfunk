@@ -9,10 +9,7 @@
 // neither a LAN peer nor a plugin page can mint a path.
 import { defineEventHandler, getRouterParam, setResponseStatus } from "h3";
 import type { PersonSession } from "../../util/person";
-import {
-	mintPersonPagePath,
-	personUiCredential,
-} from "../../util/personPlugins";
+import { mintPersonPagePath, personReach } from "../../util/personPlugins";
 import { mintPluginPagePath } from "../../util/pluginPage";
 import { callPlugin, PLUGIN_ID_RE } from "../../util/pluginProxy";
 
@@ -27,7 +24,7 @@ export default defineEventHandler(async (event) => {
 		id,
 		"/__health",
 		{ method: "GET", redirect: "manual" },
-		person ? (o) => personUiCredential(person, id, o) : undefined,
+		person ? personReach(person, id) : undefined,
 	);
 	if (!resp?.ok) {
 		setResponseStatus(event, 502);

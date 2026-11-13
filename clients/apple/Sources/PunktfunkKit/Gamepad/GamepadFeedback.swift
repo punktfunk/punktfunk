@@ -1,6 +1,6 @@
 // Host→client gamepad feedback rendering: one drain thread polls the rumble (0xCA) and
-// HID-output (0xCD) planes and replays each update on the forwarded physical controller it is
-// ADDRESSED TO by wire pad index —
+// HID-output (0xCD) planes and replays each update on the forwarded physical controller its
+// wire pad index names —
 //
 //   rumble        → CHHapticEngine players (per-handle localities when the pad has them,
 //                   one combined engine otherwise), a RumbleRenderer per pad,
@@ -9,20 +9,15 @@
 //   trigger FX    → DualSenseTriggerEffect.parse → GCDualSenseAdaptiveTrigger.
 //
 // Every forwarded controller gets a per-pad feedback slot (its RumbleRenderer + last light /
-// player-LED / trigger state) keyed on the same wire index GamepadCapture streams it on, so a
-// rumble the host aimed at pad 1 drives pad 1's actuator and nothing else. An update for a pad
-// with no live slot (one that just closed) is dropped. HID-output traffic exists only on
-// PlayStation-pad sessions (a DualSense, or a DualShock 4 = lightbar only); the drain always
-// polls both planes with short timeouts and never spins, so an Xbox pad just renders rumble.
-// GameController profile mutation happens on main; CHHapticEngine work on the renderer's serial
-// queue; the drain thread itself touches neither (it routes rumble to the pad's renderer under a
-// lock and hops HID to main). When a controller leaves the forwarded set the old pad is reset
-// (triggers off, player index unset) and its renderer silenced.
+// player-LED / trigger state) keyed on the wire index GamepadCapture streams it on; an update for
+// a pad with no live slot is dropped. The drain waits only on the rumble pull (8 ms with a pad
+// to drive, 50 ms without) and takes HID output without waiting, so it never spins.
+// GameController profile mutation happens on main, CHHapticEngine work on the renderer's serial
+// queue; the drain routes rumble under a lock and hops HID to main. A controller that leaves the
+// forwarded set is reset (triggers off, player index unset) and its renderer silenced.
 //
-// One 0xCD kind never reaches main at all: `.hidRaw` — Steam's raw writes to an as-is Steam
-// Controller 2 passthrough pad — routes on the drain thread straight to the registered
-// `setHidRawSink` (the SC2 capture's replay entry point), because no GameController profile is
-// involved and the rumble replay cadence (25–40 ms) should not queue behind main.
+// `.hidRaw` (Steam's raw writes to an as-is Steam Controller 2) never reaches main: the drain
+// hands it to `setHidRawSink`'s sink, as no GameController profile is involved.
 
 import Combine
 import CoreHaptics
@@ -60,6 +55,8 @@ public final class GamepadFeedback {
     /// Another window's session owns the pads: rumble drops, and lightbar, player-LED and trigger
     /// writes are only cached until `setSilenced(false)` replays them. Guarded by `routingLock`.
     private var silenced = false
+    /// `stop()` ran: no renderer is built or retargeted after it. Guarded by `routingLock`.
+    private var stopped = false
 
     /// The raw-report sink for `.hidRaw` events — the Steam Controller 2 capture's
     /// `Sc2Capture.onHidRaw(pad:kind:data:)`, registered by the session owner. Guarded by
@@ -123,9 +120,10 @@ public final class GamepadFeedback {
     /// Bring the per-pad feedback slots in line with the forwarded set: drop pads no longer
     /// forwarded (silence + release their renderer, reset their controller), add a slot +
     /// renderer for each new pad, and retarget a pad whose controller changed (a re-plug into the
-    /// same freed index) — replaying its cached feedback onto the new device.
+    /// same freed index) — replaying its cached feedback onto the new device. A no-op after `stop()`.
     @MainActor
     private func reconcile(_ forwarded: [GamepadManager.DiscoveredController]) {
+        guard !withRouting({ stopped }) else { return }
         var want: [UInt8: GCController] = [:]
         for dc in forwarded {
             if let pad = manager.padIndex(for: dc) { want[pad] = dc.controller }
@@ -134,15 +132,9 @@ public final class GamepadFeedback {
             reset(slot.controller)
             slots[pad] = nil
             let renderer = withRouting { rumbleByPad.removeValue(forKey: pad) }
-            // OFF the main actor. `RumbleRenderer.stop()` is a `queue.sync`, and its body is a
-            // per-motor `CHHapticEngine.stop()` — an XPC round trip to gamecontrollerd, which the
-            // renderer's own notes record as able to hang — plus `DualSenseHID.close()`, whose
-            // blocking `IOHIDDeviceSetReport` goes to a device that has just departed. It also
-            // queues behind any in-flight `setup()`. This runs on every unplug and every pin
-            // change, and the main thread is what drives the presenter's CADisplayLink, so
-            // blocking here hitches the picture mid-stream. The renderer is already detached from
-            // routing above, so nothing observes it after this point.
-            if let renderer { Task.detached { renderer.stop() } }
+            // `stop()` blocks on XPC to gamecontrollerd and a HID write to a departed pad: keep it
+            // off main (the presenter's display link) and off the cooperative pool.
+            if let renderer { DispatchQueue.global(qos: .utility).async { renderer.stop() } }
         }
         for (pad, controller) in want {
             if let slot = slots[pad] {
@@ -154,8 +146,12 @@ public final class GamepadFeedback {
             } else {
                 slots[pad] = Slot(controller: controller)
                 let renderer = RumbleRenderer()
-                renderer.retarget(controller)
-                withRouting { rumbleByPad[pad] = renderer }
+                // One lock span with `stop()`'s drain: it either stops this renderer or never sees it.
+                withRouting {
+                    guard !stopped else { return }
+                    renderer.retarget(controller)
+                    rumbleByPad[pad] = renderer
+                }
             }
         }
     }
@@ -163,9 +159,6 @@ public final class GamepadFeedback {
     public func start() {
         guard !drainStarted else { return }
         drainStarted = true
-        // Hidout traffic (lightbar / player LEDs / triggers) only exists on a PlayStation-pad
-        // session — a DualSense or a DualShock 4 (lightbar only). Block briefly on it there and
-        // let rumble own the wait elsewhere; on an Xbox session it stays nonblocking.
         let thread = Thread { [connection, flag, drainDone, weak self] in
             // Per-iteration autorelease pool: no runloop on this thread, and the haptics/HID
             // rendering below autoreleases ObjC temporaries. `false` = session over.
@@ -218,6 +211,7 @@ public final class GamepadFeedback {
             drainStarted = false
         }
         let renderers = withRouting { () -> [RumbleRenderer] in
+            stopped = true
             let r = Array(rumbleByPad.values)
             rumbleByPad.removeAll()
             hidRawSink = nil // no raw replay onto a capture the session owner is tearing down
@@ -241,22 +235,15 @@ public final class GamepadFeedback {
     ) {
         guard let renderer = withRouting({ silenced ? nil : rumbleByPad[pad] }) else { return }
         // Controller rumble off plays every command as a stop, so a motor already running halts.
-        if UserDefaults.standard.object(forKey: DefaultsKey.padRumble) as? Bool == false {
+        if Self.rumbleOff {
             renderer.apply(low: 0, high: 0, leftTrigger: 0, rightTrigger: 0)
             if pad == 0 { deviceRumble?.apply(low: 0, high: 0) }
             return
         }
         renderer.apply(low: low, high: high, leftTrigger: leftTrigger, rightTrigger: rightTrigger)
-        // The opt-in device mirror follows controller 1 unconditionally — the pads it exists for
-        // have no motors (their renderer above no-ops), and mirroring deliberately isn't gated on
-        // that: capability probing can't see a motor-less MFi pad, and the user opted in.
-        //
-        // HANDLES ONLY, deliberately. A phone body is one actuator with no trigger analogue, so
-        // the trigger levels would have to be folded to arrive at all — and folding continuous
-        // impulse-trigger content (a racing title's engine RPM / tyre slip) onto the one motor
-        // this mirror has would buzz the phone flat-out for the whole race at a level the game
-        // never requested. Dropping them matches the core engine's policy for every pad without
-        // trigger motors.
+        // The opt-in mirror follows controller 1 ungated (probing cannot see a motor-less MFi
+        // pad), handles only: folding trigger rumble onto the phone's one actuator would buzz it
+        // at levels the game never asked for, so it drops them like any pad without trigger motors.
         if pad == 0 { deviceRumble?.apply(low: low, high: high) }
     }
 
@@ -270,6 +257,11 @@ public final class GamepadFeedback {
         }
         for renderer in playing { renderer.apply(low: 0, high: 0, leftTrigger: 0, rightTrigger: 0) }
         if !on { for (pad, slot) in slots { replay(pad, slot) } }
+    }
+
+    /// Controller rumble is switched off in Settings; an unset key is on.
+    private static var rumbleOff: Bool {
+        UserDefaults.standard.object(forKey: DefaultsKey.padRumble) as? Bool == false
     }
 
     private func withRouting<R>(_ body: () -> R) -> R {
@@ -296,8 +288,7 @@ public final class GamepadFeedback {
         if case let .hidRaw(pad, kind, data) = ev {
             let sink = withRouting { hidRawSink }
             // Controller rumble off plays Steam's rumble report as a stop, like every pad's.
-            let rumbleOff = UserDefaults.standard.object(forKey: DefaultsKey.padRumble) as? Bool == false
-            let muted = rumbleOff && kind == 0 && data.first == 0x80
+            let muted = Self.rumbleOff && kind == 0 && data.first == 0x80
             sink?(pad, kind, muted ? [0x80] + [UInt8](repeating: 0, count: 9) : data)
             return
         }
