@@ -425,7 +425,7 @@ public enum ConsoleJSON {
         var row: [String: Any] = [
             "id": g.id, "title": g.title, "store": g.store,
             "launcher": g.role == "launcher",
-            "icon": g.icon.flatMap { validIconToken($0) ? $0 : nil } ?? "",
+            "icon": g.iconToken ?? "",
             "platform": g.platform ?? NSNull(), "developer": g.developer ?? NSNull(),
             "year": g.releaseYear ?? NSNull(), "genres": g.genres ?? [],
             "stats": g.stats.map { s -> [String: Any] in
@@ -481,12 +481,6 @@ public enum ConsoleJSON {
         }
         let json = try? JSONEncoder().encode(Push(downloads: downloads, grants: grants))
         return json.flatMap { String(data: $0, encoding: .utf8) } ?? "{}"
-    }
-
-    /// `GameEntry::icon_token`'s re-validation: lowercase-first, at most 32 of `[a-z0-9-]`.
-    private static func validIconToken(_ t: String) -> Bool {
-        !t.isEmpty && t.count <= 32 && t.first!.isLowercase && t.first!.isLetter
-            && t.allSatisfy { $0.isNumber || $0 == "-" || ($0.isLowercase && $0.isLetter) }
     }
 
     public static func libraryError(_ req: Any, title: String, body: String, canRetry: Bool)

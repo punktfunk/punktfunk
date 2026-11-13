@@ -171,6 +171,20 @@ final class ConsoleJSONTests: XCTestCase {
         XCTAssertTrue(out.last?["stats"] is NSNull)
     }
 
+    /// The console builds a resource name from `icon`: only `[a-z0-9-]`, as core checks it.
+    func testLibraryGamesDropANonAsciiIcon() throws {
+        let wire = #"""
+            [{"id": "a", "store": "steam", "title": "A", "art": {}, "icon": "steam-2"},
+             {"id": "b", "store": "steam", "title": "B", "art": {}, "icon": "café"},
+             {"id": "c", "store": "steam", "title": "C", "art": {}, "icon": "x٣"}]
+            """#
+        let games = try JSONDecoder().decode([GameEntry].self, from: Data(wire.utf8))
+        let push = ConsoleJSON.libraryGames(ConsoleJSON.unasked, games)
+        let doc = try JSONSerialization.jsonObject(with: Data(push.utf8)) as? [String: Any]
+        let icons = try XCTUnwrap(doc?["games"] as? [[String: Any]]).map { $0["icon"] as? String }
+        XCTAssertEqual(icons, ["steam-2", "", ""])
+    }
+
     func testKnownHostsCarryWhatALinkNeeds() throws {
         let saved = host(name: "Desk")
         let data = try XCTUnwrap(ConsoleJSON.knownHosts([saved]).data(using: .utf8))
