@@ -2732,10 +2732,6 @@ public final class PunktfunkConnection: @unchecked Sendable {
         /// and only this — is the "the host may be asleep" case.
         case lost = 5
 
-        /// Is this an ordinary outcome rather than something to alarm the user about? `.none`
-        /// counts as normal: no evidence of trouble is not evidence of it.
-        public var isNormal: Bool { self != .hostError && self != .lost }
-
         /// How long to wait before redial `attempt` (0-based) of a session that ended this way,
         /// on the schedule every client shares; nil means stay ended. Only `.lost` redials.
         public func redialDelay(attempt: UInt32) -> Duration? {
@@ -2756,9 +2752,6 @@ public final class PunktfunkConnection: @unchecked Sendable {
             return SessionEndReason(rawValue: out) ?? .none
         }
     }
-
-    /// Shorthand for the single most actionable reason: the host's launched game exited.
-    public var endedBecauseGameExited: Bool { sessionEndReason == .gameExited }
 
     /// The typed rejection a MID-SESSION close carried, if any — an access expiry being the
     /// case this exists for: `sessionEndReason` can only file that deliberate close under
