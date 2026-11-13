@@ -827,7 +827,7 @@
 			"n=*": "Mostrando as {count} amostras mais recentes. A gravação salva mantém tudo."
 		}
 	}],
-	"stats_live_waiting": "Armado — aguardando as primeiras amostras. Inicie uma sessão para começar a gravar.",
+	"stats_live_waiting": "Pronto — aguardando as primeiras amostras. Inicie uma sessão para começar a gravar.",
 	"stats_latency_title": "Latência por etapa",
 	"stats_latency_axis": "ms",
 	"stats_latency_desc": "Tempo do pipeline por etapa, empilhado, em relação a um quadro na taxa da transmissão. A linha é a parcela total do host, da captura ao envio.",
