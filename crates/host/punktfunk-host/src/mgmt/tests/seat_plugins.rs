@@ -166,3 +166,40 @@ async fn seat_half() {
         .any(|g| g.title == "Quake");
     assert_eq!(listed, !own, "a planted row's listing");
 }
+
+/// A seat's own plugin UI is its seat host's to hand out: on a made seat its plugin registers
+/// it, and the operator and the seat's person read its credential there, a device never. On a
+/// person's own account nothing registers one on any lane, so nothing hands one out.
+#[tokio::test]
+async fn a_seat_s_plugin_ui_stays_on_its_seat_host() {
+    if std::env::var_os(CHILD).is_none() {
+        on_both_seats("a_seat_s_plugin_ui_stays_on_its_seat_host");
+        return;
+    }
+    let gated = pf_paths::seat::own_account() && cfg!(target_os = "linux");
+    let app = test_app_seat(test_state(), TOKEN, MINE);
+    let person = person_session(&app).await;
+    let ui = json!({"title": "Demo", "ui": {"port": 49321, "secret": "s3cr3t-s3cr3t-s3cr3t"}});
+    let register = json_req(Method::PUT, "/api/v1/plugins/demo", ui);
+    let (status, why) = send(&app, with_bearer(register, "demo-secret")).await;
+    let want = if gated {
+        StatusCode::FORBIDDEN
+    } else {
+        StatusCode::NO_CONTENT
+    };
+    assert_eq!(status, want, "{why}");
+    let credential = || get_req("/api/v1/plugins/demo/ui-credential");
+    let found = if gated {
+        StatusCode::NOT_FOUND
+    } else {
+        StatusCode::OK
+    };
+    assert_eq!(send(&app, credential()).await.0, found, "admin");
+    let (status, body) = send(&app, with_bearer(credential(), &person)).await;
+    assert_eq!(status, found, "person");
+    if !gated {
+        assert_eq!(body["port"], 49321);
+    }
+    let device = send_cert(&app, credential(), DEVICE).await;
+    assert_eq!(device, StatusCode::UNAUTHORIZED);
+}
