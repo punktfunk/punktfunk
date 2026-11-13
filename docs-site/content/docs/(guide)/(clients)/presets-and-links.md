@@ -44,17 +44,16 @@ Rows that describe this device rather than the stream don't show in a preset: th
 
 ## Using a preset
 
-- **Bind it to a host.** Set **Preset** in the host's edit sheet, **Connect with** on the host page
-  (Linux, Apple), or **Default preset…** in the console's host options. A plain click on the host
-  uses it.
+- **Bind it to a host.** Set **Preset** in the host's edit sheet (Windows) or on the host page
+  (Android), **Connect with** on the host page (Linux, Apple), or **Default preset…** in the
+  console's host options. A plain click on the host uses it.
 - **Bind it to a game.** In the console, open a game's options (**X**) → **Settings preset…**.
   Launching that game uses it instead of the host's preset.
 - **Use it once.** The host card's menu → **Connect with** (on Android, **Connect with: …**).
   **Default settings** there streams without the host's preset.
-- **Pin it as a card.** A pinned preset gets its own card beside the host. Pin it in the host's edit
-  sheet (Android), on the host page (Linux, Apple), with **Pin as card: …** (Android) or **Pin
-  cards** (Windows) in the card menu, or with **Pin to hosts…** under the console's **Settings →
-  Presets**. Unpinning changes neither the preset nor the host.
+- **Pin it as a card.** A pinned preset gets its own card beside the host. Pin it on the host page
+  (Linux, Apple, Android), with **Pin cards** (Windows) in the card menu, or with **Pin to hosts…**
+  under the console's **Settings → Presets**. Unpinning changes neither the preset nor the host.
 
 The active preset's name shows in the [stats overlay](/docs/stats).
 
@@ -136,16 +135,17 @@ record id, `host=` and, once pinned, `fp=`, so it survives an address change or 
 - **Linux**: a desktop entry in `~/.local/share/applications/`, from the host page or a game's
   details. Under Flatpak the app shows the URL for you to place yourself.
 - **Windows**: a `.lnk` on your Desktop that runs `punktfunk-client.exe` with the URL.
-- **Android**: a home-screen shortcut with the game's cover, from a game's long-press menu or its
-  **Details…** card in the controller interface. Android TV launchers don't take shortcuts.
+- **Android**: a home-screen shortcut with the game's cover, from a game's **Details…** (long-press
+  the game in the library, or open its card in the controller interface). Android TV launchers
+  don't take shortcuts.
 
 ## Starting a game from a frontend
 
 On Android, a game frontend that lists a folder of files can start a game through a `.punktfunk`
 launcher file.
 
-1. On a game, choose **Save launcher file…** (long-press it in the library, or its **Details…**
-   card in the controller interface). Save it into the folder the frontend scans.
+1. On a game, open **Details…** (long-press it in the library, or its card in the controller
+   interface) and choose **Save launcher file…**. Save it into the folder the frontend scans.
 2. Have the frontend open `.punktfunk` files with this activity and the file's URI:
 
    ```text

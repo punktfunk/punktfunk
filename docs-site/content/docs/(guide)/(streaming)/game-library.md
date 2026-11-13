@@ -111,9 +111,9 @@ game runs on the host, the tile reads **Resume** and the game's name.
 | From | How |
 |---|---|
 | Linux | The **Library** tab, or a host card's menu → **Browse library** |
-| Windows, Android (touch) | A host card's menu → **Browse library** |
+| Windows | A host card's menu → **Browse library** |
 | Mac | **Library** in the window's sidebar |
-| iPhone, iPad, Apple TV | The **Library** tab |
+| iPhone, iPad, Apple TV, Android (touch) | The **Library** tab |
 | Controller home (TV, Steam Deck, a client with a controller) | **Y** on a saved host, or the host's options → **Library** |
 | Steam Deck | **Open Punktfunk** in the Decky panel, then the controller home. See [Steam Deck](/docs/steam-deck). |
 | Moonlight | Turn on GameStream ([Moonlight](/docs/moonlight)). Titles appear in Moonlight's app list beside **Desktop**; titles with no launch command are left out. |

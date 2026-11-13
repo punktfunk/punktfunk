@@ -1578,7 +1578,7 @@ internal fun SettingsGroup(
  * [field] is the overlay field this row writes, which is what its override marker keys on.
  */
 @Composable
-private fun ToggleRow(
+internal fun ToggleRow(
     title: String,
     subtitle: String,
     checked: Boolean,

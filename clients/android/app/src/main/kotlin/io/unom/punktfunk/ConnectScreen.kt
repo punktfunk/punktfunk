@@ -15,6 +15,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.LocalContext
 import androidx.core.content.ContextCompat
@@ -22,11 +23,15 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.withStarted
+import io.unom.punktfunk.components.HostLine
 import io.unom.punktfunk.kit.R
 import io.unom.punktfunk.kit.discovery.DiscoveredHost
+import io.unom.punktfunk.kit.library.LibraryClient
 import io.unom.punktfunk.kit.link.DeepLinks
+import io.unom.punktfunk.kit.link.StartScreen
 import io.unom.punktfunk.kit.security.KnownHost
 import io.unom.punktfunk.models.ActiveSession
+import io.unom.punktfunk.models.PendingTrust
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -41,14 +46,14 @@ import kotlinx.coroutines.withContext
 private const val HOST_ACTIONS_TTL_MS = 300_000L
 
 /**
- * The connect screen — discovery, trust and the dial itself, under either interface.
+ * The Hosts tab: discovery, trust and the dial itself.
  *
  * The engine is a [ConnectController], remembered here for the screen's life: the dial and its
  * wake fallback, trust, request access and the `punktfunk://` router, with the state they share.
- * This function runs the effects that feed it (the browse, the probe sweep, host actions) and
- * the card rows only this screen has. What is drawn lives beside it — `buildHomeTiles`,
- * `ConnectGrid` and `ConnectPrompts` — each taking what it displays and handing back what was
- * pressed.
+ * This function runs the effects that feed it (the browse, the probe sweep, host actions, what
+ * each host has up) and the acts only this screen has. What is drawn lives beside it:
+ * [ConnectGrid], the host page ([HostDetailScreen]) in the grid's place while one is open, and
+ * [ConnectPrompts] over both. Each takes what it displays and hands back what was pressed.
  */
 @Composable
 fun ConnectScreen(
@@ -57,9 +62,8 @@ fun ConnectScreen(
     // Writes the global settings back: a speed test landing in the defaults layer
     // (design/client-settings-profiles.md §5.3), and the default host set, cleared or forgotten.
     onSettingsChange: (Settings) -> Unit = {},
-    // (host, pinned preset id) — a pinned host+preset card opens ITS shelf, and the id is the
-    // one-off every launch off that shelf runs with (design §5.2a). Null = the host's own tile.
-    // Raised by "Browse library…" in a card's overflow.
+    // (host, pinned preset id): Browse library on a card or the host page. A pinned card opens
+    // its own shelf, whose launches run with that preset; null is the host's own.
     onOpenLibrary: (KnownHost, String?) -> Unit = { _, _ -> },
     // A `punktfunk://` URL to route (design/client-deep-links.md §3). This screen owns it because
     // it owns the connect path — trust decisions, the local-network grant, wake-and-retry — and a
@@ -199,6 +203,8 @@ fun ConnectScreen(
     fun recordScreens(fp: String, found: DisplayTargets.Targets?) {
         screens = if (found == null) screens - fp else screens + (fp to found)
     }
+    // The title each paired host has up, by fingerprint: a card's "Playing …". Asked every lap.
+    var nowPlaying by remember { mutableStateOf<Map<String, String>>(emptyMap()) }
     LaunchedEffect(ctl.savedHosts, ctl.identity) {
         val id = ctl.identity ?: return@LaunchedEffect
         while (true) {
@@ -206,13 +212,22 @@ fun ConnectScreen(
             val now = android.os.SystemClock.elapsedRealtime()
             for (kh in ctl.savedHosts) {
                 if (!kh.paired || kh.fpHex.isEmpty()) continue
-                if (!kh.isOnline(ctl.reachable)) continue
+                if (!kh.isOnline(ctl.reachable)) {
+                    nowPlaying = nowPlaying - kh.fpHex
+                    continue
+                }
                 recordScreens(
                     kh.fpHex,
                     withContext(Dispatchers.IO) {
                         DisplayTargets.fetch(id, kh.address, kh.effectiveMgmtPort, kh.fpHex, kh.port)
                     },
                 )
+                val up = withContext(Dispatchers.IO) {
+                    LibraryClient.fetchRunning(
+                        kh.address, kh.effectiveMgmtPort, id.certPem, id.privateKeyPem, kh.fpHex, kh.port,
+                    )
+                }.firstOrNull { it.isUp }?.title
+                nowPlaying = if (up == null) nowPlaying - kh.fpHex else nowPlaying + (kh.fpHex to up)
                 if (now - (hostActionsAt[kh.fpHex] ?: 0L) < HOST_ACTIONS_TTL_MS) continue
                 // Stamp BEFORE the request, so a slow host cannot make every lap ask again.
                 hostActionsAt = hostActionsAt + (kh.fpHex to now)
@@ -381,38 +396,97 @@ fun ConnectScreen(
         onSettingsChange(settings.copy(defaultHost = if (on) kh.id else null))
     }
 
-    ConnectGrid(
-        savedHosts = ctl.savedHosts,
-        discovered = ctl.discovered,
-        discoveredUnsaved = discoveredUnsaved,
-        reachable = ctl.reachable,
-        presets = presets,
-        pinsFor = presetStore::pinsFor,
-        connecting = ctl.connecting,
-        notice = ctl.notice,
-        status = ctl.status,
-        lnpGranted = lnpGranted,
-        onAskLocalNetwork = { ctl.lnpPrompt = true },
-        onConnect = { kh, oneOff -> ctl.connect(kh.address, kh.port, oneOffPreset = oneOff, saved = kh) },
-        onConnectDiscovered = { dh -> ctl.connect(dh.host, dh.port, dh) },
-        onForget = { kh -> forgetHost(kh) },
-        onEdit = { kh -> editTarget = kh },
-        onWake = { kh -> ctl.wakeHost(kh) },
-        onSpeedTest = { kh -> startSpeedTest(HostCardEntry(kh, null)) },
-        onSendLogs = { kh -> sendLogs(kh) },
-        onSwitchProfile = { kh -> switchProfile(kh) },
-        hostActions = hostActions,
-        onHostAction = { kh, a -> hostAction(kh, a) },
-        screens = screens,
-        onPickScreen = { kh, t -> pickScreen(kh, t) },
-        onCopyLink = { kh, pin -> copyLink(kh, pin) },
-        onTogglePin = { kh, p -> togglePin(kh, p) },
-        onBrowseLibrary = { kh, pin -> onOpenLibrary(kh, pin?.id) },
-        defaultHost = settings.defaultHost,
-        onMakeDefault = { kh, on -> setDefaultHost(kh, on) },
-        onRescan = { discovery.rescan() },
-        onAddHost = { showManualSheet = true },
+    // The host whose page is open, by record id: the page draws the live record, and a host
+    // removed from under it falls back to the grid.
+    var detailId by rememberSaveable { mutableStateOf<String?>(null) }
+    val detail = detailId?.let { id -> ctl.savedHosts.firstOrNull { it.id == id } }
+    val defaultHostId = StartScreen.defaultHost(settings.defaultHost, ctl.savedHosts).host?.id
+    fun lineOf(kh: KnownHost) = HostLine.of(
+        pinned = kh.fpHex.isNotEmpty(),
+        online = kh.isOnline(ctl.reachable),
+        connecting = false,
+        playing = nowPlaying[kh.fpHex],
+        wakes = settings.autoWakeEnabled && kh.mac.isNotEmpty(),
     )
+
+    if (detail != null) {
+        val kh = detail
+        val online = kh.isOnline(ctl.reachable)
+        // Every write below reads the record again: the page may have changed it since it drew.
+        fun write(edit: (KnownHost) -> Unit) {
+            knownHostStore.byId(kh.id)?.let(edit)
+            ctl.refreshHosts()
+        }
+        HostDetailScreen(
+            host = kh,
+            os = ctl.discovered.firstOrNull { kh.matches(it) && it.os.isNotEmpty() }?.os ?: kh.os,
+            status = lineOf(kh),
+            notice = ctl.notice,
+            failure = ctl.status,
+            isDefault = defaultHostId == kh.id,
+            presets = presets,
+            power = hostActions[kh.fpHex].orEmpty(),
+            screens = screens[kh.fpHex],
+            busy = ctl.connecting,
+            acts = HostPageActs(
+                back = { detailId = null },
+                connect = { ctl.connect(kh.address, kh.port, saved = kh) },
+                // The fetch authenticates with the pinned identity, so only a paired host browses.
+                browse = if (kh.paired) ({ onOpenLibrary(kh, null) }) else null,
+                switchProfile = if (kh.paired && kh.asProfile != null) ({ switchProfile(kh) }) else null,
+                bind = { id -> write { HostRecords.bindPreset(knownHostStore, it, id, null) } },
+                togglePin = { id -> write { HostRecords.togglePin(knownHostStore, it, id) } },
+                pickScreen = { row -> pickScreen(kh, row) },
+                edit = { editTarget = kh },
+                setClipboard = { on -> write { HostRecords.setClipboard(knownHostStore, it, on) } },
+                speedTest = { startSpeedTest(HostCardEntry(kh, null)) },
+                copyLink = { copyLink(kh, null) },
+                pair = {
+                    ctl.pendingTrust = PendingTrust(
+                        kh.address, kh.port, kh.name, kh.fpHex.ifEmpty { null }, PendingTrust.Kind.PAIR,
+                    )
+                },
+                unpair = { write { HostRecords.unpair(knownHostStore, it) } },
+                setDefault = { on -> setDefaultHost(kh, on) },
+                wake = if (kh.mac.isNotEmpty() && !online) ({ ctl.wakeHost(kh) }) else null,
+                power = { a -> hostAction(kh, a) },
+                // The upload authenticates with the streaming cert: a paired host that answers.
+                sendLogs = if (kh.paired && online) ({ sendLogs(kh) }) else null,
+                remove = {
+                    detailId = null
+                    forgetHost(kh)
+                },
+            ),
+        )
+    } else {
+        ConnectGrid(
+            savedHosts = ctl.savedHosts,
+            discovered = ctl.discovered,
+            discoveredUnsaved = discoveredUnsaved,
+            reachable = ctl.reachable,
+            presets = presets,
+            pinsFor = presetStore::pinsFor,
+            connecting = ctl.connecting,
+            notice = ctl.notice,
+            status = ctl.status,
+            lnpGranted = lnpGranted,
+            onAskLocalNetwork = { ctl.lnpPrompt = true },
+            onConnect = { kh, oneOff -> ctl.connect(kh.address, kh.port, oneOffPreset = oneOff, saved = kh) },
+            onConnectDiscovered = { dh -> ctl.connect(dh.host, dh.port, dh) },
+            onDetails = { kh -> detailId = kh.id },
+            onWake = { kh -> ctl.wakeHost(kh) },
+            onSwitchProfile = { kh -> switchProfile(kh) },
+            screens = screens,
+            nowPlaying = nowPlaying,
+            onCopyLink = { kh, pin -> copyLink(kh, pin) },
+            onTogglePin = { kh, p -> togglePin(kh, p) },
+            onBrowseLibrary = { kh, pin -> onOpenLibrary(kh, pin?.id) },
+            defaultHostId = defaultHostId,
+            autoWake = settings.autoWakeEnabled,
+            onRescan = { discovery.rescan() },
+            onAddHost = { showManualSheet = true },
+        )
+    }
 
     // Add Host stayed behind while the other modals moved into ConnectPrompts: its form fields are
     // remembered HERE, on purpose, so a half-typed address survives the sheet being dismissed and
@@ -489,8 +563,6 @@ fun ConnectScreen(
     ConnectPrompts(
         identity = ctl.identity,
         services = ctl.services,
-        presets = presets,
-        isOnline = { it.isOnline(ctl.reachable) },
         pendingTrust = ctl.pendingTrust,
         onPendingTrustChange = { ctl.pendingTrust = it },
         onTrustNew = ctl::trustNew,
