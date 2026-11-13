@@ -1,8 +1,8 @@
 // Runtime 4:4:4 HEVC decode-capability probe.
 //
-// We advertise `VIDEO_CAP_444` (so the host upgrades to a full-chroma 4:4:4 stream) ONLY when this
-// device can decode 4:4:4 HEVC *in hardware* — software 4:4:4 decode works but is far too slow for a
-// real-time stream at the negotiated resolution, so a software-only device must keep 4:2:0.
+// Answers whether this device decodes 4:4:4 HEVC *in hardware*. `ConnectOffer.resolve` advertises
+// `VIDEO_CAP_444` from it, or from PyroWave's own decoder. Software 4:4:4 HEVC decode works but is
+// far too slow for a real-time stream, so a software-only device keeps 4:2:0 on HEVC.
 //
 // `VTIsHardwareDecodeSupported(HEVC)` and the HEVC-decoder-capabilities dictionary report HEVC HW
 // decode but expose nothing about `chroma_format_idc`, so the only reliable signal is to actually
@@ -13,7 +13,8 @@
 //
 // The probe blobs are 256×256 (above the hardware decoder's minimum-dimension floor — a 16×16 clip
 // is rejected for ALL chroma formats, including 4:2:0) HEVC Range-Extensions keyframes generated
-// offline with libx265; see scripts notes. Results are cached (device-static) in lazy statics.
+// offline with libx265 (the command is in Probe444Blobs.swift). Results are cached (device-static)
+// in lazy statics.
 
 import CoreVideo
 import Foundation
