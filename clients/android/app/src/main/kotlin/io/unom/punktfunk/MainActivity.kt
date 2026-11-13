@@ -365,9 +365,9 @@ class MainActivity : FragmentActivity() {
             statusBarStyle = SystemBarStyle.dark(android.graphics.Color.TRANSPARENT),
             navigationBarStyle = SystemBarStyle.dark(android.graphics.Color.TRANSPARENT),
         )
-        // Dev escape hatch (mirrors the Apple client's PUNKTFUNK_FORCE_GAMEPAD_UI): force the console
-        // UI without a physical pad — `adb shell am start -n io.unom.punktfunk/.MainActivity --ez
-        // pf_force_gamepad_ui true`. Never set in normal use; real activation is a connected pad / TV.
+        // Dev escape hatch: force the console UI without a physical pad — `adb shell am start -n
+        // io.unom.punktfunk/.MainActivity --ez pf_force_gamepad_ui true`. Never set in normal use;
+        // real activation is a connected pad / TV.
         val forceGamepadUi = intent?.getBooleanExtra("pf_force_gamepad_ui", false) ?: false
         // SC2 hot-plug + the menu-time USB-permission grant both (re)start the menu capture.
         val receiver = object : BroadcastReceiver() {
