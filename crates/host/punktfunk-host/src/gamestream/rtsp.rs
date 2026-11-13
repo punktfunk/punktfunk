@@ -66,18 +66,28 @@ pub fn spawn(state: Arc<AppState>) -> Result<()> {
                             tracing::warn!("RTSP: too many concurrent connections — dropping");
                             continue; // `stream` drops, connection closed
                         }
-                        // Guard before spawn: if `thread::spawn` panics (OS thread limit), Drop
-                        // still releases the slot.
+                        // The guard moves into the closure: a refused thread drops the closure,
+                        // the guard and the stream, which frees the slot and closes the connection.
                         let guard = ConnGuard;
                         let st = state.clone();
-                        std::thread::spawn(move || {
-                            let _guard = guard;
-                            if let Err(e) = handle_conn(stream, st) {
-                                tracing::warn!(error = %format!("{e:#}"), "RTSP connection ended");
-                            }
-                        });
+                        let spawned = std::thread::Builder::new()
+                            .name("punktfunk-rtsp-conn".into())
+                            .spawn(move || {
+                                let _guard = guard;
+                                if let Err(e) = handle_conn(stream, st) {
+                                    tracing::warn!(error = %format!("{e:#}"), "RTSP connection ended");
+                                }
+                            });
+                        if let Err(e) = spawned {
+                            tracing::warn!(error = %e, "RTSP connection thread did not start — dropping");
+                        }
                     }
-                    Err(e) => tracing::warn!(error = %e, "RTSP accept failed"),
+                    Err(e) => {
+                        // A persistent accept error (fd exhaustion) returns at once: pause so the
+                        // loop does not spin a core and flood the log.
+                        tracing::warn!(error = %e, "RTSP accept failed — backing off 100ms");
+                        std::thread::sleep(Duration::from_millis(100));
+                    }
                 }
             }
         })
