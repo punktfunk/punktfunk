@@ -1,8 +1,9 @@
 //! The shell's decisions as plain functions over plain data: what holds the console back, how a
-//! link meets the shell, how an advert changes the host list. `mod.rs` owns the reactor wiring
-//! and calls these, so a table test pins each rule without a window.
+//! link meets the shell, how an advert changes the host list, where Back leads, how the pane
+//! sits, what a key does. `mod.rs` owns the reactor wiring and calls these, so a table test pins
+//! each rule without a window.
 
-use super::Screen;
+use super::{Dest, Screen};
 use pf_client_core::deeplink::{self, DeepLink};
 use pf_client_core::discovery::{DiscoveredHost, DiscoveryEvent};
 use pf_l10n::client;
@@ -90,13 +91,98 @@ pub(super) fn link_prompt(
     s
 }
 
+/// Below this client width the pane leaves the page and opens over it.
+const PANE_BESIDE_WIDTH: f64 = 600.0;
+/// From this client width the pane opens with its labels unless the player closed it.
+const PANE_OPEN_WIDTH: f64 = 900.0;
+
+/// How the navigation pane sits.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Pane {
+    /// Off the page. The title bar's toggle opens it over the page (`true`).
+    Over(bool),
+    /// Beside the page: open with its labels (`true`), or the icon rail.
+    Beside(bool),
+}
+
+/// The pane at a client `width`. `choice` is the toggle's last word on a pane beside the page,
+/// `over` whether the pane is up over a narrow one.
+pub(super) fn pane(width: f64, choice: Option<bool>, over: bool) -> Pane {
+    if width < PANE_BESIDE_WIDTH {
+        Pane::Over(over)
+    } else {
+        Pane::Beside(choice.unwrap_or(width >= PANE_OPEN_WIDTH))
+    }
+}
+
+/// Where the title bar's Back leads.
+#[derive(Debug, PartialEq)]
+pub(super) enum Back {
+    Screen(Screen),
+    /// Out of a host's page, to the host list.
+    HostList,
+    /// Out of the hidden titles, to the shelf.
+    Shelf,
+}
+
+/// Back from `screen`, with Home as `dest`, `host_page` and `hidden_titles` leave it. `None`
+/// where there is nowhere to go back to, or the screen has its own Cancel.
+pub(super) fn back(
+    screen: &Screen,
+    dest: Dest,
+    host_page: bool,
+    hidden_titles: bool,
+) -> Option<Back> {
+    match screen {
+        Screen::Settings | Screen::Help | Screen::SpeedTest => Some(Back::Screen(Screen::Home)),
+        Screen::Licenses => Some(Back::Screen(Screen::Settings)),
+        Screen::Home => match dest {
+            Dest::Hosts if host_page => Some(Back::HostList),
+            Dest::Library if hidden_titles => Some(Back::Shelf),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+/// What a key pressed in the shell's window asks for.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Shortcut {
+    Hosts,
+    Library,
+    /// Show the Library with the caret in its search box.
+    Search,
+    AddHost,
+    /// Scan for hosts, or reload the shelf.
+    Reload,
+    Settings,
+    Back,
+}
+
+/// The shortcut for virtual key `vk` with Ctrl and Alt as held.
+pub(super) fn shortcut(vk: u32, ctrl: bool, alt: bool) -> Option<Shortcut> {
+    const LEFT: u32 = 0x25;
+    const F5: u32 = 0x74;
+    const COMMA: u32 = 0xBC;
+    match (vk, ctrl, alt) {
+        (0x31, true, false) => Some(Shortcut::Hosts),
+        (0x32, true, false) => Some(Shortcut::Library),
+        (0x46, true, false) => Some(Shortcut::Search),
+        (0x4E, true, false) => Some(Shortcut::AddHost),
+        (0x52, true, false) | (F5, false, false) => Some(Shortcut::Reload),
+        (COMMA, true, false) => Some(Shortcut::Settings),
+        (LEFT, false, true) => Some(Shortcut::Back),
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    const ALL: [Screen; 13] = [
+    const ALL: [Screen; 12] = [
         Screen::Trust,
-        Screen::Hosts,
+        Screen::Home,
         Screen::Connecting,
         Screen::RequestAccess,
         Screen::Waking,
@@ -107,7 +193,6 @@ mod tests {
         Screen::Help,
         Screen::Pair,
         Screen::SpeedTest,
-        Screen::Library,
     ];
 
     #[test]
@@ -248,7 +333,7 @@ mod tests {
             "Pairing can't be done from a link \u{2014} pair the host in Punktfunk first."
         );
         for s in [
-            Screen::Hosts,
+            Screen::Home,
             Screen::Settings,
             Screen::WakeParked,
             Screen::Pair,
@@ -263,7 +348,7 @@ mod tests {
             .message();
         assert_eq!(msg, "That isn't a Punktfunk link.");
         assert_eq!(
-            gate_link("https://example.com", &Screen::Hosts, false),
+            gate_link("https://example.com", &Screen::Home, false),
             LinkGate::Refuse(msg)
         );
     }
@@ -283,7 +368,7 @@ mod tests {
             );
         }
         assert_eq!(
-            gate_link("punktfunk://pair", &Screen::Hosts, true),
+            gate_link("punktfunk://pair", &Screen::Home, true),
             LinkGate::Hold(msg)
         );
     }
@@ -311,5 +396,51 @@ mod tests {
             link_prompt("Desk", "192.168.1.5", Some("steam:570"), Some(&set))
                 .contains("\u{201d}.\n\nHost: 1080p\n\nIt names")
         );
+    }
+
+    #[test]
+    fn the_pane_follows_the_width_until_the_toggle_speaks() {
+        assert_eq!(pane(1200.0, None, false), Pane::Beside(true));
+        assert_eq!(pane(760.0, None, false), Pane::Beside(false));
+        assert_eq!(pane(1200.0, Some(false), false), Pane::Beside(false));
+        assert_eq!(pane(760.0, Some(true), false), Pane::Beside(true));
+        // A narrow window takes the pane off the page whatever the toggle said beside it.
+        assert_eq!(pane(480.0, Some(true), false), Pane::Over(false));
+        assert_eq!(pane(480.0, None, true), Pane::Over(true));
+    }
+
+    #[test]
+    fn back_leaves_a_drill_in_and_nothing_else() {
+        let home = |dest, host, hidden| back(&Screen::Home, dest, host, hidden);
+        assert_eq!(home(Dest::Hosts, false, false), None);
+        assert_eq!(home(Dest::Hosts, true, false), Some(Back::HostList));
+        assert_eq!(home(Dest::Library, false, true), Some(Back::Shelf));
+        // A host page left open under the Library is not what the Library goes back to.
+        assert_eq!(home(Dest::Library, true, false), None);
+        for s in ALL {
+            let want = match s {
+                Screen::Settings | Screen::Help | Screen::SpeedTest => {
+                    Some(Back::Screen(Screen::Home))
+                }
+                Screen::Licenses => Some(Back::Screen(Screen::Settings)),
+                _ => None,
+            };
+            assert_eq!(back(&s, Dest::Hosts, false, false), want);
+        }
+    }
+
+    #[test]
+    fn keys_map_to_the_shell_shortcuts() {
+        assert_eq!(shortcut(0x31, true, false), Some(Shortcut::Hosts));
+        assert_eq!(shortcut(0x32, true, false), Some(Shortcut::Library));
+        assert_eq!(shortcut(0x46, true, false), Some(Shortcut::Search));
+        assert_eq!(shortcut(0x4E, true, false), Some(Shortcut::AddHost));
+        assert_eq!(shortcut(0x52, true, false), Some(Shortcut::Reload));
+        assert_eq!(shortcut(0x74, false, false), Some(Shortcut::Reload));
+        assert_eq!(shortcut(0xBC, true, false), Some(Shortcut::Settings));
+        assert_eq!(shortcut(0x25, false, true), Some(Shortcut::Back));
+        // A bare letter is typing, and AltGr (Ctrl+Alt) is a character.
+        assert_eq!(shortcut(0x46, false, false), None);
+        assert_eq!(shortcut(0x31, true, true), None);
     }
 }

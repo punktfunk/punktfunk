@@ -692,7 +692,7 @@ fn back_button(cx: &ViewContext<'_, Wizard>, cur: WizStep) -> View {
 }
 
 /// The real window over a preset (canned or probed) and the seams its install runs on.
-pub fn run(preset: WinPreset, seams: Seams) -> windows::core::Result<()> {
+pub fn run(preset: WinPreset, seams: Seams) -> Result<(), impl std::fmt::Debug> {
     pf_l10n::set_languages(&pf_l10n::os_languages());
     // Self-contained: the runtime DLLs sit beside the exe (build.rs), which reactor finds
     // without an installed framework.

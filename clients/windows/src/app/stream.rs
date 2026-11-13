@@ -24,7 +24,7 @@ pub(crate) struct HudSample {
 /// in-window shortcuts, and a Disconnect that kills the child (its exit event routes
 /// the app back to the host list, same as the child's window closing).
 pub(crate) fn session_page(pal: &Palette, ctx: &Arc<super::AppCtx>, hud: &HudSample) -> View {
-    use super::style::{avatar, card, pill, Pill};
+    use super::style::{card, host_tile, pill, Pill};
     let target = ctx.shared.target.lock().unwrap().clone();
     let host = target.host.name.clone();
     // The settings this launch resolved, so a preset's own shortcuts are the ones named.
@@ -49,7 +49,7 @@ pub(crate) fn session_page(pal: &Palette, ctx: &Arc<super::AppCtx>, hud: &HudSam
     let header: View = Grid::new()
         .children((
             // Monogram, as the comment above says: `Target` carries no OS chain to mark with.
-            avatar(pal, &host, "")
+            host_tile(pal, &host, "", true, 44.0)
                 .grid_column(0)
                 .vertical_alignment(VerticalAlignment::Center),
             vstack((

@@ -2,10 +2,8 @@
 //! Settings).
 
 use super::style::*;
-use super::{AppCtx, AsyncSetState, Screen};
 use pf_fluent::{Palette, Token};
-use pf_l10n::{client, common, desktop};
-use std::sync::Arc;
+use pf_l10n::{client, desktop};
 use windows_reactor::*;
 
 /// punktfunk's own license (MIT OR Apache-2.0).
@@ -23,23 +21,7 @@ const APP_LICENSE: &str = concat!(
 /// — a false statement to the user's face, three lines under a card saying otherwise.
 const THIRD_PARTY_NOTICES: &str = include_str!("../../THIRD-PARTY-NOTICES.txt");
 
-pub(crate) fn licenses_page(
-    pal: &Palette,
-    ctx: &Arc<AppCtx>,
-    set_screen: &AsyncSetState<Screen>,
-) -> View {
-    let back_btn = icon_button("arrow-left", common::common_back())
-        .style(ButtonStyle::Accent)
-        .on_click({
-            let (c, ss) = (ctx.clone(), set_screen.clone());
-            move || {
-                // Back RE-ENTERS the settings page — re-base its snapshot on the file, same
-                // as the hosts page's Settings button (see settings::refresh_snapshot).
-                super::settings::refresh_snapshot(&c);
-                ss.call(Screen::Settings)
-            }
-        });
-
+pub(crate) fn licenses_page(pal: &Palette) -> View {
     let app_card = card(
         vstack((
             text("Punktfunk")
@@ -84,7 +66,7 @@ pub(crate) fn licenses_page(
     );
 
     page(vec![
-        page_header(client::about_licenses_title(), back_btn),
+        page_header(client::about_licenses_title(), Vec::new()),
         section(pal, "Punktfunk"),
         app_card.into(),
         section(pal, desktop::desktop_licenses_section_bundled()),

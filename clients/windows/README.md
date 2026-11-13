@@ -38,8 +38,17 @@ punktfunk-client --headless --speed-test --connect host[:port]  # probe burst �
 The windows-reactor pin is a moving target and WinUI regressions rarely show up in `cargo check`.
 Walk this after a reactor bump or a change to the render/state architecture:
 
-- **Hosts** — discovery populates tiles; tile hover fill; "…" → Forget and Rename; add-host modal
-  connects; the WOL wait screen cancels.
+- **Pane** — Hosts and Library switch pages with no jump under the title bar; the pane narrows to
+  icons below 900 px and overlays below 600; Back leaves a host page; Ctrl+1, Ctrl+2 and Ctrl+F.
+- **Hosts** — discovery populates cards; card hover fill; right-click menu; ⓘ opens the host page;
+  a field there saves on Enter and on focus loss, focus stays where it went, a refused value
+  snaps back, and unsaved typing survives a probe refresh; Add host saves without dialing; the
+  WOL wait screen cancels; Sort and group opens below its button and regroups the page; a card
+  menu opens on the first click after a pick.
+- **Library** — a chip per paired host and pinned preset; posters load art; the store badge and
+  "…" stay legible over a dark cover; the wheel scrolls with the pointer over a band; search in
+  the title bar filters; a title's menu opens Details; Customize moves and hides sections, and
+  the page scrolls after a section comes back, from Customize or a first favorite; an offline host's shelf shows Try again.
 - **Settings** — every section renders; combos still show their selection after a section switch
   *and* a scope switch (the historic blank-combo reconciler bug); preset create / rename / delete;
   colour swatches repaint; the Overridden marker appears on edit and clears on Reset; the GPU combo
@@ -47,5 +56,5 @@ Walk this after a reactor bump or a change to the render/state architecture:
 - **Pair** — PIN entry pairs, and the typed PIN reaches the Connect click (the `use_ref` mirror path).
 - **Session** — connect spawns the session; HUD stats tick; Ctrl+Alt+Shift+Q releases the pointer;
   the shell window restores on exit.
-- **Shell** — speed test completes; library grid loads; a `punktfunk://` deep link routes and a
-  second instance hands off and exits; the window icon appears.
+- **Shell** — speed test completes; a `punktfunk://` deep link routes and a second instance hands
+  off and exits; the window icon appears; light and dark theme.

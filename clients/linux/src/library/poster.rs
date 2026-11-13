@@ -8,7 +8,6 @@ use adw::prelude::*;
 use gtk::subclass::prelude::*;
 use gtk::{gdk, gio, glib};
 use pf_client_core::library::{initials, store_label, GameEntry};
-use pf_client_core::library_layout::ago;
 use pf_l10n::{client, common};
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -297,7 +296,10 @@ impl Poster {
             self.button.set_tooltip_text(Some(&g.title));
             // Every tile of a captioned row keeps the line, so all its rows are one height.
             p.caption.set_visible(caption != Caption::None);
-            let text = caption_text(g, caption);
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |d| d.as_millis() as u64);
+            let text = caption.text(g, now);
             p.caption.set_label(text.as_deref().unwrap_or("\u{a0}"));
             set_class(p.face.upcast_ref(), "pf-launcher", launcher);
             p.badge.set_visible(true);
@@ -398,25 +400,6 @@ fn set_class(w: &gtk::Widget, class: &str, on: bool) {
         w.add_css_class(class);
     } else {
         w.remove_css_class(class);
-    }
-}
-
-/// Under Recently played or the Recent sort, when it was last played; under Most played, how
-/// long. Nothing for a title never played here.
-fn caption_text(g: &GameEntry, caption: Caption) -> Option<String> {
-    let s = g.stats.as_ref()?;
-    match caption {
-        Caption::LastPlayed if s.last_played_unix_ms > 0 => {
-            let now = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map_or(0, |d| d.as_millis() as u64);
-            Some(ago(now.saturating_sub(s.last_played_unix_ms)))
-        }
-        Caption::PlayTime if s.play_time_ms > 0 => Some(match s.play_time_ms / 3_600_000 {
-            0 => client::lib_played_under_hour().into(),
-            h => client::lib_played_hours_short(h),
-        }),
-        _ => None,
     }
 }
 
