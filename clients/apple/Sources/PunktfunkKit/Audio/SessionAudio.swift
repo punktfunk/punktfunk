@@ -627,39 +627,25 @@ public final class SessionAudio: @unchecked Sendable {
 
     // MARK: - Device changes
 
-    /// An AVAudioEngine does not follow the audio hardware. When the output device changes under a
-    /// running engine — AirPods taken out of an ear, a headset unplugged, the default switched in
-    /// System Settings — the engine's IO unit sees the new hardware, THE ENGINE STOPS ITSELF, and
-    /// it posts `AVAudioEngineConfigurationChange`. It stays stopped until somebody starts it
-    /// again. Nothing here ever did, so from that moment the session rendered silence: no audio on
-    /// the speakers the stream had just moved to, and none in the AirPods when they went back in
-    /// (that is a second stop, not a recovery), until the whole stream was restarted. Measured on
-    /// this exact topology: render callbacks go from ~94/s to zero the instant the default output
-    /// device changes, and both restarting the same engine and building a fresh one resume them.
+    /// An AVAudioEngine does not follow the audio hardware: when its output device changes (AirPods
+    /// out of an ear, a headset unplugged, the default switched), the engine stops itself, posts
+    /// `AVAudioEngineConfigurationChange`, and stays stopped until somebody starts it again.
     ///
     /// Three triggers feed one rebuild, because no single one of them covers the ground:
     ///
     ///  - the engine notification, everywhere — the direct signal, but only an engine that still
     ///    EXISTS can post it, so it cannot report a rebuild that failed to start;
-    ///  - the HAL default-output-device listener, macOS — independent of any engine and of the
-    ///    engine's topology. It is what makes the recovery work for the voice-processing engine
-    ///    (mic + echo cancellation, the DEFAULT macOS configuration) without having to assume that
-    ///    a VPIO engine posts the notification the plain one demonstrably does;
-    ///  - the route-change and media-services-reset notifications, iOS/tvOS, where the session and
-    ///    not the device is what moves.
+    ///  - the HAL default-output-device listener, macOS — independent of any engine and of its
+    ///    topology, so it covers the voice-processing engine too;
+    ///  - the route-change, media-services-reset and interruption notifications, iOS/tvOS, where
+    ///    the session and not the device is what moves.
     ///
-    /// And three defenses keep the recovery from ANSWERING ITSELF — a rebuild is not a silent
-    /// act (a voice-processing start builds and tears down HAL aggregates, and every fresh engine
-    /// renegotiates its IO), so its own fallout can retrigger it. The 2026-08-14 field loop was
-    /// exactly that: VPIO failed on a 6-channel mic, every rebuild re-tried it, and the failure's
-    /// churn stopped the fallback engines — audio and (via the main thread) INPUT cutting out
-    /// every ~2.5 s for the whole session. The defenses: a configuration change from an engine
-    /// that is RUNNING is a rebuild's echo and is ignored (`hardwareMoved`); a VPIO failure is
-    /// latched per input device and never re-attempted on it (`CombinedTopologyGate`); and
-    /// rebuilds that chain anyway back off exponentially instead of metronoming
-    /// (`RebuildBackoff`).
+    /// A rebuild's own HAL churn can retrigger it. Three defenses keep the recovery from answering
+    /// itself: a configuration change from a RUNNING engine is a rebuild's echo (`hardwareMoved`);
+    /// a voice-processing failure is latched per input device (`CombinedTopologyGate`); rebuilds
+    /// that chain anyway back off exponentially (`RebuildBackoff`).
     ///
-    /// `micEnabled` only decides whether the mic-bearing session observers are worth installing.
+    /// `micEnabled` picks the session category the iOS and tvOS observers reactivate with.
     @MainActor
     private func installDeviceChangeRecovery(micEnabled: Bool) {
         stateLock.lock()
