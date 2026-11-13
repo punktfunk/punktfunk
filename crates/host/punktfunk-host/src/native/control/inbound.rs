@@ -135,9 +135,15 @@ impl ControlTask {
         Ok(())
     }
 
+    /// A layout ask for the stream's screen set. A session without one has dropped the
+    /// receiver: the ask is ignored and the task goes on.
     fn on_screens(&mut self, req: v2msg::Screens) -> Step {
         tracing::info!(screens = ?req.screens, "client screens");
-        self.task.ends.screens_tx.send(req.screens)?;
+        if self.task.ends.screens_tx.send(req.screens).is_err()
+            && !std::mem::replace(&mut self.closed.screens_ask, true)
+        {
+            tracing::debug!("screens ask ignored: this session has no screen set");
+        }
         Ok(())
     }
 
