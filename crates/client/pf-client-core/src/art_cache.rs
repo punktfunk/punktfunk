@@ -56,21 +56,33 @@ fn is_key(name: &OsStr) -> bool {
             .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
 }
 
-/// Cached bytes for `url`, or `None` for anything we would not have written —
+/// The cache file for `url`, or `None` for anything we would not have written —
 /// absent, empty, or past the fetch path's ceiling.
+fn present(dir: &Path, url: &str) -> Option<PathBuf> {
+    let file = file_for(dir, url);
+    let len = std::fs::metadata(&file).ok()?.len();
+    (len != 0 && len <= ART_MAX_BYTES).then_some(file)
+}
+
+/// Cached bytes for `url`, or `None` when [`path_of`] would be.
 pub fn load(url: &str) -> Option<Vec<u8>> {
     load_in(&dir()?, url)
 }
 
 fn load_in(dir: &Path, url: &str) -> Option<Vec<u8>> {
-    let file = file_for(dir, url);
-    let len = std::fs::metadata(&file).ok()?.len();
-    if len == 0 || len > ART_MAX_BYTES {
-        return None;
-    }
+    let file = present(dir, url)?;
     let bytes = std::fs::read(&file).ok()?;
     touch(&file);
     Some(bytes)
+}
+
+/// The file holding `url`'s poster, for a shell whose image loader reads a path. Marked
+/// used, so eviction keeps what a library is showing. The file is replaced only by an
+/// atomic rename, never rewritten in place.
+pub fn path_of(url: &str) -> Option<PathBuf> {
+    let file = present(&dir()?, url)?;
+    touch(&file);
+    Some(file)
 }
 
 /// Stamps last use, so eviction drops what no library has opened in longest.
@@ -193,6 +205,9 @@ mod tests {
         assert!(store_in(&dir, url, b"\x89PNG-ish"));
         assert_eq!(load_in(&dir, url).as_deref(), Some(&b"\x89PNG-ish"[..]));
         assert!(load_in(&dir, "https://other/x.png").is_none());
+        // A path-reading shell gets the same file, and a miss where `load` misses.
+        assert_eq!(present(&dir, url), Some(file_for(&dir, url)));
+        assert_eq!(present(&dir, "https://other/x.png"), None);
         // Nothing half-written survives the rename.
         let leftovers = std::fs::read_dir(&dir).unwrap().count();
         assert_eq!(leftovers, 1, "one entry, no temp file");
@@ -209,6 +224,7 @@ mod tests {
         // A file that grew past the ceiling behind our back is a miss, not a huge read.
         std::fs::write(file_for(&dir, url), vec![7u8; ART_MAX_BYTES as usize + 1]).unwrap();
         assert!(load_in(&dir, url).is_none());
+        assert_eq!(present(&dir, url), None);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
