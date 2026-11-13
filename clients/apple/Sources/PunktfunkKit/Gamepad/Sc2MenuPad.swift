@@ -37,11 +37,15 @@ final class Sc2MenuPad {
     private var link: Sc2BleLink!
     private var observers: [NSObjectProtocol] = []
 
-    /// Guards `state` (written on the link queue, read from the main actor).
+    /// Guards `state` and `listening` (the link queue and the main actor both touch them).
     private let lock = NSLock()
     /// The last parsed state report; nil until the first one and after the link closes, which
     /// is also what "a pad is attached" means here — an idle radio claims nothing.
     private var state: Sc2Device.State?
+    /// False from a stop until the next start. The link stops asynchronously and keeps its
+    /// connection 150 ms for the lizard restore; a report in that window must not re-attach
+    /// the pad, or the menus read its last state for as long as the radio stays released.
+    private var listening = false
 
     /// The live pad's buttons and sticks, or nil when none is delivering. Safe from any thread.
     var snapshot: Sc2Device.State? {
@@ -71,15 +75,15 @@ final class Sc2MenuPad {
             forName: UIApplication.willResignActiveNotification, object: nil, queue: .main
         ) { _ in
             guard let self = weakSelf else { return }
-            self.detach(reason: "app inactive")
+            self.detach(reason: "app inactive", halt: true)
             self.link.stop()
         })
         observers.append(NotificationCenter.default.addObserver(
             forName: UIApplication.didBecomeActiveNotification, object: nil, queue: .main
         ) { _ in
-            weakSelf?.link.start()
+            weakSelf?.listen()
         })
-        link.start()
+        listen()
     }
 
     /// Release the radio and forget the pad. Idempotent.
@@ -87,8 +91,16 @@ final class Sc2MenuPad {
     func stop() {
         observers.forEach { NotificationCenter.default.removeObserver($0) }
         observers.removeAll()
-        detach(reason: "stop")
+        detach(reason: "stop", halt: true)
         link.stop()
+    }
+
+    /// Take reports again and start (or restart) the link.
+    private func listen() {
+        lock.lock()
+        listening = true
+        lock.unlock()
+        link.start()
     }
 
     /// One report off the link queue. Only state reports matter — battery and wireless status
@@ -100,6 +112,10 @@ final class Sc2MenuPad {
             : Sc2Device.parseState(framed, into: &parsed)
         guard isState else { return }
         lock.lock()
+        guard listening else {
+            lock.unlock()
+            return
+        }
         let wasAttached = state != nil
         state = parsed
         lock.unlock()
@@ -109,9 +125,11 @@ final class Sc2MenuPad {
     }
 
     /// Drop the pad — link closed, backgrounded, or stopped. Fires the edge only on a real
-    /// transition, so a repeated stop stays silent.
-    private func detach(reason: String) {
+    /// transition, so a repeated stop stays silent. `halt` also refuses reports until the next
+    /// `listen`: the two stops, where the link still delivers for a moment.
+    private func detach(reason: String, halt: Bool = false) {
         lock.lock()
+        if halt { listening = false }
         let wasAttached = state != nil
         state = nil
         lock.unlock()
