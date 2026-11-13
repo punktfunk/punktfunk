@@ -15,6 +15,7 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { usePerson } from "@/lib/person";
 import { m } from "@/paraglide/messages";
 
 // Friction proportional to trust. The three install paths deliberately do NOT share a confirm
@@ -36,6 +37,7 @@ export const InstallDialog: FC<{
 	isPending: boolean;
 }> = ({ entry, onCancel, onConfirm, isPending }) => {
 	const external = entry?.tier === "external";
+	const person = usePerson() !== null;
 	return (
 		<Dialog open={entry !== null} onOpenChange={(open) => !open && onCancel()}>
 			{entry && (
@@ -67,7 +69,9 @@ export const InstallDialog: FC<{
 
 					{external && (
 						<p className="rounded-md border border-amber-600/40 bg-amber-500/10 px-3 py-2 text-sm text-amber-600 dark:border-amber-500/40 dark:text-amber-500">
-							{m.store_install_external_note()}
+							{person
+								? m.person_store_install_external_note()
+								: m.store_install_external_note()}
 						</p>
 					)}
 
@@ -107,6 +111,7 @@ export const UpdateAllDialog: FC<{
 	isPending: boolean;
 }> = ({ updates, skipped, onCancel, onConfirm, isPending }) => {
 	const external = (updates ?? []).filter((u) => u.entry.tier === "external");
+	const person = usePerson() !== null;
 	// Each source named once, in the order the run meets it.
 	const sources = [...new Set(external.map((u) => u.entry.source))];
 	return (
@@ -150,7 +155,9 @@ export const UpdateAllDialog: FC<{
 
 					{sources.length > 0 && (
 						<p className="rounded-md border border-amber-600/40 bg-amber-500/10 px-3 py-2 text-sm text-amber-600 dark:border-amber-500/40 dark:text-amber-500">
-							{m.store_update_all_external_note({
+							{(person
+								? m.person_store_update_all_external_note
+								: m.store_update_all_external_note)({
 								sources: sources.join(", "),
 							})}
 						</p>

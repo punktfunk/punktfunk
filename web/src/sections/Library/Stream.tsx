@@ -15,7 +15,7 @@ import {
 	useUpdateOverrideSet,
 } from "@/api/gen/library/library";
 import type { OverrideEntry } from "@/api/gen/model/overrideEntry";
-import { type ProfileView, useAs, useProfileView } from "@/api/seat";
+import { type ProfileView, useAs, useProfileView, whose } from "@/api/seat";
 import { useDialogs } from "@/components/dialogs";
 import { QueryState } from "@/components/query-state";
 import { Button } from "@/components/ui/button";
@@ -494,22 +494,29 @@ const OwnerStreamControls: FC<StreamControlsProps> = ({ kind, id, from }) => {
 
 /**
  * The owner's library's overrides, and in a profile's view the profile's own file beside them.
- * `sets` holds every shared override an entry may name there.
+ * `sets` holds every shared override an entry may name there. A person's own console reads
+ * only their own file, which carries the owner's shared overrides as `box_sets`: the box lends
+ * a person no read of the owner's games and sources.
  */
 export function useOverrideDocs(enabled = true) {
 	const as = useAs();
-	const box = useGetLibraryOverrides(undefined, { query: { enabled } });
+	const person = useProfileView()?.person === true;
+	const owners = useGetLibraryOverrides(undefined, {
+		query: { enabled: enabled && !person },
+	});
 	const own = useGetLibraryOverrides(as, {
 		query: { enabled: enabled && as !== undefined },
 	});
+	const lent = own.data?.box_sets;
+	const box = person ? (lent ? { sets: lent } : undefined) : owners.data;
 	return {
-		box: box.data,
+		box,
 		own: as ? own.data : undefined,
-		sets: mergedSets(box.data, as ? own.data : undefined),
-		isLoading: box.isLoading || (as !== undefined && own.isLoading),
-		error: box.error ?? (as ? own.error : null),
+		sets: mergedSets(box, as ? own.data : undefined),
+		isLoading: owners.isLoading || (as !== undefined && own.isLoading),
+		error: owners.error ?? (as ? own.error : null),
 		refetch: () => {
-			void box.refetch();
+			if (!person) void owners.refetch();
 			if (as) void own.refetch();
 		},
 	};
@@ -569,7 +576,7 @@ const ProfileStreamControls: FC<
 			<div className="space-y-4">
 				{s.mine && (
 					<div className="flex flex-wrap items-center gap-x-3 gap-y-1">
-						<OwnBadge label={m.profile_view_own({ name: view.name })} />
+						<OwnBadge label={whose(view.name, view.person).own} />
 						{!s.fallbackIsOwn && (
 							<Button
 								variant="link"

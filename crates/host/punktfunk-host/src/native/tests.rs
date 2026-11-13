@@ -2140,7 +2140,8 @@ fn a_refused_launch_runs_none_of_its_prep() {
     let add = |title: &str| {
         let touch = format!("touch {}", marker(title).display());
         let input = serde_json::json!({"title": title, "prep": [{"do": touch}]});
-        let entry = crate::library::add_custom(serde_json::from_value(input).unwrap()).unwrap();
+        let entry =
+            crate::library::add_custom(serde_json::from_value(input).unwrap(), false).unwrap();
         format!("custom:{}", entry.id)
     };
     let (boxed, own, shown) = (add("boxed"), add("own"), add("shown"));

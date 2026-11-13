@@ -666,30 +666,21 @@ fn render_stats(v: &Value) {
 
 /// Write a one-shot login page for the browser to open, and return its `file://` URL.
 ///
-/// **What is being trusted.** The ticket is keyed by the **mgmt token**: a 0600 file inside the
-/// 0700 config dir, readable only by the uid the host runs as. Whoever can read it can already
-/// drive the whole admin API directly — it is the credential the console's own proxy presents —
-/// so letting them skip a password they could simply read widens nothing. A LAN visitor without a
-/// ticket still meets the login page.
+/// **What is being trusted.** The console's ticket is keyed by the **mgmt token**: a 0600 file
+/// inside the 0700 config dir, readable only by the uid the host runs as. Whoever can read it can
+/// already drive the whole admin API directly, so skipping a password widens nothing. Inside a
+/// seat the ticket is the person's: keyed by the seat host's person token, which only the seat's
+/// account reads ([`person_ticket`]). A LAN visitor without a ticket still meets the login page.
 ///
 /// **Why a file and not the URL.** `/proc/<pid>/cmdline` is world-readable, so a ticket passed to
 /// the browser as an argument is legible to every other local user for its whole lifetime. The
-/// ticket therefore lives in a 0600 file under `$XDG_RUNTIME_DIR` — per-user, 0700, wiped at
-/// logout — and only its PATH reaches argv. No runtime dir means no private place to put it, so
-/// this fails and the caller opens the bare console URL instead.
+/// ticket lives in a 0600 file under `$XDG_RUNTIME_DIR`, and only its PATH reaches argv. No
+/// runtime dir means no private place to put it, so this fails.
 ///
-/// TTL and single-use are the console's to enforce, so a stub left behind by an earlier launch is
-/// already spent.
+/// TTL and single-use are the redeemer's to enforce: a stub left from an earlier launch is spent.
 #[cfg(unix)]
 fn console_stub() -> Result<String> {
     let dir = pf_paths::config_dir();
-    let token = crate::mgmt_token::read_persisted(&dir).ok_or_else(|| {
-        Failure::unreachable(format!(
-            "no management token in {} — the console shares this file, so without it there is \
-             nothing for a handoff to prove. Start the host once and retry.",
-            dir.join("mgmt-token").display()
-        ))
-    })?;
     let ts = crate::clock::unix_secs_u64();
     let mut raw = [0u8; 16];
     rand::Rng::fill_bytes(&mut rand::rng(), &mut raw);
@@ -701,13 +692,40 @@ fn console_stub() -> Result<String> {
                 .to_string(),
         )
     })?;
-    let ticket = handoff_ticket(&token, ts, &nonce)?;
     // The console's own port, not the mgmt one. It is not published anywhere the way
     // `mgmt-endpoint` is, so the documented default stands until somebody moves it.
     // `127.0.0.1`, not `localhost`: the console binds IPv4 only, and any local user can
     // listen on `[::1]:47992`, which browsers try first, and take the ticket.
-    let target = format!("https://127.0.0.1:47992/_auth/handoff?t={ticket}");
+    let target = if crate::person_token::mints(pf_paths::seat::role()) {
+        let ticket = person_ticket(&dir, ts, &nonce)?;
+        format!("https://127.0.0.1:47992/_auth/person?ticket={ticket}")
+    } else {
+        let token = crate::mgmt_token::read_persisted(&dir).ok_or_else(|| {
+            Failure::unreachable(format!(
+                "no management token in {} — the console shares this file, so without it there \
+                 is nothing for a handoff to prove. Start the host once and retry.",
+                dir.join("mgmt-token").display()
+            ))
+        })?;
+        let ticket = handoff_ticket(&token, ts, &nonce)?;
+        format!("https://127.0.0.1:47992/_auth/handoff?t={ticket}")
+    };
     write_stub(&std::path::Path::new(&runtime).join("punktfunk"), &target)
+}
+
+/// Inside a seat: a ticket for the seat's own profile, signed with the person token its host
+/// wrote into `dir` (`crate::person_token`). The seat host redeems it; the console cannot.
+#[cfg(unix)]
+fn person_ticket(dir: &std::path::Path, ts: u64, nonce: &str) -> Result<String> {
+    let token = crate::person_token::read_in(dir).map_err(|why| {
+        Failure::unreachable(format!(
+            "no person token: {why}. The seat's host writes one when it starts; start it and retry."
+        ))
+    })?;
+    let profile = crate::library::View::here().layer().map(str::to_string);
+    let profile = profile
+        .ok_or_else(|| Failure::unreachable("this seat names no profile of its own".to_string()))?;
+    Ok(crate::person_token::sign(&token, ts, nonce, &profile))
 }
 
 /// The signed half: `<unix-seconds>.<nonce>.<HMAC-SHA256>` over `pf-console-handoff:v1:ts:nonce`.
@@ -1037,6 +1055,7 @@ CONSOLE
     console-url                  write a one-shot login page under $XDG_RUNTIME_DIR and print its
                                  file:// URL, so a browser opened at it lands already logged in.
                                  The ticket stays out of argv, where every local user can read it.
+                                 Inside a seat it opens that person's own Punktfunk instead.
 
 DISPLAYS
     display                      the virtual-display policy, every preset, and the live displays.

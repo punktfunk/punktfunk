@@ -3,7 +3,7 @@
 // the seat follows the host's choice for every seat.
 import { QueryClientProvider, useQueryClient } from "@tanstack/react-query";
 import { toast } from "@unom/ui/toast";
-import type { FC, ReactNode } from "react";
+import type { ComponentProps, FC, ReactNode } from "react";
 import type { ProfileAdmin } from "@/api/gen/model/profileAdmin";
 import type { SessionSettingsState } from "@/api/gen/model/sessionSettingsState";
 import {
@@ -46,7 +46,12 @@ export const GameExitPreference: FC<{
 	);
 };
 
-const GameExitQuery: FC<{ id: string }> = ({ id }) => {
+const GameExitQuery: FC<{ id: string }> = ({ id }) => (
+	<GameExitView {...useGameExit(id)} />
+);
+
+/** The read and the writes behind **When the game exits** for profile `id`. */
+export function useGameExit(id: string): ComponentProps<typeof GameExitView> {
 	const qc = useQueryClient();
 	const as = { as: id };
 	const q = useGetSessionSettings(as);
@@ -62,28 +67,26 @@ const GameExitQuery: FC<{ id: string }> = ({ id }) => {
 		onError: (e: unknown) =>
 			toast.error(apiErrorMessage(e) ?? m.host_settings_save_failed()),
 	};
-	return (
-		<GameExitView
-			state={state}
-			loading={q.isLoading}
-			error={q.error ? (apiErrorMessage(q.error) ?? m.common_error()) : null}
-			onRetry={() => void q.refetch()}
-			busy={save.isPending || drop.isPending}
-			onPick={(choice) => {
-				if (!state) return;
-				if (choice !== HOST)
-					save.mutate(
-						{
-							data: { ...state.settings, session_on_game_exit: choice },
-							params: as,
-						},
-						done,
-					);
-				else if (state.configured) drop.mutate({ params: as }, done);
-			}}
-		/>
-	);
-};
+	return {
+		state,
+		loading: q.isLoading,
+		error: q.error ? (apiErrorMessage(q.error) ?? m.common_error()) : null,
+		onRetry: () => void q.refetch(),
+		busy: save.isPending || drop.isPending,
+		onPick: (choice) => {
+			if (!state) return;
+			if (choice !== HOST)
+				save.mutate(
+					{
+						data: { ...state.settings, session_on_game_exit: choice },
+						params: as,
+					},
+					done,
+				);
+			else if (state.configured) drop.mutate({ params: as }, done);
+		},
+	};
+}
 
 /** The dialog's part: its label, then the control and a line below. */
 const Frame: FC<{ children: ReactNode }> = ({ children }) => (
@@ -93,11 +96,16 @@ const Frame: FC<{ children: ReactNode }> = ({ children }) => (
 	</div>
 );
 
-/** The fixed behaviour on a person's own Linux account, as a sentence. */
-export const GameExitFixed: FC<{ name: string }> = ({ name }) => (
+/** The fixed behaviour on a person's own Linux account, as a sentence; `yours` in their own console. */
+export const GameExitFixed: FC<{ name: string; yours?: boolean }> = ({
+	name,
+	yours,
+}) => (
 	<Frame>
 		<p className="text-sm text-muted-foreground">
-			{m.profiles_game_exit_own_desktop({ name })}
+			{yours
+				? m.person_game_exit_own()
+				: m.profiles_game_exit_own_desktop({ name })}
 		</p>
 	</Frame>
 );

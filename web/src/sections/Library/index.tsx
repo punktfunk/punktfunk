@@ -21,7 +21,7 @@ type Tab = "games" | "sources";
 /**
  * The title, which is whose library it is, **Shared overrides** and **Add**. A profile's view
  * offers neither: the titles and the shared overrides are the owner's library's. A profile with
- * games of its own adds one here.
+ * games of its own adds one here; in the person's own console it is their plain **Add**.
  */
 export const LibraryHeader: FC<{ onShared?: () => void }> = ({ onShared }) => {
 	const view = useProfileView();
@@ -33,7 +33,9 @@ export const LibraryHeader: FC<{ onShared?: () => void }> = ({ onShared }) => {
 					<Button asChild>
 						<Link to="/library/$gameId" params={{ gameId: "new" }}>
 							<Plus className="size-4" />
-							{m.profile_view_add_game({ name: view.name })}
+							{view.person
+								? m.library_add_button()
+								: m.profile_view_add_game({ name: view.name })}
 						</Link>
 					</Button>
 				)}

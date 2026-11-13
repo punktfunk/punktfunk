@@ -45,6 +45,11 @@ export interface Route {
 	when?: When;
 	/** The row's handler for a seat call. Absent when the seat's host refuses the path. */
 	seat?: EventHandler;
+	/**
+	 * Why a person's own console makes this gated call with no password. Their call never reaches
+	 * the row's file (personApi.ts); the operator's still asks.
+	 */
+	person?: string;
 }
 
 const gated = (
@@ -66,6 +71,9 @@ const refused = (
 	pattern: string,
 	seat?: EventHandler,
 ): Route => ({ method, pattern, refused: true, seat });
+
+/** `route` as the person's own console makes it: their seat host proves them, not a password. */
+const ownLane = (route: Route): Route => ({ ...route, person: OWN_LANE });
 
 const open = (method: Method, pattern: string, reason: string): Route => ({
 	method,
@@ -94,6 +102,11 @@ const INSTALLED =
 	"starts only installed plugins: each install was the decision";
 const ADMITS_NONE =
 	"makes a seat but admits no device; removing one is gated. A Windows password it carries is one the caller already holds";
+const PERSON_TICKET =
+	"open on a seat host too: a ticket only the person's own account signs";
+const ASKS = "asks a seat host whose a session is: grants nothing";
+const OWN_LANE =
+	"the person's own seat host takes it on their session, and runs it as their account";
 const RESEALS =
 	"a setting, a label, or a Windows password the caller already holds: no command, device or identity in it";
 
@@ -101,6 +114,9 @@ export const GATES: readonly Route[] = [
 	gated("POST", "actions/{id}"),
 	open("POST", "auth/device/challenge", PUBLIC),
 	open("POST", "auth/device/token", PUBLIC),
+	open("POST", "auth/person/session", PERSON_TICKET),
+	open("DELETE", "auth/person/session", NARROWS),
+	open("POST", "auth/person/verify", ASKS),
 	open("POST", "client-logs", REPORT),
 	open("DELETE", "client-logs/{id}", RECORD),
 	open("DELETE", "clients", NARROWS),
@@ -115,21 +131,21 @@ export const GATES: readonly Route[] = [
 	open("DELETE", "display/presets/{id}", SETTING),
 	open("POST", "display/release", STEERS),
 	open("PUT", "display/settings", SETTING),
-	gated("POST", "emulators/{id}/adopt", adoptPost),
+	ownLane(gated("POST", "emulators/{id}/adopt", adoptPost)),
 	open("POST", "emulators/{id}/content", RUNS_NONE),
 	open("POST", "emulators/{id}/install", VERIFIED),
 	open("POST", "emulators/{id}/prepare", LAUNCHES),
-	onlyWhen(purges, gated("POST", "emulators/{id}/remove", removePost)),
+	ownLane(onlyWhen(purges, gated("POST", "emulators/{id}/remove", removePost))),
 	gated("POST", "emulators/{id}/saves/export", exportPost),
 	gated("POST", "emulators/{id}/saves/import", importPost),
 	open("POST", "game/end", STEERS),
 	refused("POST", "game/holds/{token}/release", holdReleasePost),
 	refused("POST", "events/relay", relayPost),
 	open("PUT", "gpus/preference", SETTING),
-	gated("PUT", "hooks", hooksPut),
+	ownLane(gated("PUT", "hooks", hooksPut)),
 	onlyWhen(touchesPlane, gated("PATCH", "host/settings", settingsPatch)),
-	gated("POST", "library/custom", customPost),
-	gated("PUT", "library/custom/{id}", customPut),
+	ownLane(gated("POST", "library/custom", customPost)),
+	ownLane(gated("PUT", "library/custom/{id}", customPut)),
 	open("DELETE", "library/custom/{id}", NARROWS),
 	open("PUT", "library/hidden/{id}", SETTING),
 	open("POST", "library/install/{id}", DOWNLOADS),
@@ -197,7 +213,7 @@ export const GATES: readonly Route[] = [
 	open("POST", "stats/capture/start", RECORD),
 	open("POST", "stats/capture/stop", RECORD),
 	open("DELETE", "stats/recordings/{id}", RECORD),
-	gated("POST", "store/install", installPost),
+	ownLane(gated("POST", "store/install", installPost)),
 	open("POST", "store/refresh", REFRESH),
 	open("POST", "store/runtime", INSTALLED),
 	gated("PUT", "store/sources/{name}", sourcesPut),

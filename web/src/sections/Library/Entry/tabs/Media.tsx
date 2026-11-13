@@ -3,7 +3,7 @@ import { toast } from "@unom/ui/toast";
 import { ImageOff } from "lucide-react";
 import { type FC, useState } from "react";
 import { useSetLibraryArtPick } from "@/api/gen/library/library";
-import { useAs, useProfileView } from "@/api/seat";
+import { useAs, useProfileView, whose } from "@/api/seat";
 import { LAUNCHER_ICONS, LauncherIcon } from "@/components/launcher-icon";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
@@ -113,7 +113,8 @@ const Preview: FC<{
  * The four artwork slots with previews, and the brand mark. Choose… lists every Art & Metadata
  * source's images for a slot: on an entry a plugin owns the pick is stored by the host, on the
  * operator's own entry it goes into the draft like a typed URL. In a profile's view the pick is
- * its own, marked, with one action back to the owner's.
+ * its own, marked, with one action back to the owner's. A person's own console shows the art
+ * and offers no pick.
  */
 export const MediaTab: FC<TabProps> = ({
 	draft,
@@ -130,6 +131,8 @@ export const MediaTab: FC<TabProps> = ({
 	const [choosing, setChoosing] = useState<ArtKind | null>(null);
 	const filled = entry?.filled ?? {};
 	const mine = new Set(entry?.profile?.picks ?? []);
+	// The Art & Metadata sources are the box's plugins: a person's own console picks from none.
+	const picks = !view?.person;
 
 	const store = async (kind: ArtKind, url: string | null) => {
 		if (!entry) return;
@@ -186,7 +189,9 @@ export const MediaTab: FC<TabProps> = ({
 									<div className="flex flex-wrap items-center gap-2">
 										{hers && (
 											<OwnBadge
-												label={m.profile_view_own({ name: view?.name ?? "" })}
+												label={
+													whose(view?.name ?? "", view?.person === true).own
+												}
 											/>
 										)}
 										{showsSource && (
@@ -198,16 +203,19 @@ export const MediaTab: FC<TabProps> = ({
 														})}
 											</span>
 										)}
-										<Button
-											size="sm"
-											variant="outline"
-											onClick={() => setChoosing(kind)}
-										>
-											{m.library_media_choose()}
-										</Button>
+										{picks && (
+											<Button
+												size="sm"
+												variant="outline"
+												onClick={() => setChoosing(kind)}
+											>
+												{m.library_media_choose()}
+											</Button>
+										)}
 										{/* A profile undoes only its own pick; the owner's is the owner's. */}
 										{view
-											? hers && (
+											? picks &&
+												hers && (
 													<Button
 														size="sm"
 														variant="ghost"

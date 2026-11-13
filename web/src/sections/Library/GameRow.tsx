@@ -1,6 +1,7 @@
 import { Link } from "@tanstack/react-router";
 import { Eye, EyeOff, Trash2 } from "lucide-react";
 import { type FC, useState } from "react";
+import { useWhose } from "@/api/seat";
 import { LauncherIcon } from "@/components/launcher-icon";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -35,6 +36,7 @@ export const GameRow: FC<GameCardProps> = ({
 	onSelect,
 	who,
 }) => {
+	const whose = useWhose(who);
 	const hidden = game.hidden === true;
 	const isCustom = isOperatorOwned(game);
 	const stream = streamSummary(game.overrides);
@@ -82,7 +84,7 @@ export const GameRow: FC<GameCardProps> = ({
 					</p>
 					<div className="mt-1 flex flex-wrap gap-1">
 						{own ? (
-							<OwnBadge label={m.profile_view_own({ name: who ?? "" })} />
+							<OwnBadge label={whose?.own ?? ""} />
 						) : (
 							<Badge variant={isCustom ? "secondary" : "outline"}>
 								{sourceLabel(game, nameOf)}
@@ -92,17 +94,14 @@ export const GameRow: FC<GameCardProps> = ({
 							<Badge variant="outline">{game.platform}</Badge>
 						)}
 						{hidden &&
-							(who ? (
-								<OwnBadge label={m.profile_view_hidden_badge({ name: who })} />
+							(whose ? (
+								<OwnBadge label={whose.hidden} />
 							) : (
 								<Badge variant="secondary">{m.library_hidden_badge()}</Badge>
 							))}
 						{stream &&
 							(ownStream ? (
-								<OwnBadge
-									label={stream}
-									mark={m.profile_view_own({ name: who ?? "" })}
-								/>
+								<OwnBadge label={stream} mark={whose?.own ?? ""} />
 							) : (
 								<Badge
 									variant="secondary"
@@ -125,8 +124,8 @@ export const GameRow: FC<GameCardProps> = ({
 						variant="ghost"
 						size="icon"
 						className="size-8"
-						aria-label={hideLabel(hidden, who)}
-						title={hideLabel(hidden, who)}
+						aria-label={hideLabel(hidden, whose)}
+						title={hideLabel(hidden, whose)}
 						aria-pressed={hidden}
 						disabled={hiding}
 						onClick={onToggleHidden}

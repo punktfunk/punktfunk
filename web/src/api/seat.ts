@@ -47,7 +47,33 @@ export interface SeatScopeValue {
 	ownerId?: string;
 	/** The box is a door: it has no library of its own, so every call goes to a seat. */
 	door?: boolean;
+	/** The person's own console: their profile is the one choice, and the server picks the host. */
+	person?: true;
+	/** In a person's console, the owner's name: they add the shared games. */
+	owner?: string;
 	pick: (id: string | null) => void;
+}
+
+/** Page `page` in the person's own console: their profile, viewed as itself, with no pick. */
+export function personScope(
+	page: SeatPage,
+	me: { profile: string; name: string; owner: string | null },
+): SeatScopeValue {
+	const choice: ScopeChoice = {
+		id: me.profile,
+		name: me.name,
+		seat: null,
+		as: me.profile,
+		ownGames: true,
+	};
+	return {
+		page,
+		choices: [choice],
+		current: choice,
+		person: true,
+		owner: me.owner ?? m.seat_box(),
+		pick: () => {},
+	};
 }
 
 export const SeatScopeContext = createContext<SeatScopeValue | null>(null);
@@ -65,6 +91,7 @@ export const useOwnAccount = (): OwnAccount | null => useSeat()?.own ?? null;
  */
 export const usePluginsReachable = (): boolean => {
 	const scope = useContext(SeatScopeContext);
+	if (scope?.person) return false;
 	const seat = scope?.current?.seat;
 	return !seat || (scope?.door === true && seat.id === scope.ownerId);
 };
@@ -78,7 +105,44 @@ export interface ProfileView {
 	ownGames: boolean;
 	/** Switches the console's pick to the owner. */
 	toOwner: () => void;
+	/** The person themselves, in their own console: there is no owner's library to switch to. */
+	person: boolean;
 }
+
+/** A profile's marks in the library: by name to the operator, as "you" to the person themselves. */
+export interface Whose {
+	own: string;
+	hidden: string;
+	hide: string;
+	show: string;
+	sourceOff: string;
+	library: string;
+}
+
+export const whose = (name: string, you: boolean): Whose =>
+	you
+		? {
+				own: m.person_view_own(),
+				hidden: m.person_view_hidden(),
+				hide: m.person_view_hide(),
+				show: m.person_view_show(),
+				sourceOff: m.person_view_source_off(),
+				library: m.person_library_back(),
+			}
+		: {
+				own: m.profile_view_own({ name }),
+				hidden: m.profile_view_hidden_badge({ name }),
+				hide: m.profile_view_hide({ name }),
+				show: m.profile_view_show({ name }),
+				sourceOff: m.profile_view_source_off_own({ name }),
+				library: m.seat_library_of({ name }),
+			};
+
+/** `who`'s marks as the page's reader says them; `null` without a profile. */
+export const useWhose = (who: string | undefined): Whose | null => {
+	const you = useContext(SeatScopeContext)?.person === true;
+	return who === undefined ? null : whose(who, you);
+};
 
 /** The profile whose view of the library the page shows; `null` for the owner's own. */
 export const useProfileView = (): ProfileView | null => {
@@ -88,9 +152,10 @@ export const useProfileView = (): ProfileView | null => {
 	return {
 		id: as,
 		name: scope.current?.name ?? "",
-		ownerName: scope.choices[0]?.name ?? m.seat_box(),
+		ownerName: scope.owner ?? scope.choices[0]?.name ?? m.seat_box(),
 		ownGames: scope.current?.ownGames === true,
 		toOwner: () => scope.pick(null),
+		person: scope.person === true,
 	};
 };
 

@@ -7,7 +7,7 @@ import { useGetHooks } from "@/api/gen/hooks/hooks";
 import type { HookEntry } from "@/api/gen/model/hookEntry";
 import { useListNativeClients } from "@/api/gen/native/native";
 import { hookAction, hookFilterSummary, useSaveHooks } from "@/api/hooks";
-import { useSeat } from "@/api/seat";
+import { useProfileView, useSeat } from "@/api/seat";
 import { useDialogs } from "@/components/dialogs";
 import { PasswordConfirmDialog } from "@/components/password-confirm";
 import { QueryState } from "@/components/query-state";
@@ -15,6 +15,7 @@ import { SeatScope, SeatTitle } from "@/components/seat-scope";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { apiErrorMessage } from "@/lib/errors";
 import { useLocale } from "@/lib/i18n";
 import { m } from "@/paraglide/messages";
 import { HookForm } from "./HookForm";
@@ -53,11 +54,14 @@ export const AutomationHere: FC = () => {
 const Automation: FC = () => {
 	useLocale();
 	const { confirm } = useDialogs();
+	// A person's own console: their seat host takes the list as theirs, with no password, and
+	// the box's device lists are not theirs to read.
+	const person = useProfileView()?.person === true;
 	const query = useGetHooks();
 	const save = useSaveHooks();
 	// Filters store the certificate; these two lists are what turn one back into a device name.
-	const native = useListNativeClients();
-	const moonlight = useListPairedClients();
+	const native = useListNativeClients({ query: { enabled: !person } });
+	const moonlight = useListPairedClients({ query: { enabled: !person } });
 	const deviceNames = useMemo(
 		() =>
 			new Map([
@@ -112,9 +116,17 @@ const Automation: FC = () => {
 		setHooks((prev) => (prev ?? []).filter((_, i) => i !== index));
 	};
 
-	const commit = async (password: string) => {
+	const commit = async (password?: string) => {
 		await save.mutateAsync({ hooks: list, password });
 		toast.success(m.automation_saved());
+	};
+	// The person saves at once; a failure keeps the list as edited and says why.
+	const saveOwn = async () => {
+		try {
+			await commit();
+		} catch (e) {
+			toast.error(apiErrorMessage(e) ?? m.automation_save_failed());
+		}
 	};
 
 	return (
@@ -123,7 +135,7 @@ const Automation: FC = () => {
 				<div className="space-y-1">
 					<SeatTitle title={m.automation_title()} />
 					<p className="max-w-prose text-sm text-muted-foreground">
-						{m.automation_subtitle()}
+						{person ? m.person_automation_subtitle() : m.automation_subtitle()}
 					</p>
 				</div>
 
@@ -231,7 +243,11 @@ const Automation: FC = () => {
 									>
 										{m.display_revert()}
 									</Button>
-									<Button size="sm" onClick={() => setConfirming(true)}>
+									<Button
+										size="sm"
+										disabled={save.isPending}
+										onClick={() => (person ? saveOwn() : setConfirming(true))}
+									>
 										{m.display_save()}
 									</Button>
 								</div>

@@ -16,6 +16,8 @@ import {
 } from "lucide-react";
 import type { PluginSummary } from "@/api/gen/model";
 import { useListPlugins } from "@/api/gen/plugins/plugins";
+import { usePerson } from "@/lib/person";
+import { usePersonPlugins } from "./person";
 
 /** A game source: listed under Library → Game sources. */
 export const LIBRARY_CATEGORY = "library";
@@ -74,15 +76,22 @@ export function boostPluginPolling(): void {
 	boostUntil = Date.now() + BOOST_MS;
 }
 
-/** Live plugin registrations, polled (and refetched on window focus) so the nav stays current. */
-export const usePlugins = () =>
-	useListPlugins({
+/**
+ * Live plugin registrations, polled (and refetched on window focus) so the nav stays current. In
+ * a person's console, their seat host's, when it runs plugins of theirs.
+ */
+export const usePlugins = () => {
+	const person = usePerson();
+	const theirs = usePersonPlugins(person).offered;
+	return useListPlugins({
 		query: {
+			enabled: !person || theirs,
 			refetchInterval: () =>
 				Date.now() < boostUntil ? BOOST_POLL_MS : IDLE_POLL_MS,
 			refetchOnWindowFocus: true,
 		},
 	});
+};
 
 /**
  * The plugins that get a **nav entry**: those serving a page, minus the library and metadata ones.

@@ -24,6 +24,14 @@ fn every_route_is_classified_for_the_plugin_and_cert_lanes() {
         // `mgmt::device_auth`.
         ("POST", "/api/v1/auth/device/challenge", false, false),
         ("POST", "/api/v1/auth/device/token", false, false),
+        // A person's session on their own seat host: `require_auth` exempts the session path,
+        // whose ticket or token is the proof, the person lane reads its own profile, and
+        // verifying one is the admin lane's.
+        ("POST", "/api/v1/auth/person/session", false, false),
+        ("DELETE", "/api/v1/auth/person/session", false, false),
+        ("GET", "/api/v1/auth/person/profile", false, false),
+        ("GET", "/api/v1/auth/person/profile/avatar", false, false),
+        ("POST", "/api/v1/auth/person/verify", false, false),
         ("GET", "/api/v1/host", true, true),
         ("GET", "/api/v1/status", true, true),
         ("GET", "/api/v1/local/summary", true, false), // loopback-only, handled before the gates
@@ -223,13 +231,13 @@ fn every_route_is_classified_for_the_plugin_and_cert_lanes() {
             false,
             false,
         ),
-        // A game's entry in a locked profile's own overrides: its person's too.
+        // A game's or a source's entry in a locked profile's own overrides: its person's too.
         ("PUT", "/api/v1/library/overrides/games/{id}", false, true),
         (
             "PUT",
             "/api/v1/library/overrides/sources/{source}",
             false,
-            false,
+            true,
         ),
         // A plugin reports its own downloads; the host maps them through the catalog.
         (
@@ -408,6 +416,7 @@ async fn a_plugin_changes_only_its_own_library_rows() {
     let app = test_app(test_state(), None);
     let manual = crate::library::add_custom(
         serde_json::from_value(serde_json::json!({ "title": "Mine" })).unwrap(),
+        false,
     )
     .unwrap()
     .id;
@@ -674,6 +683,11 @@ fn every_route_has_a_side_on_the_door() {
         ("GET", "/api/v1/webtransport", true),
         ("POST", "/api/v1/auth/device/challenge", true),
         ("POST", "/api/v1/auth/device/token", true),
+        ("POST", "/api/v1/auth/person/session", true),
+        ("DELETE", "/api/v1/auth/person/session", true),
+        ("GET", "/api/v1/auth/person/profile", true),
+        ("GET", "/api/v1/auth/person/profile/avatar", true),
+        ("POST", "/api/v1/auth/person/verify", true),
         ("GET", "/api/v1/local/summary", true),
         ("GET", "/api/v1/host", true),
         ("GET", "/api/v1/host/settings", true),

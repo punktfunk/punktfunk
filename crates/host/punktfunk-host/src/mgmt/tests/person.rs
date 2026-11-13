@@ -33,6 +33,11 @@ fn person_writes() -> Vec<(Method, &'static str, Option<serde_json::Value>)> {
         ),
         (
             Method::PUT,
+            "/api/v1/library/overrides/sources/steam",
+            Some(json!({"hz": 50})),
+        ),
+        (
+            Method::PUT,
             "/api/v1/library/scanners/steam",
             Some(json!({"enabled": false})),
         ),
@@ -81,7 +86,7 @@ async fn as_device(
 }
 
 /// Every file under `dir`, by its path there.
-fn files(dir: &Path) -> BTreeMap<PathBuf, Vec<u8>> {
+pub(super) fn files(dir: &Path) -> BTreeMap<PathBuf, Vec<u8>> {
     let mut out = BTreeMap::new();
     let mut todo = vec![dir.to_path_buf()];
     while let Some(at) = todo.pop() {
@@ -135,7 +140,7 @@ fn lane() -> Vec<(Method, &'static str, Option<serde_json::Value>)> {
 }
 
 /// `files` but those in profile `id`'s own layer.
-fn outside(files: &BTreeMap<PathBuf, Vec<u8>>, id: &str) -> BTreeMap<PathBuf, Vec<u8>> {
+pub(super) fn outside(files: &BTreeMap<PathBuf, Vec<u8>>, id: &str) -> BTreeMap<PathBuf, Vec<u8>> {
     let layer = Path::new("library-profiles").join(id);
     let theirs = |(p, _): &(&PathBuf, &Vec<u8>)| !p.starts_with(&layer);
     let kept = files.iter().filter(theirs);
@@ -276,9 +281,9 @@ async fn a_locked_profile_s_device_changes_its_layer_alone() {
     }
 }
 
-/// What a device adds stays bounded by the library: it hides a title or sets its entry only when
-/// its profile's library lists it, and takes either away whatever the title. The console still
-/// writes a title that is gone for now.
+/// What a device adds stays bounded by the library: it hides a title or sets a title's or a
+/// source's entry only when its profile's library lists it, and takes any of them away whatever
+/// the title. The console still writes a title that is gone for now.
 #[tokio::test]
 async fn a_device_adds_only_what_its_library_lists() {
     use serde_json::json;
@@ -287,9 +292,11 @@ async fn a_device_adds_only_what_its_library_lists() {
     let ghost = "steam:999999";
     let hide = format!("/api/v1/library/hidden/{ghost}");
     let game = format!("/api/v1/library/overrides/games/{ghost}");
+    let source = "/api/v1/library/overrides/sources/nosuchstore".to_string();
     for (path, adds, takes) in [
         (&hide, json!({"hidden": true}), json!({"hidden": false})),
         (&game, json!({"hz": 50}), json!({})),
+        (&source, json!({"hz": 50}), json!({})),
     ] {
         let at = |body| call(&Method::PUT, path, Some(SEAT_P), &Some(body));
         let before = files(tmp.path());

@@ -124,9 +124,15 @@ interface PluginRequest {
 	redirect?: RequestRedirect;
 }
 
+/** Where a person's call finds a plugin's credential: their own seat host (personPlugins.ts). */
+export type CredentialSource = (opts: {
+	bustCache: boolean;
+}) => Promise<UiCredential | null>;
+
 /**
  * The only dial to a plugin's UI server: `pathAndQuery` on 127.0.0.1 with its secret, or through
- * the host's relay for a plugin with no listener.
+ * the host's relay for a plugin with no listener. With `person`, the credential is theirs, and
+ * the host's relay, which takes the admin token, is never used.
  *
  * A 401 means the secret rotated inside the cache window, so it retries once with a fresh
  * credential, and keeps the first answer when the retry finds no plugin. A throw (the port died)
@@ -137,14 +143,18 @@ export async function callPlugin(
 	id: string,
 	pathAndQuery: string,
 	{ headers = {}, body, ...init }: PluginRequest,
+	person?: CredentialSource,
 ): Promise<Response | null> {
 	const attempt = async (bustCache: boolean): Promise<Response | null> => {
 		// `null` also covers a port we refuse to dial (see isDialablePort).
-		const cred = await fetchUiCredential(id, { bustCache });
+		const cred = person
+			? await person({ bustCache })
+			: await fetchUiCredential(id, { bustCache });
 		if (!cred) return null;
 		const sent = { ...init, body: body as BodyInit | undefined };
 		try {
 			if (viaHost(cred)) {
+				if (person) return null;
 				return await mgmtFetch(hostRelayPath(id, pathAndQuery), {
 					...sent,
 					headers,
@@ -155,7 +165,8 @@ export async function callPlugin(
 				headers: { ...headers, authorization: `Bearer ${cred.secret}` },
 			});
 		} catch {
-			bustCredential(id);
+			// ponytail: a person's dead port stays cached for its 15 s; the operator's is dropped.
+			if (!person) bustCredential(id);
 			return null;
 		}
 	};

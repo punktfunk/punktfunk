@@ -193,7 +193,9 @@ export default defineConfig({
 				configure(proxy) {
 					const token = process.env.PUNKTFUNK_MGMT_TOKEN;
 					if (!token) return;
-					proxy.on("proxyReq", (proxyReq) => {
+					proxy.on("proxyReq", (proxyReq, req) => {
+						// A person's console never carries the admin bearer, in dev either.
+						if (/(?:^|;\s*)pf_person=/.test(req.headers.cookie ?? "")) return;
 						proxyReq.setHeader("authorization", `Bearer ${token}`);
 					});
 				},

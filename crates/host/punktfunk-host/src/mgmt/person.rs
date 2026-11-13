@@ -82,6 +82,35 @@ pub(crate) async fn check(
     }
 }
 
+/// The refusal when profile `named` is not the person session's `vouched` one, or is the owner.
+/// The proof is the account its seat host runs as, so a lock or an own account changes nothing.
+/// A profile this host doesn't hold is the 404 an unknown id gets. Not `Result`: a `Response` in
+/// `Err` trips `clippy::result_large_err`.
+pub(crate) fn session_refusal(
+    st: &MgmtState,
+    named: Option<&str>,
+    vouched: Option<&str>,
+) -> Option<Response> {
+    let not_theirs = || {
+        api_error(
+            StatusCode::FORBIDDEN,
+            "a person session changes its own profile alone, never the owner's",
+        )
+    };
+    let Some(id) = named.filter(|p| Some(*p) == vouched) else {
+        return Some(not_theirs());
+    };
+    let held = st
+        .app
+        .profiles
+        .get()
+        .filter(|p| crate::library::is_profile_id(id) && p.get(id).is_some());
+    let Some(profiles) = held else {
+        return Some(super::library::profile_unknown());
+    };
+    (profiles.owner_id().as_deref() == Some(id)).then(not_theirs)
+}
+
 /// Profile `id`'s lock (its holder's) is locked and admits device `fp` with nothing asked. An open
 /// profile has no person: any paired device could claim it.
 fn opens_locked(profiles: &Profiles, id: &str, fp: &str) -> bool {

@@ -5,11 +5,18 @@ import { m } from "@/paraglide/messages";
 
 /**
  * In a profile's view: the shared titles are the owner's library's, and the way there. A profile
- * with games of its own adds those here.
+ * with games of its own adds those here. In the person's own console there is no way there: the
+ * note says who adds the shared games.
  */
 export const SharedNote: FC = () => {
 	const view = useProfileView();
 	if (!view) return null;
+	if (view.person)
+		return (
+			<p className="max-w-prose text-sm text-muted-foreground">
+				{m.person_shared_note({ owner: view.ownerName })}
+			</p>
+		);
 	return (
 		<p className="max-w-prose text-sm text-muted-foreground">
 			{view.ownGames

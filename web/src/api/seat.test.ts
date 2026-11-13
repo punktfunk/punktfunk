@@ -9,6 +9,7 @@ import {
 	scopeChoices,
 	seatChoices,
 	seatClient,
+	whose,
 } from "./seat";
 import { installable } from "./store";
 
@@ -259,4 +260,12 @@ test("a seat's cache is kept and takes the box's defaults", () => {
 	expect(seatClient("a".repeat(32), root)).toBe(kid);
 	expect(kid).not.toBe(root);
 	expect(kid.getDefaultOptions().queries?.staleTime).toBe(7);
+});
+
+test("the operator reads a profile's marks by name, the person reads them as theirs", () => {
+	const theirs = Object.values(whose("Anna", false));
+	const yours = Object.values(whose("Anna", true));
+	for (const line of theirs) expect(line).toContain("Anna");
+	for (const line of yours) expect(line).not.toContain("Anna");
+	expect(whose("Anna", true).own).toBe("Only for you");
 });

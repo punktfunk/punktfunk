@@ -5,8 +5,11 @@
 //
 // Auth: requests are same-origin to `/api/...`; the browser sends only the session cookie
 // (the server-side proxy injects the management bearer token — the token never lives in the
-// browser). The auth middleware's 401 body means the session is gone → bounce to /login.
+// browser). The auth middleware's 401 body means the session is gone → bounce to /login; in a
+// person's console it means their console closed, which the shell shows instead.
 // Password-confirmed actions also use 401, but leave the valid session in place.
+
+import { announceClosed, closedBy, personBrowser } from "@/lib/person";
 
 /** A failed API call. `status` is the HTTP code; `data` is the parsed `ApiError` body if any. */
 export class ApiError extends Error {
@@ -25,9 +28,12 @@ const V1 = "/api/v1/";
 /** The profile whose seat the call being started belongs to; `null` is this box. */
 let seat: string | null = null;
 
-/** `/api/v1/x` as the box forwards it to a seat's own host; any other URL is the box's. */
+/**
+ * `/api/v1/x` as the box forwards it to a seat's own host; any other URL is the box's. A person's
+ * console has one host behind it, theirs, and the server picks it: their URLs stay as they are.
+ */
 export function seatUrl(url: string, id: string | null): string {
-	if (!id || !url.startsWith(V1)) return url;
+	if (!id || !url.startsWith(V1) || personBrowser()) return url;
 	return `${V1}profiles/${encodeURIComponent(id)}/proxy/${url.slice(V1.length)}`;
 }
 
@@ -61,7 +67,12 @@ export async function apiFetch<T>(
 
 	const text = await res.text();
 	const body = text ? safeJson(text) : undefined;
-	if (res.status === 401 && isSessionUnauthorized(body)) redirectToLogin();
+	if (res.status === 401 && personBrowser()) {
+		// A person's console never offers the operator's login; it says it closed.
+		const why = closedBy((body as { code?: unknown } | undefined)?.code);
+		if (why) announceClosed(why);
+	} else if (res.status === 401 && isSessionUnauthorized(body))
+		redirectToLogin();
 	if (!res.ok) throw new ApiError(res.status, body, res.statusText);
 	return body as T;
 }

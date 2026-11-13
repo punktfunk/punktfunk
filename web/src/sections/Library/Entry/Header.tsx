@@ -2,6 +2,7 @@ import { Link } from "@tanstack/react-router";
 import { ArrowLeft, Eye, EyeOff, Trash2 } from "lucide-react";
 import { type FC, type ReactNode, useState } from "react";
 import type { OperatorGameEntry } from "@/api/gen/model/operatorGameEntry";
+import { useWhose } from "@/api/seat";
 import { LauncherIcon } from "@/components/launcher-icon";
 import {
 	PasswordConfirmField,
@@ -151,6 +152,7 @@ export const EntryHeader: FC<EntryHeaderProps> = ({
 	own,
 	waiting,
 }) => {
+	const whose = useWhose(who);
 	const [heroFailed, setHeroFailed] = useState(false);
 	const hidden = entry?.hidden === true;
 	const creating = entry === null;
@@ -179,7 +181,7 @@ export const EntryHeader: FC<EntryHeaderProps> = ({
 			)}
 		>
 			<ArrowLeft className="size-3.5" />
-			{who ? m.seat_library_of({ name: who }) : m.library_title()}
+			{whose ? whose.library : m.library_title()}
 		</Link>
 	);
 	return (
@@ -205,12 +207,10 @@ export const EntryHeader: FC<EntryHeaderProps> = ({
 						</h1>
 						{meta && <p className="text-sm text-muted-foreground">{meta}</p>}
 						{stats && <p className="text-xs text-muted-foreground">{stats}</p>}
-						{own && who && (
-							<OwnBadge label={m.profile_view_own({ name: who })} />
-						)}
+						{own && whose && <OwnBadge label={whose.own} />}
 						{hidden &&
-							(who ? (
-								<OwnBadge label={m.profile_view_hidden_badge({ name: who })} />
+							(whose ? (
+								<OwnBadge label={whose.hidden} />
 							) : (
 								<Badge variant="secondary">{m.library_hidden_badge()}</Badge>
 							))}
@@ -229,7 +229,7 @@ export const EntryHeader: FC<EntryHeaderProps> = ({
 								) : (
 									<EyeOff className="size-4" />
 								)}
-								{hideLabel(hidden, who)}
+								{hideLabel(hidden, whose)}
 							</Button>
 						)}
 						{onDelete && (

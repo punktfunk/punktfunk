@@ -240,13 +240,29 @@ session by design, and display activation fails while its session is inactive.
   `?profile=<id>` for a profile with a seat: they read and write that seat account's copies, in
   its profile folder. A seat host answers 409.
 - **The box's library, on Linux.** The box's library is the owner's. A seat other than the
-  owner's runs no plugins and lists and launches only what it can start as its own user:
+  owner's runs none of the box's plugins, and of the box's library lists and launches only what
+  it can start as its own user:
   `steam_appid` with an id that fits 32 bits and `steam_ui`, with its own Steam, and `emulator`,
   with a copy it can run and a game file it can read. The seat answers every change to the box's
   library with 409. The owner's host installs a Flathub emulator box-wide through `install_flatpak`, so every
   seat runs it with its own config and saves in `~/.var/app/<id>`; which emulators stay the
   owner's is in [Profiles](/docs/profiles#on-linux). At a launch the seat installs the RetroArch
   core the entry names into its own RetroArch and places the firmware from its library copy.
+- **Its own runner's titles, on Linux.** What a plugin of the seat account's own runner
+  publishes with `PUT library/provider/{provider}` lands in the seat host's own titles (below),
+  under `own:` ids. On a made seat that runner is the seat account's `punktfunk-scripting` user
+  unit, which reads the seat's config directory, where the package enables the unit for every
+  account. A person's own account runs none: their unit reads their own desk config. A
+  `?store=` claim is dropped there, so no row shadows a title of the box's. The provider's
+  running and download reports read those rows, and the box learns their names and pictures as
+  it learns the others'. On a person's own account every lane is refused
+  (`plugins_own_account`), and a provider row found on their shelf lists nothing.
+- **Its own runner's folders, on Linux.** A plugin installed in the seat's own `plugins/` reads
+  its manifest and grants from the seat's own config directory, never the box's for a plugin of
+  the same id; any other plugin reads the box's copy. The operator decides them on a made seat,
+  the seat's person on both kinds of seat, and a folder the seat's account can't list is refused
+  (`not_readable`). On a person's own account an emulator or core install asked through a grant
+  stays refused (`emulators_own_account_yet`).
 - **One profile.** The seat serves the profile whose seat it is. A connect that names any other
   profile, the owner's included, is refused as an unknown profile; one that names none plays as
   this seat's profile. The owner's row alone also serves the owner and the profiles that share the
@@ -269,17 +285,18 @@ session by design, and display activation fails while its session is inactive.
   drops the profile's own session settings, so its seat takes the Seat defaults again.
 - **A profile's own titles.** A seat host keeps titles of its own, launch and `prep` included, in
   `library.json` in its own config directory. The custom-entry routes write there on a seat host,
-  under `own:<12 hex>` ids the box never mints; a write naming any other id answers 409, and a
-  seat on a person's own account takes none (403 `library_own_account`). Its list carries them on
-  top of its profile's view, marked `own`, and they launch, run `prep` and serve art as the seat's
-  user, past the rules for what a seat lists of the box's. `GET library/own` answers each one's
-  id, title, platform and `http(s)` art, never how it starts. The box asks for that when a seat's
-  host comes up and on each `library.changed` the seat sends, and stores it through
-  `PUT library/own?as=<profile id>` on the host that writes the library: the owner's host behind a
-  door, the box host on Windows. It keeps it as `own-titles.json` in the profile's layer, under
-  the profile the seat belongs to, dropping a row with a bad id or title and a cover or platform
-  it would not store; an answer that isn't a list, lists more than 500 or repeats an id leaves
-  the stored titles as they were. `?as=` and the door's answer to a device list those rows,
+  under `own:<12 hex>` ids the box never mints; a write naming any other id answers 409. On a
+  person's own account only [their own session](#the-persons-own-session) writes one; any other
+  lane answers 403 `library_own_account_person`, or `library_own_account` where that lane is
+  closed. Its list carries them on top of its profile's view, marked `own`, and they launch, run
+  `prep` and serve art as the seat's user, past the rules for what a seat lists of the box's.
+  `GET library/own` answers each one's id, title, platform and `http(s)` art, never how it
+  starts. The box asks for that when a seat's host comes up and on each `library.changed` the
+  seat sends, and stores it through `PUT library/own?as=<profile id>` on the host that writes the
+  library: the owner's host behind a door, the box host on Windows. It keeps it as
+  `own-titles.json` in the profile's layer, under the profile the seat belongs to, dropping a row
+  with a bad id or title and a cover or platform it would not store; an answer that isn't a list,
+  lists more than 500 or repeats an id leaves the stored titles as they were. `?as=` and the door's answer to a device list those rows,
   marked `own`, with no launch: the box refuses to start one with the sentence a title gets that
   this desktop can't start.
 - **Not a host of its own to clients.** A seat host never advertises over mDNS, whatever
@@ -387,9 +404,10 @@ entry and opens with the owner's lock, list and PIN. A take-turns profile keeps 
 - **The person.** A device a locked profile's list admits now, with nothing asked, is that
   profile's person, unless the profile is the owner or on a person's own account. With
   `?as=<id>` it may call `mgmt_routes::PERSON`: `PUT library/hidden/{id}`,
-  `PUT library/overrides/games/{id}`, `PUT library/scanners/{id}`, and `PUT` and
-  `DELETE session/settings`, which write that profile's own layer alone. A hide or a game's
-  entry it adds must name a title the profile's library lists; taking one away needs none. With
+  `PUT library/overrides/games/{id}`, `PUT library/overrides/sources/{source}`,
+  `PUT library/scanners/{id}`, and `PUT` and `DELETE session/settings`, which write that
+  profile's own layer alone. A hide or a game's entry it adds must name a title the profile's
+  library lists, and a source's entry a source with such a title; taking one away needs none. With
   no `as` a device isn't let in. A device that isn't the person, an open profile, one that needs
   its PIN and the owner's id answer 403 `profile_change_not_allowed`; an unknown id 404
   `profile_unknown`. Art picks stay off: the host fetches a pick's URL itself. Asked on every
@@ -397,6 +415,28 @@ entry and opens with the owner's lock, list and PIN. A take-turns profile keeps 
   which writes the library, carrying `X-Punktfunk-Person` beside `X-Punktfunk-Device`. That host
   honours it only with its admin token, on these routes, for the profile `as` names and never
   the owner, and needs no pairing record for the device. Any other seat host decides nothing.
+
+## Linux and Windows, side by side
+
+A row with one answer holds on both. Every other row is a difference the sections above state.
+
+| What a profile has | Linux | Windows |
+|---|---|---|
+| Its own layer: hidden titles, sources, game overrides, session settings | Yes | Yes |
+| Its lock, PIN and device key | The door checks | The box host checks |
+| A device as its person, on `mgmt_routes::PERSON` | The door decides, the owner's host writes | The box host decides and writes |
+| Its own titles, with a command and `prep` | On its seat host; the owner's host stores the list | On its seat host; the box host stores the list |
+| [The person's own session](#the-persons-own-session) | On a seat's own host, made or on their own account | None: a seat writes no token and takes no ticket |
+| Hooks on a made seat | The operator and the person | The operator |
+| Hooks on a person's own account | The person, in their session | Refused |
+| Plugins on a made seat | The seat account's own runner | None: an install answers 409 |
+| Plugins on a person's own account | Refused on every lane | None |
+| The box's titles on its seat | Steam and emulator titles it can start as its own user | Every title but those of one account's sources |
+| Emulators | Installed box-wide; config and saves are the account's | The box's copies; saves and firmware through the box host's `?profile=` |
+| A seat on an existing account | Yes, opened by its password or a device key | On Windows Server |
+
+Open on Windows: the person's own session, a seat's own plugin runner, and a plugin's page for a
+seat.
 
 ## Checking a seat can actually stream
 
@@ -645,11 +685,11 @@ that host answers, within two minutes, a supervisor that doesn't answer meanwhil
 any other door event a stopped owner's host misses.
 
 A seat's `game.*` goes to the same route with its `seat` kept: the owner's plugins hear it, and
-no host's hooks run on it. A seat host runs no plugins, so its `game.launching` carries a `hold`
-token, and the launch waits up to 130 seconds for `POST /game/holds/{token}/release`. The door
-sends it once the owner's host has run the plugins that hold the stage, whatever they answered,
-and at once when that host isn't running. An event a seat host lists with a `seat` already is
-one a host relayed there, and is never taken back.
+no host's hooks run on it. A seat's launch is held for the box's plugins, so its
+`game.launching` carries a `hold` token, and the launch waits up to 130 seconds for
+`POST /game/holds/{token}/release`. The door sends it once the owner's host has run the plugins
+that hold the stage, whatever they answered, and at once when that host isn't running. An event
+a seat host lists with a `seat` already is one a host relayed there, and is never taken back.
 
 The door's console also accepts a console handoff signed with the owner's host's token, the one
 the owner's own `ctl console-url` holds: the door keeps it in `owner-handoff-key` in its own
@@ -761,6 +801,57 @@ and it is a contract seat's host, not the owner's.
 - **What it does not take.** The owner's `host.env` and settings, the box's library as its own
   (it plays the box's, from its trust copy), the door, and the owner's user host. The trust copy
   is readable by the person alone.
+
+#### The person's own session
+
+A Linux seat's own host, made or on a person's own account, runs as the seat's account, so what
+it writes into its config folder only that account and root read. The console password never
+reaches this lane.
+
+- **The token.** At start the seat host writes 32 random bytes as hex to `person-token` in
+  `PUNKTFUNK_CONFIG_DIR`, mode `0600`, owned by its uid, in a folder it owns; it refuses a folder
+  that is a link, another uid's, or open to group or others, and the lane stays closed. No copy
+  list of the supervisor names the file. The owner's row, the door, a plain host and a Windows
+  seat write none and take no ticket.
+- **The ticket.** `punktfunk-host ctl console-url`, run as the person in the seat, signs
+  `<unix s>.<32 hex nonce>.<profile id>.<HMAC-SHA256 hex>` over
+  `pf-person-session:v1:<unix s>:<nonce>:<profile id>` with the token, and writes a page opening
+  `https://127.0.0.1:47992/_auth/person?ticket=<ticket>`.
+- **The session.** `POST /api/v1/auth/person/session` with `{"ticket"}`, from loopback, answers
+  `{token, expires_at, profile}`. The host takes a ticket at most 60 s from its stamp, once, for
+  its own profile; otherwise 401 `person_ticket_refused`, and 429 `person_ticket_wait` for a
+  refused one after ten refusals in a minute. A good ticket opens whatever was refused before
+  it. A session lasts 12 hours, 16 at most, and ends with the host or on
+  `DELETE` with its token as the bearer. A call with an expired one answers 401
+  `person_session_ended`.
+- **On the seat host.** `Authorization: Bearer <session>`, from loopback, reaches every route
+  scoped `profile-data` or `profile-exec` and `GET host` and `GET status`; anything else is 403.
+  An `as` naming another profile is 403. `GET auth/person/profile` answers the session's own
+  profile from the seat's trust copy, `{id, display_name, accent?, has_avatar}`, and
+  `GET auth/person/profile/avatar` its picture; any other lane gets 404.
+- **On the box.** The console sends `X-Punktfunk-Person-Session` and `X-Punktfunk-Person-Profile`
+  with no bearer, and `?as=` naming that profile, to the door from loopback. The door asks the
+  profile's seat host `POST /api/v1/auth/person/verify` `{"token"}` with its admin token, and
+  takes the call only when the answer names that profile; any other call answers 401
+  `person_session_ended`. Refusals are not counted, so no other local caller can close a
+  profile to its own person. It reaches
+  `mgmt_routes::PERSON` and the reads `GET library`, `library/page`, `library/art/{id}/{kind}`,
+  `library/scanners`, `library/overrides` and `session/settings`, never for the owner.
+  `library/overrides` carries the box's shared sets as `box_sets`, which the person reads and
+  points at but never changes. The
+  owner's host takes the door's word with `X-Punktfunk-Person` and its admin token, as for a
+  device's person.
+- **What only it writes, on a person's own account.** `PUT hooks` and the custom-entry writes.
+  The host marks each with `person: true`, and runs only hooks and lists only own titles so
+  marked: a file planted without the mark runs nothing. A `prep` step runs only when an own
+  title the person wrote names it. Any other lane is refused, with `hooks_own_account_person` or
+  `library_own_account_person`, reads no hooks there, and reads a marked title as 404.
+- **Their emulators.** The person adopts a copy of their own (`POST emulators/{id}/adopt`) and
+  prepares their emulators (`POST emulators/{id}/prepare`, without a `firmware_dir`); every
+  other lane gets `emulators_own_account`. An install, a removal, content and the save exchange
+  stay refused for the person too, with `emulators_own_account_yet`. Hermir's adoption list is
+  in the account's own data folder, where no other lane writes. Plugins, the store and the
+  runner stay refused on every lane; the person decides only folder grants (above).
 
 #### Who opens a person's seat
 

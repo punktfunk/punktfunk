@@ -284,14 +284,39 @@ pub(crate) fn granted_roots_in(id: &str, config_dir: PathBuf) -> Vec<PathBuf> {
         .collect()
 }
 
-/// Extra roots the operator granted a plugin, by id: `<library dir>/plugin-run/plugin-grants.json`
+/// Extra roots granted a plugin, by id: `plugin-run/plugin-grants.json` under [`home_of`] `id`,
 /// via [`crate::plugins::access::AccessStore`]. A Windows seat host reads the box's.
 ///
-/// Written by `punktfunk-host plugins grant` or an operator's `allow` decision, never by a
-/// plugin — the file is the operator's answer to "this package may also reach here", so
-/// nothing in the plugin lane may edit it.
+/// Written by `punktfunk-host plugins grant` or an `allow` decision, never by a plugin — the
+/// file is the answer to "this package may also reach here", so nothing in the plugin lane may
+/// edit it.
 pub fn granted_roots(id: &str) -> Vec<PathBuf> {
-    granted_roots_in(id, pf_paths::seat::library_dir())
+    granted_roots_in(id, home_of(id))
+}
+
+/// Whether `id` is a plugin of this Linux seat's own runner, installed in its own `plugins/`
+/// ([`runner_plugins`]): its manifest and grants are the seat's, never the box's copy of a
+/// plugin of that id.
+pub fn seat_owns(id: &str) -> bool {
+    seat_runs_its_own() && runner_plugins().contains_key(id)
+}
+
+/// Whether this is a Linux seat host reading the box's library: its runner is the seat
+/// account's own, and what its plugins publish is the seat's. A Windows seat runs none.
+pub fn seat_runs_its_own() -> bool {
+    cfg!(target_os = "linux")
+        && pf_paths::seat::role().is_seat_host()
+        && pf_paths::seat::box_library_dir().is_some()
+}
+
+/// Where plugin `id`'s manifest and grants live: this seat's own config dir for [`seat_owns`],
+/// else the library dir, which is the box's copy on a seat and this host's own elsewhere.
+pub fn home_of(id: &str) -> PathBuf {
+    if seat_owns(id) {
+        pf_paths::config_dir()
+    } else {
+        pf_paths::seat::library_dir()
+    }
 }
 
 /// Every installed plugin's manifest, keyed by the id it declares.
@@ -300,7 +325,8 @@ pub fn granted_roots(id: &str) -> Vec<PathBuf> {
 /// not every package under `node_modules`, where a plugin's own libraries live too. Without that
 /// file the tree is scanned. An id is one lowercase path component, and an id two packages claim
 /// is refused for both. Read fresh: installs and updates land between launches. A seat host reads
-/// the box's plugins dir, which its `exec` entries came from.
+/// the box's plugins dir; a plugin's own lookup goes through [`for_provider`].
+#[cfg(windows)]
 pub fn installed() -> BTreeMap<String, PluginManifest> {
     installed_in(&pf_paths::seat::library_dir().join("plugins"))
 }
@@ -371,9 +397,9 @@ fn top_level_packages(plugins: &Path) -> Option<Vec<String>> {
     Some(root.dependencies.into_keys().filter(plain).collect())
 }
 
-/// The manifest declaring `id`, if one is installed.
+/// The manifest declaring `id`, if one is installed where it lives ([`home_of`]).
 pub fn for_provider(id: &str) -> Option<PluginManifest> {
-    installed().remove(id)
+    installed_in(&home_of(id).join("plugins")).remove(id)
 }
 
 /// The provider id package `pkg` declares in `plugins`, read before an uninstall takes its

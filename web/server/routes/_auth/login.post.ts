@@ -18,6 +18,7 @@ import {
 	verifyUiPassword,
 } from "../../util/auth";
 import { recordLoginSuccess, takeAttempt } from "../../util/loginThrottle";
+import { endSession } from "../../util/person";
 
 export default defineEventHandler(async (event) => {
 	if (!authConfigured()) {
@@ -49,5 +50,7 @@ export default defineEventHandler(async (event) => {
 	recordLoginSuccess(ip);
 	const session = await useSession<SessionData>(event, sessionConfig());
 	await session.update({ authenticated: true, epoch: sessionEpoch() });
+	// The operator signed in: a person's console in this browser ends rather than outranking them.
+	await endSession(event);
 	return { ok: true };
 });

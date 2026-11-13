@@ -211,6 +211,11 @@ in
           "$out/share/applications/io.unom.punktfunk.starthost.desktop"
         substituteInPlace "$out/share/applications/io.unom.punktfunk.starthost.desktop" \
           --replace-fail "/usr/bin/punktfunk-tray" "$out/bin/punktfunk-tray"
+        # Opens the web console signed in: a person's own inside their seat, the operator's elsewhere.
+        install -Dm0644 packaging/linux/io.unom.punktfunk.webconsole.desktop \
+          "$out/share/applications/io.unom.punktfunk.webconsole.desktop"
+        substituteInPlace "$out/share/applications/io.unom.punktfunk.webconsole.desktop" \
+          --replace-fail "/usr/bin/punktfunk-host" "$out/bin/punktfunk-host"
         for sz in 22x22 48x48; do
           for png in packaging/linux/icons/hicolor/$sz/apps/*.png; do
             install -Dm0644 "$png" "$out/share/icons/hicolor/$sz/apps/$(basename "$png")"
