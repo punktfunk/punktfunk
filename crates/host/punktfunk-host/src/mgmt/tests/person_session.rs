@@ -702,13 +702,38 @@ async fn a_person_reads_the_box_s_shared_overrides() {
     assert_eq!(status, StatusCode::CREATED, "{set}");
     let id = set["id"].as_str().unwrap();
 
+    // The box's entries for a title and a source the profile's library doesn't list.
+    let outside = [
+        ("games/steam:999999", serde_json::json!({"lines": 720})),
+        ("sources/nosuchstore", serde_json::json!({"hz": 50})),
+    ];
+    for (path, body) in outside {
+        let req = json_req(
+            Method::PUT,
+            &format!("/api/v1/library/overrides/{path}"),
+            body,
+        );
+        assert_eq!(send(&app, req).await.0, StatusCode::OK, "{path}");
+    }
+
     let read = get_req(&format!("/api/v1/library/overrides?as={SEAT_P}"));
     let (status, doc) = send(&app, vouch(read)).await;
     assert_eq!(status, StatusCode::OK, "{doc}");
     assert_eq!(doc["box_sets"][id]["lines"], 2160, "{doc}");
     assert_eq!(doc["games"], serde_json::json!({"steam:400": {"hz": 30}}));
+    // What "Same as the owner" shows: the box's entries for what this library lists, only.
+    assert_eq!(
+        doc["box_games"],
+        serde_json::json!({"steam:400": {"hz": 60}})
+    );
+    assert_eq!(
+        doc["box_sources"],
+        serde_json::json!({"steam": {"lines": 1080}})
+    );
     let (_, own) = send(&app, get_req("/api/v1/library/overrides")).await;
-    assert!(own.get("box_sets").is_none(), "{own}");
+    for key in ["box_sets", "box_games", "box_sources"] {
+        assert!(own.get(key).is_none(), "{key}: {own}");
+    }
 
     let before = super::person::files(tmp.path());
     let path = format!("/api/v1/library/overrides/sets/{id}?as={SEAT_P}");

@@ -221,6 +221,24 @@ describe("a person's calls", () => {
 		});
 		await send("/api/v1/store/runtime", { cookie: cookies });
 		expect(seatCalls.at(-1)?.path).toBe("/api/v1/store/runtime");
+		// Folders for their own plugins: their seat host decides, and no password is asked.
+		const allow = JSON.stringify({
+			path: "/home/anna/Games",
+			decision: "allow",
+		});
+		await send("/api/v1/plugin-access/demo/decide", {
+			method: "POST",
+			cookie: cookies,
+			headers: { "content-type": "application/json" },
+			body: allow,
+		});
+		expect(seatCalls.at(-1)).toMatchObject({
+			path: "/api/v1/plugin-access/demo/decide",
+			authorization: `Bearer ${seatSays.token}`,
+			body: allow,
+		});
+		await send("/api/v1/plugin-access", { cookie: cookies });
+		expect(seatCalls.at(-1)?.path).toBe("/api/v1/plugin-access");
 		await send("/api/v1/library/overrides/sources/steam", {
 			method: "PUT",
 			cookie: cookies,

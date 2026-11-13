@@ -849,9 +849,9 @@ reaches this lane.
   `mgmt_routes::PERSON` and the reads `GET library`, `library/page`, `library/art/{id}/{kind}`,
   `library/scanners`, `library/overrides` and `session/settings`, never for the owner.
   `library/overrides` carries the box's shared sets as `box_sets`, which the person reads and
-  points at but never changes. The
-  owner's host takes the door's word with `X-Punktfunk-Person` and its admin token, as for a
-  device's person.
+  points at but never changes, and the box's entries as `box_games` and `box_sources`, only for
+  the titles and sources the profile's library lists. The owner's host takes the door's word
+  with `X-Punktfunk-Person` and its admin token, as for a device's person.
 - **What only it writes, on a person's own account.** `PUT hooks` and the custom-entry writes.
   The host marks each with `person: true`, and runs only hooks and lists only own titles so
   marked: a file planted without the mark runs nothing. A `prep` step runs only when an own

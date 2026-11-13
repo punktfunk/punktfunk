@@ -4472,7 +4472,7 @@
           "library"
         ],
         "summary": "Read the game overrides",
-        "description": "The shared overrides, each game's entry and each source's, as `library-overrides.json`\nholds them. `GET /library` carries what each title resolves to. With `as`, the profile's own\nfile: where it has an entry for a game or its source, that entry wins over the box's. Beside\nit, `box_sets`: the box's shared overrides it may point at, which only the console changes.",
+        "description": "The shared overrides, each game's entry and each source's, as `library-overrides.json`\nholds them. `GET /library` carries what each title resolves to. With `as`, the profile's own\nfile: where it has an entry for a game or its source, that entry wins over the box's. Beside\nit, `box_sets`: the box's shared overrides it may point at, which only the console changes,\nand `box_games` and `box_sources`: the box's entries for what that profile's library lists.",
         "operationId": "getLibraryOverrides",
         "parameters": [
           {
@@ -16929,6 +16929,19 @@
           {
             "type": "object",
             "properties": {
+              "box_games": {
+                "type": [
+                  "object",
+                  "null"
+                ],
+                "description": "Beside `box_sets`: the box's entries for the games that profile's library lists, which\napply where it has none of its own.",
+                "additionalProperties": {
+                  "$ref": "#/components/schemas/OverrideEntry"
+                },
+                "propertyNames": {
+                  "type": "string"
+                }
+              },
               "box_sets": {
                 "type": [
                   "object",
@@ -16937,6 +16950,19 @@
                 "description": "With `as` naming a profile with a layer of its own: the box's shared overrides by id,\nwhich that profile's entries may name with `set`. Read only here.",
                 "additionalProperties": {
                   "$ref": "#/components/schemas/GameOverrides"
+                },
+                "propertyNames": {
+                  "type": "string"
+                }
+              },
+              "box_sources": {
+                "type": [
+                  "object",
+                  "null"
+                ],
+                "description": "Beside `box_sets`: the box's entries for the sources with a title in that library.",
+                "additionalProperties": {
+                  "$ref": "#/components/schemas/OverrideEntry"
                 },
                 "propertyNames": {
                   "type": "string"
