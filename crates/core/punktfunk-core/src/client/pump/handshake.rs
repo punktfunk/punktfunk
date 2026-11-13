@@ -204,7 +204,7 @@ async fn dial(
     // The host streams as soon as it has `Start`, so its address is whitelisted for media
     // before the handshake. Later is the opening IDR.
     media.set_host(conn.remote_address());
-    let _ = args.shared.reconnect.set(Box::new(media.reconnector()));
+    *args.shared.reconnect.lock().unwrap() = Some(Box::new(media.reconnector()));
     // Inner future so a failure can read `conn.close_reason()`: a typed application
     // close is `Rejected`, not the generic transport error the failed read produces.
     let handshake = async {
