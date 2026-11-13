@@ -33,6 +33,9 @@ use windows_reactor::*;
 const POSTER_MIN_WIDTH: f64 = 150.0;
 const POSTER_GAP: f64 = 12.0;
 const POSTER_RATIO: f64 = 1.5;
+/// How long arriving posters gather before the shelf is told: about ten renders a second at
+/// most, however fast the workers stream.
+const ART_BATCH: std::time::Duration = std::time::Duration::from_millis(100);
 
 /// One game, as the grid renders it (the wire `GameEntry` minus the artwork paths, which
 /// resolve into `LibraryState::art`).
@@ -304,12 +307,23 @@ pub(crate) fn start_fetch(ctx: &Arc<AppCtx>, set_library: &AsyncSetState<Library
             let urls: HashMap<String, Vec<String>> = jobs.iter().cloned().collect();
             let rx = library::spawn_art_fetch(api, jobs);
             // The workers have written the winning poster to the cache; the bytes are not needed.
-            while let Ok((id, _)) = rx.recv_blocking() {
+            // A publish clones the state and re-renders the shelf, so the posters that land in
+            // one ART_BATCH go out together.
+            while let Ok(first) = rx.recv_blocking() {
+                std::thread::sleep(ART_BATCH);
                 if shared.library_gen.load(Ordering::SeqCst) != generation {
                     return; // superseded — stop touching state (and the cache is shared anyway)
                 }
-                if let Some(path) = urls.get(&id).and_then(|c| cached_art(c)) {
-                    state.art.insert(id, path);
+                let mut landed = false;
+                for (id, _) in
+                    std::iter::once(first).chain(std::iter::from_fn(|| rx.try_recv().ok()))
+                {
+                    if let Some(path) = urls.get(&id).and_then(|c| cached_art(c)) {
+                        state.art.insert(id, path);
+                        landed = true;
+                    }
+                }
+                if landed {
                     publish(&state);
                 }
             }
