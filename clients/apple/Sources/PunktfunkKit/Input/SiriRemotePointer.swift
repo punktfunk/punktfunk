@@ -47,8 +47,7 @@ public final class SiriRemotePointer {
     /// Trails a delivered right-click tap by `tapPress` to release it — see `deliverRightClick`.
     private var rightReleaseTimer: Timer?
 
-    /// Hold Back/Menu at least this long (then release) to end the session. Shorter than the
-    /// controller chord's 1.5 s — the remote has no way to trip this during gameplay.
+    /// Hold Back/Menu at least this long (then release) to end the session.
     private static let disconnectHold: TimeInterval = 1.0
     /// Hold Play/Pause this long to cycle the stats overlay instead of right-clicking. It is the
     /// remote's only spare button, and on an Apple TV with no controller in the room this is the

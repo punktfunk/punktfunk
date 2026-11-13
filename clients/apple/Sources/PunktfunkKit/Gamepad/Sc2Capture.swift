@@ -157,10 +157,8 @@ public final class Sc2Capture {
                 self?.handleReport(source: Sc2Capture.bleSource, report)
             },
             onClosed: { [weak self] in
-                // Controller powered off / out of range. Release the slot (the punktfunk
-                // analogue of "Steam sees a REAL disconnect": the host tears down /
-                // neutralizes its virtual pad) — the link keeps re-acquiring on its own 2 s
-                // poll, and the next connection re-claims + re-proves its IMU live.
+                // Controller powered off or out of range: the host tears its virtual pad down.
+                // The link re-acquires on its own; the next connection's first report claims again.
                 self?.releaseSource(Sc2Capture.bleSource, reason: "link closed")
             })
         #if os(macOS)

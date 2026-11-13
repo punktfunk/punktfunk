@@ -13,8 +13,8 @@
 // the responder chain. GC handlers and notifications fire on the main queue, so the state
 // here needs no locking.
 //
-// GCMouse.current and GCKeyboard.coalesced have one handler slot each, so one InputCapture
-// is live per process. `activeCapture` keeps a stale capture's stop() off a newer one's handlers.
+// Each GCMouse and GCKeyboard.coalesced has one handler slot, so one InputCapture is live per
+// process. `activeCapture` keeps a stale capture's stop() off a newer one's handlers.
 
 #if os(macOS)
 import AppKit
