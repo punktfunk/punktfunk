@@ -13,7 +13,6 @@ import Foundation
 /// Siri "End the Punktfunk stream" phrase. `perform()` runs in the app's process (LiveActivityIntent)
 /// — it posts `.punktfunkEndActiveSession`, which the app's SessionModel owner observes and turns
 /// into `disconnect(deliberate: true)` (the user explicitly ended it → quit-close the host).
-@available(iOS 17.0, *)
 public struct EndStreamIntent: LiveActivityIntent {
     public static let title: LocalizedStringResource = LocalizedStringResource(
         "apple_intent_end_stream_title", defaultValue: "End Punktfunk Stream")
