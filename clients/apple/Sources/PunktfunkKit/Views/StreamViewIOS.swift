@@ -155,11 +155,10 @@ public struct StreamView: UIViewControllerRepresentable {
 #if os(tvOS)
 /// tvOS: a GCEventViewController with `controllerUserInteractionEnabled = false` routes game-
 /// controller (and Siri Remote) input EXCLUSIVELY to the GameController framework while the
-/// stream is up. Without it a pad's B/Menu press doubles as a UIKit menu press — which ended
-/// the session (or suspended the whole app) from ordinary gameplay; a SwiftUI
-/// `.onExitCommand {}` swallow proved unreliable with nothing focusable on screen. Every
-/// in-session exit is GC-level by design: the pad's escape chord (GamepadCapture) and the
-/// remote's hold-Back (SiriRemotePointer).
+/// stream is up. Without it a pad's B/Menu press is also a UIKit menu press, which ends the
+/// session or suspends the app from ordinary gameplay. Every in-session exit is GC-level by
+/// design: the pad's escape chord (GamepadCapture) and the remote's hold-Back
+/// (SiriRemotePointer).
 public typealias StreamViewControllerBase = GCEventViewController
 #else
 public typealias StreamViewControllerBase = UIViewController
@@ -400,11 +399,8 @@ public final class StreamViewController: StreamViewControllerBase {
 
     /// Claim Escape while the stream owns the keyboard, so the SYSTEM never gets to act on it.
     ///
-    /// This is the fix for "Escape hands the mouse back to iPadOS": the platform releases the
-    /// scene's pointer lock on an Escape that nothing claimed — the same "let me out" the web
-    /// Pointer Lock API mandates. Every recovery attempt before this one fought that release AFTER
-    /// the fact (a re-lock burst, then a click), and the platform's post-Escape cooldown means the
-    /// burst is refused by construction. Claiming the press means there is nothing to recover from.
+    /// The platform releases the scene's pointer lock on an Escape that nothing claimed, and
+    /// refuses a re-lock for a while after it. A claimed press releases nothing.
     ///
     /// Escape is forwarded to the host on the GCKeyboard path, which is untouched by this — that
     /// path never sees the UIKit responder chain, so the host still receives the keystroke and
@@ -1652,9 +1648,8 @@ final class StreamLayerUIView: UIView {
     /// system's Natural Scrolling switch: UIKit has already applied that preference by the time it
     /// hands us a translation (it is what makes every UIScrollView on the device turn the right
     /// way), so the sign we get IS the user's choice, and the host's WHEEL convention agrees with
-    /// it — +y is a wheel-forward notch, the one that moves content down. Negating y here, as this
-    /// did, pinned the stream to traditional scrolling and inverted the setting for everyone on the
-    /// default. macOS passes `NSEvent.scrollingDeltaY` through for exactly the same reason.
+    /// it — +y is a wheel-forward notch, the one that moves content down. macOS passes
+    /// `NSEvent.scrollingDeltaY` through for exactly the same reason.
     /// A continuous (trackpad) recognizer is a measured distance in points — DIP on the
     /// wire — with the recognizer's state as the gesture boundary.
     @objc private func handlePreciseScroll(_ g: UIPanGestureRecognizer) {
@@ -1711,8 +1706,7 @@ final class StreamLayerUIView: UIView {
     ///
     /// The mask is 1-based over the HID button order — 1 primary, 2 secondary, 3 middle, 4/5 the
     /// side buttons — while the wire numbers middle and right the other way round (1 left,
-    /// 2 middle, 3 right, 4 X1/back, 5 X2/forward), so only those two swap. Without the 3…5 arms
-    /// every button past the first two fell into the `else` and clicked LEFT on the host.
+    /// 2 middle, 3 right, 4 X1/back, 5 X2/forward), so only those two swap.
     ///
     /// `.primary`/`.secondary` are spelled out because they are the only two named cases; the rest
     /// come from `.button(_:)`, which takes the same 1-based number.

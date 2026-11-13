@@ -182,8 +182,7 @@ final class PencilStream: NSObject {
     /// The ≤100 ms keepalive while in range (see the file header): ONE long-lived 50 ms timer
     /// in `.common` run-loop mode, armed on range entry and torn down on exit. `.default`-mode
     /// scheduling pauses during run-loop tracking, where a stationary pen would silently cross
-    /// the host's 200 ms force-release mid-stroke; the old per-emit re-arm also churned the run
-    /// loop once per event during a stroke. The tick resends only after ≥50 ms of send silence,
+    /// the host's 200 ms force-release mid-stroke. The tick resends only after ≥50 ms of send silence,
     /// so an active stroke costs nothing and the worst-case gap stays ≈100 ms — the wire bound.
     private func syncHeartbeat() {
         guard inRange || touching else {

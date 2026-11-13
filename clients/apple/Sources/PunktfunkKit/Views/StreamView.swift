@@ -521,17 +521,10 @@ public final class StreamLayerView: NSView {
         return (PUNKTFUNK_SCROLL_SOURCE_CONTINUOUS, PUNKTFUNK_SCROLL_PHASE_NONE)
     }
 
-    // While captured, the view is first responder and SENDS key events to the host straight
-    // from NSEvent — GCKeyboard delivery proved unreliable on macOS (the same GameController
-    // quirk that killed GCMouse motion, fixed in e414ec0), so the macOS GCKeyboard send path
-    // is disabled and NSEvent is the single source. We map NSEvent.keyCode (a Carbon virtual
-    // keycode) → Windows VK and forward via InputCapture.sendKey, then CONSUME (return without
-    // super) to stop the responder chain's "unhandled keyDown" beep. Keys with no VK mapping
-    // are still consumed while captured so they don't beep either. The ⌘⎋ toggle's Esc is
-    // swallowed upstream by InputCapture's keyDown monitor (suppressedVK), so it never gets here
-    // as a send — and so are ⌘ combos generally while captured, which that monitor forwards to the
-    // host itself (`forwardsCommandChord`) rather than letting a menu key equivalent claim them.
-    // Modifier keys never fire keyDown/keyUp — they come through flagsChanged below.
+    // Captured, the view is first responder and sends keys from NSEvent, the only key source on
+    // macOS: keyCode → Windows VK through InputCapture.sendKey. Every key is consumed while
+    // captured, mapped or not, so none beeps. InputCapture's monitor takes ⌘⎋ and ⌘ chords
+    // first (`forwardsCommandChord`); modifiers arrive through flagsChanged.
     public override var acceptsFirstResponder: Bool { true }
     // A click after the app was inactive (Cmd-Tab away and back) must reach mouseDown so the
     // user can re-capture — the deliberate design is that becoming active does NOT auto-grab;
@@ -687,9 +680,7 @@ public final class StreamLayerView: NSView {
     /// draws it wearing the host's shape, and a RELEASED view shows the plain arrow. A
     /// host-composited pointer then appears *underneath* it as a second cursor — and, because a
     /// released view forwards no motion, one that never moves. On glass that reads as a frozen
-    /// duplicate stuck wherever the host pointer was last left (verified: `client_draws=false
-    /// blended=true live=(-1, 622)` — parked on the streamed output's left edge while the user
-    /// moved their own cursor around freely).
+    /// duplicate stuck wherever the host pointer was last left.
     ///
     /// So "released" counts as WE draw it: the host stops compositing, the client keeps
     /// receiving shape/state over the channel (the forwarder only ticks on this side of the
@@ -768,8 +759,7 @@ public final class StreamLayerView: NSView {
 
     private func applyCursorShape(_ ev: PunktfunkConnection.CursorShapeEvent) {
         guard let shape = Self.makeShape(ev) else {
-            // Truthful only because `resetCursorRects` falls back to `lastWornShape`: before that,
-            // a rejection here left the announced serial with no bitmap and HID the pointer.
+            // The previous cursor stays: `resetCursorRects` falls back to `lastWornShape`.
             streamInputLog.warning("cursor shape rejected (\(ev.width)x\(ev.height)) — keeping the previous cursor")
             return
         }
