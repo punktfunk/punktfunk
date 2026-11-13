@@ -259,8 +259,8 @@ kernel void wavelet_dequant(
     if (simd_group != 0)
         sign_offset += shared_sign_scan[simd_group - 1];
 
-    // Load 64 bits of sign stream and bit-align (may read one word past the payload — the
-    // buffer carries a 16-byte zeroed guard tail for exactly this).
+    // Load 64 bits of sign stream and bit-align (may read one word past the payload — each pool
+    // slot has `WaveletAccessUnitPool.slackBytes` of room past its AU for exactly this).
     uint sign_word = payload_u32[sign_offset / 32 + 0];
     uint sign_word_upper = payload_u32[sign_offset / 32 + 1];
 
