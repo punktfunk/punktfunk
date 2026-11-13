@@ -967,7 +967,8 @@ public final class MetalVideoPresenter {
     private lazy var latchQueue: MTLCommandQueue? = device.makeCommandQueue()
     private lazy var latchEvent: MTLSharedEvent? = device.makeSharedEvent()
     private var latchValue: UInt64 = 0
-    /// Three uniforms in rotation: a pass has long run before its buffer comes round.
+    /// Uniforms in rotation, three unless an allocation failed: `park` rotates over the ones
+    /// that exist.
     private lazy var latchUniforms: [MTLBuffer] = (0..<3).compactMap { _ in
         device.makeBuffer(length: MemoryLayout<LatchUniform>.stride, options: .storageModeShared)
     }
@@ -1066,9 +1067,11 @@ public final class MetalVideoPresenter {
         pipeline = hdrActive
             ? pipelines.latchedHDR : (tenBitSDRActive ? pipelines.latchedSDR10 : pipelines.latchedSDR)
         #endif
-        guard let pipeline, let commandBuffer = queue.makeCommandBuffer() else { return nil }
+        let uniforms = latchUniforms
+        guard let pipeline, !uniforms.isEmpty, let commandBuffer = queue.makeCommandBuffer()
+        else { return nil }
         let value = latchValue + 1
-        let uniform = latchUniforms[Int(value % 3)]
+        let uniform = uniforms[Int(value % UInt64(uniforms.count))]
         uniform.contents().storeBytes(of: Int32(-1), toByteOffset: LatchUniform.slotOffset, as: Int32.self)
         commandBuffer.encodeWaitForEvent(event, value: value)
         let pass = MTLRenderPassDescriptor()
