@@ -732,7 +732,9 @@ extension SettingsView {
         if pyroWaveRate {
             let s = effective
             let picture = connectPicture(s)
-            let lines = PyroWaveQuality.lines(s, mode: picture, link: PyroWaveQuality.localLink())
+            let displayHDR = NativeDisplay.presentsHDR
+            let lines = PyroWaveQuality.lines(
+                s, mode: picture, link: PyroWaveQuality.localLink(), displayHDR: displayHDR)
             let field = scoped(SettingsFields.pyrowaveBpp)
             let quality = Binding(
                 get: { PyroWaveQuality.snapped(field.wrappedValue) },
@@ -745,7 +747,7 @@ extension SettingsView {
                     options: PyroWaveQuality.rungs.map { bpp in
                         var at = s
                         at.pyrowaveBpp = bpp
-                        let kbps = PyroWaveQuality.kbps(at, mode: picture)
+                        let kbps = PyroWaveQuality.kbps(at, mode: picture, displayHDR: displayHDR)
                         return (label: PyroWaveQuality.rateLabel(kbps: kbps), tag: bpp)
                     },
                     selection: quality)

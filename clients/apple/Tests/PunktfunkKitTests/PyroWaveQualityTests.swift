@@ -14,24 +14,40 @@ final class PyroWaveQualityTests: XCTestCase {
         var s = EffectiveSettings()
         s.hdrEnabled = false
         let native: (width: Int, height: Int, hz: Int) = (3840, 2160, 120)
-        let fits = PyroWaveQuality.lines(s, mode: s.streamMode(native: native), link: wire)
+        let fits = PyroWaveQuality.lines(s, mode: s.streamMode(native: native), link: wire, displayHDR: true)
         XCTAssertEqual(fits.caption, "3840×2160 at 120 Hz: 1.6 Gbit/s")
         XCTAssertNil(fits.warning)
         XCTAssertEqual(
-            PyroWaveQuality.lines(s, mode: s.streamMode(native: native), link: (0, 0)).warning,
+            PyroWaveQuality.lines(s, mode: s.streamMode(native: native), link: (0, 0), displayHDR: true).warning,
             "Needs 1.6 Gbit/s — more than a 1 GbE link carries.")
         s.width = 1920
         s.height = 1080
         s.refreshHz = 60
         s.renderScale = 0.5
         XCTAssertEqual(
-            PyroWaveQuality.lines(s, mode: s.streamPicture(native: native), link: wire).caption,
+            PyroWaveQuality.lines(s, mode: s.streamPicture(native: native), link: wire, displayHDR: true).caption,
             "960×540 at 60 Hz: 50 Mbit/s")
         s.renderScale = 2
         XCTAssertEqual(s.streamMode(native: native).width, 3840)
         XCTAssertEqual(
-            PyroWaveQuality.lines(s, mode: s.streamPicture(native: native), link: wire).caption,
+            PyroWaveQuality.lines(s, mode: s.streamPicture(native: native), link: wire, displayHDR: true).caption,
             "1920×1080 at 60 Hz: 199 Mbit/s")
+    }
+
+    /// HDR is on by default, and an SDR display gets an 8-bit stream: its rate is the 8-bit one,
+    /// not the 10-bit one a display that shows HDR is offered.
+    func testHDROnAnSDRDisplayPricesEightBits() {
+        var s = EffectiveSettings()
+        s.hdrEnabled = true
+        s.tenBitSdr = false
+        let mode: (width: UInt32, height: UInt32, hz: UInt32) = (3840, 2160, 120)
+        var sdr = s
+        sdr.hdrEnabled = false
+        let eight = PyroWaveQuality.kbps(sdr, mode: mode, displayHDR: false)
+        XCTAssertEqual(PyroWaveQuality.kbps(s, mode: mode, displayHDR: false), eight)
+        XCTAssertGreaterThan(PyroWaveQuality.kbps(s, mode: mode, displayHDR: true), eight)
+        s.tenBitSdr = true
+        XCTAssertGreaterThan(PyroWaveQuality.kbps(s, mode: mode, displayHDR: false), eight)
     }
 
     /// The dial carries hundredths inside the bounds; the slider lands on tenths.
