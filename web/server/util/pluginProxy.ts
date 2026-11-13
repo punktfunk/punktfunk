@@ -129,10 +129,17 @@ export type CredentialSource = (opts: {
 	bustCache: boolean;
 }) => Promise<UiCredential | null>;
 
+/** A person's way to a plugin: the credential their seat host gives them, and that host's
+ * relay, on their session, for a plugin with no listener (personPlugins.ts). */
+export interface PersonReach {
+	credential: CredentialSource;
+	relay: (path: string, init: RequestInit) => Promise<Response>;
+}
+
 /**
  * The only dial to a plugin's UI server: `pathAndQuery` on 127.0.0.1 with its secret, or through
- * the host's relay for a plugin with no listener. With `person`, the credential is theirs, and
- * the host's relay, which takes the admin token, is never used.
+ * the host's relay for a plugin with no listener. With `person`, the credential and the relay are
+ * their seat host's, on their session; the box's relay, which takes the admin token, is never used.
  *
  * A 401 means the secret rotated inside the cache window, so it retries once with a fresh
  * credential, and keeps the first answer when the retry finds no plugin. A throw (the port died)
@@ -143,22 +150,21 @@ export async function callPlugin(
 	id: string,
 	pathAndQuery: string,
 	{ headers = {}, body, ...init }: PluginRequest,
-	person?: CredentialSource,
+	person?: PersonReach,
 ): Promise<Response | null> {
 	const attempt = async (bustCache: boolean): Promise<Response | null> => {
 		// `null` also covers a port we refuse to dial (see isDialablePort).
 		const cred = person
-			? await person({ bustCache })
+			? await person.credential({ bustCache })
 			: await fetchUiCredential(id, { bustCache });
 		if (!cred) return null;
 		const sent = { ...init, body: body as BodyInit | undefined };
 		try {
 			if (viaHost(cred)) {
-				if (person) return null;
-				return await mgmtFetch(hostRelayPath(id, pathAndQuery), {
-					...sent,
-					headers,
-				});
+				const path = hostRelayPath(id, pathAndQuery);
+				return person
+					? await person.relay(path, { ...sent, headers })
+					: await mgmtFetch(path, { ...sent, headers });
 			}
 			return await fetch(`http://127.0.0.1:${cred.port}${pathAndQuery}`, {
 				...sent,

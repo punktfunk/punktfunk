@@ -173,6 +173,10 @@ export const seat = Bun.serve({
 			return Response.json({ port: plugin.port, secret: PLUGIN_SECRET });
 		if (call.path === "/api/v1/plugins/relayed/ui-credential")
 			return Response.json({ port: 0, secret: "relay" });
+		if (call.path.startsWith("/api/v1/plugins/relayed/ui/"))
+			return new Response(`<p>relayed ${call.path.slice(26)}</p>`, {
+				headers: { "content-type": "text/plain" },
+			});
 		if (call.path === "/api/v1/auth/person/profile")
 			return Response.json({
 				id: PROFILE,

@@ -91,11 +91,26 @@ test("a person's page path is theirs alone: not the operator's, not another comp
 	expect(pluginCalls).toEqual([]);
 });
 
-test("a plugin the host relays itself, or one their seat host doesn't run, opens nothing", async () => {
+test("a plugin with no listener opens through their seat host's relay, on their session", async () => {
 	const cookie = await signIn();
-	for (const id of ["relayed", "missing"]) {
-		const { status } = await pagePath(cookie, id);
-		expect(status, id).toBe(502);
-	}
+	const { status, body } = await pagePath(cookie, "relayed");
+	expect(status).toBe(200);
+	const page = await onPluginListener(`${body.path}settings?x=1`);
+	expect(page.status).toBe(200);
+	expect(await page.text()).toBe("<p>relayed /settings</p>");
+	expect(seatCalls.at(-1)).toMatchObject({
+		path: "/api/v1/plugins/relayed/ui/settings",
+		search: "?x=1",
+		authorization: `Bearer ${seatSays.token}`,
+	});
+	expect(boxCalls).toEqual([]);
+	expect(pluginCalls).toEqual([]);
+	expect(JSON.stringify(seatCalls)).not.toContain(ADMIN);
+});
+
+test("a plugin their seat host doesn't run opens nothing", async () => {
+	const cookie = await signIn();
+	const { status } = await pagePath(cookie, "missing");
+	expect(status).toBe(502);
 	expect(boxCalls).toEqual([]);
 });
