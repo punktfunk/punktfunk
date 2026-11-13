@@ -28,7 +28,7 @@ public enum Licenses {
             + apache
     }
 
-    /// The bundled brand typeface (Geist Sans + Geist Mono) — SIL Open Font License 1.1. The
+    /// The bundled brand typeface (Geist Sans) — SIL Open Font License 1.1. The
     /// license file ships alongside the OTFs in `Resources/Fonts/`, satisfying the OFL's
     /// distribution requirement; this surfaces it in the Acknowledgements screen too.
     public static var fontLicense: String {
