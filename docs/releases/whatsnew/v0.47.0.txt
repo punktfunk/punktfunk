@@ -1,3 +1,5 @@
-• On a Chromebook, a two-finger touchpad swipe scrolls on the host instead of moving the pointer.
-• A Shield on a TV that runs a hair slower than the stream drops and repeats far fewer frames.
-• A profile on a family member's own account asks for its password, and a fingerprint can keep you signed in.
+• Punktfunk speaks German, Spanish, French, Italian and Brazilian Portuguese.
+• A locked profile asks for its PIN, and a fingerprint keeps you signed in.
+• Tell the host what your screen is: the only screen, the main screen, a second screen or one monitor.
+• Shortcuts you can change, Hide for me, and Reset in Settings.
+• Realtek, Tensor and Chromecast boxes heal a lost packet without a frozen or green picture.
