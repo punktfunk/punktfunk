@@ -468,12 +468,6 @@ struct DroughtConceal {
     /// Concealed over the session, in FRAMES.
     private var total = 0
 
-    /// At the protocol's default frame (`JitterPolicy.frameMS`) — every Opus session, and every test
-    /// that pins the pre-hi-res numbers.
-    init(maxMS: Int) {
-        self.init(maxMS: maxMS, frameUs: JitterPolicy.frameMS * 1_000)
-    }
-
     /// At an explicitly negotiated frame length (`punktfunk_connection_audio_frame_us`).
     ///
     /// This type charges one frame per concealed frame and bounds itself in WALL-CLOCK

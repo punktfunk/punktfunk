@@ -947,7 +947,7 @@ final class AudioRingDriftTests: XCTestCase {
     ///
     /// Mirrors `a_drought_is_concealed_only_while_the_ring_is_running_out`.
     func testADroughtIsConcealedOnlyWhileTheRingIsRunningOut() {
-        var c = DroughtConceal(maxMS: JitterPolicy.plcMaxMS)
+        var c = DroughtConceal(maxMS: JitterPolicy.plcMaxMS, frameUs: JitterPolicy.frameMS * 1_000)
         let stalledMS = 3 * JitterPolicy.frameMS
         XCTAssertFalse(
             c.conceal(sinceLastPacketMS: stalledMS, depthMS: 40),
@@ -962,7 +962,7 @@ final class AudioRingDriftTests: XCTestCase {
     ///
     /// Mirrors `ordinary_jitter_is_not_a_drought`.
     func testOrdinaryJitterIsNotADrought() {
-        var c = DroughtConceal(maxMS: JitterPolicy.plcMaxMS)
+        var c = DroughtConceal(maxMS: JitterPolicy.plcMaxMS, frameUs: JitterPolicy.frameMS * 1_000)
         for _ in 0..<1_000 {
             XCTAssertFalse(c.conceal(sinceLastPacketMS: JitterPolicy.frameMS, depthMS: 0))
         }
@@ -977,7 +977,7 @@ final class AudioRingDriftTests: XCTestCase {
     func testDroughtConcealmentIsBoundedAtTwiceTheDeprimeFuse() {
         let deprimeMS = 60 // JitterPolicy.deprimeMS / JitterTuning::COREAUDIO.deprime_ms
         XCTAssertEqual(JitterPolicy.plcMaxMS, 2 * deprimeMS)
-        var c = DroughtConceal(maxMS: JitterPolicy.plcMaxMS)
+        var c = DroughtConceal(maxMS: JitterPolicy.plcMaxMS, frameUs: JitterPolicy.frameMS * 1_000)
         var ms = 0
         for _ in 0..<1_000 where c.conceal(sinceLastPacketMS: 2 * JitterPolicy.frameMS, depthMS: 0) {
             ms += JitterPolicy.frameMS
@@ -995,7 +995,7 @@ final class AudioRingDriftTests: XCTestCase {
     /// and so does the subtraction (`drought_concealment_is_not_charged_again_by_the_loss_path` in
     /// `punktfunk_ffi`).
     func testAPacketEndsTheDroughtAndRefreshesTheBudget() {
-        var c = DroughtConceal(maxMS: JitterPolicy.plcMaxMS)
+        var c = DroughtConceal(maxMS: JitterPolicy.plcMaxMS, frameUs: JitterPolicy.frameMS * 1_000)
         for _ in 0..<1_000 where c.conceal(sinceLastPacketMS: 2 * JitterPolicy.frameMS, depthMS: 0) {}
         XCTAssertEqual(c.totalMS, JitterPolicy.plcMaxMS, "budget spent")
         XCTAssertFalse(c.conceal(sinceLastPacketMS: 2 * JitterPolicy.frameMS, depthMS: 0))
@@ -1023,7 +1023,7 @@ final class AudioRingDriftTests: XCTestCase {
             var scratch = [Float](repeating: 0, count: want)
             let feed = [Float](repeating: 0.5, count: 25 * perMS)
             feed.withUnsafeBufferPointer { ring.write($0.baseAddress!, count: 25 * perMS) }
-            var drought = DroughtConceal(maxMS: JitterPolicy.plcMaxMS)
+            var drought = DroughtConceal(maxMS: JitterPolicy.plcMaxMS, frameUs: JitterPolicy.frameMS * 1_000)
             for tick in 0..<(ms / JitterPolicy.frameMS) {
                 if concealing,
                    drought.conceal(
@@ -1109,20 +1109,6 @@ final class AudioRingDriftTests: XCTestCase {
         XCTAssertEqual(
             c.totalMS, JitterPolicy.plcMaxMS + 2,
             "the SESSION total keeps counting, in the frame the wire really carried")
-
-        // The convenience initializer IS the default frame — the property that keeps every Opus
-        // session and the four drought tests above bit-identical.
-        var byDefault = DroughtConceal(maxMS: JitterPolicy.plcMaxMS)
-        var explicit = DroughtConceal(maxMS: JitterPolicy.plcMaxMS, frameUs: JitterPolicy.frameMS * 1_000)
-        for quiet in [0, 5, 9, 10, 50] {
-            for depth in [0, 4, 10, 11, 40] {
-                XCTAssertEqual(
-                    byDefault.conceal(sinceLastPacketMS: quiet, depthMS: depth),
-                    explicit.conceal(sinceLastPacketMS: quiet, depthMS: depth),
-                    "quiet=\(quiet) depth=\(depth): the default frame must be 5 ms")
-            }
-        }
-        XCTAssertEqual(byDefault.totalMS, explicit.totalMS)
     }
 
     /// Both thresholds — how long a quiet wire must stay quiet, and how empty the ring must be —
