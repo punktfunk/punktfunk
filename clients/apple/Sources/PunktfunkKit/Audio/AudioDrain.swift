@@ -44,8 +44,8 @@ enum AudioDrain {
         // hold. Until then a session whose host never sends audio keeps the long timeout below
         // rather than waking two hundred times a second to do nothing.
         var decoded = false
-        // Decode happens IN-CORE (libopus multistream) — AudioToolbox's Opus path is
-        // stereo-only — and is handed back as interleaved f32 PCM in wire channel order.
+        // Core decodes both planes (libopus multistream for Opus surround) and hands back
+        // interleaved f32 in wire channel order.
         // Per-iteration autorelease pool: no runloop on this thread (see Stage2Pipeline).
         var alive = true
         while alive, !flag.isStopped {
