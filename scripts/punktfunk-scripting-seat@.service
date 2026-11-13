@@ -2,7 +2,8 @@
 #
 # The instance is the seat's id. That seat's host, which runs as the person, starts it in their
 # own user manager while their seat runs and their console has the runner on; nothing enables it,
-# and seat-session stops it with the seat. It reads the seat's config directory alone, never the
+# and seat-session stops it with the seat. The host makes plugin-run and plugin-state first: a
+# `+` ExecStartPre here fails at NAMESPACE. It reads the seat's config directory alone, never the
 # person's own ~/.config/punktfunk, and runs only the plugins their own console installed
 # (PUNKTFUNK_PERSON_PLUGINS). Otherwise it is punktfunk-scripting.service, whose comments explain
 # each directive.
@@ -14,7 +15,6 @@ Type=simple
 ExecStart=/usr/bin/punktfunk-scripting
 Environment=PUNKTFUNK_CONFIG_DIR=/var/lib/punktfunk-seats/seats/%i/config
 Environment=PUNKTFUNK_PERSON_PLUGINS=1
-ExecStartPre=+/bin/mkdir -p -m 0700 /var/lib/punktfunk-seats/seats/%i/config/plugin-run /var/lib/punktfunk-seats/seats/%i/config/plugin-state
 Restart=on-failure
 RestartSec=2
 RestartPreventExitStatus=78

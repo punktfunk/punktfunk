@@ -36,6 +36,17 @@ fn person_switch() -> Option<std::path::PathBuf> {
     super::person_runner().then(|| pf_paths::config_dir().join("plugin-runner-on"))
 }
 
+/// The two folders a person's seat runner binds, made before each start: its unit can't make
+/// them itself.
+#[cfg(target_os = "linux")]
+fn person_dirs() -> Result<()> {
+    for dir in [super::RUNNER_DATA_DIR, "plugin-state"] {
+        let dir = pf_paths::config_dir().join(dir);
+        pf_paths::create_private_dir(&dir).with_context(|| format!("create {}", dir.display()))?;
+    }
+    Ok(())
+}
+
 /// Wrapper name every non-Windows package installs (`/usr/bin`, `~/.local/bin`, `$out/bin`).
 const RUNNER_BIN: &str = "punktfunk-scripting";
 
@@ -157,6 +168,7 @@ pub(super) fn converge_runner_acls(_status: &RuntimeStatus) {}
 pub(super) fn enable() -> Result<()> {
     let unit = unit();
     if let Some(switch) = person_switch() {
+        person_dirs()?;
         pf_paths::replace_file(&switch, b"")
             .with_context(|| format!("replace {}", switch.display()))?;
         run_systemctl(&["start", unit])?;
@@ -306,6 +318,9 @@ pub(super) fn runner_sandbox_off() -> bool {
 
 #[cfg(target_os = "linux")]
 pub(super) fn restart_runtime() -> Result<()> {
+    if person_switch().is_some() {
+        person_dirs()?;
+    }
     run_systemctl(&["restart", unit()])
 }
 
