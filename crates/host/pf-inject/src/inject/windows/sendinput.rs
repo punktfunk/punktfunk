@@ -18,6 +18,7 @@
 use anyhow::Result;
 use punktfunk_core::input::{InputEvent, InputKind};
 
+use crate::held::HeldInput;
 use crate::scroll::{ScrollBackend, ScrollMapper, ScrollOp};
 use std::mem::size_of;
 use windows::Win32::System::StationsAndDesktops::{
@@ -49,6 +50,9 @@ pub struct SendInputInjector {
     touch_failed: bool,
     /// Scroll lowering, legacy and normalized, onto WHEEL/HWHEEL clicks.
     scroll: ScrollMapper,
+    /// Keys and buttons pressed through `SendInput`, lifted when the injector goes. The HID
+    /// device keeps its own mirror, lifted through it.
+    held: HeldInput,
 }
 
 // SAFETY: the only non-`Send` field is `Option<HDESK>` (`SyntheticTouch` is `Send`
@@ -64,6 +68,7 @@ impl SendInputInjector {
             touch: None,
             touch_failed: false,
             scroll: ScrollMapper::new(ScrollBackend::Windows),
+            held: HeldInput::default(),
         };
         me.reattach_input_desktop(); // best-effort
         tracing::info!("SendInput injector ready (Win32 KeyboardAndMouse)");
@@ -199,7 +204,13 @@ impl SendInputInjector {
 }
 
 impl Drop for SendInputInjector {
+    /// Lift what is still down first: the HID device outlives the injector, and a failed inject
+    /// drops it with a press whose up is later in the batch or inside the reopen backoff.
     fn drop(&mut self) {
+        crate::mouse_windows::release_hid();
+        for up in self.held.release() {
+            let _ = self.inject(&up);
+        }
         if let Some(h) = self.desktop.take() {
             // SAFETY: `h` is the `HDESK` this injector owned (moved out of `self.desktop`);
             // `CloseDesktop` runs once here in `Drop` on that still-valid handle, with no later use —
@@ -215,6 +226,15 @@ impl InputInjector for SendInputInjector {
     fn inject(&mut self, event: &InputEvent) -> Result<()> {
         if self.inject_hid(event) {
             return Ok(());
+        }
+        if matches!(
+            event.kind,
+            InputKind::KeyDown
+                | InputKind::KeyUp
+                | InputKind::MouseButtonDown
+                | InputKind::MouseButtonUp
+        ) {
+            self.held.note(event);
         }
         let down = matches!(event.kind, InputKind::MouseButtonDown | InputKind::KeyDown);
         match event.kind {

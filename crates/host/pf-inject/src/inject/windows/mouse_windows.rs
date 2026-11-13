@@ -231,11 +231,7 @@ impl VirtualMouse {
             self.was_ready = ready;
             if ready {
                 tracing::info!("input: mouse and keyboard go through the virtual HID device");
-                self.buttons = 0;
-                self.keys = [0; KEYBOARD_BITMAP_LEN];
-                self.push(&relative_report(0, 0, 0, 0, 0));
-                let report = keyboard_report(&self.keys);
-                self.push(&report);
+                self.rest();
             } else {
                 tracing::warn!(
                     driver_ring = ring,
@@ -244,6 +240,23 @@ impl VirtualMouse {
             }
         }
         ready
+    }
+
+    /// Nothing held: the mirror clears and one neutral report per collection follows.
+    fn rest(&mut self) {
+        self.buttons = 0;
+        self.keys = [0; KEYBOARD_BITMAP_LEN];
+        self.push(&relative_report(0, 0, 0, 0, 0));
+        let report = keyboard_report(&self.keys);
+        self.push(&report);
+    }
+
+    /// Let go of every button and key the device holds, for an injector that goes away with
+    /// presses down. Writes nothing when nothing is held.
+    pub fn release_held(&mut self) {
+        if self.buttons != 0 || self.keys != [0; KEYBOARD_BITMAP_LEN] {
+            self.rest();
+        }
     }
 
     /// Queue one report, ringing the doorbell when the driver may have stopped draining.
@@ -431,6 +444,11 @@ pub(crate) fn with_hid<R>(f: impl FnOnce(&mut VirtualMouse) -> R) -> Option<R> {
     let mut resident = RESIDENT.lock().unwrap_or_else(PoisonError::into_inner);
     let m = resident.as_mut()?;
     (m.route_input && m.fenced && m.ready()).then(|| f(m))
+}
+
+/// Let go of every button and key the resident device holds. A no-op while it carries no input.
+pub(crate) fn release_hid() {
+    with_hid(VirtualMouse::release_held);
 }
 
 /// Ensure the one process-wide virtual mouse exists. Called from
