@@ -345,7 +345,8 @@ impl Shell {
 
         #[cfg(test)]
         crate::textprobe::layer();
-        self.draw_overlays(canvas, w, h, k, dt, t, fonts);
+        let foot = f64::from(tray_reach(&chrome).1);
+        self.draw_overlays(canvas, w, h, k, dt, t, fonts, foot);
         if inset {
             canvas.restore();
         }

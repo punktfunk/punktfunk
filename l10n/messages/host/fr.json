@@ -210,7 +210,6 @@
 	"apierr_seat_no_answer_start": "Le poste n’a pas répondu. Démarrez-le, puis réessayez.",
 	"apierr_seat_no_answer_stop": "Le poste n’a pas répondu. Arrêtez-le plutôt pour déconnecter la personne qui y joue.",
 	"apierr_seat_pairing_on_box": "Ceci est un poste. Associez les appareils dans la console web de l’hôte lui-même.",
-	"apierr_seat_runs_no_plugins": "Ce poste utilise les plugins de l’hôte, donc aucun ne peut être installé ici. Installez-les sur l’hôte.",
 	"apierr_seat_part_is_box": "Cette partie d’un poste appartient à l’hôte. Modifiez-la sur cette page, pas via un poste.",
 	"apierr_seat_session_settings_read_only": "Les paramètres de session d’un poste ne peuvent pas être modifiés ici. Modifiez les valeurs par défaut des postes sur l’hôte.",
 	"apierr_seat_session_starting": "Cette session démarre. Réessayez dans un instant.",

@@ -3699,6 +3699,7 @@ dependencies = [
  "pf-paths",
  "pf-paths-win",
  "rand 0.10.3",
+ "rcgen",
  "rustix",
  "rustls",
  "serde",
@@ -3710,6 +3711,7 @@ dependencies = [
  "windows 0.62.2",
  "windows-service",
  "winreg 0.56.0",
+ "x509-parser",
  "zeroize",
 ]
 

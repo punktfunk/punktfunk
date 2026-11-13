@@ -37,6 +37,8 @@ zeroize = "1"
 libc = "0.2"
 libloading = "0.9"
 rustix = { version = "1", features = ["fs", "mount", "net", "process", "thread"] }
+# Checks the console certificate root installs for Firefox (`linux::firefox`).
+x509-parser = "0.18"
 
 [target.'cfg(windows)'.dependencies]
 pf-paths-win = { path = "../pf-paths-win" }
@@ -70,6 +72,7 @@ windows = { version = "0.62", features = [
 
 [dev-dependencies]
 pf-host-config = { path = "../pf-host-config" }
+rcgen = { workspace = true }
 tempfile = "3"
 
 [lints]

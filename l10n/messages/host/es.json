@@ -210,7 +210,6 @@
 	"apierr_seat_no_answer_start": "El puesto no respondió. Inícialo y vuelve a intentarlo.",
 	"apierr_seat_no_answer_stop": "El puesto no respondió. Deténlo en su lugar para desconectar a quien juegue ahí.",
 	"apierr_seat_pairing_on_box": "Esto es un puesto. Empareja los dispositivos en la consola web del propio host.",
-	"apierr_seat_runs_no_plugins": "Este puesto usa los plugins del host, así que no se puede instalar ninguno aquí. Instálalos en el host.",
 	"apierr_seat_part_is_box": "Esa parte de un puesto pertenece al host. Cámbiala en esta página, no a través de un puesto.",
 	"apierr_seat_session_settings_read_only": "Los ajustes de sesión de un puesto no se pueden cambiar aquí. Cambia los valores predeterminados de los puestos en el host.",
 	"apierr_seat_session_starting": "Esa sesión se está iniciando. Inténtalo de nuevo en un momento.",

@@ -47,7 +47,6 @@
     {"id": "apierr_profile_limit", "params": {"count": "1"}, "english": "The host's own English.", "sentence": "A host holds at most 1 profile"},
     {"id": "apierr_profile_limit", "params": {"count": "2"}, "english": "The host's own English.", "sentence": "A host holds at most 2 profiles"},
     {"id": "apierr_profile_lock_shared", "params": {"owner": "Enrico"}, "english": "The host's own English.", "sentence": "This profile shares Enrico's desktop, so it opens with that profile's lock. Change the lock there."},
-    {"id": "apierr_seat_runs_no_plugins", "params": {}, "english": "The host's own English.", "sentence": "This seat uses the host's plugins, so none can be installed here. Install them on the host."},
     {"id": "apierr_title_in_use", "params": {"title": "Quail"}, "english": "The host's own English.", "sentence": "Quit Quail first."},
     {"id": "apierr_unlock_locked_out_device_minutes", "params": {"count": "1"}, "english": "The host's own English.", "sentence": "Too many failed attempts on this device. Try again in 1 minute."},
     {"id": "apierr_unlock_locked_out_device_minutes", "params": {"count": "2"}, "english": "The host's own English.", "sentence": "Too many failed attempts on this device. Try again in 2 minutes."},

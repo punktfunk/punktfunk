@@ -303,12 +303,17 @@ pub(super) fn set_login(account: &str, dropin: Option<&str>) -> Result<(), Backe
 /// Writes `contents` at `path` with `mode` unless it is already this process's file holding
 /// exactly that. One another uid owns is replaced: root reads these files. `true` when it
 /// changed.
-pub(super) fn write_if_changed(path: &Path, contents: &str, mode: u32) -> std::io::Result<bool> {
+pub(super) fn write_if_changed(
+    path: &Path,
+    contents: impl AsRef<[u8]>,
+    mode: u32,
+) -> std::io::Result<bool> {
     use std::io::Read as _;
     use std::os::unix::fs::{MetadataExt as _, OpenOptionsExt as _, PermissionsExt as _};
+    let contents = contents.as_ref();
     let unchanged = std::fs::File::open(path).and_then(|mut file| {
-        let mut current = String::new();
-        file.read_to_string(&mut current)?;
+        let mut current = Vec::new();
+        file.read_to_end(&mut current)?;
         let ours = file.metadata()?.uid() == rustix::process::geteuid().as_raw();
         Ok(ours && current == contents)
     });
@@ -325,7 +330,7 @@ pub(super) fn write_if_changed(path: &Path, contents: &str, mode: u32) -> std::i
         .create_new(true)
         .mode(mode)
         .open(&temp)?;
-    file.write_all(contents.as_bytes())?;
+    file.write_all(contents)?;
     file.set_permissions(std::fs::Permissions::from_mode(mode))?;
     file.sync_all()?;
     std::fs::rename(temp, path)?;
@@ -439,7 +444,7 @@ pub(super) fn write_unit_files(
     }
     if let Some(parts) = manager_parts(&dropins, update_binds.as_deref()) {
         let manager = manager_dropin(passwd.uid);
-        changed |= write_if_changed(&manager, &render_manager(&parts), 0o644)
+        changed |= write_if_changed(&manager, render_manager(&parts), 0o644)
             .map_err(|e| io("write the seat user's manager drop-in", e))?;
     }
     if changed {

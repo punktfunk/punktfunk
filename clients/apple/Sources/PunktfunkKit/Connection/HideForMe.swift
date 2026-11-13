@@ -34,9 +34,13 @@ public enum HideForMe {
         /// No answer to word: a lowercase cause.
         case failed(String)
 
+        /// Only a coded error is a sentence for the player; one with no code is the operator's
+        /// line and reads as a failure.
         public static func from(status: Int, body: Data) -> Outcome {
             if (200..<300).contains(status) { return .done }
-            if let said = HostText.apiError(body) { return .refused(said) }
+            let json = (try? JSONSerialization.jsonObject(with: body)) as? [String: Any]
+            let coded = (json?["code"] as? String).map { !$0.isEmpty } ?? false
+            if coded, let said = HostText.apiError(body) { return .refused(said) }
             return .failed(L10n.errorMgmtRefused(code: String(status)))
         }
 
