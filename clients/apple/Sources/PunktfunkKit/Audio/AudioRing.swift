@@ -90,8 +90,8 @@ final class AudioRing: @unchecked Sendable {
     private var outputLatencyNsValue: Int64 = 0
     /// Drought concealment the drain thread has synthesized this session, ms (`notePlcMS`).
     private var plcMS = 0
-    private let channels: Int
-    private let rateHz: Int
+    let channels: Int
+    let rateHz: Int
     private let lock = OSAllocatedUnfairLock()
 
     /// A ring holding `seconds` of audio at the negotiated format, sized in time: a sample count

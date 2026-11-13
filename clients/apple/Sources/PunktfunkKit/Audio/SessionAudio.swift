@@ -1059,8 +1059,8 @@ public final class SessionAudio: @unchecked Sendable {
     // MARK: - Playback (host → speaker)
 
     /// The playback jitter ring + the source node draining it — shared by the plain playback
-    /// engine and the combined voice-processing engine, and REUSED across an engine rebuild
-    /// (same session, same ring: the drain thread keeps writing right through the swap). nil
+    /// engine and the combined voice-processing engine, and REUSED across an engine rebuild at
+    /// the same format (the drain thread keeps writing right through the swap). nil
     /// when the host's channel layout can't be expressed (already logged). Runs on `engineQueue`.
     private func makePlaybackChain()
         -> (ring: AudioRing, source: AVAudioSourceNode, format: AVAudioFormat)?
@@ -1071,9 +1071,11 @@ public final class SessionAudio: @unchecked Sendable {
         let channels = Int(connection.audioFormat.channels)
         let rateHz = wireRateHz
         // One second of capacity at the session's format. The de-jitter depth is the ring's
-        // `JitterPolicy`, not a prefill passed in here.
+        // `JitterPolicy`, not a prefill passed in here. A ring of another format holds the ended
+        // drain's audio: a rebuild that beats `audioFormatChanged` must not play it at this one.
         stateLock.lock()
-        let ring = self.ring ?? AudioRing(seconds: 1, channels: channels, rateHz: rateHz)
+        let ring = self.ring.flatMap { $0.channels == channels && $0.rateHz == rateHz ? $0 : nil }
+            ?? AudioRing(seconds: 1, channels: channels, rateHz: rateHz)
         self.ring = ring
         stateLock.unlock()
         // The session's real frame: the shed and the priming lift are one frame. Idempotent, so
