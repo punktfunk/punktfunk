@@ -216,7 +216,6 @@
 	"apierr_seat_no_answer_start": "The seat didn't answer. Start it, then try again.",
 	"apierr_seat_no_answer_stop": "The seat didn't answer. Stop it instead to disconnect whoever plays there.",
 	"apierr_seat_pairing_on_box": "This is a seat. Pair devices in the host's own web console.",
-	"apierr_seat_runs_no_plugins": "This seat uses the host's plugins, so none can be installed here. Install them on the host.",
 	"apierr_seat_part_is_box": "That part of a seat belongs to the host. Change it on this page, not through a seat.",
 	"apierr_seat_session_settings_read_only": "A seat's session settings can't be changed here. Change the Seat defaults on the host.",
 	"apierr_seat_session_starting": "That session is starting. Try again in a moment.",

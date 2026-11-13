@@ -210,7 +210,6 @@
 	"apierr_seat_no_answer_start": "La postazione non ha risposto. Avviala, poi riprova.",
 	"apierr_seat_no_answer_stop": "La postazione non ha risposto. Fermala invece, per disconnettere chi sta giocando lì.",
 	"apierr_seat_pairing_on_box": "Questa è una postazione. Associa i dispositivi nella console web dell’host stesso.",
-	"apierr_seat_runs_no_plugins": "Questa postazione usa i plugin dell’host, quindi qui non se ne possono installare. Installali sull’host.",
 	"apierr_seat_part_is_box": "Quella parte di una postazione appartiene all’host. Modificala in questa pagina, non tramite una postazione.",
 	"apierr_seat_session_settings_read_only": "Le impostazioni di sessione di una postazione non possono essere modificate da qui. Modifica le impostazioni predefinite delle postazioni sull’host.",
 	"apierr_seat_session_starting": "Quella sessione si sta avviando. Riprova tra un attimo.",
