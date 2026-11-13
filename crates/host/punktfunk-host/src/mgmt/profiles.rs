@@ -936,7 +936,7 @@ fn may_start(seat: &pf_seats::Seat) -> bool {
 
 /// Starts a stopped seat in the background when [`may_start`] lets it: a first logon takes tens
 /// of seconds, and the caller answers with the seat as it is now, `starting`.
-pub(super) fn start_seat(id: &str) {
+pub(crate) fn start_seat(id: &str) {
     let Ok(id) = pf_seats::SeatId::parse(id) else {
         return;
     };
