@@ -298,7 +298,15 @@ pub fn granted_roots(id: &str) -> Vec<PathBuf> {
 /// ([`runner_plugins`]): its manifest and grants are the seat's, never the box's copy of a
 /// plugin of that id.
 pub fn seat_owns(id: &str) -> bool {
-    crate::library::keeps_provider_rows() && runner_plugins().contains_key(id)
+    seat_runs_its_own() && runner_plugins().contains_key(id)
+}
+
+/// Whether this is a Linux seat host reading the box's library: its runner is the seat
+/// account's own, and what its plugins publish is the seat's. A Windows seat runs none.
+pub fn seat_runs_its_own() -> bool {
+    cfg!(target_os = "linux")
+        && pf_paths::seat::role().is_seat_host()
+        && pf_paths::seat::box_library_dir().is_some()
 }
 
 /// Where plugin `id`'s manifest and grants live: this seat's own config dir for [`seat_owns`],

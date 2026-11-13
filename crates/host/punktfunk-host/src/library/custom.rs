@@ -900,9 +900,9 @@ fn reconcile_on(
 }
 
 /// The shelf a provider's rows go on: a Linux seat host's own, as its runner is the seat
-/// account's ([`keeps_own_titles`]); else the box's. A Windows seat runs no runner of its own.
+/// account's; else the box's. A Windows seat runs no runner of its own.
 fn provider_shelf() -> Shelf {
-    if cfg!(target_os = "linux") && keeps_own_titles() {
+    if crate::plugins::manifest::seat_runs_its_own() {
         Shelf::Own
     } else {
         Shelf::Box
