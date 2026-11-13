@@ -405,17 +405,9 @@ fn valid_probe(p: &str, windows: bool) -> bool {
 fn probe_matches(p: &str) -> bool {
     #[cfg(windows)]
     if let Some(key) = p.strip_prefix("HKLM\\") {
-        use std::os::windows::process::CommandExt;
-        // `reg.exe query`, not a registry crate — no extra dep under LocalService.
-        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-        return std::process::Command::new(crate::install::sys32("reg.exe"))
-            .args(["query", &format!("HKLM\\{key}")])
-            .creation_flags(CREATE_NO_WINDOW)
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .status()
-            .map(|s| s.success())
-            .unwrap_or(false);
+        return winreg::RegKey::predef(winreg::enums::HKEY_LOCAL_MACHINE)
+            .open_subkey(key)
+            .is_ok();
     }
     #[cfg(not(windows))]
     if p.starts_with("HKLM\\") {
