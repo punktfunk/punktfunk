@@ -153,6 +153,9 @@ pub mod trust;
 // Profiles on a box and the picker rule every shell shares (`design/profiles-and-seats.md` §10).
 #[cfg(portable)]
 pub mod profiles;
+// "Hide for me": a title off the shelf of the profile this device plays as, and back.
+#[cfg(portable)]
+pub mod hide;
 // The unlock of a profile on a person's own account: prompt, device key, refusal.
 #[cfg(portable)]
 pub mod unlock;

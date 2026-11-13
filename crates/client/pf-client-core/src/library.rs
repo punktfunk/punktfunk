@@ -326,8 +326,8 @@ pub fn agent(
 /// One answer of `GET /api/v1/library/page`. `total` and `platforms` stay undecoded:
 /// every shell collates the whole catalog itself.
 #[derive(Deserialize)]
-struct LibraryPage {
-    items: Vec<GameEntry>,
+struct LibraryPage<T> {
+    items: Vec<T>,
     #[serde(default)]
     next_cursor: Option<String>,
 }
@@ -341,15 +341,15 @@ const MAX_PAGES: usize = 500;
 /// The whole catalog, a page at a time, so no answer grows with the library. `get` takes
 /// the cursor of the page before and answers one page's body; `bad_reply` words a body
 /// that does not decode. Any page failing fails the walk: half a catalog is not one.
-pub fn walk_pages<E>(
+pub fn walk_pages<T: serde::de::DeserializeOwned, E>(
     mut get: impl FnMut(Option<&str>) -> Result<String, E>,
     bad_reply: impl Fn(String) -> E,
-) -> Result<Vec<GameEntry>, E> {
+) -> Result<Vec<T>, E> {
     let mut games = Vec::new();
     let mut cursor: Option<String> = None;
     for _ in 0..MAX_PAGES {
         let body = get(cursor.as_deref())?;
-        let page: LibraryPage =
+        let page: LibraryPage<T> =
             serde_json::from_str(&body).map_err(|e| bad_reply(format!("bad JSON: {e}")))?;
         games.extend(page.items);
         match page.next_cursor {
@@ -500,7 +500,7 @@ impl HostApi {
 }
 
 /// `s` percent-encoded for a query value.
-fn query_value(s: &str) -> String {
+pub(crate) fn query_value(s: &str) -> String {
     s.bytes()
         .map(|b| match b {
             b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
@@ -870,8 +870,7 @@ pub fn change_install(
 }
 
 /// `id` as one URL path segment: unreserved characters and `:` stay, the rest is escaped.
-#[cfg(desktop)]
-fn path_segment(id: &str) -> String {
+pub(crate) fn path_segment(id: &str) -> String {
     id.bytes()
         .map(|b| match b {
             b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' | b':' => {
@@ -1871,7 +1870,7 @@ mod tests {
     #[test]
     fn a_walk_ends_on_a_cursor_that_does_not_move() {
         let mut calls = 0;
-        let games = walk_pages(
+        let games = walk_pages::<GameEntry, _>(
             |_| {
                 calls += 1;
                 Ok::<_, String>(page(&["a"], Some("stuck")))
@@ -1888,7 +1887,7 @@ mod tests {
 
     #[test]
     fn a_failed_page_fails_the_walk() {
-        let walked = walk_pages(
+        let walked = walk_pages::<GameEntry, _>(
             |cursor| match cursor {
                 None => Ok(page(&["a"], Some("c1"))),
                 Some(_) => Err("the host went away".to_string()),
@@ -1896,7 +1895,7 @@ mod tests {
             |why| why,
         );
         assert_eq!(walked.unwrap_err(), "the host went away");
-        let undecodable = walk_pages(|_| Ok::<_, String>("[]".into()), |why| why);
+        let undecodable = walk_pages::<GameEntry, _>(|_| Ok::<_, String>("[]".into()), |why| why);
         assert!(undecodable.unwrap_err().starts_with("bad JSON"));
     }
 
