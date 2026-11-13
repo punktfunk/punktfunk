@@ -79,7 +79,6 @@ struct StreamScene: View {
                 if captured { model?.claimControllers() }
                 #endif
             },
-            onDisconnectRequest: { [weak model] in model?.disconnect() },
             onShortcut: { [weak model, ring] action, phase in
                 model?.runShortcut(action, phase, pad: nil, ring: ring)
             },

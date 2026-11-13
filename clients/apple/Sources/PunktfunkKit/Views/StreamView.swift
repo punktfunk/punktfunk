@@ -101,7 +101,6 @@ public struct StreamView: NSViewRepresentable {
     private let connection: PunktfunkConnection
     private let captureEnabled: Bool
     private let onCaptureChange: ((Bool) -> Void)?
-    private let onDisconnectRequest: (() -> Void)?
     private let onShortcut: ((Shortcuts.Action, Shortcuts.Phase) -> Void)?
     private let onFrame: (@Sendable (AccessUnit) -> Void)?
     private let onSessionEnd: (@Sendable () -> Void)?
@@ -114,18 +113,15 @@ public struct StreamView: NSViewRepresentable {
     /// `captureEnabled: false` disables input capture entirely while UI (e.g. a trust
     /// prompt) is layered over the stream; flipping it to true auto-engages capture
     /// once. `onCaptureChange` (main thread) reports engage/release — drive the HUD's
-    /// "click to capture" / "⌃⌥⇧Q releases" hint with it. `onDisconnectRequest` (main
-    /// thread) fires on the reserved ⌃⌥⇧D combo while captured — the owner ends the
-    /// session (released, the same combo reaches the Stream menu instead).
+    /// "click to capture" / "⌃⌥⇧Q releases" hint with it.
     /// `endToEndMeter` records capture→on-glass for the A/V sync loop.
     public init(
         connection: PunktfunkConnection,
         captureEnabled: Bool = true,
         onCaptureChange: ((Bool) -> Void)? = nil,
-        onDisconnectRequest: (() -> Void)? = nil,
         onShortcut: ((Shortcuts.Action, Shortcuts.Phase) -> Void)? = nil,
-        // Call-site parity with the touch platforms: macOS has no twist (the ring opens from
-        // the keyboard there, a later work package), so the parameter is accepted and unused.
+        // Call-site parity with the touch platforms: macOS has no twist (⌃⌥⇧O opens the ring),
+        // so the parameter is accepted and unused.
         onDial: ((DialEvent) -> Void)? = nil,
         onFrame: (@Sendable (AccessUnit) -> Void)? = nil,
         onSessionEnd: (@Sendable () -> Void)? = nil,
@@ -136,7 +132,6 @@ public struct StreamView: NSViewRepresentable {
         self.connection = connection
         self.captureEnabled = captureEnabled
         self.onCaptureChange = onCaptureChange
-        self.onDisconnectRequest = onDisconnectRequest
         self.onShortcut = onShortcut
         self.onFrame = onFrame
         self.onSessionEnd = onSessionEnd
@@ -148,7 +143,6 @@ public struct StreamView: NSViewRepresentable {
     public func makeNSView(context: Context) -> StreamLayerView {
         let view = StreamLayerView()
         view.onCaptureChange = onCaptureChange
-        view.onDisconnectRequest = onDisconnectRequest
         view.onShortcut = onShortcut
         view.captureEnabled = captureEnabled
         view.endToEndMeter = endToEndMeter
@@ -160,7 +154,6 @@ public struct StreamView: NSViewRepresentable {
 
     public func updateNSView(_ view: StreamLayerView, context: Context) {
         view.onCaptureChange = onCaptureChange
-        view.onDisconnectRequest = onDisconnectRequest
         view.onShortcut = onShortcut
         view.captureEnabled = captureEnabled
         view.endToEndMeter = endToEndMeter
@@ -273,9 +266,6 @@ public final class StreamLayerView: NSView {
     /// Reports engage/release on the main thread.
     public var onCaptureChange: ((Bool) -> Void)?
 
-    /// Fired (main thread) when the captured-state ⌃⌥⇧D combo asks to end the session — the
-    /// view can't do that itself (the connection's owner disconnects).
-    public var onDisconnectRequest: (() -> Void)?
     /// A keyboard shortcut fired; the session runs it. Main thread.
     public var onShortcut: ((Shortcuts.Action, Shortcuts.Phase) -> Void)?
 

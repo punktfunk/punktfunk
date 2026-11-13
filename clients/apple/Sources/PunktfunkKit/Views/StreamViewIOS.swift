@@ -62,7 +62,6 @@ public struct StreamView: UIViewControllerRepresentable {
     private let connection: PunktfunkConnection
     private let captureEnabled: Bool
     private let onCaptureChange: ((Bool) -> Void)?
-    private let onDisconnectRequest: (() -> Void)?
     private let onShortcut: ((Shortcuts.Action, Shortcuts.Phase) -> Void)?
     private let onDial: ((DialEvent) -> Void)?
     private let onFrame: (@Sendable (AccessUnit) -> Void)?
@@ -80,7 +79,6 @@ public struct StreamView: UIViewControllerRepresentable {
         connection: PunktfunkConnection,
         captureEnabled: Bool = true,
         onCaptureChange: ((Bool) -> Void)? = nil,
-        onDisconnectRequest: (() -> Void)? = nil,
         onShortcut: ((Shortcuts.Action, Shortcuts.Phase) -> Void)? = nil,
         onDial: ((DialEvent) -> Void)? = nil,
         onFrame: (@Sendable (AccessUnit) -> Void)? = nil,
@@ -92,7 +90,6 @@ public struct StreamView: UIViewControllerRepresentable {
         self.connection = connection
         self.captureEnabled = captureEnabled
         self.onCaptureChange = onCaptureChange
-        self.onDisconnectRequest = onDisconnectRequest
         self.onShortcut = onShortcut
         self.onDial = onDial
         self.onFrame = onFrame
@@ -117,7 +114,6 @@ public struct StreamView: UIViewControllerRepresentable {
         controller.setCurve(curveTarget)
         #endif
         controller.onCaptureChange = onCaptureChange
-        controller.onDisconnectRequest = onDisconnectRequest
         controller.onShortcut = onShortcut
         controller.onDial = onDial
         controller.captureEnabled = captureEnabled
@@ -130,7 +126,6 @@ public struct StreamView: UIViewControllerRepresentable {
 
     public func updateUIViewController(_ controller: StreamViewController, context: Context) {
         controller.onCaptureChange = onCaptureChange
-        controller.onDisconnectRequest = onDisconnectRequest
         controller.onShortcut = onShortcut
         controller.onDial = onDial
         controller.captureEnabled = captureEnabled
@@ -240,8 +235,6 @@ public final class StreamViewController: StreamViewControllerBase {
     }
 
     var onCaptureChange: ((Bool) -> Void)?
-    /// Kept for call-site parity; the keyboard's End stream arrives through `onShortcut`.
-    var onDisconnectRequest: (() -> Void)?
     /// A keyboard shortcut that fired (see `StreamView.init`).
     var onShortcut: ((Shortcuts.Action, Shortcuts.Phase) -> Void)?
     /// The two-finger twist turning the quick-action ring (forwarded from the stream view).
