@@ -18,17 +18,13 @@ import Foundation
 /// A host's library as last seen, with when that was.
 public struct CachedLibrary: Codable, Sendable {
     public var games: [GameEntry]
+    /// When the host answered it. A catalog of any age still goes up: it beats an empty shelf.
     public var fetchedAt: Date
 
     public init(games: [GameEntry], fetchedAt: Date) {
         self.games = games
         self.fetchedAt = fetchedAt
     }
-
-    /// How old this snapshot is. The UI uses it to word the staleness note, never to decide whether
-    /// to show the catalog: a year-old library is still a far better answer than an empty one, and
-    /// the live fetch is always in flight behind it anyway.
-    public var age: TimeInterval { Date().timeIntervalSince(fetchedAt) }
 }
 
 /// Per-host catalog storage. An actor so disk work stays off the SwiftUI thread and a read can
