@@ -1008,7 +1008,11 @@ public final class SessionAudio: @unchecked Sendable {
         if muted {
             capture.pause()
         } else if !flag.isStopped {
-            try? capture.start()
+            do {
+                try capture.start()
+            } catch {
+                log.error("capture engine did not restart on unmute: \(error.localizedDescription)")
+            }
             // `stop()` may have stopped this engine between the check and the start.
             if flag.isStopped { capture.stop() }
         }
