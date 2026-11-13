@@ -31,6 +31,7 @@ use pf_client_core::presets::{PresetsFile, SettingsOverlay, StreamPreset};
 use pf_client_core::settings::Label;
 use pf_fluent::{Palette, Token};
 use pf_l10n::{client, common, desktop};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use windows_reactor::*;
 
@@ -94,13 +95,13 @@ pub(crate) fn update_preset(
     })
 }
 
-/// Re-base the settings snapshot on the file, re-probe this device's hardware, and ask each
-/// paired host for its screens, which a preset's Host screen row lists. Called from the
-/// navigation handlers that (re)enter this page, never per render pass. `ctx.settings` is
-/// loaded once at process start and this process is not the file's only writer (a spawned
-/// session, the console UI and Decky save too), so without this the page opens on values
-/// another process already replaced, which "jump" the moment a row is touched and `commit`'s
-/// rebase pulls the file in.
+/// Re-base the settings snapshot on the file, ask each paired host for its screens (which a
+/// preset's Host screen row lists) and re-probe this device's hardware in the background.
+/// Called from the navigation handlers that (re)enter this page, never per render pass.
+/// `ctx.settings` is loaded once at process start and this process is not the file's only
+/// writer (a spawned session, the console UI and Decky save too), so without this the page
+/// opens on values another process already replaced, which "jump" the moment a row is touched
+/// and `commit`'s rebase pulls the file in.
 pub(crate) fn refresh_snapshot(ctx: &Arc<AppCtx>) {
     *ctx.settings.lock().unwrap() = Settings::load();
     for k in crate::trust::KnownHosts::load()
@@ -113,14 +114,44 @@ pub(crate) fn refresh_snapshot(ctx: &Arc<AppCtx>) {
             .unwrap_or(pf_client_core::library::DEFAULT_MGMT_PORT);
         pf_client_core::display_targets::refresh(&k.addr, mgmt, k.port, &k.fp_hex);
     }
-    let (speakers, mics) = pf_client_core::audio::devices().unwrap_or_default();
-    *ctx.probes.lock().unwrap() = DeviceProbes {
-        gpus: crate::gpu::adapter_names(),
-        speakers,
-        mics,
-        native: primary_mode(),
-        link: punktfunk_core::transport::ifinfo::local_link_facts(None),
-    };
+    probe_devices(ctx);
+}
+
+/// Probe DXGI, WASAPI and the link on a worker: a driver can sit in limbo for seconds, and
+/// the WinUI thread must not wait on it. The page shows the previous probe until this one
+/// lands, then re-renders. One probe runs at a time; a visit during one reads its result.
+pub(crate) fn probe_devices(ctx: &Arc<AppCtx>) {
+    static BUSY: AtomicBool = AtomicBool::new(false);
+    /// Clears [`BUSY`] when the worker ends, a panic included.
+    struct Idle;
+    impl Drop for Idle {
+        fn drop(&mut self) {
+            BUSY.store(false, Ordering::Release);
+        }
+    }
+    if BUSY.swap(true, Ordering::AcqRel) {
+        return;
+    }
+    let ctx = ctx.clone();
+    let spawned = std::thread::Builder::new()
+        .name("pf-device-probe".into())
+        .spawn(move || {
+            let _idle = Idle;
+            let (speakers, mics) = pf_client_core::audio::devices().unwrap_or_default();
+            *ctx.probes.lock().unwrap() = DeviceProbes {
+                gpus: crate::gpu::adapter_names(),
+                speakers,
+                mics,
+                native: primary_mode(),
+                link: punktfunk_core::transport::ifinfo::local_link_facts(None),
+            };
+            if let Some(set) = ctx.shared.set_devices.lock().unwrap().as_ref() {
+                set.call(());
+            }
+        });
+    if spawned.is_err() {
+        BUSY.store(false, Ordering::Release);
+    }
 }
 
 /// The primary display's current mode in real pixels: what a Native stream asks for here.
@@ -153,7 +184,7 @@ fn primary_mode() -> Option<punktfunk_core::Mode> {
 }
 
 /// This device's pickable hardware: DXGI adapters and WASAPI endpoints, and the display and
-/// link PyroWave quality prices against. Probed once per visit by [`refresh_snapshot`], never
+/// link PyroWave quality prices against. Probed once per visit by [`probe_devices`], never
 /// on the render each settings commit triggers.
 #[derive(Default)]
 pub(crate) struct DeviceProbes {
