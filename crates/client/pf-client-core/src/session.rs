@@ -1422,6 +1422,7 @@ impl Pump {
             let spawned = std::thread::Builder::new()
                 .name("pf-decode-done".into())
                 .spawn(move || {
+                    crate::audio_rt::boost_and_log("pf-decode-done");
                     use std::os::fd::AsFd as _;
                     while let Ok(fd) = rx.recv() {
                         let _ = pf_dmabuf::fence::wait_sync_file(fd.as_fd(), 50);
