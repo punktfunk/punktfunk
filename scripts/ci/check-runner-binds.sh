@@ -27,7 +27,7 @@ for n in $names; do
 		echo "$SEAT: the runner reads \$config/$n and this unit never binds it"
 		rc=1
 	}
-	grep '^ *priority=1 .*@{HOME}' "$AA" | grep -qE "[/{,]${n}[,}/ ]" || {
+	grep -E '^ *priority=1 .*@\{(HOME|PF_HOMES)\}' "$AA" | grep -qE "[/{,]${n}[,}/ ]" || {
 		echo "$AA: the runner reads \$config/$n and its profile never allows it"
 		rc=1
 	}
