@@ -573,12 +573,6 @@ public final class Sc2Capture {
                 let dongle = self.isDongleSource(source)
                 let kind: PunktfunkConnection.GamepadType = self.isClassicSource(source)
                     ? .steamController : dongle ? .steamController2Puck : .steamController2
-                #if os(macOS)
-                let serial = source == Sc2Capture.bleSource
-                    ? nil : self.usbLink.serial(source: source)
-                #else
-                let serial: String? = nil
-                #endif
                 self.lock.lock()
                 guard self.sources[source] === src, src.claimPending else {
                     // The entry that asked was released, and a later report may have made a
@@ -612,7 +606,7 @@ public final class Sc2Capture {
                 self.syncShadowSuppression()
                 let via = dongle ? "Puck" : (self.currentTransport == .usb ? "USB" : "BLE")
                 log.info(
-                    "SC2 captured → wire pad \(index) (\(via, privacy: .public) passthrough, pref \(kind.rawValue), serial \(serial ?? "?"))"
+                    "SC2 captured → wire pad \(index) (\(via, privacy: .public) passthrough, pref \(kind.rawValue))"
                 )
                 self.onPhaseChange?(.captured(pad: index))
             }

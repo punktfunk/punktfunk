@@ -167,42 +167,6 @@ enum Sc2Device {
     /// The Puck reports a controller bonded to one of its slots.
     static let wirelessConnect: UInt8 = 2
 
-    // MARK: - Engraved serial (feature report 2 on a controller slot; macOS `Sc2UsbLink` only)
-
-    /// The feature report whose plain GET a slot node answers with the pad's ENGRAVED serial —
-    /// no SET first, unlike the `0xAE` GET_STRING_ATTRIBUTE dance every other string query
-    /// rides on feature report 1 (`steam_proto::ID_GET_STRING_ATTRIBUTE`). The reply is a
-    /// small binary header followed by the serial as printable ASCII (13 chars, `FXA…` —
-    /// `triton_proto.rs`), the only per-unit identity a Puck exposes: the dongle's own USB
-    /// serial is shared by every slot. Feature report 2 is declared by the controller
-    /// descriptor itself, for the Puck's connection/bond queries (`triton_proto.rs`); this GET
-    /// is one of them, proven on real hardware by the splitscreen project's bench. Read once
-    /// per live pad, never per report (the blocking-GET rule `HidUsbLink.kt` pins).
-    static let featureSerial: UInt8 = 0x02
-
-    /// Pull the serial out of a feature-2 reply: the longest ASCII-alphanumeric run, accepted
-    /// only at 8–20 characters (the header is binary; the engraved serial is the one printable
-    /// token that length; ties keep the first). Nil otherwise — a reply this cannot read
-    /// degrades to no-serial, never to a garbage identity, which is why an over-long run (an
-    /// all-ASCII error string, say) is rejected whole rather than truncated into one.
-    static func parseSerial(_ reply: [UInt8]) -> String? {
-        var best: ArraySlice<UInt8> = []
-        var runStart: Int?
-        for (i, b) in reply.enumerated() {
-            let alnum = (0x30 ... 0x39).contains(b) || (0x41 ... 0x5A).contains(b)
-                || (0x61 ... 0x7A).contains(b)
-            if alnum {
-                if runStart == nil { runStart = i }
-            } else if let s = runStart {
-                if i - s > best.count { best = reply[s ..< i] }
-                runStart = nil
-            }
-        }
-        if let s = runStart, reply.count - s > best.count { best = reply[s...] }
-        guard (8 ... 20).contains(best.count) else { return nil }
-        return String(decoding: best, as: UTF8.self)
-    }
-
     /// The gyro-enable Steam itself sends — WRITE_REGISTER, reg 0x30 (GYRO_MODE), value 0x0018
     /// (raw accel | raw gyro); confirmed both ways on real hardware 2026-06-08. Kept ONLY for
     /// logging and tests: the client must NEVER self-enable the gyro (a permanent enable re-flies
