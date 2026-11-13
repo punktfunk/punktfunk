@@ -902,7 +902,7 @@ public final class PunktfunkConnection: @unchecked Sendable {
     }
 
     /// The video codec the host encodes now (`PUNKTFUNK_CODEC_*`): `2` = HEVC (default / older
-    /// host), `1` = H.264, `4` = AV1, `8` = PyroWave (only when this client opted in). Build the
+    /// host), `1` = H.264, `4` = AV1, `8` = PyroWave (see `codecPyroWave`). Build the
     /// decoder from THIS. It honours the client's `preferredCodec` when the host could emit it,
     /// and moves with `streamFormat`.
     public var resolvedCodec: UInt8 {
@@ -1215,8 +1215,8 @@ public final class PunktfunkConnection: @unchecked Sendable {
         }
     }
 
-    /// The resolved codec as a `VideoCodec` (H.264 / HEVC / AV1) — drives the bitstream framing
-    /// (Annex-B NAL parsing vs the AV1 OBU repack).
+    /// The resolved codec as a `VideoCodec` (H.264, HEVC, AV1 or PyroWave): picks the decoder and
+    /// the bitstream framing.
     public var videoCodec: VideoCodec { VideoCodec(wire: resolvedCodec) }
 
     /// Connect and start a session at the requested mode: the host makes a virtual output at
@@ -2162,9 +2162,9 @@ public final class PunktfunkConnection: @unchecked Sendable {
     public static let codecH264: UInt8 = UInt8(PUNKTFUNK_CODEC_H264)
     public static let codecHEVC: UInt8 = UInt8(PUNKTFUNK_CODEC_HEVC)
     public static let codecAV1: UInt8 = UInt8(PUNKTFUNK_CODEC_AV1)
-    /// PyroWave (opt-in wired-LAN wavelet codec, 8-bit SDR): the host only ever resolves it
-    /// when the client both advertises the bit AND names it `preferredCodec` — never
-    /// auto-selected. Decoded by the Metal wavelet decoder, not VideoToolbox.
+    /// PyroWave (opt-in wired-LAN wavelet codec): never auto-selected. The host resolves it only
+    /// for a client that advertises the bit, when that client names it `preferredCodec` or names
+    /// none and the host's encoder is pinned to it. Decoded by the Metal wavelet decoder.
     public static let codecPyroWave: UInt8 = UInt8(PUNKTFUNK_CODEC_PYROWAVE)
 
     /// `clientCaps` bit: ask the host to leave ITS OWN audio devices alone for this session —
