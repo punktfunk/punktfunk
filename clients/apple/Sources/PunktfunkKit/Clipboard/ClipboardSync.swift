@@ -138,8 +138,6 @@ public final class ClipboardSync: NSObject {
         super.init()
     }
 
-    deinit { stopped.raise() }
-
     // MARK: - Lifecycle
 
     /// Enable sync with the host and start the drain thread. The host answers the enable with a
@@ -161,7 +159,8 @@ public final class ClipboardSync: NSObject {
     }
 
     /// Disable sync and join the drain thread. Called off-main before `connection.close()` (the
-    /// same discipline as the audio/feedback drains).
+    /// same discipline as the audio/feedback drains). The drain holds the sync for its loop, so
+    /// only this or the connection closing ends it: dropping the sync does not.
     ///
     /// A host offer still sitting on the local pasteboard as a promise has to be dealt with here,
     /// because after this returns nothing can answer it: either it is pulled down to real bytes
