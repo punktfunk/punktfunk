@@ -247,11 +247,6 @@ jobs:
           # crates (see this file's header). No FFMPEG_DIR: nothing in this package links libav*
           # (M10), and pack-msix.ps1 no longer copies runtime DLLs from one.
           "CARGO_TARGET_DIR=${{ matrix.td }}" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
-          # A cache daemon of this leg's own. On the default port the legs share one, which ends
-          # with whichever job started it, and the other leg's build then fails at `rustc -vV`.
-          $leg = if ('${{ matrix.arch }}' -eq 'arm64') { 1 } else { 0 }
-          $port = 20000 + ([int64]$env:GITHUB_RUN_ID % 10000) * 2 + $leg
-          "SCCACHE_SERVER_PORT=$port" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           rustup target add ${{ matrix.target }}
           rustc --version
           cargo --version
@@ -295,6 +290,13 @@ jobs:
           if ($code -ne 0) {
             Write-Warning "sccache daemon failed to start - building this leg without the cache"
             "RUSTC_WRAPPER=" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          }
+          # A probe that failed on an earlier run stays pinned in the target dir and fails every
+          # build after it, whatever the daemon does now. Drop it so cargo probes again.
+          $info = Join-Path $env:CARGO_TARGET_DIR '.rustc_info.json'
+          if ((Test-Path $info) -and (Select-String -Path $info -SimpleMatch '"success":false' -Quiet)) {
+            Remove-Item $info -Force
+            Write-Warning "dropped a failed compiler probe cached in $info"
           }
 
       # All three client binaries, ONCE, in release. The shell spawns punktfunk-session.exe (a
