@@ -24,15 +24,32 @@ pub fn planted_by_non_admin(path: &Path) -> bool {
     path.exists() && is_admin_owned(path) != Some(true)
 }
 
-/// Rename a planted file to `<path>.untrusted`, replacing an earlier one. Best-effort by
-/// contract: the caller's guarantee is what it does when the file is still there.
+/// How many names `rename_aside` tries: `<path>.untrusted`, then `.untrusted.1` and on.
+const ASIDE_NAMES: u32 = 64;
+
+/// Rename a planted entry to `<path>.untrusted`, replacing an earlier file there. An earlier
+/// directory stays, since Windows renames nothing over a non-empty directory: the entry takes
+/// the next free `<path>.untrusted.N`. Best-effort by contract: the caller's guarantee is what
+/// it does when the entry is still there.
 pub fn rename_aside(path: &Path) -> Result<PathBuf> {
-    let mut aside = path.to_path_buf().into_os_string();
-    aside.push(".untrusted");
-    let aside = PathBuf::from(aside);
-    let _ = std::fs::remove_file(&aside);
-    std::fs::rename(path, &aside)?;
-    Ok(aside)
+    let mut base = path.to_path_buf().into_os_string();
+    base.push(".untrusted");
+    let _ = std::fs::remove_file(&base);
+    let mut refused = None;
+    for n in 0..ASIDE_NAMES {
+        let mut name = base.clone();
+        if n > 0 {
+            name.push(format!(".{n}"));
+        }
+        let aside = PathBuf::from(name);
+        match std::fs::rename(path, &aside) {
+            Ok(()) => return Ok(aside),
+            // The name is taken: try the next. Anything else will not change with the name.
+            Err(e) if std::fs::symlink_metadata(&aside).is_ok() => refused = Some(e),
+            Err(e) => return Err(e),
+        }
+    }
+    Err(refused.unwrap_or_else(|| other(format!("no free name beside {}", path.display()))))
 }
 
 /// Rename `path` aside when it is a reparse point or its owner is not SYSTEM, Administrators
@@ -563,6 +580,44 @@ pub fn kill_on_close_job(
         )
     }?;
     Ok(job)
+}
+
+#[cfg(test)]
+mod rename_aside_tests {
+    /// A directory set aside twice keeps both: the second takes the next name instead of
+    /// failing to replace the first, and nothing stays at the original path.
+    #[test]
+    fn a_second_planted_directory_takes_the_next_name() {
+        let root = std::env::temp_dir().join(format!("pf-rename-aside-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let planted = root.join("data");
+        for round in ["first", "second"] {
+            std::fs::create_dir_all(&planted).unwrap();
+            std::fs::write(planted.join(round), "x").unwrap();
+            super::rename_aside(&planted).unwrap();
+            assert!(!planted.exists(), "{round} stayed at the trusted path");
+        }
+        assert!(root.join("data.untrusted").join("first").exists());
+        assert!(root.join("data.untrusted.1").join("second").exists());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// A file still replaces an earlier file at the first name.
+    #[test]
+    fn a_planted_file_replaces_an_earlier_one() {
+        let root = std::env::temp_dir().join(format!("pf-rename-file-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let planted = root.join("host.env");
+        for body in ["old", "new"] {
+            std::fs::write(&planted, body).unwrap();
+            super::rename_aside(&planted).unwrap();
+        }
+        let kept = std::fs::read_to_string(root.join("host.env.untrusted")).unwrap();
+        assert_eq!(kept, "new");
+        assert!(!root.join("host.env.untrusted.1").exists());
+        let _ = std::fs::remove_dir_all(&root);
+    }
 }
 
 #[cfg(test)]
