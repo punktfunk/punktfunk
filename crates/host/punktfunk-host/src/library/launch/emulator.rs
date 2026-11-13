@@ -1,12 +1,10 @@
 //! `launch.kind == "emulator"`: a catalog emulator this host found or installed, its command
-//! rendered by hermir. The plugin names no program at all: only the emulator's catalog id, the
-//! platform, the game file under a root it may reach, a libretro core and extra arguments.
+//! rendered by hermir. The plugin names no program and no flag: only the emulator's catalog id,
+//! the platform, the game file under a root it may reach and a libretro core. A flag is the
+//! plugin choosing what the emulator loads, which is an `exec` template's to declare.
 
 use super::*;
 use crate::plugins::manifest::{param_ok, ParamKind, PluginManifest};
-
-/// Ceiling on extra arguments.
-const MAX_EXTRA: usize = 32;
 
 /// The arguments of an `emulator` entry, checked.
 struct EmulatorArgs<'a> {
@@ -14,7 +12,6 @@ struct EmulatorArgs<'a> {
     platform: &'a str,
     file: &'a Path,
     core: Option<&'a str>,
-    extra: Vec<&'a str>,
 }
 
 /// Each argument once and in its shape, and the file inside the roots of `manifest`, if given.
@@ -25,14 +22,13 @@ fn args<'a>(
     if !crate::emulators::in_catalog(&spec.value) {
         return Err("not an emulator in the catalog");
     }
-    let (mut platform, mut file, mut core, mut extra) = (None, None, None, Vec::new());
+    let (mut platform, mut file, mut core) = (None, None, None);
     for a in spec.args.iter().flatten() {
         let v = a.value.as_str();
         match a.name.as_str() {
             "platform" if platform.is_none() && param_ok(ParamKind::Id, v) => platform = Some(v),
             "file" if file.is_none() && param_ok(ParamKind::Path, v) => file = Some(Path::new(v)),
             "core" if core.is_none() && crate::emulators::valid_core(v) => core = Some(v),
-            "extra" if extra.len() < MAX_EXTRA && param_ok(ParamKind::Args, v) => extra.push(v),
             _ => return Err("an argument is unknown, repeated or malformed"),
         }
     }
@@ -47,7 +43,6 @@ fn args<'a>(
         platform,
         file,
         core,
-        extra,
     })
 }
 
@@ -102,7 +97,7 @@ fn build(manifest: Option<&PluginManifest>, spec: &LaunchSpec) -> Result<ExecRec
     let program = argv.next().ok_or("the command is empty")?;
     Ok(ExecRecipe {
         program,
-        args: argv.chain(a.extra.iter().map(|s| s.to_string())).collect(),
+        args: argv.collect(),
         cwd: launch.cwd,
     })
 }
@@ -144,11 +139,16 @@ mod tests {
                 ("platform", "snes"),
                 ("file", file),
                 ("core", "snes9x"),
-                ("extra", "--verbose"),
-                ("extra", "--menu"),
             ])),
             Ok(())
         );
+        // A flag would pick what the emulator loads: `-L` names a library.
+        assert!(ok(&spec(&[
+            ("platform", "snes"),
+            ("file", file),
+            ("extra", "--verbose"),
+        ]))
+        .is_err());
         assert!(ok(&spec(&[("platform", "snes")])).is_err());
         assert!(ok(&spec(&[("platform", "snes"), ("file", "/etc/passwd")])).is_err());
         assert!(ok(&spec(&[

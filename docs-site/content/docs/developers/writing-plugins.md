@@ -80,9 +80,10 @@ No other value may start with `-`. The host drops a title whose values don't fit
 publishes it.
 
 A ROM needs no template. `launch: { kind: "emulator", value: "pcsx2", args: [...] }` names a
-catalog emulator, and the arguments `platform`, `file`, and optionally `core` and `extra`; `file`
-must lie inside the plugin's roots. The host starts `file` in its best copy of that emulator,
-after first-run setup and the platform's firmware.
+catalog emulator, and the arguments `platform`, `file`, and optionally `core`; `file` must lie
+inside the plugin's roots. The host starts `file` in its best copy of that emulator, after
+first-run setup and the platform's firmware. It takes no flags: a title that needs its own goes
+through a template.
 `GET /api/v1/emulators/catalog` lists the platforms and emulators. A plugin that moves saves asks
 once with `saves: true` on `POST /api/v1/plugin-access/requests`.
 
