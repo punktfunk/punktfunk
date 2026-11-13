@@ -127,13 +127,47 @@ extension MgmtTransport {
         _ method: String, _ path: String, body: Data?, contentType: String?,
         to target: MgmtTarget
     ) async throws -> HTTPResponse {
-        try await withCheckedThrowingContinuation { done in
-            // The call blocks for a dial; it must not hold a cooperative thread.
-            DispatchQueue.global(qos: .userInitiated).async {
-                done.resume(with: Result {
-                    try tunnelBlocking(method, path, body: body ?? Data(), contentType, to: target)
-                })
+        // The call blocks for a dial; it must not hold a cooperative thread.
+        try await onTunnelThread(host: "\(unbracketed(target.address)):\(target.streamPort)") {
+            try tunnelBlocking(method, path, body: body ?? Data(), contentType, to: target)
+        }
+    }
+
+    /// Each host's tunnel threads, by `host:port`. A process talks to a handful of hosts.
+    private static let tunnelQueues = OSAllocatedUnfairLock(
+        uncheckedState: [String: OperationQueue]())
+
+    /// Tunnel calls one host runs at once. The tunnel carries each on a stream of its own, so a
+    /// screenful of posters loads together: 32 covers one, and is half the threads libdispatch
+    /// gives a process.
+    static let tunnelWidth = 32
+
+    /// Runs `work`, which blocks, on one of `host`'s tunnel threads: at most `tunnelWidth` at
+    /// once, started in the order asked, so a long shelf parks a bounded number of threads
+    /// rather than one per tile. A caller cancelled while it waits never runs.
+    static func onTunnelThread<T>(
+        host: String, _ work: @escaping () throws -> T
+    ) async throws -> T {
+        let queue = tunnelQueues.withLockUnchecked { queues in
+            if let queue = queues[host] { return queue }
+            let queue = OperationQueue()
+            queue.maxConcurrentOperationCount = tunnelWidth
+            queue.qualityOfService = .userInitiated
+            queues[host] = queue
+            return queue
+        }
+        let cancelled = OSAllocatedUnfairLock(initialState: false)
+        return try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { done in
+                queue.addOperation {
+                    done.resume(with: Result {
+                        if cancelled.withLock({ $0 }) { throw CancellationError() }
+                        return try work()
+                    })
+                }
             }
+        } onCancel: {
+            cancelled.withLock { $0 = true }
         }
     }
 

@@ -1,5 +1,6 @@
 // The management transport's connection state as the pool and the retry loop read it.
 
+import os
 import XCTest
 @testable import PunktfunkKit
 
@@ -38,5 +39,58 @@ final class MgmtTransportTests: XCTestCase {
         }
         let whole = try MgmtConnection.closeFramed(Data("HTTP/1.1 200 OK\r\n\r\nbody".utf8))
         XCTAssertEqual(whole.body, Data("body".utf8))
+    }
+
+    /// A host's blocking tunnel calls hold a bounded number of threads, however many callers
+    /// ask at once.
+    func testTunnelCallsShareAFewThreadsPerHost() async throws {
+        let host = "cap-\(UUID().uuidString)"
+        let gauge = OSAllocatedUnfairLock(initialState: (now: 0, peak: 0))
+        try await withThrowingTaskGroup(of: Void.self) { group in
+            for _ in 0..<(MgmtTransport.tunnelWidth + 16) {
+                group.addTask {
+                    try await MgmtTransport.onTunnelThread(host: host) {
+                        gauge.withLock { $0.now += 1; $0.peak = max($0.peak, $0.now) }
+                        Thread.sleep(forTimeInterval: 0.05)
+                        gauge.withLock { $0.now -= 1 }
+                    }
+                }
+            }
+            try await group.waitForAll()
+        }
+        XCTAssertLessThanOrEqual(gauge.withLock { $0.peak }, MgmtTransport.tunnelWidth)
+    }
+
+    /// A caller cancelled while the host's threads are busy gives up its turn without running.
+    func testCancelledTunnelWaiterNeverRuns() async throws {
+        let host = "cancel-\(UUID().uuidString)"
+        let running = OSAllocatedUnfairLock(initialState: 0)
+        let gate = DispatchSemaphore(value: 0)
+        let busy = (0..<MgmtTransport.tunnelWidth).map { _ in
+            Task {
+                try await MgmtTransport.onTunnelThread(host: host) {
+                    running.withLock { $0 += 1 }
+                    gate.wait()
+                }
+            }
+        }
+        for _ in 0..<500 where running.withLock({ $0 }) < MgmtTransport.tunnelWidth {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        XCTAssertEqual(running.withLock { $0 }, MgmtTransport.tunnelWidth)
+        let ran = OSAllocatedUnfairLock(initialState: false)
+        let waiter = Task {
+            try await MgmtTransport.onTunnelThread(host: host) { ran.withLock { $0 = true } }
+        }
+        waiter.cancel()
+        for _ in busy { gate.signal() }
+        do {
+            try await waiter.value
+            XCTFail("a cancelled waiter ran")
+        } catch {
+            XCTAssertTrue(error is CancellationError)
+        }
+        for task in busy { try await task.value }
+        XCTAssertFalse(ran.withLock { $0 })
     }
 }
