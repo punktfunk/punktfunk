@@ -512,6 +512,8 @@ fn api_router_parts() -> (Router<Arc<MgmtState>>, utoipa::openapi::OpenApi) {
             person_session::close_person_session
         ))
         .routes(routes!(person_session::verify_person_session))
+        .routes(routes!(person_session::get_person_profile))
+        .routes(routes!(person_session::get_person_avatar))
         .routes(routes!(native::get_native_pairing))
         .routes(routes!(native::arm_native_pairing))
         .routes(routes!(native::disarm_native_pairing))

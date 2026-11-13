@@ -213,6 +213,105 @@
         "x-scope": "box"
       }
     },
+    "/api/v1/auth/person/profile": {
+      "get": {
+        "tags": [
+          "host"
+        ],
+        "summary": "The person's own profile",
+        "description": "The person lane on a seat host: the session's profile as the box's `profiles.json` in this\nhost's trust copy has it. Only that profile, and only on that lane; every other caller gets\n404.",
+        "operationId": "getPersonProfile",
+        "responses": {
+          "200": {
+            "description": "The session's profile",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PersonProfile"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid credentials",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No person session, or its profile is not in this host's copy",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "x-scope": "box"
+      }
+    },
+    "/api/v1/auth/person/profile/avatar": {
+      "get": {
+        "tags": [
+          "host"
+        ],
+        "summary": "The person's own picture",
+        "description": "As `GET /profiles/{id}/avatar`, for the person session's own profile alone, from this seat\nhost's trust copy.",
+        "operationId": "getPersonAvatar",
+        "parameters": [
+          {
+            "name": "If-None-Match",
+            "in": "header",
+            "description": "An `ETag` from an earlier response",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Image bytes",
+            "content": {
+              "image/png": {}
+            }
+          },
+          "304": {
+            "description": "The tag in `If-None-Match` is current"
+          },
+          "401": {
+            "description": "Missing or invalid credentials",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No person session, or no picture for its profile",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "x-scope": "box"
+      }
+    },
     "/api/v1/auth/person/session": {
       "post": {
         "tags": [
@@ -17215,12 +17314,40 @@
       },
       "PersonOf": {
         "type": "object",
-        "description": "Whose a live session is.",
+        "description": "Whose a live session is. The person lane stamps it on each of its calls.",
         "required": [
           "profile"
         ],
         "properties": {
           "profile": {
+            "type": "string"
+          }
+        }
+      },
+      "PersonProfile": {
+        "type": "object",
+        "description": "A person's own profile, as their pages show it.",
+        "required": [
+          "id",
+          "display_name",
+          "has_avatar"
+        ],
+        "properties": {
+          "accent": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`#RRGGBB`."
+          },
+          "display_name": {
+            "type": "string"
+          },
+          "has_avatar": {
+            "type": "boolean",
+            "description": "It has a picture, at `GET /auth/person/profile/avatar`."
+          },
+          "id": {
             "type": "string"
           }
         }

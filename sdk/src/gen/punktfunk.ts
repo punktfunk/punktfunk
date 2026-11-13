@@ -21,6 +21,8 @@ export type TokenRequest = { readonly "device_key": string, readonly "nonce": st
 export const TokenRequest = Schema.StructWithRest(Schema.Struct({ "device_key": Schema.String.annotate({ "description": "Base64 SPKI of the device's P-256 public key — the same bytes it paired with, whose\nSHA-256 the host stored." }), "nonce": Schema.String.annotate({ "description": "The nonce from `challenge`." }), "signature": Schema.String.annotate({ "description": "Base64 ECDSA-P256-SHA256 signature, ASN.1 DER, over the same message the control stream\nuses: context, the host's identity fingerprint, then the nonce." }) }), [Schema.Record(Schema.String, Schema.Json.annotate({ "expected": "JSON value" }))]).annotate({ "description": "`POST /auth/device/token` — what a paired browser presents.", "identifier": "TokenRequest" })
 export type TokenGrant = { readonly "expires_at": number, readonly "fingerprint": string, readonly "token": string } & { readonly [x: string]: Schema.Json }
 export const TokenGrant = Schema.StructWithRest(Schema.Struct({ "expires_at": Schema.Number.annotate({ "description": "Unix seconds.", "format": "int64" }).check(Schema.isInt().annotate({ "expected": "an integer" })), "fingerprint": Schema.String.annotate({ "description": "The device's own fingerprint, so a client can show which identity it is using." }), "token": Schema.String.annotate({ "description": "Present as `Authorization: Bearer <token>`." }) }), [Schema.Record(Schema.String, Schema.Json.annotate({ "expected": "JSON value" }))]).annotate({ "identifier": "TokenGrant" })
+export type PersonProfile = { readonly "accent"?: string | null, readonly "display_name": string, readonly "has_avatar": boolean, readonly "id": string } & { readonly [x: string]: Schema.Json }
+export const PersonProfile = Schema.StructWithRest(Schema.Struct({ "accent": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null]).annotate({ "description": "`#RRGGBB`." })), "display_name": Schema.String, "has_avatar": Schema.Boolean.annotate({ "description": "It has a picture, at `GET /auth/person/profile/avatar`." }), "id": Schema.String }), [Schema.Record(Schema.String, Schema.Json.annotate({ "expected": "JSON value" }))]).annotate({ "description": "A person's own profile, as their pages show it.", "identifier": "PersonProfile" })
 export type PersonTicket = { readonly "ticket": string } & { readonly [x: string]: Schema.Json }
 export const PersonTicket = Schema.StructWithRest(Schema.Struct({ "ticket": Schema.String.annotate({ "description": "`<unix seconds>.<nonce>.<profile id>.<HMAC-SHA256>`, as the page's `ticket` carries it." }) }), [Schema.Record(Schema.String, Schema.Json.annotate({ "expected": "JSON value" }))]).annotate({ "description": "The ticket `ctl console-url` wrote into the page it opened.", "identifier": "PersonTicket" })
 export type PersonGrant = { readonly "expires_at": number, readonly "profile": string, readonly "token": string } & { readonly [x: string]: Schema.Json }
@@ -28,7 +30,7 @@ export const PersonGrant = Schema.StructWithRest(Schema.Struct({ "expires_at": S
 export type PersonSessionToken = { readonly "token": string } & { readonly [x: string]: Schema.Json }
 export const PersonSessionToken = Schema.StructWithRest(Schema.Struct({ "token": Schema.String }), [Schema.Record(Schema.String, Schema.Json.annotate({ "expected": "JSON value" }))]).annotate({ "description": "A session token the box asks about.", "identifier": "PersonSessionToken" })
 export type PersonOf = { readonly "profile": string } & { readonly [x: string]: Schema.Json }
-export const PersonOf = Schema.StructWithRest(Schema.Struct({ "profile": Schema.String }), [Schema.Record(Schema.String, Schema.Json.annotate({ "expected": "JSON value" }))]).annotate({ "description": "Whose a live session is.", "identifier": "PersonOf" })
+export const PersonOf = Schema.StructWithRest(Schema.Struct({ "profile": Schema.String }), [Schema.Record(Schema.String, Schema.Json.annotate({ "expected": "JSON value" }))]).annotate({ "description": "Whose a live session is. The person lane stamps it on each of its calls.", "identifier": "PersonOf" })
 export type ClientLogMeta = { readonly "device_name": string, readonly "fingerprint_prefix": string, readonly "id": string, readonly "received_ms": number, readonly "size_bytes": number } & { readonly [x: string]: Schema.Json }
 export const ClientLogMeta = Schema.StructWithRest(Schema.Struct({ "device_name": Schema.String.annotate({ "description": "Paired device name at upload, filesystem-sanitized." }), "fingerprint_prefix": Schema.String.annotate({ "description": "First 16 hex chars of the pairing fingerprint — enough to match the roster\nwithout repeating the full identity in every filename." }), "id": Schema.String.annotate({ "description": "Filename stem; pass to fetch/delete." }), "received_ms": Schema.Number.annotate({ "description": "Upload time (unix ms from the file mtime, not the stem timestamp).", "format": "int64" }).check(Schema.isInt().annotate({ "expected": "an integer" })).check(Schema.isGreaterThanOrEqualTo(0).annotate({ "expected": "a value greater than or equal to 0" })), "size_bytes": Schema.Number.annotate({ "format": "int64" }).check(Schema.isInt().annotate({ "expected": "an integer" })).check(Schema.isGreaterThanOrEqualTo(0).annotate({ "expected": "a value greater than or equal to 0" })) }), [Schema.Record(Schema.String, Schema.Json.annotate({ "expected": "JSON value" }))]).annotate({ "identifier": "ClientLogMeta" })
 export type ClientLogUploaded = { readonly "id": string } & { readonly [x: string]: Schema.Json }
@@ -570,6 +572,18 @@ export type PostDeviceToken200 = TokenGrant
 export const PostDeviceToken200 = TokenGrant
 export type PostDeviceToken401 = ApiError
 export const PostDeviceToken401 = ApiError
+export type GetPersonProfile200 = PersonProfile
+export const GetPersonProfile200 = PersonProfile
+export type GetPersonProfile401 = ApiError
+export const GetPersonProfile401 = ApiError
+export type GetPersonProfile404 = ApiError
+export const GetPersonProfile404 = ApiError
+export type GetPersonAvatarParams = { readonly "If-None-Match"?: string }
+export const GetPersonAvatarParams = Schema.Struct({ "If-None-Match": Schema.optionalKey(Schema.String) })
+export type GetPersonAvatar401 = ApiError
+export const GetPersonAvatar401 = ApiError
+export type GetPersonAvatar404 = ApiError
+export const GetPersonAvatar404 = ApiError
 export type OpenPersonSessionRequestJson = PersonTicket
 export const OpenPersonSessionRequestJson = PersonTicket
 export type OpenPersonSession200 = PersonGrant
@@ -2176,6 +2190,28 @@ export const make = (
       "401": decodeError("PostDeviceToken401", PostDeviceToken401),
       orElse: unexpectedStatus
     }))
+    ),
+    "getPersonProfile": (options: Parameters<Punktfunk["getPersonProfile"]>[0]) => HttpClientRequest.get("/api/v1/auth/person/profile").pipe(
+      withResponse(options?.config)(HttpClientResponse.matchStatus({
+      "2xx": decodeSuccess(GetPersonProfile200),
+      "401": decodeError("GetPersonProfile401", GetPersonProfile401),
+      "404": decodeError("GetPersonProfile404", GetPersonProfile404),
+      orElse: unexpectedStatus
+    }))
+    ),
+    "getPersonAvatar": (options: Parameters<Punktfunk["getPersonAvatar"]>[0]) => HttpClientRequest.get("/api/v1/auth/person/profile/avatar").pipe(
+      HttpClientRequest.setHeaders({ "If-None-Match": options?.params?.["If-None-Match"] ?? undefined }),
+      withResponse(options?.config)(HttpClientResponse.matchStatus({
+      "200": decodeBinary,
+      "401": decodeError("GetPersonAvatar401", GetPersonAvatar401),
+      "404": decodeError("GetPersonAvatar404", GetPersonAvatar404),
+      "304": () => Effect.void,
+      orElse: unexpectedStatus
+    }))
+    ),
+    "getPersonAvatarStream": (options) => HttpClientRequest.get("/api/v1/auth/person/profile/avatar").pipe(
+      HttpClientRequest.setHeaders({ "If-None-Match": options?.params?.["If-None-Match"] ?? undefined }),
+      binaryRequest
     ),
     "openPersonSession": (options: Parameters<Punktfunk["openPersonSession"]>[0]) => HttpClientRequest.post("/api/v1/auth/person/session").pipe(
       HttpClientRequest.bodyJsonUnsafe(options.payload),
@@ -4032,6 +4068,28 @@ readonly "postDeviceToken": {
     <Config extends OperationConfig | undefined = undefined>(options: { readonly payload: typeof PostDeviceTokenRequestJson.Encoded; readonly config: Config }): Effect.Effect<WithOptionalResponse<typeof PostDeviceToken200.Type, Config>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"PostDeviceToken401", typeof PostDeviceToken401.Type>>;
     <Config extends OperationConfig | undefined = undefined>(options: { readonly payload: typeof PostDeviceTokenRequestJson.Encoded; readonly config?: Config | undefined }): Effect.Effect<WithOptionalResponse<typeof PostDeviceToken200.Type, Config | undefined>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"PostDeviceToken401", typeof PostDeviceToken401.Type>>;
   }
+  /**
+* The person lane on a seat host: the session's profile as the box's `profiles.json` in this
+* host's trust copy has it. Only that profile, and only on that lane; every other caller gets
+* 404.
+*/
+readonly "getPersonProfile": {
+    <Config extends OperationConfig | undefined = undefined>(options: { readonly config: Config }): Effect.Effect<WithOptionalResponse<typeof GetPersonProfile200.Type, Config>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"GetPersonProfile401", typeof GetPersonProfile401.Type> | PunktfunkError<"GetPersonProfile404", typeof GetPersonProfile404.Type>>;
+    <Config extends OperationConfig | undefined = undefined>(options: { readonly config?: Config | undefined } | undefined): Effect.Effect<WithOptionalResponse<typeof GetPersonProfile200.Type, Config | undefined>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"GetPersonProfile401", typeof GetPersonProfile401.Type> | PunktfunkError<"GetPersonProfile404", typeof GetPersonProfile404.Type>>;
+  }
+  /**
+* As `GET /profiles/{id}/avatar`, for the person session's own profile alone, from this seat
+* host's trust copy.
+*/
+readonly "getPersonAvatar": {
+    <Config extends OperationConfig | undefined = undefined>(options: { readonly params?: typeof GetPersonAvatarParams.Encoded | undefined; readonly config: Config }): Effect.Effect<WithOptionalResponse<Uint8Array | void, Config>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"GetPersonAvatar401", typeof GetPersonAvatar401.Type> | PunktfunkError<"GetPersonAvatar404", typeof GetPersonAvatar404.Type>>;
+    <Config extends OperationConfig | undefined = undefined>(options: { readonly params?: typeof GetPersonAvatarParams.Encoded | undefined; readonly config?: Config | undefined } | undefined): Effect.Effect<WithOptionalResponse<Uint8Array | void, Config | undefined>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"GetPersonAvatar401", typeof GetPersonAvatar401.Type> | PunktfunkError<"GetPersonAvatar404", typeof GetPersonAvatar404.Type>>;
+  }
+  /**
+* As `GET /profiles/{id}/avatar`, for the person session's own profile alone, from this seat
+* host's trust copy.
+*/
+readonly "getPersonAvatarStream": (options: { readonly params?: typeof GetPersonAvatarParams.Encoded | undefined } | undefined) => Stream.Stream<Uint8Array, HttpClientError.HttpClientError>
   /**
 * On a seat host, from loopback: trade the one-time ticket `ctl console-url` wrote into the
 * page it opened for a session token. The ticket is signed with this host's person token, at

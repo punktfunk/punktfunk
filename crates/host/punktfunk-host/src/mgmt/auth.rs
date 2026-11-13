@@ -426,6 +426,7 @@ fn vouched_person(st: &MgmtState, req: &Request) -> Option<super::person::Vouche
 }
 
 /// The person lane of this seat host, for session `profile`: its reach, and no other profile.
+/// The call carries `profile` as [`super::person_session::PersonOf`].
 async fn forward_person(req: Request, next: Next, profile: String) -> Response {
     use super::person_session::may_reach;
     if !may_reach(req.method(), req.uri().path()) {
@@ -442,6 +443,8 @@ async fn forward_person(req: Request, next: Next, profile: String) -> Response {
     }
     let mut req = req;
     req.extensions_mut().insert(AuthLane::Person);
+    req.extensions_mut()
+        .insert(super::person_session::PersonOf { profile });
     next.run(req).await
 }
 

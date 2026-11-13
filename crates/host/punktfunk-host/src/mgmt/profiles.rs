@@ -1095,6 +1095,15 @@ pub(crate) async fn get_profile_avatar(
     let Some(profiles) = st.app.profiles.get().cloned() else {
         return no_profiles();
     };
+    avatar_of(profiles, id, &headers).await
+}
+
+/// Profile `id`'s picture, or 304 when `headers` name its tag.
+pub(super) async fn avatar_of(
+    profiles: Arc<Profiles>,
+    id: String,
+    headers: &axum::http::HeaderMap,
+) -> Response {
     let found = tokio::task::spawn_blocking(move || profiles.avatar(&id)).await;
     let Ok(Some(avatar)) = found else {
         return api_error(StatusCode::NOT_FOUND, "no picture for that profile");

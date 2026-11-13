@@ -11,6 +11,7 @@ use super::owner::{Answer, Forwarded, Target};
 use super::scope::{scope_of, Scope};
 use super::shared::*;
 use axum::http::{HeaderMap, Method};
+use axum::Extension;
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -31,9 +32,14 @@ const FAILURE_WINDOW: Duration = Duration::from_secs(60);
 /// How long a redeemed ticket is remembered: a ticket is fresh 60 s either side of its stamp.
 const SPENT_FOR: Duration = Duration::from_secs(2 * crate::person_token::TICKET_TTL_SECS);
 
-/// The host routes a person's pages read on their seat host: its name and its status.
-pub(crate) const HOST_READS: &[(&str, &str)] =
-    &[("GET", "/api/v1/host"), ("GET", "/api/v1/status")];
+/// What a person's pages read on their seat host beside their profile's routes: the host's name
+/// and status, and their own profile.
+pub(crate) const SEAT_READS: &[(&str, &str)] = &[
+    ("GET", "/api/v1/host"),
+    ("GET", "/api/v1/status"),
+    ("GET", "/api/v1/auth/person/profile"),
+    ("GET", "/api/v1/auth/person/profile/avatar"),
+];
 
 /// What the person's pages read of their profile on the box, beside the `PERSON` writes.
 pub(crate) const BOX_READS: &[(&str, &str)] = &[
@@ -46,11 +52,11 @@ pub(crate) const BOX_READS: &[(&str, &str)] = &[
 ];
 
 /// Whether the person lane reaches `method` `path` on its seat host: a profile's data or
-/// execution, or one of [`HOST_READS`]. A route with no scope stays closed.
+/// execution, or one of [`SEAT_READS`]. A route with no scope stays closed.
 pub(crate) fn may_reach(method: &Method, path: &str) -> bool {
     match scope_of(method, path) {
         Some(Scope::ProfileData | Scope::ProfileExec) => true,
-        Some(_) => listed(HOST_READS, method, path),
+        Some(_) => listed(SEAT_READS, method, path),
         None => false,
     }
 }
@@ -217,10 +223,28 @@ pub(crate) struct PersonSessionToken {
     token: String,
 }
 
-/// Whose a live session is.
-#[derive(Serialize, Deserialize, ToSchema)]
+/// Whose a live session is. The person lane stamps it on each of its calls.
+#[derive(Serialize, Deserialize, ToSchema, Clone)]
 pub(crate) struct PersonOf {
     pub(crate) profile: String,
+}
+
+/// A person's own profile, as their pages show it.
+#[derive(Serialize, ToSchema)]
+pub(crate) struct PersonProfile {
+    id: String,
+    display_name: String,
+    /// `#RRGGBB`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(required = false)]
+    accent: Option<String>,
+    /// It has a picture, at `GET /auth/person/profile/avatar`.
+    has_avatar: bool,
+}
+
+/// The answer to a profile read off the person lane, or for a profile this host's copy lacks.
+fn no_person_profile() -> Response {
+    api_error(StatusCode::NOT_FOUND, "no person session's profile here")
 }
 
 /// The refusal of a ticket, one for every reason.
@@ -333,6 +357,72 @@ pub(crate) async fn verify_person_session(
             StatusCode::NOT_FOUND,
             "no live person session with that token here",
         ),
+    }
+}
+
+/// The person's own profile
+///
+/// The person lane on a seat host: the session's profile as the box's `profiles.json` in this
+/// host's trust copy has it. Only that profile, and only on that lane; every other caller gets
+/// 404.
+#[utoipa::path(
+    get,
+    path = "/auth/person/profile",
+    tag = "host",
+    operation_id = "getPersonProfile",
+    responses(
+        (status = OK, description = "The session's profile", body = PersonProfile),
+        (status = UNAUTHORIZED, description = "Missing or invalid credentials", body = ApiError),
+        (status = NOT_FOUND, description = "No person session, or its profile is not in this host's copy", body = ApiError),
+    )
+)]
+pub(crate) async fn get_person_profile(
+    State(st): State<Arc<MgmtState>>,
+    of: Option<Extension<PersonOf>>,
+) -> Response {
+    let profiles = st.app.profiles.get();
+    let found = of.zip(profiles);
+    match found.and_then(|(Extension(of), p)| p.get(&of.profile)) {
+        Some(p) => Json(PersonProfile {
+            has_avatar: p.avatar.is_some(),
+            id: p.id,
+            display_name: p.display_name,
+            accent: p.accent,
+        })
+        .into_response(),
+        None => no_person_profile(),
+    }
+}
+
+/// The person's own picture
+///
+/// As `GET /profiles/{id}/avatar`, for the person session's own profile alone, from this seat
+/// host's trust copy.
+#[utoipa::path(
+    get,
+    path = "/auth/person/profile/avatar",
+    tag = "host",
+    operation_id = "getPersonAvatar",
+    params(
+        ("If-None-Match" = Option<String>, Header, description = "An `ETag` from an earlier response"),
+    ),
+    responses(
+        (status = OK, description = "Image bytes", content_type = "image/png"),
+        (status = NOT_MODIFIED, description = "The tag in `If-None-Match` is current"),
+        (status = UNAUTHORIZED, description = "Missing or invalid credentials", body = ApiError),
+        (status = NOT_FOUND, description = "No person session, or no picture for its profile", body = ApiError),
+    )
+)]
+pub(crate) async fn get_person_avatar(
+    State(st): State<Arc<MgmtState>>,
+    of: Option<Extension<PersonOf>>,
+    headers: HeaderMap,
+) -> Response {
+    match of.zip(st.app.profiles.get().cloned()) {
+        Some((Extension(of), profiles)) => {
+            super::profiles::avatar_of(profiles, of.profile, &headers).await
+        }
+        None => no_person_profile(),
     }
 }
 

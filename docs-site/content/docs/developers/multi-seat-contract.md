@@ -802,7 +802,9 @@ reaches this lane.
   `person_session_ended`.
 - **On the seat host.** `Authorization: Bearer <session>`, from loopback, reaches every route
   scoped `profile-data` or `profile-exec` and `GET host` and `GET status`; anything else is 403.
-  An `as` naming another profile is 403.
+  An `as` naming another profile is 403. `GET auth/person/profile` answers the session's own
+  profile from the seat's trust copy, `{id, display_name, accent?, has_avatar}`, and
+  `GET auth/person/profile/avatar` its picture; any other lane gets 404.
 - **On the box.** The console sends `X-Punktfunk-Person-Session` and `X-Punktfunk-Person-Profile`
   with no bearer, and `?as=` naming that profile, to the door from loopback. The door asks the
   profile's seat host `POST /api/v1/auth/person/verify` `{"token"}` with its admin token, and

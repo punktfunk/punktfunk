@@ -121,8 +121,8 @@ async fn a_session_is_its_host_s_its_loopback_s_and_its_profile_s() {
 }
 
 /// Every route the person lane reaches on its seat host, by the API document: a profile's data
-/// and execution, and the host's name and status. A new route is closed until it has a scope,
-/// and one with a profile scope changes this list.
+/// and execution, the host's name and status, and the person's own profile. A new route is
+/// closed until it has a scope, and one with a profile scope changes this list.
 #[test]
 fn the_person_lane_reaches_what_is_pinned() {
     use crate::mgmt::person_session::{box_may_reach, may_reach};
@@ -130,6 +130,8 @@ fn the_person_lane_reaches_what_is_pinned() {
     const SEAT_REACH: &[(&str, &str)] = &[
         ("GET", "/api/v1/host"),
         ("GET", "/api/v1/status"),
+        ("GET", "/api/v1/auth/person/profile"),
+        ("GET", "/api/v1/auth/person/profile/avatar"),
         ("GET", "/api/v1/display/clients/{fingerprint}"),
         ("PUT", "/api/v1/display/clients/{fingerprint}"),
         ("DELETE", "/api/v1/display/clients/{fingerprint}"),
@@ -298,6 +300,62 @@ async fn the_seat_host_answers_the_box_whose_a_session_is() {
     assert_eq!(bare(&app, ask(&token)).await.0, StatusCode::UNAUTHORIZED);
     let plugin = with_bearer(ask(&token), "plugin-secret");
     assert_eq!(send(&app, plugin).await.0, StatusCode::FORBIDDEN);
+}
+
+/// The person reads their own profile and picture from the seat host's copy of the box's
+/// profiles, never another's. The operator's and a plugin's lanes read neither there.
+#[tokio::test]
+async fn a_person_reads_their_own_profile_on_their_seat_host() {
+    let trust = tempfile::tempdir().unwrap();
+    let copy = trust.path().join("profiles.json");
+    let profile = |id: &str, name: &str| {
+        serde_json::json!({"id": id, "display_name": name, "accent": "#1E90FF",
+            "avatar": format!("/api/v1/profiles/{id}/avatar"),
+            "os_account": {"kind": "seat", "seat": P_SEAT}})
+    };
+    let file = serde_json::json!({"profiles": [profile(OWNER, "Enrico"), profile(SEAT_P, "Jane")]});
+    std::fs::write(&copy, file.to_string()).unwrap();
+    std::fs::create_dir(trust.path().join("profiles")).unwrap();
+    for (id, bytes) in [(OWNER, "owner-png"), (SEAT_P, "jane-png")] {
+        std::fs::write(trust.path().join(format!("profiles/{id}.png")), bytes).unwrap();
+    }
+    let state = test_state();
+    let store = crate::profiles::Profiles::load_box(copy, Some(P_SEAT.to_string()));
+    let _ = state.profiles.set(Arc::new(store));
+    let app = test_app_seat(state, TOKEN, SEAT_P);
+    let token = open(&app, &ticket(TOKEN, 1)).await;
+    let me = || get_req("/api/v1/auth/person/profile");
+    let (status, body) = bare(&app, with_bearer(me(), &token)).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(
+        body,
+        serde_json::json!({"id": SEAT_P, "display_name": "Jane", "accent": "#1E90FF",
+            "has_avatar": true})
+    );
+    let avatar = || get_req("/api/v1/auth/person/profile/avatar");
+    let resp = app
+        .clone()
+        .oneshot(with_bearer(avatar(), &token))
+        .await
+        .unwrap();
+    let (status, etag) = (resp.status(), resp.headers().get("etag").cloned());
+    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    assert_eq!((status, &bytes[..]), (StatusCode::OK, &b"jane-png"[..]));
+    let mut again = with_bearer(avatar(), &token);
+    again.headers_mut().insert("if-none-match", etag.unwrap());
+    let resp = app.clone().oneshot(again).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::NOT_MODIFIED);
+    // The owner's picture stays the box's route, off this lane.
+    let owner = get_req(&format!("/api/v1/profiles/{OWNER}/avatar"));
+    assert_eq!(
+        bare(&app, with_bearer(owner, &token)).await.0,
+        StatusCode::FORBIDDEN
+    );
+    for req in [me(), avatar()] {
+        assert_eq!(send(&app, req).await.0, StatusCode::NOT_FOUND, "admin");
+    }
+    let plugin = with_bearer(me(), "plugin-secret");
+    assert_eq!(bare(&app, plugin).await.0, StatusCode::FORBIDDEN);
 }
 
 /// A seat row of a profile, as the supervisor lists it.

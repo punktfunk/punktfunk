@@ -210,6 +210,8 @@ mod tests {
             ("DELETE", "/api/v1/auth/person/session"),
             ("DELETE", "/api/v1/client-logs/{id}"),
             ("DELETE", "/api/v1/display/presets/{id}"),
+            ("GET", "/api/v1/auth/person/profile"),
+            ("GET", "/api/v1/auth/person/profile/avatar"),
             ("GET", "/api/v1/client-logs"),
             ("GET", "/api/v1/client-logs/{id}"),
             ("GET", "/api/v1/display/monitors"),

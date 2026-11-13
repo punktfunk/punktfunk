@@ -25,9 +25,12 @@ fn every_route_is_classified_for_the_plugin_and_cert_lanes() {
         ("POST", "/api/v1/auth/device/challenge", false, false),
         ("POST", "/api/v1/auth/device/token", false, false),
         // A person's session on their own seat host: `require_auth` exempts the session path,
-        // whose ticket or token is the proof, and verifying one is the admin lane's.
+        // whose ticket or token is the proof, the person lane reads its own profile, and
+        // verifying one is the admin lane's.
         ("POST", "/api/v1/auth/person/session", false, false),
         ("DELETE", "/api/v1/auth/person/session", false, false),
+        ("GET", "/api/v1/auth/person/profile", false, false),
+        ("GET", "/api/v1/auth/person/profile/avatar", false, false),
         ("POST", "/api/v1/auth/person/verify", false, false),
         ("GET", "/api/v1/host", true, true),
         ("GET", "/api/v1/status", true, true),
@@ -682,6 +685,8 @@ fn every_route_has_a_side_on_the_door() {
         ("POST", "/api/v1/auth/device/token", true),
         ("POST", "/api/v1/auth/person/session", true),
         ("DELETE", "/api/v1/auth/person/session", true),
+        ("GET", "/api/v1/auth/person/profile", true),
+        ("GET", "/api/v1/auth/person/profile/avatar", true),
         ("POST", "/api/v1/auth/person/verify", true),
         ("GET", "/api/v1/local/summary", true),
         ("GET", "/api/v1/host", true),
