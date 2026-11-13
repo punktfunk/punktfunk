@@ -128,7 +128,7 @@ const At: FC<{ path: string; children: ReactNode }> = ({ path, children }) => {
 
 /**
  * Page `page` of `me`'s console at `path`, in the frame. Anna's desktop runs plugins of hers, so
- * her frame lists Plugins; Oma's own account runs none.
+ * her frame lists Plugins; Oma's own account has no runner installed.
  */
 const Framed: FC<{
 	path: string;
